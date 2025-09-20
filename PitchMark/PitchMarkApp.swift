@@ -11,7 +11,7 @@ import SwiftUI
 struct PitchMarkApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            PitchTrackerView()
         }
     }
 }
