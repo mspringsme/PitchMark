@@ -6,13 +6,34 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		2398B8532E85988700CE44E1 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 2398B8522E85988700CE44E1 /* FirebaseAuth */; };
+		2398B8552E85988700CE44E1 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2398B8542E85988700CE44E1 /* FirebaseCore */; };
+		2398B8582E8598AD00CE44E1 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 2398B8572E8598AD00CE44E1 /* GoogleSignIn */; };
+		2398B85A2E8598AD00CE44E1 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 2398B8592E8598AD00CE44E1 /* GoogleSignInSwift */; };
+		2398B87E2E85B81500CE44E1 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 2398B87D2E85B81500CE44E1 /* FirebaseFirestore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		2361CC052E7A098700862200 /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		2398B8802E85BFBA00CE44E1 /* Exceptions for "PitchMark" folder in "PitchMark" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 2361CC042E7A098700862200 /* PitchMark */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		2361CC072E7A098700862200 /* PitchMark */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				2398B8802E85BFBA00CE44E1 /* Exceptions for "PitchMark" folder in "PitchMark" target */,
+			);
 			path = PitchMark;
 			sourceTree = "<group>";
 		};
@@ -23,6 +44,11 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2398B8552E85988700CE44E1 /* FirebaseCore in Frameworks */,
+				2398B8532E85988700CE44E1 /* FirebaseAuth in Frameworks */,
+				2398B8582E8598AD00CE44E1 /* GoogleSignIn in Frameworks */,
+				2398B87E2E85B81500CE44E1 /* FirebaseFirestore in Frameworks */,
+				2398B85A2E8598AD00CE44E1 /* GoogleSignInSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +91,11 @@
 			);
 			name = PitchMark;
 			packageProductDependencies = (
+				2398B8522E85988700CE44E1 /* FirebaseAuth */,
+				2398B8542E85988700CE44E1 /* FirebaseCore */,
+				2398B8572E8598AD00CE44E1 /* GoogleSignIn */,
+				2398B8592E8598AD00CE44E1 /* GoogleSignInSwift */,
+				2398B87D2E85B81500CE44E1 /* FirebaseFirestore */,
 			);
 			productName = PitchMark;
 			productReference = 2361CC052E7A098700862200 /* PitchMark.app */;
@@ -78,7 +109,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1640;
-				LastUpgradeCheck = 1640;
+				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					2361CC042E7A098700862200 = {
 						CreatedOnToolsVersion = 16.4;
@@ -94,6 +125,10 @@
 			);
 			mainGroup = 2361CBFC2E7A098700862200;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				2398B8512E85988700CE44E1 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				2398B8562E8598AD00CE44E1 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 2361CC062E7A098700862200 /* Products */;
 			projectDirPath = "";
@@ -178,12 +213,13 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -236,11 +272,12 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -256,6 +293,7 @@
 				DEVELOPMENT_TEAM = E3TJVK4339;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PitchMark/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -268,9 +306,13 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MarkSpringer.PitchMark;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -284,6 +326,7 @@
 				DEVELOPMENT_TEAM = E3TJVK4339;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PitchMark/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -296,9 +339,13 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.MarkSpringer.PitchMark;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -324,6 +371,53 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		2398B8512E85988700CE44E1 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.3.0;
+			};
+		};
+		2398B8562E8598AD00CE44E1 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		2398B8522E85988700CE44E1 /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2398B8512E85988700CE44E1 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		2398B8542E85988700CE44E1 /* FirebaseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2398B8512E85988700CE44E1 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCore;
+		};
+		2398B8572E8598AD00CE44E1 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2398B8562E8598AD00CE44E1 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		2398B8592E8598AD00CE44E1 /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2398B8562E8598AD00CE44E1 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
+		};
+		2398B87D2E85B81500CE44E1 /* FirebaseFirestore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2398B8512E85988700CE44E1 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFirestore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 2361CBFD2E7A098700862200 /* Project object */;
 }
