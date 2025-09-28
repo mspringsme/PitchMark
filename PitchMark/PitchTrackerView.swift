@@ -43,7 +43,22 @@ func allLocationsFromGrid() -> [String] {
     ]
 }
 
+func normalizedLocation(from label: String) -> String {
+    if label.hasPrefix("Strike ") || label.hasPrefix("Ball ") {
+        return label
+    }
 
+    let strikeLabels = strikeGrid.map(\.label)
+    let prefix = strikeLabels.contains(label) ? "Strike" : "Ball"
+    return "\(prefix) \(label)"
+}
+func normalizedLabel(_ label: String) -> String {
+    switch label {
+    case "Up and In", "Down and In", "In": return "Inside"
+    case "Up and Out", "Down and Out", "Out": return "Outside"
+    default: return label
+    }
+}
 struct GridLocation: Identifiable {
     let id = UUID()
     let row: Int
@@ -105,6 +120,29 @@ struct CodeAssignmentPanel: View {
             .filter { $0.pitch == selectedPitch && $0.location == selectedLocation }
             .map(\.code)
     }
+    
+    @ViewBuilder
+    private func locationButton(label: String, isStrike: Bool) -> some View{
+        let strikeLabels = strikeGrid.map(\.label)
+        let fullLabel = "\(isStrike ? "Strike" : "Ball") \(label)"
+        let isSelected = selectedLocation == fullLabel
+
+        Button(action: {
+            selectedLocation = fullLabel
+        }) {
+            Text(label)
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(isSelected ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
+                .foregroundColor(.primary)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 1)
+                )
+        }
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -126,7 +164,7 @@ struct CodeAssignmentPanel: View {
             }
 
             // 🔹 Dynamic Pitch + Location Label
-            Text("\(selectedPitch) \(selectedLocation)")
+            Text("\(selectedPitch) → \(selectedLocation)")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -143,31 +181,39 @@ struct CodeAssignmentPanel: View {
                     }
                 }
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(allLocationsFromGrid(), id: \.self) { location in
-                        let isSelected = selectedLocation == location
+            VStack(alignment: .leading, spacing: 16) {
+                // 🔹 Strike Locations
+                Text("Strike Locations")
+                    .font(.headline)
+                    .padding(.leading)
 
-                        Button(action: {
-                            selectedLocation = location
-                        }) {
-                            Text(location)
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(isSelected ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                                .foregroundColor(.primary)
-                                .cornerRadius(8)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(isSelected ? Color.blue : Color.clear, lineWidth: 1)
-                                )
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(strikeGrid.map(\.label), id: \.self) { label in
+                            locationButton(label: label, isStrike: true)
                         }
                     }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
-            }
-            // 🔹 Selected Codes Display
+
+                // 🔹 Ball Locations
+                Text("Ball Locations")
+                    .font(.headline)
+                    .padding(.leading)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach([
+                            "Up and Out", "Up", "Up and In",
+                            "Out", "In",
+                            "Down and Out", "Down", "Down and In"
+                        ], id: \.self) { label in
+                            locationButton(label: label, isStrike: false)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }            // 🔹 Selected Codes Display
             Text("\(selectedCodes.sorted().joined(separator: ", "))")
                 .font(.headline)
                 .padding(.top, 4)
@@ -175,7 +221,11 @@ struct CodeAssignmentPanel: View {
             // 🔹 Assign Button
             Button("Assign Codes") {
                 for code in selectedCodes {
-                    let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
+                    let assignment = PitchCodeAssignment(
+                        code: code,
+                        pitch: selectedPitch,
+                        location: selectedLocation // already prefixed
+                    )
                     if !pitchCodeAssignments.contains(assignment) {
                         pitchCodeAssignments.append(assignment)
                     }
@@ -570,7 +620,9 @@ struct PitchTrackerView: View {
                     HStack(spacing: 16) {
                         
                         Button("L Batter") {
-                            batterSide = .left
+                            withAnimation {
+                                batterSide = .left
+                            }
                         }
                         .font(.body)
                         .padding(.vertical, 6)
@@ -580,7 +632,9 @@ struct PitchTrackerView: View {
                         .cornerRadius(6)
                         
                         Button("R Batter") {
-                            batterSide = .right
+                            withAnimation {
+                                batterSide = .right
+                            }
                         }
                         .font(.body)
                         .padding(.vertical, 6)
@@ -805,7 +859,7 @@ struct StrikeZoneView: View {
         let zoneHeight = geo.size.height * 0.35
         let cellWidth = zoneWidth / 3
         let cellHeight = zoneHeight / 3
-        let buttonSize = min(cellWidth, cellHeight) * 0.6
+        let buttonSize = min(cellWidth, cellHeight) * 0.8
         let originX = (geo.size.width - zoneWidth) / 2
         let originY: CGFloat = 0
         let labelManager = PitchLabelManager(batterSide: batterSide)
@@ -836,14 +890,16 @@ struct StrikeZoneView: View {
             }
             
             let ballLocations: [(String, CGFloat, CGFloat)] = [
-                ("Up and Out", originX - buttonSize * 1.2, originY - buttonSize * 1.2),
-                ("Up", originX + zoneWidth / 2, originY - buttonSize * 1.5),
-                ("Up and In", originX + zoneWidth + buttonSize * 1.2, originY - buttonSize * 1.2),
-                ("Out", originX - buttonSize * 1.5, originY + zoneHeight / 2),
-                ("In", originX + zoneWidth + buttonSize * 1.5, originY + zoneHeight / 2),
-                ("Down and Out", originX - buttonSize * 1.2, originY + zoneHeight + buttonSize * 1.2),
-                ("Down", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 1.5),
-                ("Down and In", originX + zoneWidth + buttonSize * 1.2, originY + zoneHeight + buttonSize * 1.2)
+                ("Up and Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
+                ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
+                ("Up and In", originX + zoneWidth + buttonSize * 0.6, originY - buttonSize * 0.6),
+                
+                ("Out", originX - buttonSize * 0.75, originY + zoneHeight / 2),
+                ("In", originX + zoneWidth + buttonSize * 0.75, originY + zoneHeight / 2),
+                
+                ("Down and Out", originX - buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6),
+                ("Down", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
+                ("Down and In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
             ]
             ForEach(ballLocations, id: \.0) { label, x, y in
                 pitchButton(
@@ -876,18 +932,19 @@ struct StrikeZoneView: View {
         pitchCodeAssignments: [PitchCodeAssignment],
         gameIsActive: Bool
     ) -> some View {
-        //let isSelected = lastTappedPosition == CGPoint(x: x, y: y)
         let tappedPoint = CGPoint(x: x, y: y)
-        let adjustedLabel = labelManager.adjustedLabel(from: location.label)
-        
-        // Find assigned code for this pitch + location
+        let prefix = location.isStrike ? "Strike" : "Ball"
+        let normalized = normalizedLabel(location.label)
+        let baseLabel = labelManager.adjustedLabel(from: normalized)
+        let fullLabel = "\(prefix) \(baseLabel)"
+
         let assignedCode = pitchCodeAssignments.first {
-            $0.pitch == selectedPitch && $0.location == adjustedLabel
+            $0.pitch == selectedPitch && $0.location == fullLabel
         }
-        
-        // Disable if game is active and no code is assigned
+
         let isDisabled = gameIsActive && assignedCode == nil
         let isSelected = lastTappedPosition == tappedPoint
+
         return Group {
             if isDisabled {
                 disabledView(isStrike: location.isStrike)
@@ -896,60 +953,65 @@ struct StrikeZoneView: View {
                     .zIndex(1)
             }
 
-                Menu {
-                    if selectedPitches.isEmpty {
-                        Button("Select pitches first") {}.disabled(true)
-                    } else {
-                        ForEach(Array(selectedPitches), id: \.self) { pitch in
-                            Button(pitch) {
-                                withAnimation {
-                                    let assignedCodes = pitchCodeAssignments
-                                        .filter { $0.pitch == pitch && $0.location == adjustedLabel }
-                                        .map(\.code)
+            Menu {
+                if selectedPitches.isEmpty {
+                    Button("Select pitches first") {}.disabled(true)
+                } else {
+                    ForEach(Array(selectedPitches), id: \.self) { pitch in
+                        Button(pitch) {
+                            withAnimation {
+                                let assignedCodes = pitchCodeAssignments
+                                    .filter { $0.pitch == pitch && $0.location == fullLabel }
+                                    .map(\.code)
 
-                                    let newCall = PitchCall(
-                                        pitch: pitch,
-                                        location: adjustedLabel,
-                                        isStrike: location.isStrike,
-                                        codes: assignedCodes
-                                    )
+                                let newCall = PitchCall(
+                                    pitch: pitch,
+                                    location: fullLabel,
+                                    isStrike: location.isStrike,
+                                    codes: assignedCodes
+                                )
 
-                                    if lastTappedPosition == tappedPoint,
-                                       let currentCall = calledPitch,
-                                       currentCall.location == newCall.location,
-                                       currentCall.pitch == newCall.pitch {
-                                        setLastTapped(nil)
-                                        setCalledPitch(nil)
-                                    } else {
-                                        setLastTapped(tappedPoint)
-                                        setCalledPitch(newCall)
-                                    }
+                                let isSameCall = lastTappedPosition == tappedPoint &&
+                                    calledPitch?.location == newCall.location &&
+                                    calledPitch?.pitch == newCall.pitch
+
+                                if isSameCall {
+                                    setLastTapped(nil)
+                                    setCalledPitch(nil)
+                                } else {
+                                    setLastTapped(tappedPoint)
+                                    setCalledPitch(newCall)
                                 }
                             }
                         }
                     }
-                } label: {
-                    shapeView(isStrike: location.isStrike, isSelected: isSelected)
-                        .frame(width: buttonSize, height: buttonSize)
-                        .contentShape(Rectangle())
                 }
-                .position(x: x, y: y)
-                .zIndex(1)
+            } label: {
+                ZStack {
+                    shapeView(isStrike: location.isStrike, isSelected: isSelected)
+
+                    Text(fullLabel)
+                        .font(.system(size: buttonSize * 0.24, weight: .semibold))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.5)
+                        .padding(4)
+                }
+                .frame(width: buttonSize, height: buttonSize)
+                .contentShape(Rectangle())
             }
+            .position(x: x, y: y)
+            .zIndex(1)
         }
     }
-    @ViewBuilder
-    private func shapeView(isStrike: Bool, isSelected: Bool) -> some View {
-        if isStrike {
-            Circle()
-                .fill(isSelected ? Color.green.opacity(0.6) : Color.green)
-                .overlay(Circle().stroke(Color.black, lineWidth: isSelected ? 3 : 0))
-        } else {
-            RoundedRectangle(cornerRadius: 4)
-                .fill(isSelected ? Color.red.opacity(0.6) : Color.red)
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.black, lineWidth: isSelected ? 3 : 0))
-        }
     }
+@ViewBuilder
+private func shapeView(isStrike: Bool, isSelected: Bool) -> some View {
+    Circle()
+        .fill(isStrike ? Color.green.opacity(isSelected ? 0.6 : 1.0) : Color.red.opacity(isSelected ? 0.6 : 1.0))
+        .overlay(Circle().stroke(Color.black, lineWidth: isSelected ? 3 : 0))
+}
     @ViewBuilder
     private func disabledView(isStrike: Bool) -> some View {
         if isStrike {
