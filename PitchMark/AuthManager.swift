@@ -139,6 +139,27 @@ class AuthManager: ObservableObject {
         }
     }
     
+    func deleteTemplate(_ template: PitchTemplate) {
+        guard let user = user else {
+            print("No signed-in user to delete template for.")
+            return
+        }
+
+        let db = Firestore.firestore()
+        let templateRef = db.collection("users")
+            .document(user.uid)
+            .collection("templates")
+            .document(template.id.uuidString)
+
+        templateRef.delete { error in
+            if let error = error {
+                print("Error deleting template: \(error.localizedDescription)")
+            } else {
+                print("Template deleted successfully for user: \(user.email ?? "Unknown")")
+            }
+        }
+    }
+    
     func loadTemplates(completion: @escaping ([PitchTemplate]) -> Void) {
         guard let user = user else {
             completion([])
