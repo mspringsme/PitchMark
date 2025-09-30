@@ -6,6 +6,216 @@
 //
 
 import SwiftUI
+struct StrikeZoneView: View {
+    let geo: GeometryProxy
+    let batterSide: BatterSide
+    let lastTappedPosition: CGPoint?
+    let setLastTapped: (CGPoint?) -> Void
+    let calledPitch: PitchCall?
+    let setCalledPitch: (PitchCall?) -> Void
+    let selectedPitches: Set<String>
+    let gameIsActive: Bool
+    let selectedPitch: String
+    let pitchCodeAssignments: [PitchCodeAssignment]
+    
+    var body: some View {
+        let zoneWidth = geo.size.width * 0.4
+        let zoneHeight = geo.size.height * 0.35
+        let cellWidth = zoneWidth / 3
+        let cellHeight = zoneHeight / 3
+        let buttonSize = min(cellWidth, cellHeight) * 0.8
+        let originX = (geo.size.width - zoneWidth) / 2
+        let originY: CGFloat = 0
+        let labelManager = PitchLabelManager(batterSide: batterSide)
+        
+        ZStack(alignment: .topLeading) {
+            Rectangle()
+                .stroke(Color.black, lineWidth: 2)
+                .frame(width: zoneWidth, height: zoneHeight)
+                .position(x: originX + zoneWidth / 2, y: originY + zoneHeight / 2)
+            
+            ForEach(strikeGrid) { loc in
+                let x = originX + CGFloat(loc.col) * cellWidth + cellWidth / 2
+                let y = originY + CGFloat(loc.row) * cellHeight + cellHeight / 2
+                
+                pitchButton(
+                    x: x,
+                    y: y,
+                    location: .init(label: loc.label, isStrike: true),
+                    labelManager: labelManager,
+                    lastTappedPosition: lastTappedPosition,
+                    setLastTapped: setLastTapped,
+                    setCalledPitch: setCalledPitch,
+                    buttonSize: buttonSize,
+                    selectedPitch: selectedPitch,
+                    pitchCodeAssignments: pitchCodeAssignments,
+                    gameIsActive: gameIsActive
+                )
+            }
+            
+            let ballLocations: [(String, CGFloat, CGFloat)] = [
+                ("Up & Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
+                ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
+                ("Up & In", originX + zoneWidth + buttonSize * 0.6, originY - buttonSize * 0.6),
+                
+                ("Out", originX - buttonSize * 0.75, originY + zoneHeight / 2),
+                ("In", originX + zoneWidth + buttonSize * 0.75, originY + zoneHeight / 2),
+                
+                ("↓ & Out", originX - buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6),
+                ("↓ ", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
+                ("↓ & In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
+            ]
+            ForEach(ballLocations, id: \.0) { label, x, y in
+                pitchButton(
+                    x: x,
+                    y: y,
+                    location: .init(label: label, isStrike: false),
+                    labelManager: labelManager,
+                    lastTappedPosition: lastTappedPosition,
+                    setLastTapped: setLastTapped,
+                    setCalledPitch: setCalledPitch,
+                    buttonSize: buttonSize,
+                    selectedPitch: selectedPitch,
+                    pitchCodeAssignments: pitchCodeAssignments,
+                    gameIsActive: gameIsActive
+                )
+            }
+        }
+        .frame(height: zoneHeight + buttonSize * 3)
+    }
+    private func pitchButton(
+        x: CGFloat,
+        y: CGFloat,
+        location: PitchLocation,
+        labelManager: PitchLabelManager,
+        lastTappedPosition: CGPoint?,
+        setLastTapped: @escaping (CGPoint?) -> Void,
+        setCalledPitch: @escaping (PitchCall?) -> Void,
+        buttonSize: CGFloat,
+        selectedPitch: String,
+        pitchCodeAssignments: [PitchCodeAssignment],
+        gameIsActive: Bool
+    ) -> some View {
+        let tappedPoint = CGPoint(x: x, y: y)
+        let prefix = location.isStrike ? "Strike" : "Ball"
+        let normalized = normalizedLabel(location.label)
+        let baseLabel = labelManager.adjustedLabel(from: normalized)
+        let fullLabel = "\(prefix) \(baseLabel)"
+        
+        let assignedCode = pitchCodeAssignments.first {
+            $0.pitch == selectedPitch && $0.location == fullLabel
+        }
+        
+        let isDisabled = gameIsActive && assignedCode == nil
+        let isSelected = lastTappedPosition == tappedPoint
+        
+        return Group {
+            if isDisabled {
+                disabledView(isStrike: location.isStrike)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .position(x: x, y: y)
+                    .zIndex(1)
+            }
+            
+            Menu {
+                if selectedPitches.isEmpty {
+                    Button("Select pitches first") {}.disabled(true)
+                } else {
+                    ForEach(Array(selectedPitches), id: \.self) { pitch in
+                        Button(pitch) {
+                            withAnimation {
+                                let assignedCodes = pitchCodeAssignments
+                                    .filter { $0.pitch == pitch && $0.location == fullLabel }
+                                    .map(\.code)
+                                
+                                let newCall = PitchCall(
+                                    pitch: pitch,
+                                    location: fullLabel,
+                                    isStrike: location.isStrike,
+                                    codes: assignedCodes
+                                )
+                                
+                                let isSameCall = lastTappedPosition == tappedPoint &&
+                                calledPitch?.location == newCall.location &&
+                                calledPitch?.pitch == newCall.pitch
+                                
+                                if isSameCall {
+                                    setLastTapped(nil)
+                                    setCalledPitch(nil)
+                                } else {
+                                    setLastTapped(tappedPoint)
+                                    setCalledPitch(newCall)
+                                }
+                            }
+                        }
+                    }
+                }
+            } label: {
+                ZStack {
+                    shapeView(isStrike: location.isStrike, isSelected: isSelected)
+                    
+                    Text(fullLabel)
+                        .font(.system(size: buttonSize * 0.24, weight: .semibold))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.5)
+                        .padding(4)
+                }
+                .frame(width: buttonSize, height: buttonSize)
+                .contentShape(Rectangle())
+            }
+            .position(x: x, y: y)
+            .zIndex(1)
+        }
+    }
+}
+@ViewBuilder
+private func shapeView(isStrike: Bool, isSelected: Bool) -> some View {
+    Circle()
+        .fill(isStrike ? Color.green.opacity(isSelected ? 0.6 : 1.0) : Color.red.opacity(isSelected ? 0.6 : 1.0))
+        .overlay(Circle().stroke(Color.black, lineWidth: isSelected ? 3 : 0))
+}
+@ViewBuilder
+private func disabledView(isStrike: Bool) -> some View {
+    if isStrike {
+        Circle().fill(Color.gray.opacity(0.3))
+    } else {
+        RoundedRectangle(cornerRadius: 4).fill(Color.gray.opacity(0.3))
+    }
+    
+}
+struct LabelFactory {
+    let batterSide: BatterSide
+
+    func fullLabel(prefix: String, rawLabel: String) -> String {
+        let norm = normalizedLabel(rawLabel)                       // produces "Up & In", etc.
+        let adj = PitchLabelManager(batterSide: batterSide).adjustedLabel(from: norm)
+        return "\(prefix) \(adj)"                                  // "Strike Up & In" or "Ball ↓  & Out"
+    }
+}
+struct BatterLabelSet {
+    let strikeFull: [String]
+    let ballFull: [String]
+
+    init(side: BatterSide) {
+        let factory = LabelFactory(batterSide: side)
+        strikeFull = strikeGrid.map { factory.fullLabel(prefix: "Strike", rawLabel: $0.label) }
+        let ballRaw = [
+            "Up & Out", "Up", "Up & In",
+            "Out", "In",
+            "↓ & Out", "↓ ", "↓ & In"
+        ]
+        ballFull = ballRaw.map { factory.fullLabel(prefix: "Ball", rawLabel: $0) }
+    }
+}
+
+// MARK: - PitchCall display helpers
+
+extension PitchCall {
+    var displayTitle: String { "\(type) \(location)" } // location will now already be "Up & In" style
+    var shortLabel: String { "\(pitch) — \(displayTitle)" }
+}
 
 enum BatterSide: String, CaseIterable, Identifiable {
     case left, right
@@ -37,9 +247,9 @@ struct PitchLocation {
 
 func allLocationsFromGrid() -> [String] {
     strikeGrid.map(\.label) + [
-        "Up and Out", "Up", "Up and In",
+        "Up & Out", "Up", "Up & In",
         "Out", "In",
-        "Down and Out", "Down", "Down and In"
+        "↓ & Out", "↓ ", "↓ & In"
     ]
 }
 
@@ -54,9 +264,16 @@ func normalizedLocation(from label: String) -> String {
 }
 func normalizedLabel(_ label: String) -> String {
     switch label {
-    case "Up and In", "Down and In", "In": return "Inside"
-    case "Up and Out", "Down and Out", "Out": return "Outside"
-    default: return label
+    case "Up & In":       return "Up & In"
+    case "↓ & In":     return "↓ & In"
+    case "Up & Out":      return "Up & Out"
+    case "↓ & Out":    return "↓ & Out"
+    case "Up":              return "Up"
+    case "↓ ":            return "↓ "
+    case "In":              return "In"
+    case "Out":             return "Out"
+    case "Middle":          return "Middle"
+    default:                return label
     }
 }
 struct GridLocation: Identifiable {
@@ -66,25 +283,59 @@ struct GridLocation: Identifiable {
     let label: String
 }
 let strikeGrid: [GridLocation] = [
-    .init(row: 0, col: 0, label: "Up and Out"),
+    .init(row: 0, col: 0, label: "Up & Out"),
     .init(row: 0, col: 1, label: "Up"),
-    .init(row: 0, col: 2, label: "Up and In"),
+    .init(row: 0, col: 2, label: "Up & In"),
     .init(row: 1, col: 0, label: "Out"),
     .init(row: 1, col: 1, label: "Middle"),
     .init(row: 1, col: 2, label: "In"),
-    .init(row: 2, col: 0, label: "Down and Out"),
-    .init(row: 2, col: 1, label: "Down"),
-    .init(row: 2, col: 2, label: "Down and In")
+    .init(row: 2, col: 0, label: "↓ & Out"),
+    .init(row: 2, col: 1, label: "↓ "),
+    .init(row: 2, col: 2, label: "↓ & In")
 ]
 struct PitchLabelManager {
     let batterSide: BatterSide
-    
+
     func adjustedLabel(from rawLabel: String) -> String {
         guard batterSide == .left else { return rawLabel }
-        return rawLabel
-            .replacingOccurrences(of: "Inside", with: "TEMP")
-            .replacingOccurrences(of: "Outside", with: "Inside")
-            .replacingOccurrences(of: "TEMP", with: "Outside")
+
+        // Swap "In" and "Out" while preserving other words and the ampersand
+        // We do a safe token-based swap to avoid accidental substring collisions (e.g., "In" inside another word).
+        // Split on spaces and ampersand tokens to find exact tokens.
+        let separators = CharacterSet(charactersIn: " &")
+        var tokens = rawLabel.components(separatedBy: separators)
+
+        // Rebuild preserving separators: we'll replace tokens in place
+        var output = rawLabel
+
+        // Replace whole-word tokens only: use word boundaries via regex-like approach
+        // Note: Swift String methods used here for clarity and safety.
+        func replaceWholeWord(_ word: String, with replacement: String) {
+            // Replace occurrences where the token is bounded by start/end or separators (space or '&')
+            // This simple approach works with our known token set ("Up", "↓ ", "In", "Out", "Middle")
+            output = output.replacingOccurrences(of: " \(word) ", with: " \(replacement) ")
+            if output.hasPrefix("\(word) ") {
+                output = output.replacingOccurrences(of: "\(word) ", with: "\(replacement) ")
+            }
+            if output.hasSuffix(" \(word)") {
+                output = output.replacingOccurrences(of: " \(word)", with: " \(replacement)")
+            }
+            // also handle cases with ampersand separators " & "
+            output = output.replacingOccurrences(of: " & \(word) ", with: " & \(replacement) ")
+            if output.hasPrefix("\(word) &") {
+                output = output.replacingOccurrences(of: "\(word) &", with: "\(replacement) &")
+            }
+            if output.hasSuffix("& \(word)") {
+                output = output.replacingOccurrences(of: "& \(word)", with: "& \(replacement)")
+            }
+        }
+
+        // do safe swap using a temp token to avoid collision
+        replaceWholeWord("In", with: "__TEMP_IN__")
+        replaceWholeWord("Out", with: "In")
+        replaceWholeWord("__TEMP_IN__", with: "Out")
+
+        return output
     }
 }
 struct PitchCodeAssignment: Hashable {
@@ -204,9 +455,9 @@ struct CodeAssignmentPanel: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach([
-                            "Up and Out", "Up", "Up and In",
+                            "Up & Out", "Up", "Up & In",
                             "Out", "In",
-                            "Down and Out", "Down", "Down and In"
+                            "↓ & Out", "↓ ", "↓ & In"
                         ], id: \.self) { label in
                             locationButton(label: label, isStrike: false)
                         }
@@ -651,6 +902,8 @@ struct PitchTrackerView: View {
                     Divider()
                     
                     VStack {
+                        if let selectedTemplate = selectedTemplate {
+                            Text("")
                         StrikeZoneView(
                             geo: geo,
                             batterSide: batterSide,
@@ -663,6 +916,31 @@ struct PitchTrackerView: View {
                             selectedPitch: selectedPitch,
                             pitchCodeAssignments: pitchCodeAssignments
                         )
+                        } else {
+                            ZStack{
+                                StrikeZoneView(
+                                    geo: geo,
+                                    batterSide: batterSide,
+                                    lastTappedPosition: lastTappedPosition,
+                                    setLastTapped: { lastTappedPosition = $0 },
+                                    calledPitch: calledPitch,
+                                    setCalledPitch: { calledPitch = $0 },
+                                    selectedPitches: selectedPitches,
+                                    gameIsActive: gameIsActive,
+                                    selectedPitch: selectedPitch,
+                                    pitchCodeAssignments: pitchCodeAssignments
+                                )
+                                Text("Choose a template")
+                                    .font(.headline)
+                                    .foregroundColor(.gray)
+                                    .frame(height: geo.size.height * 0.7, alignment: .top)
+                                    .frame(maxWidth: .infinity)
+                                    .background(Color.white.opacity(0.8))
+                                    .cornerRadius(20)
+                                    .padding(.top, 8)
+                                
+                            }
+                        }
                     }
                     .frame(height: geo.size.height * 0.7) // ✅ Prevents overlap
                     .clipped()
@@ -842,185 +1120,8 @@ struct CalledPitchView: View {
     }
 }
 
-struct StrikeZoneView: View {
-    let geo: GeometryProxy
-    let batterSide: BatterSide
-    let lastTappedPosition: CGPoint?
-    let setLastTapped: (CGPoint?) -> Void
-    let calledPitch: PitchCall?
-    let setCalledPitch: (PitchCall?) -> Void
-    let selectedPitches: Set<String>
-    let gameIsActive: Bool
-    let selectedPitch: String
-    let pitchCodeAssignments: [PitchCodeAssignment]
-    
-    var body: some View {
-        let zoneWidth = geo.size.width * 0.4
-        let zoneHeight = geo.size.height * 0.35
-        let cellWidth = zoneWidth / 3
-        let cellHeight = zoneHeight / 3
-        let buttonSize = min(cellWidth, cellHeight) * 0.8
-        let originX = (geo.size.width - zoneWidth) / 2
-        let originY: CGFloat = 0
-        let labelManager = PitchLabelManager(batterSide: batterSide)
-        
-        ZStack(alignment: .topLeading) {
-            Rectangle()
-                .stroke(Color.black, lineWidth: 2)
-                .frame(width: zoneWidth, height: zoneHeight)
-                .position(x: originX + zoneWidth / 2, y: originY + zoneHeight / 2)
-            
-            ForEach(strikeGrid) { loc in
-                let x = originX + CGFloat(loc.col) * cellWidth + cellWidth / 2
-                let y = originY + CGFloat(loc.row) * cellHeight + cellHeight / 2
-                
-                pitchButton(
-                    x: x,
-                    y: y,
-                    location: .init(label: loc.label, isStrike: true),
-                    labelManager: labelManager,
-                    lastTappedPosition: lastTappedPosition,
-                    setLastTapped: setLastTapped,
-                    setCalledPitch: setCalledPitch,
-                    buttonSize: buttonSize,
-                    selectedPitch: selectedPitch,
-                    pitchCodeAssignments: pitchCodeAssignments,
-                    gameIsActive: gameIsActive
-                )
-            }
-            
-            let ballLocations: [(String, CGFloat, CGFloat)] = [
-                ("Up and Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
-                ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
-                ("Up and In", originX + zoneWidth + buttonSize * 0.6, originY - buttonSize * 0.6),
-                
-                ("Out", originX - buttonSize * 0.75, originY + zoneHeight / 2),
-                ("In", originX + zoneWidth + buttonSize * 0.75, originY + zoneHeight / 2),
-                
-                ("Down and Out", originX - buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6),
-                ("Down", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
-                ("Down and In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
-            ]
-            ForEach(ballLocations, id: \.0) { label, x, y in
-                pitchButton(
-                    x: x,
-                    y: y,
-                    location: .init(label: label, isStrike: false),
-                    labelManager: labelManager,
-                    lastTappedPosition: lastTappedPosition,
-                    setLastTapped: setLastTapped,
-                    setCalledPitch: setCalledPitch,
-                    buttonSize: buttonSize,
-                    selectedPitch: selectedPitch,
-                    pitchCodeAssignments: pitchCodeAssignments,
-                    gameIsActive: gameIsActive
-                )
-            }
-        }
-        .frame(height: zoneHeight + buttonSize * 3)
-    }
-    private func pitchButton(
-        x: CGFloat,
-        y: CGFloat,
-        location: PitchLocation,
-        labelManager: PitchLabelManager,
-        lastTappedPosition: CGPoint?,
-        setLastTapped: @escaping (CGPoint?) -> Void,
-        setCalledPitch: @escaping (PitchCall?) -> Void,
-        buttonSize: CGFloat,
-        selectedPitch: String,
-        pitchCodeAssignments: [PitchCodeAssignment],
-        gameIsActive: Bool
-    ) -> some View {
-        let tappedPoint = CGPoint(x: x, y: y)
-        let prefix = location.isStrike ? "Strike" : "Ball"
-        let normalized = normalizedLabel(location.label)
-        let baseLabel = labelManager.adjustedLabel(from: normalized)
-        let fullLabel = "\(prefix) \(baseLabel)"
+// MARK: - PitchCall display helpers
 
-        let assignedCode = pitchCodeAssignments.first {
-            $0.pitch == selectedPitch && $0.location == fullLabel
-        }
-
-        let isDisabled = gameIsActive && assignedCode == nil
-        let isSelected = lastTappedPosition == tappedPoint
-
-        return Group {
-            if isDisabled {
-                disabledView(isStrike: location.isStrike)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .position(x: x, y: y)
-                    .zIndex(1)
-            }
-
-            Menu {
-                if selectedPitches.isEmpty {
-                    Button("Select pitches first") {}.disabled(true)
-                } else {
-                    ForEach(Array(selectedPitches), id: \.self) { pitch in
-                        Button(pitch) {
-                            withAnimation {
-                                let assignedCodes = pitchCodeAssignments
-                                    .filter { $0.pitch == pitch && $0.location == fullLabel }
-                                    .map(\.code)
-
-                                let newCall = PitchCall(
-                                    pitch: pitch,
-                                    location: fullLabel,
-                                    isStrike: location.isStrike,
-                                    codes: assignedCodes
-                                )
-
-                                let isSameCall = lastTappedPosition == tappedPoint &&
-                                    calledPitch?.location == newCall.location &&
-                                    calledPitch?.pitch == newCall.pitch
-
-                                if isSameCall {
-                                    setLastTapped(nil)
-                                    setCalledPitch(nil)
-                                } else {
-                                    setLastTapped(tappedPoint)
-                                    setCalledPitch(newCall)
-                                }
-                            }
-                        }
-                    }
-                }
-            } label: {
-                ZStack {
-                    shapeView(isStrike: location.isStrike, isSelected: isSelected)
-
-                    Text(fullLabel)
-                        .font(.system(size: buttonSize * 0.24, weight: .semibold))
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.5)
-                        .padding(4)
-                }
-                .frame(width: buttonSize, height: buttonSize)
-                .contentShape(Rectangle())
-            }
-            .position(x: x, y: y)
-            .zIndex(1)
-        }
-    }
-    }
-@ViewBuilder
-private func shapeView(isStrike: Bool, isSelected: Bool) -> some View {
-    Circle()
-        .fill(isStrike ? Color.green.opacity(isSelected ? 0.6 : 1.0) : Color.red.opacity(isSelected ? 0.6 : 1.0))
-        .overlay(Circle().stroke(Color.black, lineWidth: isSelected ? 3 : 0))
-}
-    @ViewBuilder
-    private func disabledView(isStrike: Bool) -> some View {
-        if isStrike {
-            Circle().fill(Color.gray.opacity(0.3))
-        } else {
-            RoundedRectangle(cornerRadius: 4).fill(Color.gray.opacity(0.3))
-        }
-    
-}
 struct LocationImageView: View {
     let location: String
     let isSelected: Bool
