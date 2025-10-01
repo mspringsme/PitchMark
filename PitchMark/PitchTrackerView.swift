@@ -265,8 +265,8 @@ func menuContent(
                 .map(\.code)
 
             let codeSuffix = assignedCodes.isEmpty
-                ? " [No codes]"
-                : " [\(assignedCodes.joined(separator: ", "))]"
+                ? "     --"
+                : "   \(assignedCodes.joined(separator: ", "))"
 
             Button("\(pitch)\(codeSuffix)") {
                 withAnimation {
