@@ -10,13 +10,13 @@ import SwiftUI
 let pitchColors: [String: Color] = [
     "4 Seam": .blue,
     "2 Seam": .green,
-    "Change": .orange,
+    "Change": .brown,
     "Curve": .purple,
-    "Screw": .pink,
+    "Screw": .gray,
     "Smile": .yellow,
     "Drop": .cyan,
     "Rise": .mint,
-    "Pipe": .red
+    "Pipe": .black
 ]
 
 let strikeGrid: [GridLocation] = [

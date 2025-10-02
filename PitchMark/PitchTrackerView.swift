@@ -440,10 +440,7 @@ struct ToggleChip: View {
             )
             .foregroundColor(.white)
             .cornerRadius(16)
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(isInTemplate ? Color.green : Color.clear, lineWidth: 2)
-            )
+            
             .overlay(
                 Group {
                     if assignedCodeCount > 0 {

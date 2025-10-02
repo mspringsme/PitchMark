@@ -58,14 +58,25 @@ struct TemplateEditorView: View {
                                     selectedPitches.insert(pitch)
                                 }
                             }) {
-                                Text(pitch)
-                                    .padding(8)
-                                    .background(isSelected ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
-                                    .cornerRadius(8)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .stroke(isSelected ? Color.green : Color.clear, lineWidth: 1)
-                                    )
+                                HStack(spacing: 4) {
+                                    if isSelected {
+                                        Image(systemName: "checkmark")
+                                            .font(.caption)
+                                            .foregroundColor(.green)
+                                    }
+
+                                    Text(pitch)
+                                        .font(.subheadline)
+                                        .foregroundColor(.primary)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(isSelected ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
+                                .cornerRadius(16)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(isSelected ? Color.green : Color.clear, lineWidth: 1)
+                                )
                             }
                         }
                     }
@@ -186,58 +197,123 @@ struct CodeAssignmentPanel: View {
                 }
                 .padding(.horizontal)
             }
-
-            // 🔹 Dynamic Pitch + Location Label
-            Text("\(selectedPitch) → \(selectedLocation)")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack {
+            HStack(spacing: 12) {
+                // 🔹 Select Pitch
+                Menu {
                     ForEach(allPitches, id: \.self) { pitch in
-                        Button(action: { selectedPitch = pitch }) {
-                            Text(pitch)
-                                .padding(6)
-                                .background(selectedPitch == pitch ? Color.blue : Color.gray.opacity(0.2))
-                                .foregroundColor(.white)
-                                .cornerRadius(6)
+                        Button(action: {
+                            selectedPitch = pitch
+                        }) {
+                            Label(pitch, systemImage: selectedPitch == pitch ? "checkmark" : "")
                         }
                     }
+                } label: {
+                    HStack {
+                        Text(selectedPitch.isEmpty ? "Select Pitch" : selectedPitch)
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                    )
                 }
+
+                // 🔹 Strike Location
+                Menu {
+                    ForEach(strikeGrid.map(\.label), id: \.self) { label in
+                        let fullLabel = "Strike \(label)"
+                        Button(action: {
+                            selectedLocation = fullLabel
+                        }) {
+                            HStack {
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundColor(.primary)
+                                if selectedLocation == fullLabel {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                        .font(.caption2)
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(selectedLocation.starts(with: "Strike") ? selectedLocation.replacingOccurrences(of: "Strike ", with: "") : "Strike Location")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .disabled(selectedPitch.isEmpty)
+
+                // 🔹 Ball Location
+                Menu {
+                    ForEach([
+                        "Up & Out", "Up", "Up & In",
+                        "Out", "In",
+                        "↓ & Out", "↓ ", "↓ & In"
+                    ], id: \.self) { label in
+                        let fullLabel = "Ball \(label)"
+                        Button(action: {
+                            selectedLocation = fullLabel
+                        }) {
+                            HStack {
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundColor(.primary)
+                                if selectedLocation == fullLabel {
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                        .font(.caption2)
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(selectedLocation.starts(with: "Ball") ? selectedLocation.replacingOccurrences(of: "Ball ", with: "") : "Ball Location")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                    )
+                }
+                .disabled(selectedPitch.isEmpty)
             }
-            VStack(alignment: .leading, spacing: 16) {
-                // 🔹 Strike Locations
-                Text("Strike Locations")
-                    .font(.headline)
-                    .padding(.leading)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(strikeGrid.map(\.label), id: \.self) { label in
-                            locationButton(label: label, isStrike: true)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-
-                // 🔹 Ball Locations
-                Text("Ball Locations")
-                    .font(.headline)
-                    .padding(.leading)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach([
-                            "Up & Out", "Up", "Up & In",
-                            "Out", "In",
-                            "↓ & Out", "↓ ", "↓ & In"
-                        ], id: \.self) { label in
-                            locationButton(label: label, isStrike: false)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-            }            // 🔹 Selected Codes Display
+            .padding(.horizontal)
+            
             Text("\(selectedCodes.sorted().joined(separator: ", "))")
                 .font(.headline)
                 .padding(.top, 4)
@@ -276,7 +352,7 @@ struct CodeAssignmentPanel: View {
                                 ForEach(codes, id: \.self) { code in
                                     let isGloballyAssigned = pitchCodeAssignments.contains { $0.code == code }
                                     let isSelected = selectedCodes.contains(code)
-
+                                    let isAssignedToSelectedPitch = pitchCodeAssignments.contains { $0.code == code && $0.pitch == selectedPitch }
                                     Button(action: {
                                         if isGloballyAssigned { return }
                                         if isSelected {
@@ -288,7 +364,11 @@ struct CodeAssignmentPanel: View {
                                         Text(code)
                                             .font(.body)
                                             .frame(width: 60, height: 36)
-                                            .background(isGloballyAssigned ? Color.clear : isSelected ? Color.green.opacity(0.2) : Color.blue.opacity(0.2))
+                                            .background(
+                                                isGloballyAssigned ? Color.clear :
+                                                isSelected ? Color.green.opacity(0.2) :
+                                                Color.blue.opacity(0.2)
+                                            )
                                             .foregroundColor(isGloballyAssigned ? .red : .black)
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 6)
@@ -299,6 +379,14 @@ struct CodeAssignmentPanel: View {
                                                         lineWidth: 1
                                                     )
                                             )
+                                            .shadow(
+                                                color: isAssignedToSelectedPitch ? Color.purple.opacity(0.4) : .clear,
+                                                radius: isAssignedToSelectedPitch ? 4 : 0
+                                            )
+                                            .background(
+                                                isAssignedToSelectedPitch ? Color.purple.opacity(0.2) : Color.clear
+                                            )
+                                            .cornerRadius(6)
                                     }
                                     .disabled(isGloballyAssigned)
                                 }
