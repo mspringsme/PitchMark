@@ -357,48 +357,69 @@ struct CodeAssignmentPanel: View {
 
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
                                 ForEach(codes, id: \.self) { code in
+                                    let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
                                     let isGloballyAssigned = pitchCodeAssignments.contains { $0.code == code }
+                                    let isAssignedToCurrentLocation = pitchCodeAssignments.contains(assignment)
                                     let isSelected = selectedCodes.contains(code)
-                                    let isAssignedToSelectedPitch = pitchCodeAssignments.contains { $0.code == code && $0.pitch == selectedPitch }
-                                    let isAssignedToCurrentLocation = assignedCodesForSelection.contains(code)
+                                    let isAssignedToSelectedPitch = pitchCodeAssignments.contains {
+                                        $0.code == code && $0.pitch == selectedPitch
+                                    }
+
+                                    // Visual styling
+                                    let backgroundColor: Color = {
+                                        if isGloballyAssigned {
+                                            return .clear
+                                        } else if isAssignedToCurrentLocation {
+                                            return Color.blue.opacity(0.2)
+                                        } else if isSelected {
+                                            return Color.green.opacity(0.2)
+                                        } else {
+                                            return Color.blue.opacity(0.2)
+                                        }
+                                    }()
+
+                                    let borderColor: Color = {
+                                        if isAssignedToCurrentLocation {
+                                            return .black
+                                        } else if isGloballyAssigned {
+                                            return .red
+                                        } else if isSelected {
+                                            return .green
+                                        } else {
+                                            return .blue
+                                        }
+                                    }()
+
+                                    let borderWidth: CGFloat = isAssignedToCurrentLocation ? 3 : 1
+                                    let shadowColor: Color = isAssignedToSelectedPitch ? Color.purple.opacity(0.4) : .clear
+                                    let pitchHighlight: Color = isAssignedToSelectedPitch ? Color.purple.opacity(0.2) : .clear
+                                    let textColor: Color = isGloballyAssigned ? .red : .black
 
                                     Button(action: {
-                                        if isGloballyAssigned { return }
-                                        if isSelected {
-                                            selectedCodes.remove(code)
-                                        } else {
-                                            selectedCodes.insert(code)
+                                        if isAssignedToCurrentLocation {
+                                            pitchCodeAssignments.removeAll { $0 == assignment }
+                                        } else if !isGloballyAssigned {
+                                            if isSelected {
+                                                selectedCodes.remove(code)
+                                            } else {
+                                                selectedCodes.insert(code)
+                                            }
                                         }
                                     }) {
                                         Text(code)
                                             .font(.body)
                                             .frame(width: 60, height: 36)
-                                            .background(
-                                                isGloballyAssigned ? Color.clear :
-                                                isSelected ? Color.green.opacity(0.2) :
-                                                Color.blue.opacity(0.2)
-                                            )
-                                            .foregroundColor(isGloballyAssigned ? .red : .black)
+                                            .background(backgroundColor)
+                                            .foregroundColor(textColor)
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 6)
-                                                    .stroke(
-                                                        isAssignedToCurrentLocation ? Color.black :
-                                                        isGloballyAssigned ? Color.red :
-                                                        isSelected ? Color.green :
-                                                        Color.blue,
-                                                        lineWidth: isAssignedToCurrentLocation ? 3 : 1
-                                                    )
+                                                    .stroke(borderColor, lineWidth: borderWidth)
                                             )
-                                            .shadow(
-                                                color: isAssignedToSelectedPitch ? Color.purple.opacity(0.4) : .clear,
-                                                radius: isAssignedToSelectedPitch ? 4 : 0
-                                            )
-                                            .background(
-                                                isAssignedToSelectedPitch ? Color.purple.opacity(0.2) : Color.clear
-                                            )
+                                            .shadow(color: shadowColor, radius: isAssignedToSelectedPitch ? 4 : 0)
+                                            .background(pitchHighlight)
                                             .cornerRadius(6)
                                     }
-                                    .disabled(isGloballyAssigned)
+                                    .disabled(isGloballyAssigned && !isAssignedToCurrentLocation)
                                 }
                             }
                         }
