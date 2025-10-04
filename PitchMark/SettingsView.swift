@@ -154,7 +154,6 @@ struct SettingsView: View {
                         }
                         
                         authManager.saveTemplate(updatedTemplate) // ✅ persist to Firestore
-                        selectedTemplate = nil
                     }
                 )
             }

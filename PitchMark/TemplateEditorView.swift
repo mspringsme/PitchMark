@@ -126,7 +126,6 @@ struct TemplateEditorView: View {
                         codeAssignments: codeAssignments
                     )
                     onSave(newTemplate)
-                    dismiss()
                 }
                 .disabled(
                     name.isEmpty ||
