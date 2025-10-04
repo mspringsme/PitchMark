@@ -104,19 +104,21 @@ struct TemplateEditorView: View {
                     }
                 )
                 
-                Spacer()
-                
                 Button("Save Template") {
-                    // ✅ First, assign any pending codes
-                    for code in selectedCodes {
-                        let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
-                        if !codeAssignments.contains(assignment) {
-                            codeAssignments.append(assignment)
+                    if !selectedCodes.isEmpty && !selectedPitch.isEmpty && !selectedLocation.isEmpty {
+                        let newAssignments = selectedCodes.map {
+                            PitchCodeAssignment(code: $0, pitch: selectedPitch, location: selectedLocation)
                         }
-                    }
-                    selectedCodes.removeAll()
 
-                    // ✅ Then, save the full template
+                        for assignment in newAssignments {
+                            if !codeAssignments.contains(assignment) {
+                                codeAssignments.append(assignment)
+                            }
+                        }
+
+                        selectedCodes.removeAll()
+                    }
+
                     let newTemplate = PitchTemplate(
                         id: templateID,
                         name: name,
@@ -126,7 +128,35 @@ struct TemplateEditorView: View {
                     onSave(newTemplate)
                     dismiss()
                 }
-                .disabled(name.isEmpty || selectedPitches.isEmpty)
+                .disabled(
+                    name.isEmpty ||
+                    selectedPitches.isEmpty
+                )
+                .padding(.bottom)
+                
+                Spacer()
+                
+//                Button("Save Template") {
+//                    // ✅ First, assign any pending codes
+//                    for code in selectedCodes {
+//                        let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
+//                        if !codeAssignments.contains(assignment) {
+//                            codeAssignments.append(assignment)
+//                        }
+//                    }
+//                    selectedCodes.removeAll()
+//
+//                    // ✅ Then, save the full template
+//                    let newTemplate = PitchTemplate(
+//                        id: templateID,
+//                        name: name,
+//                        pitches: Array(selectedPitches),
+//                        codeAssignments: codeAssignments
+//                    )
+//                    onSave(newTemplate)
+//                    dismiss()
+//                }
+//                .disabled(name.isEmpty || selectedPitches.isEmpty)
             }
             .padding()
         }
@@ -326,21 +356,23 @@ struct CodeAssignmentPanel: View {
                 .padding(.top, 4)
 
             // 🔹 Assign Button
-            Button("Assign Codes") {
-                for code in selectedCodes {
-                    let assignment = PitchCodeAssignment(
-                        code: code,
-                        pitch: selectedPitch,
-                        location: selectedLocation // already prefixed
-                    )
-                    if !pitchCodeAssignments.contains(assignment) {
-                        pitchCodeAssignments.append(assignment)
-                    }
-                }
-                selectedCodes.removeAll()
-            }
-            .disabled(selectedCodes.isEmpty || selectedPitch.isEmpty || selectedLocation.isEmpty)
+//            Button("Assign Codes") {
+//                for code in selectedCodes {
+//                    let assignment = PitchCodeAssignment(
+//                        code: code,
+//                        pitch: selectedPitch,
+//                        location: selectedLocation // already prefixed
+//                    )
+//                    if !pitchCodeAssignments.contains(assignment) {
+//                        pitchCodeAssignments.append(assignment)
+//                    }
+//                }
+//                selectedCodes.removeAll()
+//            }
+//            .disabled(selectedCodes.isEmpty || selectedPitch.isEmpty || selectedLocation.isEmpty)
 
+
+            
             Divider()
 
             // 🔹 Embedded Scrollable Code Picker
