@@ -191,7 +191,8 @@ struct CodeAssignmentPanel: View {
                             .font(.caption)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
-                            .background(Color.gray.opacity(0.2))
+                            .background(Color.black.opacity(0.8))
+                            .foregroundStyle(Color.white)
                             .cornerRadius(6)
                     }
                 }
@@ -218,7 +219,7 @@ struct CodeAssignmentPanel: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color.gray.opacity(0.1))
+                    .background(selectedPitch.isEmpty ? Color.gray.opacity(0.1) : Color.purple.opacity(0.2))
                     .cornerRadius(8)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
@@ -250,11 +251,11 @@ struct CodeAssignmentPanel: View {
                 } label: {
                     HStack {
                         Text(selectedLocation.starts(with: "Strike") ? selectedLocation.replacingOccurrences(of: "Strike ", with: "") : "Strike Location")
-                            .font(.subheadline)
-                            .foregroundColor(.primary)
-                        Image(systemName: "chevron.down")
-                            .font(.caption)
-                            .foregroundColor(.gray)
+                                .font(.subheadline)
+                                .foregroundColor(selectedPitch.isEmpty ? Color.gray.opacity(0.5) : .primary)
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                                .foregroundColor(.gray)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -262,7 +263,10 @@ struct CodeAssignmentPanel: View {
                     .cornerRadius(8)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                            .stroke(
+                                selectedLocation.starts(with: "Strike") ? Color.black : Color.blue.opacity(0.3),
+                                lineWidth: selectedLocation.starts(with: "Strike") ? 2 : 1
+                            )
                     )
                 }
                 .disabled(selectedPitch.isEmpty)
@@ -295,11 +299,11 @@ struct CodeAssignmentPanel: View {
                 } label: {
                     HStack {
                         Text(selectedLocation.starts(with: "Ball") ? selectedLocation.replacingOccurrences(of: "Ball ", with: "") : "Ball Location")
-                            .font(.subheadline)
-                            .foregroundColor(.primary)
-                        Image(systemName: "chevron.down")
-                            .font(.caption)
-                            .foregroundColor(.gray)
+                                .font(.subheadline)
+                                .foregroundColor(selectedPitch.isEmpty ? Color.gray.opacity(0.5) : .primary)
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                                .foregroundColor(.gray)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
@@ -307,7 +311,10 @@ struct CodeAssignmentPanel: View {
                     .cornerRadius(8)
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                            .stroke(
+                                selectedLocation.starts(with: "Ball") ? Color.black : Color.blue.opacity(0.3),
+                                lineWidth: selectedLocation.starts(with: "Ball") ? 2 : 1
+                            )
                     )
                 }
                 .disabled(selectedPitch.isEmpty)
@@ -353,6 +360,8 @@ struct CodeAssignmentPanel: View {
                                     let isGloballyAssigned = pitchCodeAssignments.contains { $0.code == code }
                                     let isSelected = selectedCodes.contains(code)
                                     let isAssignedToSelectedPitch = pitchCodeAssignments.contains { $0.code == code && $0.pitch == selectedPitch }
+                                    let isAssignedToCurrentLocation = assignedCodesForSelection.contains(code)
+
                                     Button(action: {
                                         if isGloballyAssigned { return }
                                         if isSelected {
@@ -373,10 +382,11 @@ struct CodeAssignmentPanel: View {
                                             .overlay(
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .stroke(
+                                                        isAssignedToCurrentLocation ? Color.black :
                                                         isGloballyAssigned ? Color.red :
                                                         isSelected ? Color.green :
                                                         Color.blue,
-                                                        lineWidth: 1
+                                                        lineWidth: isAssignedToCurrentLocation ? 3 : 1
                                                     )
                                             )
                                             .shadow(
