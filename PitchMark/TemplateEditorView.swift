@@ -13,11 +13,37 @@ struct TemplateEditorView: View {
     @State private var selectedLocation: String = ""
     @State private var selectedCodes: Set<String> = []
     @State private var codeAssignments: [PitchCodeAssignment]
+    @State private var hasUnsavedChanges = false
+    @State private var showSaveAlert = false
     
     let allPitches: [String]
     let templateID: UUID
     let onSave: (PitchTemplate) -> Void
     @Environment(\.dismiss) var dismiss
+    
+    private func saveTemplate() {
+        if !selectedCodes.isEmpty && !selectedPitch.isEmpty && !selectedLocation.isEmpty {
+            let newAssignments = selectedCodes.map {
+                PitchCodeAssignment(code: $0, pitch: selectedPitch, location: selectedLocation)
+            }
+
+            for assignment in newAssignments {
+                if !codeAssignments.contains(assignment) {
+                    codeAssignments.append(assignment)
+                }
+            }
+
+            selectedCodes.removeAll()
+        }
+
+        let newTemplate = PitchTemplate(
+            id: templateID,
+            name: name,
+            pitches: Array(selectedPitches),
+            codeAssignments: codeAssignments
+        )
+        onSave(newTemplate)
+    }
     
     init(template: PitchTemplate?, allPitches: [String], onSave: @escaping (PitchTemplate) -> Void) {
         self.allPitches = allPitches
@@ -36,128 +62,98 @@ struct TemplateEditorView: View {
     }
     
     var body: some View {
-        ZStack {
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    UIApplication.shared.endEditing()
-                }
-            VStack(spacing: 16) {
-                TextField("Template Name", text: $name)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .padding()
-                
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack {
-                        ForEach(allPitches, id: \.self) { pitch in
-                            let isSelected = selectedPitches.contains(pitch)
-                            Button(action: {
-                                if isSelected {
-                                    selectedPitches.remove(pitch)
-                                } else {
-                                    selectedPitches.insert(pitch)
-                                }
-                            }) {
-                                HStack(spacing: 4) {
+        NavigationStack {
+            ZStack {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        UIApplication.shared.endEditing()
+                    }
+                VStack(spacing: 16) {
+                    TextField("Template Name", text: $name)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .padding()
+                    
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack {
+                            ForEach(pitchOrder, id: \.self) { pitch in
+                                let isSelected = selectedPitches.contains(pitch)
+                                Button(action: {
                                     if isSelected {
-                                        Image(systemName: "checkmark")
-                                            .font(.caption)
-                                            .foregroundColor(.green)
+                                        selectedPitches.remove(pitch)
+                                    } else {
+                                        selectedPitches.insert(pitch)
                                     }
-
-                                    Text(pitch)
-                                        .font(.subheadline)
-                                        .foregroundColor(.primary)
+                                }) {
+                                    HStack(spacing: 4) {
+                                        if isSelected {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption)
+                                                .foregroundColor(.green)
+                                        }
+                                        
+                                        Text(pitch)
+                                            .font(.subheadline)
+                                            .foregroundColor(.primary)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(isSelected ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
+                                    .cornerRadius(16)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(isSelected ? Color.green : Color.clear, lineWidth: 1)
+                                    )
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(isSelected ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
-                                .cornerRadius(16)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 16)
-                                        .stroke(isSelected ? Color.green : Color.clear, lineWidth: 1)
-                                )
                             }
                         }
+                        .padding(.horizontal)
                     }
-                    .padding(.horizontal)
-                }
-                
-                Divider()
-                
-                // 🔹 Code Assignment Panel
-                CodeAssignmentPanel(
-                    selectedCodes: $selectedCodes,
-                    selectedPitch: $selectedPitch,
-                    selectedLocation: $selectedLocation,
-                    pitchCodeAssignments: $codeAssignments,
-                    allPitches: Array(selectedPitches),
-                    allLocations: allLocationsFromGrid(),
-                    assignAction: {
-                        for code in selectedCodes {
-                            let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
-                            if !codeAssignments.contains(assignment) {
-                                codeAssignments.append(assignment)
+                    
+                    Divider()
+                    
+                    // 🔹 Code Assignment Panel
+                    CodeAssignmentPanel(
+                        selectedCodes: $selectedCodes,
+                        selectedPitch: $selectedPitch,
+                        selectedLocation: $selectedLocation,
+                        pitchCodeAssignments: $codeAssignments,
+                        allPitches: Array(selectedPitches),
+                        allLocations: allLocationsFromGrid(),
+                        assignAction: {
+                            for code in selectedCodes {
+                                let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
+                                if !codeAssignments.contains(assignment) {
+                                    codeAssignments.append(assignment)
+                                }
                             }
+                            selectedCodes.removeAll()
                         }
-                        selectedCodes.removeAll()
-                    }
-                )
-                
-                Button("Save Template") {
-                    if !selectedCodes.isEmpty && !selectedPitch.isEmpty && !selectedLocation.isEmpty {
-                        let newAssignments = selectedCodes.map {
-                            PitchCodeAssignment(code: $0, pitch: selectedPitch, location: selectedLocation)
-                        }
-
-                        for assignment in newAssignments {
-                            if !codeAssignments.contains(assignment) {
-                                codeAssignments.append(assignment)
-                            }
-                        }
-
-                        selectedCodes.removeAll()
-                    }
-
-                    let newTemplate = PitchTemplate(
-                        id: templateID,
-                        name: name,
-                        pitches: Array(selectedPitches),
-                        codeAssignments: codeAssignments
                     )
-                    onSave(newTemplate)
+                    
+                    Button("Save") {
+                        saveTemplate()
+                    }
+                    .disabled(
+                        name.isEmpty ||
+                        selectedPitches.isEmpty
+                    )
+                    .padding(.bottom)
+                    
+                    Spacer()
+                    
                 }
-                .disabled(
-                    name.isEmpty ||
-                    selectedPitches.isEmpty
-                )
-                .padding(.bottom)
-                
-                Spacer()
-                
-//                Button("Save Template") {
-//                    // ✅ First, assign any pending codes
-//                    for code in selectedCodes {
-//                        let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
-//                        if !codeAssignments.contains(assignment) {
-//                            codeAssignments.append(assignment)
-//                        }
-//                    }
-//                    selectedCodes.removeAll()
-//
-//                    // ✅ Then, save the full template
-//                    let newTemplate = PitchTemplate(
-//                        id: templateID,
-//                        name: name,
-//                        pitches: Array(selectedPitches),
-//                        codeAssignments: codeAssignments
-//                    )
-//                    onSave(newTemplate)
-//                    dismiss()
-//                }
-//                .disabled(name.isEmpty || selectedPitches.isEmpty)
+                .padding()
             }
-            .padding()
+            .interactiveDismissDisabled(true)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Save and Close") {
+                        saveTemplate()
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 }
@@ -180,9 +176,27 @@ struct CodeAssignmentPanel: View {
     }
 
     private var assignedCodesForSelection: [String] {
-        pitchCodeAssignments
-            .filter { $0.pitch == selectedPitch && $0.location == selectedLocation }
-            .map(\.code)
+        let allForPitch = pitchCodeAssignments.filter { $0.pitch == selectedPitch }
+
+        if selectedLocation.isEmpty {
+            return Array(Set(allForPitch.map(\.code))) // all codes for pitch
+        } else {
+            return allForPitch
+                .filter { $0.location == selectedLocation }
+                .map(\.code)
+        }
+    }
+    
+    private func codeCount(for pitch: String) -> Int {
+        pitchCodeAssignments.filter { $0.pitch == pitch }.count
+    }
+
+    private func codeCount(forLocation label: String, isStrike: Bool) -> Int {
+        let prefix = isStrike ? "Strike" : "Ball"
+        let fullLabel = "\(prefix) \(label)"
+        return pitchCodeAssignments.filter {
+            $0.pitch == selectedPitch && $0.location == fullLabel
+        }.count
     }
     
     @ViewBuilder
@@ -227,10 +241,15 @@ struct CodeAssignmentPanel: View {
                 }
                 .padding(.horizontal)
             }
+
             HStack(spacing: 12) {
+                
                 // 🔹 Select Pitch
                 Menu {
-                    ForEach(allPitches, id: \.self) { pitch in
+                    ForEach(allPitches.sorted(by: {
+                        pitchOrder.firstIndex(of: $0) ?? .max
+                        < pitchOrder.firstIndex(of: $1) ?? .max
+                    }), id: \.self) { pitch in
                         Button(action: {
                             selectedPitch = pitch
                         }) {
@@ -238,24 +257,13 @@ struct CodeAssignmentPanel: View {
                         }
                     }
                 } label: {
-                    HStack {
-                        Text(selectedPitch.isEmpty ? "Select Pitch" : selectedPitch)
-                            .font(.subheadline)
-                            .foregroundColor(.primary)
-                        Image(systemName: "chevron.down")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(selectedPitch.isEmpty ? Color.gray.opacity(0.1) : Color.purple.opacity(0.2))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                    menuLabel(
+                        title: selectedPitch.isEmpty ? "Select Pitch" : selectedPitch,
+                        isActive: !selectedPitch.isEmpty,
+                        activeColor: Color.purple.opacity(0.2)
                     )
                 }
-
+                
                 // 🔹 Strike Location
                 Menu {
                     ForEach(strikeGrid.map(\.label), id: \.self) { label in
@@ -263,43 +271,19 @@ struct CodeAssignmentPanel: View {
                         Button(action: {
                             selectedLocation = fullLabel
                         }) {
-                            HStack {
-                                Text(label)
-                                    .font(.caption)
-                                    .foregroundColor(.primary)
-                                if selectedLocation == fullLabel {
-                                    Spacer()
-                                    Image(systemName: "checkmark")
-                                        .font(.caption2)
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                            .padding(.vertical, 4)
+                            menuOption(label: "\(label) (\(codeCount(forLocation: label, isStrike: true)))", isSelected: selectedLocation == fullLabel)
                         }
                     }
                 } label: {
-                    HStack {
-                        Text(selectedLocation.starts(with: "Strike") ? selectedLocation.replacingOccurrences(of: "Strike ", with: "") : "Strike Location")
-                                .font(.subheadline)
-                                .foregroundColor(selectedPitch.isEmpty ? Color.gray.opacity(0.5) : .primary)
-                            Image(systemName: "chevron.down")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(
-                                selectedLocation.starts(with: "Strike") ? Color.black : Color.blue.opacity(0.3),
-                                lineWidth: selectedLocation.starts(with: "Strike") ? 2 : 1
-                            )
+                    menuLabel(
+                        title: selectedLocation.starts(with: "Strike") ?
+                            selectedLocation.replacingOccurrences(of: "Strike ", with: "") :
+                            "Strike Location",
+                        isActive: selectedLocation.starts(with: "Strike")
                     )
                 }
                 .disabled(selectedPitch.isEmpty)
-
+                
                 // 🔹 Ball Location
                 Menu {
                     ForEach([
@@ -311,65 +295,28 @@ struct CodeAssignmentPanel: View {
                         Button(action: {
                             selectedLocation = fullLabel
                         }) {
-                            HStack {
-                                Text(label)
-                                    .font(.caption)
-                                    .foregroundColor(.primary)
-                                if selectedLocation == fullLabel {
-                                    Spacer()
-                                    Image(systemName: "checkmark")
-                                        .font(.caption2)
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                            .padding(.vertical, 4)
+                            menuOption(label: "\(label) (\(codeCount(forLocation: label, isStrike: false)))", isSelected: selectedLocation == fullLabel)
                         }
                     }
                 } label: {
-                    HStack {
-                        Text(selectedLocation.starts(with: "Ball") ? selectedLocation.replacingOccurrences(of: "Ball ", with: "") : "Ball Location")
-                                .font(.subheadline)
-                                .foregroundColor(selectedPitch.isEmpty ? Color.gray.opacity(0.5) : .primary)
-                            Image(systemName: "chevron.down")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(
-                                selectedLocation.starts(with: "Ball") ? Color.black : Color.blue.opacity(0.3),
-                                lineWidth: selectedLocation.starts(with: "Ball") ? 2 : 1
-                            )
+                    menuLabel(
+                        title: selectedLocation.starts(with: "Ball") ?
+                            selectedLocation.replacingOccurrences(of: "Ball ", with: "") :
+                            "Ball Location",
+                        isActive: selectedLocation.starts(with: "Ball")
                     )
                 }
                 .disabled(selectedPitch.isEmpty)
             }
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal)
+            .padding(.bottom, 4)
             .padding(.horizontal)
             
             Text("\(selectedCodes.sorted().joined(separator: ", "))")
                 .font(.headline)
                 .padding(.top, 4)
-
-            // 🔹 Assign Button
-//            Button("Assign Codes") {
-//                for code in selectedCodes {
-//                    let assignment = PitchCodeAssignment(
-//                        code: code,
-//                        pitch: selectedPitch,
-//                        location: selectedLocation // already prefixed
-//                    )
-//                    if !pitchCodeAssignments.contains(assignment) {
-//                        pitchCodeAssignments.append(assignment)
-//                    }
-//                }
-//                selectedCodes.removeAll()
-//            }
-//            .disabled(selectedCodes.isEmpty || selectedPitch.isEmpty || selectedLocation.isEmpty)
-
 
             
             Divider()
@@ -458,8 +405,45 @@ struct CodeAssignmentPanel: View {
                 }
                 .padding(.bottom)
             }
-            
+            .onChange(of: selectedPitch) {
+                selectedLocation = ""
+            }
         }
         
     }
+}
+@ViewBuilder
+func menuLabel(title: String, isActive: Bool, activeColor: Color = Color.gray.opacity(0.1)) -> some View {
+    HStack {
+        Text(title)
+            .font(.subheadline)
+            .foregroundColor(isActive ? .primary : Color.gray.opacity(0.5))
+        Image(systemName: "chevron.down")
+            .font(.caption)
+            .foregroundColor(.gray)
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .background(isActive ? activeColor : Color.gray.opacity(0.1))
+    .cornerRadius(8)
+    .overlay(
+        RoundedRectangle(cornerRadius: 8)
+            .stroke(isActive ? Color.black : Color.blue.opacity(0.3), lineWidth: isActive ? 2 : 1)
+    )
+}
+
+@ViewBuilder
+func menuOption(label: String, isSelected: Bool) -> some View {
+    HStack {
+        Text(label)
+            .font(.caption)
+            .foregroundColor(.primary)
+        if isSelected {
+            Spacer()
+            Image(systemName: "checkmark")
+                .font(.caption2)
+                .foregroundColor(.blue)
+        }
+    }
+    .padding(.vertical, 4)
 }

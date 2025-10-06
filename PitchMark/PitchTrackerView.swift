@@ -96,7 +96,7 @@ struct PitchTrackerView: View {
                     // 🧩 Toggle Chips for Pitch Selection
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(allPitches, id: \.self) { pitch in
+                            ForEach(pitchOrder, id: \.self) { pitch in
                                 ToggleChip(
                                     pitch: pitch,
                                     selectedPitches: $selectedPitches,
@@ -113,43 +113,54 @@ struct PitchTrackerView: View {
                     Divider()
                         .padding(.bottom, 4)
                     
+                    let iconSize: CGFloat = 40
+
                     // 🧍‍♂️ Batter Side Buttons
                     HStack(spacing: 16) {
                         
-                        Button("L Batter") {
+                        Button(action: {
                             withAnimation {
                                 batterSide = .left
                             }
+                        }) {
+                            Image("rightBatterIcon")
+                                .resizable()
+                                .renderingMode(.template) // enables tinting
+                                .frame(width: iconSize, height: iconSize)
+                                .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
                         }
-                        .font(.body)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 12)
-                        .background(batterSide == .left ? Color.blue : Color.gray.opacity(0.2))
-                        .foregroundColor(.white)
+                        .background(Color.clear)
                         .cornerRadius(6)
+                        .buttonStyle(.plain)
                         
-                        Button("R Batter") {
+                        Button(action: {
                             withAnimation {
                                 batterSide = .right
                             }
+                        }) {
+                            Image("leftBatterIcon")
+                                .resizable()
+                                .renderingMode(.template)
+                                .frame(width: iconSize, height: iconSize)
+                                .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
                         }
-                        .font(.body)
                         .padding(.vertical, 6)
                         .padding(.horizontal, 12)
-                        .background(batterSide == .right ? Color.blue : Color.gray.opacity(0.2))
-                        .foregroundColor(.white)
+                        .background(Color.clear)
                         .cornerRadius(6)
+                        .buttonStyle(.plain)
                     }
                     .frame(maxWidth: .infinity)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
                     .padding(.bottom, 4)
-                    
-                    Divider()
+                    //Divider()
                     
                     VStack {
-                        if let selectedTemplate = selectedTemplate {
-                            Text("")
+//                        if let selectedTemplate = selectedTemplate {
+//                            Text("")
                         StrikeZoneView(
                             geo: geo,
                             batterSide: batterSide,
@@ -162,31 +173,31 @@ struct PitchTrackerView: View {
                             selectedPitch: selectedPitch,
                             pitchCodeAssignments: pitchCodeAssignments
                         )
-                        } else {
-                            ZStack{
-                                StrikeZoneView(
-                                    geo: geo,
-                                    batterSide: batterSide,
-                                    lastTappedPosition: lastTappedPosition,
-                                    setLastTapped: { lastTappedPosition = $0 },
-                                    calledPitch: calledPitch,
-                                    setCalledPitch: { calledPitch = $0 },
-                                    selectedPitches: selectedPitches,
-                                    gameIsActive: gameIsActive,
-                                    selectedPitch: selectedPitch,
-                                    pitchCodeAssignments: pitchCodeAssignments
-                                )
-                                Text("Choose a template")
-                                    .font(.headline)
-                                    .foregroundColor(.gray)
-                                    .frame(height: geo.size.height * 0.7, alignment: .top)
-                                    .frame(maxWidth: .infinity)
-                                    .background(Color.white.opacity(0.8))
-                                    .cornerRadius(20)
-                                    .padding(.top, 8)
-                                
-                            }
-                        }
+//                        } else {
+//                            ZStack{
+//                                StrikeZoneView(
+//                                    geo: geo,
+//                                    batterSide: batterSide,
+//                                    lastTappedPosition: lastTappedPosition,
+//                                    setLastTapped: { lastTappedPosition = $0 },
+//                                    calledPitch: calledPitch,
+//                                    setCalledPitch: { calledPitch = $0 },
+//                                    selectedPitches: selectedPitches,
+//                                    gameIsActive: gameIsActive,
+//                                    selectedPitch: selectedPitch,
+//                                    pitchCodeAssignments: pitchCodeAssignments
+//                                )
+//                                Text("Choose a template")
+//                                    .font(.headline)
+//                                    .foregroundColor(.gray)
+//                                    .frame(height: geo.size.height * 0.7, alignment: .top)
+//                                    .frame(maxWidth: .infinity)
+//                                    .background(Color.white.opacity(0.8))
+//                                    .cornerRadius(20)
+//                                    .padding(.top, 8)
+//                                
+//                            }
+//                        }
                     }
                     .frame(height: geo.size.height * 0.7) // ✅ Prevents overlap
                     .clipped()
@@ -194,7 +205,7 @@ struct PitchTrackerView: View {
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
                 
-                BatterIconOverlay(batterSide: batterSide, geo: geo)
+                //BatterIconOverlay(batterSide: batterSide, geo: geo)
                 
                 ResetPitchButton(geo: geo) {
                     lastTappedPosition = nil
@@ -213,6 +224,17 @@ struct PitchTrackerView: View {
                         .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
                         .transition(.opacity)
                 }
+                if selectedTemplate == nil {
+                    Text("")
+                        .font(.headline)
+                        .foregroundColor(.gray)
+                        .frame(height: geo.size.height * 0.88, alignment: .top)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.white.opacity(0.9))
+                        .cornerRadius(20)
+                        .padding(.top, 8)
+                }
+                
             } // end of z stack
             
         }
@@ -436,11 +458,17 @@ struct ToggleChip: View {
             .padding(.vertical, 6)
             .background(
                 (pitchColors[pitch] ?? .gray)
-                    .opacity(isSelected ? 0.8 : 0.2)
+                    .opacity(isSelected ? 1.0 : 0.2)
             )
             .foregroundColor(.white)
             .cornerRadius(16)
             
+            
+//            .overlay(
+//                RoundedRectangle(cornerRadius: 16)
+//                    .stroke(isSelected ? pitchColors[pitch] ?? .gray : Color.clear, lineWidth: 2)
+//            )
+            .shadow(color: isSelected ? pitchColors[pitch]?.opacity(0.4) ?? .gray : .clear, radius: 2)
             .overlay(
                 Group {
                     if assignedCodeCount > 0 {
@@ -455,11 +483,6 @@ struct ToggleChip: View {
                 },
                 alignment: .topTrailing
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(isSelected ? pitchColors[pitch] ?? .gray : Color.clear, lineWidth: 2)
-            )
-            .shadow(color: isSelected ? pitchColors[pitch]?.opacity(0.4) ?? .gray : .clear, radius: 2)
             .onTapGesture {
                 if isSelected {
                     selectedPitches.remove(pitch)

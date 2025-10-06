@@ -8,16 +8,23 @@
 import SwiftUI
 
 let pitchColors: [String: Color] = [
-    "4 Seam": .blue,
-    "2 Seam": .green,
-    "Change": .brown,
-    "Curve": .purple,
-    "Screw": .gray,
-    "Smile": .yellow,
-    "Drop": .cyan,
-    "Rise": .mint,
-    "Pipe": .black
+    "4 Seam": .blue,            // classic fastball
+    "2 Seam": ._2Seam,            // cooler tone than green---
+    "Change": .brown,           // earthy, off-speed
+    "Curve": .purple,           // sharp break
+    "Screw": ._Screw,             // neutral, subtle
+    "Smile": ._Smile,           // playful, high visibility
+    "Drop": ._Drop,              // light, vertical action---
+    "Rise": .mint,              // soft, upward movement---
+    "Pipe": .black              // bold, center-cut
 ]
+extension Color {
+    static let _2Seam = Color(red: 1.0, green: 143/255, blue: 0)
+    static let _Drop = Color(red: 1.0, green: 0.0, blue: 1.0)
+    static let _Screw = Color(red: 172/255, green: 172/255, blue: 172/255)
+    static let _Smile = Color(red: 0, green: 200/255, blue: 1.0)
+    // Add more as needed
+}
 
 let strikeGrid: [GridLocation] = [
     .init(row: 0, col: 0, label: "Up & Out"),
@@ -32,7 +39,9 @@ let strikeGrid: [GridLocation] = [
 ]
 
 let allPitches = ["2 Seam", "4 Seam", "Change", "Curve", "Screw", "Smile", "Drop", "Rise", "Pipe"]
-
+let pitchOrder: [String] = [
+    "2 Seam", "4 Seam", "Change", "Curve", "Drop", "Pipe", "Rise", "Screw", "Smile" 
+]
 func pitchButton(
     x: CGFloat,
     y: CGFloat,
@@ -147,7 +156,7 @@ struct StrikeZoneButtonLabel: View {
             if !segmentColors.isEmpty {
                 PieChartView(segments: segmentColors)
                     .frame(width: buttonSize, height: buttonSize)
-                    .opacity(0.7)
+                    .opacity(1.0)
             }
 
             Text(fullLabel)
