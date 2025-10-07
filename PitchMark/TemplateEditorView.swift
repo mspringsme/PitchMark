@@ -253,7 +253,8 @@ struct CodeAssignmentPanel: View {
                         Button(action: {
                             selectedPitch = pitch
                         }) {
-                            Label(pitch, systemImage: selectedPitch == pitch ? "checkmark" : "")
+                            let count = codeCount(for: pitch)
+                            Label(count > 0 ? "\(pitch) (\(count))" : pitch, systemImage: selectedPitch == pitch ? "checkmark" : "")
                         }
                     }
                 } label: {
@@ -271,7 +272,8 @@ struct CodeAssignmentPanel: View {
                         Button(action: {
                             selectedLocation = fullLabel
                         }) {
-                            menuOption(label: "\(label) (\(codeCount(forLocation: label, isStrike: true)))", isSelected: selectedLocation == fullLabel)
+                            let count = codeCount(forLocation: label, isStrike: true)
+                            menuOption(label: count > 0 ? "\(label) (\(count))" : label, isSelected: selectedLocation == fullLabel)
                         }
                     }
                 } label: {
@@ -295,7 +297,8 @@ struct CodeAssignmentPanel: View {
                         Button(action: {
                             selectedLocation = fullLabel
                         }) {
-                            menuOption(label: "\(label) (\(codeCount(forLocation: label, isStrike: false)))", isSelected: selectedLocation == fullLabel)
+                            let count = codeCount(forLocation: label, isStrike: false)
+                            menuOption(label: count > 0 ? "\(label) (\(count))" : label, isSelected: selectedLocation == fullLabel)
                         }
                     }
                 } label: {
@@ -310,9 +313,8 @@ struct CodeAssignmentPanel: View {
             }
             .frame(maxWidth: .infinity)
             .multilineTextAlignment(.center)
-            .padding(.horizontal)
+            .padding(.horizontal, 8) // 👈 tighter left/right padding
             .padding(.bottom, 4)
-            .padding(.horizontal)
             
             Text("\(selectedCodes.sorted().joined(separator: ", "))")
                 .font(.headline)
@@ -418,6 +420,8 @@ func menuLabel(title: String, isActive: Bool, activeColor: Color = Color.gray.op
         Text(title)
             .font(.subheadline)
             .foregroundColor(isActive ? .primary : Color.gray.opacity(0.5))
+            .lineLimit(nil)
+            .fixedSize(horizontal: false, vertical: true)
         Image(systemName: "chevron.down")
             .font(.caption)
             .foregroundColor(.gray)
