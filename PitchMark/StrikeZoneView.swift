@@ -94,7 +94,13 @@ struct StrikeZoneView: View {
 func shapeView(isStrike: Bool, isSelected: Bool) -> some View {
     Circle()
         .fill(isStrike ? Color.green.opacity(isSelected ? 0.6 : 1.0) : Color.red.opacity(isSelected ? 0.6 : 1.0))
-        .overlay(Circle().stroke(Color.black, lineWidth: isSelected ? 3 : 0))
+        .overlay(
+            Circle()
+                .stroke(Color.black, lineWidth: isSelected ? 3 : 0)
+        )
+        .shadow(color: isSelected ? Color.yellow.opacity(0.7) : .clear, radius: isSelected ? 10 : 0)
+        //.scaleEffect(isSelected ? 1.1 : 1.0)
+        .animation(.easeOut(duration: 0.2), value: isSelected)
 }
 
 @ViewBuilder

@@ -173,40 +173,14 @@ struct PitchTrackerView: View {
                             selectedPitch: selectedPitch,
                             pitchCodeAssignments: pitchCodeAssignments
                         )
-//                        } else {
-//                            ZStack{
-//                                StrikeZoneView(
-//                                    geo: geo,
-//                                    batterSide: batterSide,
-//                                    lastTappedPosition: lastTappedPosition,
-//                                    setLastTapped: { lastTappedPosition = $0 },
-//                                    calledPitch: calledPitch,
-//                                    setCalledPitch: { calledPitch = $0 },
-//                                    selectedPitches: selectedPitches,
-//                                    gameIsActive: gameIsActive,
-//                                    selectedPitch: selectedPitch,
-//                                    pitchCodeAssignments: pitchCodeAssignments
-//                                )
-//                                Text("Choose a template")
-//                                    .font(.headline)
-//                                    .foregroundColor(.gray)
-//                                    .frame(height: geo.size.height * 0.7, alignment: .top)
-//                                    .frame(maxWidth: .infinity)
-//                                    .background(Color.white.opacity(0.8))
-//                                    .cornerRadius(20)
-//                                    .padding(.top, 8)
-//                                
-//                            }
-//                        }
+//
                     }
                     .frame(height: geo.size.height * 0.7) // ✅ Prevents overlap
                     .clipped()
                     .padding(.top, 8)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
-                
-                //BatterIconOverlay(batterSide: batterSide, geo: geo)
-                
+                                
                 ResetPitchButton(geo: geo) {
                     lastTappedPosition = nil
                     calledPitch = nil
@@ -356,10 +330,6 @@ struct ResetPitchButton: View {
         }
         .position(x: 30, y: geo.size.height * 0.65)
         .accessibilityLabel("Reset pitch selection")
-//        .padding(.top, 12)
-//        .frame(maxWidth: .infinity, alignment: .leading)
-//        .offset(x: 0, y: geo.size.height * 0.1)
-//        .padding(.leading, 12)
     }
 }
 
@@ -370,16 +340,18 @@ struct CalledPitchView: View {
 
     var body: some View {
         let labelManager = PitchLabelManager(batterSide: batterSide)
-        let normalized = normalizedLabel(call.location.replacingOccurrences(of: "Strike ", with: "").replacingOccurrences(of: "Ball ", with: ""))
-        let adjusted = labelManager.adjustedLabel(from: normalized)
-        let prefix = labelManager.adjustedCallPrefix(for: normalized, isStrike: call.isStrike)
-        let displayLocation = "\(prefix) \(adjusted)"
-
+        let displayLocation = call.location.trimmingCharacters(in: .whitespaces)
         let assignedCodes = pitchCodeAssignments
-            .filter { $0.pitch == call.pitch && $0.location == displayLocation }
+            .filter {
+                $0.pitch == call.pitch &&
+                $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == displayLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             .map(\.code)
+        
+        print("Looking for: \(call.pitch) @ \(displayLocation)")
+        print("Available: \(pitchCodeAssignments.map { "\($0.pitch) @ \($0.location)" })")
 
-        VStack(alignment: .leading, spacing: 4) {
+        return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("Called Pitch:")
                 Text(call.type)
@@ -462,12 +434,6 @@ struct ToggleChip: View {
             )
             .foregroundColor(.white)
             .cornerRadius(16)
-            
-            
-//            .overlay(
-//                RoundedRectangle(cornerRadius: 16)
-//                    .stroke(isSelected ? pitchColors[pitch] ?? .gray : Color.clear, lineWidth: 2)
-//            )
             .shadow(color: isSelected ? pitchColors[pitch]?.opacity(0.4) ?? .gray : .clear, radius: 2)
             .overlay(
                 Group {
