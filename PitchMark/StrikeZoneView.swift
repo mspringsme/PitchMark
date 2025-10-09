@@ -98,8 +98,8 @@ func shapeView(isStrike: Bool, isSelected: Bool) -> some View {
             Circle()
                 .stroke(Color.black, lineWidth: isSelected ? 3 : 0)
         )
-        .shadow(color: isSelected ? Color.yellow.opacity(0.7) : .clear, radius: isSelected ? 10 : 0)
-        //.scaleEffect(isSelected ? 1.1 : 1.0)
+        .shadow(color: isSelected ? Color.blue.opacity(0.8) : .clear, radius: isSelected ? 15 : 0)
+        .scaleEffect(isSelected ? 1.1 : 1.0)
         .animation(.easeOut(duration: 0.2), value: isSelected)
 }
 

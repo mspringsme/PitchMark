@@ -255,7 +255,7 @@ func menuContent(
     if selectedPitches.isEmpty {
         Button("Select pitches first") {}.disabled(true)
     } else {
-        ForEach(Array(selectedPitches), id: \.self) { pitch in
+        ForEach(pitchOrder.filter { selectedPitches.contains($0) }, id: \.self) { pitch in
             let assignedCodes = pitchCodeAssignments
                 .filter { $0.pitch == pitch && $0.location == adjustedLabel }
                 .map(\.code)
@@ -351,26 +351,42 @@ struct CalledPitchView: View {
         print("Looking for: \(call.pitch) @ \(displayLocation)")
         print("Available: \(pitchCodeAssignments.map { "\($0.pitch) @ \($0.location)" })")
 
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Called Pitch:")
-                Text(call.type)
-                    .bold()
-                    .foregroundColor(call.type == "Strike" ? .green : .red)
+        return HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Called Pitch:")
+                    Text(call.type)
+                        .bold()
+                        .foregroundColor(call.type == "Strike" ? .green : .red)
+                }
+
+                Text("\(call.pitch) (\(displayLocation))")
+                    .foregroundColor(.primary)
+
+                if !assignedCodes.isEmpty {
+                    Text("Calls: \(assignedCodes.joined(separator: ", "))")
+                        .font(.subheadline)
+                        .foregroundColor(.red)
+                } else {
+                    Text("No assigned Calls for pitch/location")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
             }
 
-            Text("\(call.pitch) (\(displayLocation))")
-                .foregroundColor(.primary)
+            Spacer()
 
-            if !assignedCodes.isEmpty {
-                Text("Calls: \(assignedCodes.joined(separator: ", "))")
-                    .font(.subheadline)
-                    .foregroundColor(.red)
-            } else {
-                Text("No assigned Calls for pitch/location")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
+            Button(action: {
+                // 🟡 Add your playback or action logic here
+                print("Play button tapped for \(call.pitch) @ \(displayLocation)")
+            }) {
+                Label("Play", systemImage: "play.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .font(.title2)
+                    .foregroundColor(.blue)
+                    .overlay(Text("🥎").font(.title2).offset(x: 16, y: -16))
             }
+            .padding(.leading, 8)
         }
         .font(.headline)
         .padding(.horizontal)
