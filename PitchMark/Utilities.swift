@@ -55,12 +55,23 @@ func pitchButton(
     pitchCodeAssignments: [PitchCodeAssignment],
     calledPitch: PitchCall?,
     selectedPitch: String,
-    gameIsActive: Bool
+    gameIsActive: Bool,
+    isRecordingResult: Bool,
+    setIsRecordingResult: @escaping (Bool) -> Void,
+    setActualLocation: @escaping (String) -> Void,
+    actualLocationRecorded: String?,
+    calledPitchLocation: String?,
+    setSelectedPitch: @escaping (String) -> Void
+    
+    
 ) -> some View {
     let tappedPoint = CGPoint(x: x, y: y)
     let isSelected = lastTappedPosition == tappedPoint
     let adjustedLabel = labelManager.adjustedLabel(from: location.label)
     let fullLabel = "\(location.isStrike ? "Strike" : "Ball") \(adjustedLabel)"
+    
+    print("🎯 selectedPitch: \(selectedPitch), color: \(pitchColors[selectedPitch]?.description ?? "nil")")
+
 
     let assignedCode = pitchCodeAssignments.first {
         $0.pitch == selectedPitch && $0.location == fullLabel
@@ -68,44 +79,104 @@ func pitchButton(
 
     let isDisabled = gameIsActive && assignedCode == nil
 
-    let assignedPitches = pitchCodeAssignments
-        .filter { $0.location == fullLabel }
-        .map(\.pitch)
+    let assignedPitches = Set(
+        pitchCodeAssignments
+            .filter { $0.location == fullLabel && selectedPitches.contains($0.pitch) }
+            .map(\.pitch)
+    )
 
-    let segmentColors = assignedPitches
-        .compactMap { pitchColors[$0] }
+    let segmentColors: [Color]
+
+    if isRecordingResult {
+        // ✅ Play mode: override all visuals
+        if fullLabel == calledPitchLocation {
+            // Called pitch → show selected pitch color
+            segmentColors = [pitchColors[selectedPitch] ?? .gray]
+        } else {
+            // All other buttons → show red or green based on strike zone
+            segmentColors = [location.isStrike ? .green : .red]
+        }
+    } else if lastTappedPosition == tappedPoint {
+        // ✅ Just tapped this button → show selected pitch color
+        segmentColors = [pitchColors[selectedPitch] ?? .gray]
+    } else {
+        // ✅ Default: show assigned pitch slices
+        segmentColors = Array(assignedPitches).compactMap { pitchColors[$0] }
+    }
 
     return Group {
         if isDisabled {
             disabledView(isStrike: location.isStrike)
                 .frame(width: buttonSize, height: buttonSize)
-                .position(x: x, y: y)
-                .zIndex(1)
+        } else if isRecordingResult {
+            Button(action: {
+                setActualLocation(fullLabel)
+                setIsRecordingResult(false)
+                print("✅ Recorded actual result: \(fullLabel)")
+            }) {
+                StrikeZoneButtonLabel(
+                    isStrike: location.isStrike,
+                    isSelected: isSelected,
+                    fullLabel: fullLabel,
+                    segmentColors: segmentColors,
+                    buttonSize: buttonSize,
+                    isRecordingResult: isRecordingResult,
+                    actualLocationRecorded: actualLocationRecorded,
+                    calledPitchLocation: calledPitchLocation
+                    
+                )
+            }
+            .buttonStyle(.plain)
+        } else {
+            Menu {
+                menuContent(
+                    for: fullLabel,
+                    tappedPoint: tappedPoint,
+                    location: location,
+                    setLastTapped: setLastTapped,
+                    setCalledPitch: setCalledPitch,
+                    selectedPitches: selectedPitches,
+                    pitchCodeAssignments: pitchCodeAssignments,
+                    lastTappedPosition: lastTappedPosition,
+                    calledPitch: calledPitch,
+                    setSelectedPitch: setSelectedPitch // ✅ Pass it in
+                )
+            } label: {
+                StrikeZoneButtonLabel(
+                    isStrike: location.isStrike,
+                    isSelected: isSelected,
+                    fullLabel: fullLabel,
+                    segmentColors: segmentColors,
+                    buttonSize: buttonSize,
+                    isRecordingResult: isRecordingResult,
+                    actualLocationRecorded: actualLocationRecorded,
+                    calledPitchLocation: calledPitchLocation
+                )
+            }
         }
+    }
+    .position(x: x, y: y)
+    .zIndex(1)
+}
 
-        Menu {
-            menuContent(
-                for: fullLabel,
-                tappedPoint: tappedPoint,
-                location: location,
-                setLastTapped: setLastTapped,
-                setCalledPitch: setCalledPitch,
-                selectedPitches: selectedPitches,
-                pitchCodeAssignments: pitchCodeAssignments,
-                lastTappedPosition: lastTappedPosition,
-                calledPitch: calledPitch
-            )
-        } label: {
-            StrikeZoneButtonLabel(
-                isStrike: location.isStrike,
-                isSelected: isSelected,
-                fullLabel: fullLabel,
-                segmentColors: segmentColors,
-                buttonSize: buttonSize
-            )
-        }
-        .position(x: x, y: y)
-        .zIndex(1)
+struct PieSlice: Shape {
+    let startAngle: Angle
+    let endAngle: Angle
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+
+        path.move(to: center)
+        path.addArc(center: center,
+                    radius: radius,
+                    startAngle: startAngle,
+                    endAngle: endAngle,
+                    clockwise: false)
+        path.closeSubpath()
+
+        return path
     }
 }
 
@@ -148,16 +219,24 @@ struct StrikeZoneButtonLabel: View {
     let fullLabel: String
     let segmentColors: [Color]
     let buttonSize: CGFloat
+    let isRecordingResult: Bool
+    let actualLocationRecorded: String?
+    let calledPitchLocation: String?
 
     var body: some View {
-        ZStack {
-            shapeView(isStrike: isStrike, isSelected: isSelected)
+        let isHighlighted = isRecordingResult &&
+            (actualLocationRecorded == fullLabel ||
+             calledPitchLocation?.trimmingCharacters(in: .whitespacesAndNewlines) == fullLabel)
 
-            if !segmentColors.isEmpty {
-                PieChartView(segments: segmentColors)
-                    .frame(width: buttonSize, height: buttonSize)
-                    .opacity(1.0)
-            }
+        let overrideFill: Color? = isHighlighted ? (segmentColors.first ?? .gray) : nil
+        
+        ZStack {
+            shapeView(isStrike: isStrike, isSelected: isSelected, overrideFill: overrideFill)
+
+            PieChartView(segments: segmentColors)
+                .frame(width: buttonSize, height: buttonSize)
+                .opacity((isRecordingResult && !isHighlighted) ? 0 : 1)
+                .animation(.easeInOut(duration: 0.2), value: segmentColors)
 
             Text(fullLabel)
                 .font(.system(size: buttonSize * 0.24, weight: .semibold))
@@ -169,6 +248,10 @@ struct StrikeZoneButtonLabel: View {
         }
         .frame(width: buttonSize, height: buttonSize)
         .contentShape(Rectangle())
+        .shadow(color: isHighlighted ? Color.yellow.opacity(0.6) : .clear, radius: isHighlighted ? 6 : 0)
+        .overlay(
+            Circle().stroke(Color.yellow, lineWidth: isHighlighted ? 2 : 0)
+        )
     }
 }
 
@@ -177,19 +260,24 @@ struct PieChartView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let radius = min(geo.size.width, geo.size.height) / 2
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let sliceCount = segments.count
+            let anglePerSlice = 2 * .pi / Double(sliceCount)
+
             ZStack {
                 ForEach(segments.indices, id: \.self) { index in
-                    let startAngle = Angle(degrees: Double(index) / Double(segments.count) * 360)
-                    let endAngle = Angle(degrees: Double(index + 1) / Double(segments.count) * 360)
+                    let startAngle = anglePerSlice * Double(index) - .pi / 2
+                    let endAngle = startAngle + anglePerSlice
 
                     Path { path in
-                        let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
                         path.move(to: center)
                         path.addArc(center: center,
-                                    radius: geo.size.width / 2,
-                                    startAngle: startAngle,
-                                    endAngle: endAngle,
+                                    radius: radius,
+                                    startAngle: Angle(radians: startAngle),
+                                    endAngle: Angle(radians: endAngle),
                                     clockwise: false)
+                        path.closeSubpath()
                     }
                     .fill(segments[index])
                 }

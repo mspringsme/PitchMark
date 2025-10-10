@@ -17,7 +17,13 @@ struct StrikeZoneView: View {
     let gameIsActive: Bool
     let selectedPitch: String
     let pitchCodeAssignments: [PitchCodeAssignment]
-
+    let isRecordingResult: Bool
+    let setIsRecordingResult: (Bool) -> Void
+    let setActualLocation: (String) -> Void
+    let actualLocationRecorded: String?
+    let setSelectedPitch: (String) -> Void
+    
+    
     var body: some View {
         let zoneWidth = geo.size.width * 0.4
         let zoneHeight = geo.size.height * 0.35
@@ -52,7 +58,13 @@ struct StrikeZoneView: View {
                     pitchCodeAssignments: pitchCodeAssignments,
                     calledPitch: calledPitch,
                     selectedPitch: selectedPitch,
-                    gameIsActive: gameIsActive
+                    gameIsActive: gameIsActive,
+                    isRecordingResult: isRecordingResult,
+                    setIsRecordingResult: setIsRecordingResult,
+                    setActualLocation: setActualLocation,
+                    actualLocationRecorded: actualLocationRecorded,
+                    calledPitchLocation: calledPitch?.location,
+                    setSelectedPitch: setSelectedPitch// ✅ Add this
                 )
             }
 
@@ -72,7 +84,7 @@ struct StrikeZoneView: View {
                 pitchButton(
                     x: x,
                     y: y,
-                    location: .init(label: label, isStrike: false),
+                    location: .init(label: label, isStrike: false), // ✅ use label directly
                     labelManager: labelManager,
                     lastTappedPosition: lastTappedPosition,
                     setLastTapped: setLastTapped,
@@ -82,7 +94,13 @@ struct StrikeZoneView: View {
                     pitchCodeAssignments: pitchCodeAssignments,
                     calledPitch: calledPitch,
                     selectedPitch: selectedPitch,
-                    gameIsActive: gameIsActive
+                    gameIsActive: gameIsActive,
+                    isRecordingResult: isRecordingResult,
+                    setIsRecordingResult: setIsRecordingResult,
+                    setActualLocation: setActualLocation,
+                    actualLocationRecorded: actualLocationRecorded,
+                    calledPitchLocation: calledPitch?.location,
+                    setSelectedPitch: setSelectedPitch
                 )
             }
         }
@@ -91,9 +109,13 @@ struct StrikeZoneView: View {
 }
 
 @ViewBuilder
-func shapeView(isStrike: Bool, isSelected: Bool) -> some View {
+func shapeView(isStrike: Bool, isSelected: Bool, overrideFill: Color? = nil) -> some View {
+    let isOverride = overrideFill != nil
+    let baseColor = overrideFill ?? (isStrike ? Color.green : Color.red)
+    let fillColor = isOverride ? baseColor : baseColor.opacity(isSelected ? 0.6 : 1.0)
+
     Circle()
-        .fill(isStrike ? Color.green.opacity(isSelected ? 0.6 : 1.0) : Color.red.opacity(isSelected ? 0.6 : 1.0))
+        .fill(fillColor)
         .overlay(
             Circle()
                 .stroke(Color.black, lineWidth: isSelected ? 3 : 0)

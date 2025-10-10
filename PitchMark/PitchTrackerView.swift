@@ -28,7 +28,9 @@ struct PitchTrackerView: View {
     @State private var showSignOutConfirmation = false
     @State private var selectedTemplate: PitchTemplate? = nil
     @State private var showTemplateEditor = false
-
+    @State private var isRecordingResult = false
+    @State private var activeCalledPitchId: String? = nil
+    @State private var actualLocationRecorded: String? = nil
     
     var body: some View {
         GeometryReader { geo in
@@ -171,7 +173,12 @@ struct PitchTrackerView: View {
                             selectedPitches: selectedPitches,
                             gameIsActive: gameIsActive,
                             selectedPitch: selectedPitch,
-                            pitchCodeAssignments: pitchCodeAssignments
+                            pitchCodeAssignments: pitchCodeAssignments,
+                            isRecordingResult: isRecordingResult,
+                            setIsRecordingResult: { isRecordingResult = $0 },
+                            setActualLocation: { actualLocationRecorded = $0 },
+                            actualLocationRecorded: actualLocationRecorded,
+                            setSelectedPitch: { selectedPitch = $0 } // ✅ Add this line
                         )
 //
                     }
@@ -188,15 +195,19 @@ struct PitchTrackerView: View {
                 
                 // 📝 Called Pitch Display
                 if let call = calledPitch {
-                    CalledPitchView(call: call,
-                                    pitchCodeAssignments: pitchCodeAssignments,
-                                    batterSide: batterSide)
-                        .frame(maxWidth: geo.size.width * 0.9)
-                        .background(Color.white.opacity(0.9))
-                        .cornerRadius(8)
-                        .shadow(radius: 4)
-                        .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
-                        .transition(.opacity)
+                    CalledPitchView(
+                        isRecordingResult: $isRecordingResult,
+                        activeCalledPitchId: $activeCalledPitchId,
+                        call: call,
+                        pitchCodeAssignments: pitchCodeAssignments,
+                        batterSide: batterSide
+                    )
+                    .frame(maxWidth: geo.size.width * 0.9)
+                    .background(Color.white.opacity(0.9))
+                    .cornerRadius(8)
+                    .shadow(radius: 4)
+                    .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
+                    .transition(.opacity)
                 }
                 if selectedTemplate == nil {
                     Text("")
@@ -250,7 +261,8 @@ func menuContent(
     selectedPitches: Set<String>,
     pitchCodeAssignments: [PitchCodeAssignment],
     lastTappedPosition: CGPoint?,
-    calledPitch: PitchCall?
+    calledPitch: PitchCall?,
+    setSelectedPitch: @escaping (String) -> Void
 ) -> some View {
     if selectedPitches.isEmpty {
         Button("Select pitches first") {}.disabled(true)
@@ -266,6 +278,8 @@ func menuContent(
 
             Button("\(pitch)\(codeSuffix)") {
                 withAnimation {
+                    setSelectedPitch(pitch) // ✅ This sets the selected pitch
+
                     let newCall = PitchCall(
                         pitch: pitch,
                         location: adjustedLabel,
@@ -334,6 +348,10 @@ struct ResetPitchButton: View {
 }
 
 struct CalledPitchView: View {
+    @State private var showResultOverlay = false
+    @State private var selectedActualLocation: String?
+    @Binding var isRecordingResult: Bool
+    @Binding var activeCalledPitchId: String?
     let call: PitchCall
     let pitchCodeAssignments: [PitchCodeAssignment]
     let batterSide: BatterSide
@@ -351,7 +369,7 @@ struct CalledPitchView: View {
         print("Looking for: \(call.pitch) @ \(displayLocation)")
         print("Available: \(pitchCodeAssignments.map { "\($0.pitch) @ \($0.location)" })")
 
-        return HStack(alignment: .top) {
+        return HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Called Pitch:")
@@ -377,16 +395,20 @@ struct CalledPitchView: View {
             Spacer()
 
             Button(action: {
-                // 🟡 Add your playback or action logic here
-                print("Play button tapped for \(call.pitch) @ \(displayLocation)")
+                isRecordingResult = true
+                activeCalledPitchId = UUID().uuidString
             }) {
-                Label("Play", systemImage: "play.circle.fill")
-                    .labelStyle(.iconOnly)
-                    .font(.title2)
-                    .foregroundColor(.blue)
-                    .overlay(Text("🥎").font(.title2).offset(x: 16, y: -16))
+                HStack(spacing: 6) {
+                    Image(systemName: "play.circle.fill")
+                        .font(.title)
+                    Text("🥎")
+                        .font(.title)
+                }
+                .padding(10)
+                .background(Color.blue.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-            .padding(.leading, 8)
+            .buttonStyle(.plain)
         }
         .font(.headline)
         .padding(.horizontal)
