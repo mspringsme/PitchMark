@@ -22,6 +22,8 @@ struct StrikeZoneView: View {
     let setActualLocation: (String) -> Void
     let actualLocationRecorded: String?
     let setSelectedPitch: (String) -> Void
+    let resultVisualState: String?
+    let setResultVisualState: (String?) -> Void
     
     
     var body: some View {
@@ -64,7 +66,9 @@ struct StrikeZoneView: View {
                     setActualLocation: setActualLocation,
                     actualLocationRecorded: actualLocationRecorded,
                     calledPitchLocation: calledPitch?.location,
-                    setSelectedPitch: setSelectedPitch// ✅ Add this
+                    setSelectedPitch: setSelectedPitch,
+                    resultVisualState: resultVisualState,
+                    setResultVisualState: setResultVisualState
                 )
             }
 
@@ -100,7 +104,9 @@ struct StrikeZoneView: View {
                     setActualLocation: setActualLocation,
                     actualLocationRecorded: actualLocationRecorded,
                     calledPitchLocation: calledPitch?.location,
-                    setSelectedPitch: setSelectedPitch
+                    setSelectedPitch: setSelectedPitch,
+                    resultVisualState: resultVisualState,
+                    setResultVisualState: setResultVisualState
                 )
             }
         }

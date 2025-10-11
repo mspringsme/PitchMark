@@ -42,6 +42,7 @@ let allPitches = ["2 Seam", "4 Seam", "Change", "Curve", "Screw", "Smile", "Drop
 let pitchOrder: [String] = [
     "2 Seam", "4 Seam", "Change", "Curve", "Drop", "Pipe", "Rise", "Screw", "Smile" 
 ]
+
 func pitchButton(
     x: CGFloat,
     y: CGFloat,
@@ -61,7 +62,9 @@ func pitchButton(
     setActualLocation: @escaping (String) -> Void,
     actualLocationRecorded: String?,
     calledPitchLocation: String?,
-    setSelectedPitch: @escaping (String) -> Void
+    setSelectedPitch: @escaping (String) -> Void,
+    resultVisualState: String?,
+    setResultVisualState: @escaping (String?) -> Void
     
     
 ) -> some View {
@@ -69,10 +72,6 @@ func pitchButton(
     let isSelected = lastTappedPosition == tappedPoint
     let adjustedLabel = labelManager.adjustedLabel(from: location.label)
     let fullLabel = "\(location.isStrike ? "Strike" : "Ball") \(adjustedLabel)"
-    
-    print("🎯 selectedPitch: \(selectedPitch), color: \(pitchColors[selectedPitch]?.description ?? "nil")")
-
-
     let assignedCode = pitchCodeAssignments.first {
         $0.pitch == selectedPitch && $0.location == fullLabel
     }
@@ -85,25 +84,25 @@ func pitchButton(
             .map(\.pitch)
     )
 
-    let segmentColors: [Color]
-
-    if isRecordingResult {
-        // ✅ Play mode: override all visuals
-        if fullLabel == calledPitchLocation {
-            // Called pitch → show selected pitch color
-            segmentColors = [pitchColors[selectedPitch] ?? .gray]
+    let segmentColors: [Color] = {
+        if let resultLabel = resultVisualState {
+            if fullLabel == resultLabel {
+                return [location.isStrike ? .green : .red]
+            } else {
+                return [location.isStrike ? .green : .red]
+            }
+        } else if isRecordingResult {
+            if fullLabel == calledPitchLocation {
+                return [pitchColors[selectedPitch] ?? .gray]
+            } else {
+                return [location.isStrike ? .green : .red]
+            }
+        } else if lastTappedPosition == tappedPoint {
+            return [pitchColors[selectedPitch] ?? .gray]
         } else {
-            // All other buttons → show red or green based on strike zone
-            segmentColors = [location.isStrike ? .green : .red]
+            return Array(assignedPitches).compactMap { pitchColors[$0] }
         }
-    } else if lastTappedPosition == tappedPoint {
-        // ✅ Just tapped this button → show selected pitch color
-        segmentColors = [pitchColors[selectedPitch] ?? .gray]
-    } else {
-        // ✅ Default: show assigned pitch slices
-        segmentColors = Array(assignedPitches).compactMap { pitchColors[$0] }
-    }
-
+    }()
     return Group {
         if isDisabled {
             disabledView(isStrike: location.isStrike)
@@ -111,8 +110,8 @@ func pitchButton(
         } else if isRecordingResult {
             Button(action: {
                 setActualLocation(fullLabel)
+                setResultVisualState(fullLabel)
                 setIsRecordingResult(false)
-                print("✅ Recorded actual result: \(fullLabel)")
             }) {
                 StrikeZoneButtonLabel(
                     isStrike: location.isStrike,
@@ -159,27 +158,6 @@ func pitchButton(
     .zIndex(1)
 }
 
-struct PieSlice: Shape {
-    let startAngle: Angle
-    let endAngle: Angle
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-        let radius = min(rect.width, rect.height) / 2
-
-        path.move(to: center)
-        path.addArc(center: center,
-                    radius: radius,
-                    startAngle: startAngle,
-                    endAngle: endAngle,
-                    clockwise: false)
-        path.closeSubpath()
-
-        return path
-    }
-}
-
 func allLocationsFromGrid() -> [String] {
     strikeGrid.map(\.label) + [
         "Up & Out", "Up", "Up & In",
@@ -224,18 +202,18 @@ struct StrikeZoneButtonLabel: View {
     let calledPitchLocation: String?
 
     var body: some View {
-        let isHighlighted = isRecordingResult &&
-            (actualLocationRecorded == fullLabel ||
-             calledPitchLocation?.trimmingCharacters(in: .whitespacesAndNewlines) == fullLabel)
-
-        let overrideFill: Color? = isHighlighted ? (segmentColors.first ?? .gray) : nil
+        let isResultSelected = actualLocationRecorded == fullLabel
         
-        ZStack {
+        let isFaded = isRecordingResult && !isResultSelected
+        let isCalledPitch = calledPitchLocation?.trimmingCharacters(in: .whitespacesAndNewlines) == fullLabel
+        let overrideFill: Color? = isCalledPitch ? (segmentColors.first ?? .gray) : nil
+        
+        return ZStack {
             shapeView(isStrike: isStrike, isSelected: isSelected, overrideFill: overrideFill)
 
             PieChartView(segments: segmentColors)
                 .frame(width: buttonSize, height: buttonSize)
-                .opacity((isRecordingResult && !isHighlighted) ? 0 : 1)
+                .opacity(1) // Always show pie chart (red/green or pitch color)
                 .animation(.easeInOut(duration: 0.2), value: segmentColors)
 
             Text(fullLabel)
@@ -248,10 +226,9 @@ struct StrikeZoneButtonLabel: View {
         }
         .frame(width: buttonSize, height: buttonSize)
         .contentShape(Rectangle())
-        .shadow(color: isHighlighted ? Color.yellow.opacity(0.6) : .clear, radius: isHighlighted ? 6 : 0)
-        .overlay(
-            Circle().stroke(Color.yellow, lineWidth: isHighlighted ? 2 : 0)
-        )
+        .opacity(isFaded ? 0.4 : 1)
+        .scaleEffect(isResultSelected ? 1.4 : 1)
+        .animation(.easeInOut(duration: 0.2), value: isResultSelected)
     }
 }
 

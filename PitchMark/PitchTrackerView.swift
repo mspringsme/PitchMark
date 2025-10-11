@@ -31,6 +31,7 @@ struct PitchTrackerView: View {
     @State private var isRecordingResult = false
     @State private var activeCalledPitchId: String? = nil
     @State private var actualLocationRecorded: String? = nil
+    @State private var resultVisualState: String? = nil
     
     var body: some View {
         GeometryReader { geo in
@@ -178,7 +179,9 @@ struct PitchTrackerView: View {
                             setIsRecordingResult: { isRecordingResult = $0 },
                             setActualLocation: { actualLocationRecorded = $0 },
                             actualLocationRecorded: actualLocationRecorded,
-                            setSelectedPitch: { selectedPitch = $0 } // ✅ Add this line
+                            setSelectedPitch: { selectedPitch = $0 },
+                            resultVisualState: resultVisualState,
+                            setResultVisualState: { resultVisualState = $0 }
                         )
 //
                     }
