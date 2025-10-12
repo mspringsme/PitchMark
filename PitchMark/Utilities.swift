@@ -64,9 +64,9 @@ func pitchButton(
     calledPitchLocation: String?,
     setSelectedPitch: @escaping (String) -> Void,
     resultVisualState: String?,
-    setResultVisualState: @escaping (String?) -> Void
-    
-    
+    setResultVisualState: @escaping (String?) -> Void,
+    pendingResultLabel: Binding<String?>,
+    showResultConfirmation: Binding<Bool>
 ) -> some View {
     let tappedPoint = CGPoint(x: x, y: y)
     let isSelected = lastTappedPosition == tappedPoint
@@ -109,9 +109,8 @@ func pitchButton(
                 .frame(width: buttonSize, height: buttonSize)
         } else if isRecordingResult {
             Button(action: {
-                setActualLocation(fullLabel)
-                setResultVisualState(fullLabel)
-                setIsRecordingResult(false)
+                pendingResultLabel.wrappedValue = fullLabel
+                showResultConfirmation.wrappedValue = true
             }) {
                 StrikeZoneButtonLabel(
                     isStrike: location.isStrike,
@@ -122,10 +121,10 @@ func pitchButton(
                     isRecordingResult: isRecordingResult,
                     actualLocationRecorded: actualLocationRecorded,
                     calledPitchLocation: calledPitchLocation
-                    
                 )
             }
             .buttonStyle(.plain)
+            
         } else {
             Menu {
                 menuContent(
@@ -228,6 +227,7 @@ struct StrikeZoneButtonLabel: View {
         .contentShape(Rectangle())
         .opacity(isFaded ? 0.4 : 1)
         .scaleEffect(isResultSelected ? 1.4 : 1)
+        .shadow(color: Color.yellow.opacity(0.6), radius: isResultSelected ? 10 : 0)
         .animation(.easeInOut(duration: 0.2), value: isResultSelected)
     }
 }

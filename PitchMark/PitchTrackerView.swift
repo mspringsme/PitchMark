@@ -32,6 +32,9 @@ struct PitchTrackerView: View {
     @State private var activeCalledPitchId: String? = nil
     @State private var actualLocationRecorded: String? = nil
     @State private var resultVisualState: String? = nil
+    @State private var pendingResultLabel: String? = nil
+    @State private var showResultConfirmation = false
+    
     
     var body: some View {
         GeometryReader { geo in
@@ -181,7 +184,9 @@ struct PitchTrackerView: View {
                             actualLocationRecorded: actualLocationRecorded,
                             setSelectedPitch: { selectedPitch = $0 },
                             resultVisualState: resultVisualState,
-                            setResultVisualState: { resultVisualState = $0 }
+                            setResultVisualState: { resultVisualState = $0 },
+                            pendingResultLabel: $pendingResultLabel,
+                            showResultConfirmation: $showResultConfirmation
                         )
 //
                     }
@@ -224,6 +229,23 @@ struct PitchTrackerView: View {
                 }
                 
             } // end of z stack
+            .confirmationDialog(
+                "Confirm result location: \(pendingResultLabel ?? "")?",
+                isPresented: $showResultConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Confirm", role: .none) {
+                    if let label = pendingResultLabel {
+                        actualLocationRecorded = label
+                        resultVisualState = label
+                        isRecordingResult = false
+                    }
+                    pendingResultLabel = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingResultLabel = nil
+                }
+            }
             
         }
         .sheet(isPresented: $showCodeAssignmentSheet) {

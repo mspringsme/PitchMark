@@ -24,6 +24,8 @@ struct StrikeZoneView: View {
     let setSelectedPitch: (String) -> Void
     let resultVisualState: String?
     let setResultVisualState: (String?) -> Void
+    let pendingResultLabel: Binding<String?>
+    let showResultConfirmation: Binding<Bool>
     
     
     var body: some View {
@@ -68,7 +70,9 @@ struct StrikeZoneView: View {
                     calledPitchLocation: calledPitch?.location,
                     setSelectedPitch: setSelectedPitch,
                     resultVisualState: resultVisualState,
-                    setResultVisualState: setResultVisualState
+                    setResultVisualState: setResultVisualState,
+                    pendingResultLabel: pendingResultLabel,
+                    showResultConfirmation: showResultConfirmation
                 )
             }
 
@@ -106,7 +110,9 @@ struct StrikeZoneView: View {
                     calledPitchLocation: calledPitch?.location,
                     setSelectedPitch: setSelectedPitch,
                     resultVisualState: resultVisualState,
-                    setResultVisualState: setResultVisualState
+                    setResultVisualState: setResultVisualState,
+                    pendingResultLabel: pendingResultLabel,
+                    showResultConfirmation: showResultConfirmation
                 )
             }
         }
