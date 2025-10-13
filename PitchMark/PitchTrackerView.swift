@@ -34,6 +34,7 @@ struct PitchTrackerView: View {
     @State private var resultVisualState: String? = nil
     @State private var pendingResultLabel: String? = nil
     @State private var showResultConfirmation = false
+    @State private var isGameMode: Double = 1
     
     
     var body: some View {
@@ -46,27 +47,27 @@ struct PitchTrackerView: View {
                 VStack(spacing: 4) {
                     HStack {
                         Text(selectedTemplate?.name ?? "Select a template")
-                                .font(.headline)
-                                .foregroundColor(templates.isEmpty ? .gray : .primary)
-
-                            Menu {
-                                ForEach(templates, id: \.self) { template in
-                                    Button(template.name) {
-                                        selectedTemplate = template
-                                        selectedPitches = Set(template.pitches)
-                                        pitchCodeAssignments = template.codeAssignments
-                                        // 🧹 Reset strike zone and called pitch state
-                                        lastTappedPosition = nil
-                                        calledPitch = nil
-                                        
-                                    }
+                            .font(.headline)
+                            .foregroundColor(templates.isEmpty ? .gray : .primary)
+                        
+                        Menu {
+                            ForEach(templates, id: \.self) { template in
+                                Button(template.name) {
+                                    selectedTemplate = template
+                                    selectedPitches = Set(template.pitches)
+                                    pitchCodeAssignments = template.codeAssignments
+                                    // 🧹 Reset strike zone and called pitch state
+                                    lastTappedPosition = nil
+                                    calledPitch = nil
+                                    
                                 }
-                            } label: {
-                                Image(systemName: "chevron.down.circle")
-                                    .imageScale(.large)
-                                    .foregroundColor(templates.isEmpty ? .gray : .blue)
                             }
-                            .disabled(templates.isEmpty) // ✅ disables interaction
+                        } label: {
+                            Image(systemName: "chevron.down.circle")
+                                .imageScale(.large)
+                                .foregroundColor(templates.isEmpty ? .gray : .blue)
+                        }
+                        .disabled(templates.isEmpty) // ✅ disables interaction
                         Spacer() // 👈 Pushes content to the trailing edge
                         
                         Button(action: {
@@ -119,11 +120,10 @@ struct PitchTrackerView: View {
                     Divider()
                         .padding(.bottom, 4)
                     
-                    let iconSize: CGFloat = 40
+                    let iconSize: CGFloat = 36
 
-                    // 🧍‍♂️ Batter Side Buttons
-                    HStack(spacing: 16) {
-                        
+                    HStack {
+                        // Left Batter Button (Leading)
                         Button(action: {
                             withAnimation {
                                 batterSide = .left
@@ -131,7 +131,7 @@ struct PitchTrackerView: View {
                         }) {
                             Image("rightBatterIcon")
                                 .resizable()
-                                .renderingMode(.template) // enables tinting
+                                .renderingMode(.template)
                                 .frame(width: iconSize, height: iconSize)
                                 .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
                         }
@@ -140,7 +140,34 @@ struct PitchTrackerView: View {
                         .background(Color.clear)
                         .cornerRadius(6)
                         .buttonStyle(.plain)
-                        
+
+                        Spacer()
+
+                        // Slider with Labels
+                        VStack(spacing: 4) {
+                            Text("Mode")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Slider(value: $isGameMode, in: 0...1, step: 1)
+                                .accentColor(.blue)
+
+                            HStack {
+                                Text("Practice")
+                                    .font(.caption2)
+                                    .foregroundColor(isGameMode < 0.5 ? .primary : .gray)
+                                Spacer()
+                                Text("Game")
+                                    .font(.caption2)
+                                    .foregroundColor(isGameMode > 0.5 ? .primary : .gray)
+                            }
+                            .padding(.horizontal, 4)
+                        }
+                        .frame(width: 160)
+
+                        Spacer()
+
+                        // Right Batter Button (Trailing)
                         Button(action: {
                             withAnimation {
                                 batterSide = .right
@@ -159,14 +186,12 @@ struct PitchTrackerView: View {
                         .buttonStyle(.plain)
                     }
                     .frame(maxWidth: .infinity)
-                    .multilineTextAlignment(.center)
                     .padding(.horizontal)
                     .padding(.bottom, 4)
-                    //Divider()
                     
                     VStack {
-//                        if let selectedTemplate = selectedTemplate {
-//                            Text("")
+                        //                        if let selectedTemplate = selectedTemplate {
+                        //                            Text("")
                         StrikeZoneView(
                             geo: geo,
                             batterSide: batterSide,
@@ -188,28 +213,28 @@ struct PitchTrackerView: View {
                             pendingResultLabel: $pendingResultLabel,
                             showResultConfirmation: $showResultConfirmation
                         )
-//
+                        //
                     }
                     .frame(height: geo.size.height * 0.7) // ✅ Prevents overlap
                     .clipped()
                     .padding(.top, 8)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
-                                
+                
                 ResetPitchButton(geo: geo) {
-                        isRecordingResult = false
-
-                        // ✅ Reset pitch and location selection
-                        selectedPitch = ""
-                        selectedLocation = ""
-
-                        // ✅ Reset tapped position and called pitch display
-                        lastTappedPosition = nil
-                        calledPitch = nil
-
-                        // ✅ Clear visual override state
-                        resultVisualState = nil
-                        actualLocationRecorded = nil
+                    isRecordingResult = false
+                    
+                    // ✅ Reset pitch and location selection
+                    selectedPitch = ""
+                    selectedLocation = ""
+                    
+                    // ✅ Reset tapped position and called pitch display
+                    lastTappedPosition = nil
+                    calledPitch = nil
+                    
+                    // ✅ Clear visual override state
+                    resultVisualState = nil
+                    actualLocationRecorded = nil
                     
                     pendingResultLabel = nil
                 }
@@ -252,15 +277,15 @@ struct PitchTrackerView: View {
                         actualLocationRecorded = label
                         resultVisualState = label
                         isRecordingResult = false
-
+                        
                         // ✅ Reset pitch and location selection
                         selectedPitch = ""
                         selectedLocation = ""
-
+                        
                         // ✅ Reset tapped position and called pitch display
                         lastTappedPosition = nil
                         calledPitch = nil
-
+                        
                         // ✅ Clear visual override state
                         resultVisualState = nil
                         actualLocationRecorded = nil
@@ -281,12 +306,12 @@ struct PitchTrackerView: View {
             .padding()
         }
         .onAppear {
-                    if authManager.isSignedIn {
-                        authManager.loadTemplates { loadedTemplates in
-                            self.templates = loadedTemplates
-                        }
-                    }
+            if authManager.isSignedIn {
+                authManager.loadTemplates { loadedTemplates in
+                    self.templates = loadedTemplates
                 }
+            }
+        }
         .sheet(isPresented: $showSettings) {
             SettingsView(
                 templates: $templates,
@@ -318,22 +343,22 @@ func menuContent(
             let assignedCodes = pitchCodeAssignments
                 .filter { $0.pitch == pitch && $0.location == adjustedLabel }
                 .map(\.code)
-
+            
             let codeSuffix = assignedCodes.isEmpty
-                ? "     --"
-                : "   \(assignedCodes.joined(separator: ", "))"
-
+            ? "     --"
+            : "   \(assignedCodes.joined(separator: ", "))"
+            
             Button("\(pitch)\(codeSuffix)") {
                 withAnimation {
                     setSelectedPitch(pitch) // ✅ This sets the selected pitch
-
+                    
                     let newCall = PitchCall(
                         pitch: pitch,
                         location: adjustedLabel,
                         isStrike: location.isStrike,
                         codes: assignedCodes
                     )
-
+                    
                     if lastTappedPosition == tappedPoint,
                        let currentCall = calledPitch,
                        currentCall.location == newCall.location,
@@ -402,7 +427,7 @@ struct CalledPitchView: View {
     let call: PitchCall
     let pitchCodeAssignments: [PitchCodeAssignment]
     let batterSide: BatterSide
-
+    
     var body: some View {
         let labelManager = PitchLabelManager(batterSide: batterSide)
         let displayLocation = call.location.trimmingCharacters(in: .whitespaces)
@@ -415,7 +440,7 @@ struct CalledPitchView: View {
         
         print("Looking for: \(call.pitch) @ \(displayLocation)")
         print("Available: \(pitchCodeAssignments.map { "\($0.pitch) @ \($0.location)" })")
-
+        
         return HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -424,10 +449,10 @@ struct CalledPitchView: View {
                         .bold()
                         .foregroundColor(call.type == "Strike" ? .green : .red)
                 }
-
+                
                 Text("\(call.pitch) (\(displayLocation))")
                     .foregroundColor(.primary)
-
+                
                 if !assignedCodes.isEmpty {
                     Text("Calls: \(assignedCodes.joined(separator: ", "))")
                         .font(.subheadline)
@@ -438,9 +463,9 @@ struct CalledPitchView: View {
                         .foregroundColor(.gray)
                 }
             }
-
+            
             Spacer()
-
+            
             Button(action: {
                 isRecordingResult = true
                 activeCalledPitchId = UUID().uuidString
@@ -466,7 +491,7 @@ struct CalledPitchView: View {
 struct LocationImageView: View {
     let location: String
     let isSelected: Bool
-
+    
     var body: some View {
         ZStack {
             // Base grid or strike zone
@@ -474,7 +499,7 @@ struct LocationImageView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 40, height: 40)
-
+            
             // Highlight overlay
             if isSelected {
                 Rectangle()
@@ -496,19 +521,19 @@ struct ToggleChip: View {
     @Binding var selectedPitches: Set<String>
     var template: PitchTemplate?
     var codeAssignments: [PitchCodeAssignment] = []
-
+    
     var isSelected: Bool {
         selectedPitches.contains(pitch)
     }
-
+    
     var isInTemplate: Bool {
         template?.pitches.contains(pitch) == true
     }
-
+    
     var assignedCodeCount: Int {
         codeAssignments.filter { $0.pitch == pitch }.count
     }
-
+    
     var body: some View {
         Text(pitch)
             .padding(.horizontal, 12)
