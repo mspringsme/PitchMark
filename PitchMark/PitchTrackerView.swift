@@ -35,6 +35,8 @@ struct PitchTrackerView: View {
     @State private var pendingResultLabel: String? = nil
     @State private var showResultConfirmation = false
     @State private var isGameMode: Double = 1
+    @State private var showMessage = true
+    @State private var fadeTimer: Timer?
     
     
     var body: some View {
@@ -240,20 +242,64 @@ struct PitchTrackerView: View {
                 }
                 
                 // 📝 Called Pitch Display
-                if let call = calledPitch {
-                    CalledPitchView(
-                        isRecordingResult: $isRecordingResult,
-                        activeCalledPitchId: $activeCalledPitchId,
-                        call: call,
-                        pitchCodeAssignments: pitchCodeAssignments,
-                        batterSide: batterSide
-                    )
-                    .frame(maxWidth: geo.size.width * 0.9)
-                    .background(Color.white.opacity(0.9))
-                    .cornerRadius(8)
-                    .shadow(radius: 4)
-                    .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
-                    .transition(.opacity)
+                Group {
+                    if isRecordingResult && activeCalledPitchId == nil {
+                        if showMessage {
+                            Text("Record the pitch outcome location")
+                                .font(.headline)
+                                .padding()
+                                .frame(maxWidth: geo.size.width * 0.9)
+                                .background(Color.white.opacity(0.9))
+                                .cornerRadius(8)
+                                .shadow(radius: 4)
+                                .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
+                                .transition(.opacity)
+                        } else if let call = calledPitch {
+                            CalledPitchView(
+                                isRecordingResult: $isRecordingResult,
+                                activeCalledPitchId: $activeCalledPitchId,
+                                call: call,
+                                pitchCodeAssignments: pitchCodeAssignments,
+                                batterSide: batterSide
+                            )
+                            .frame(maxWidth: geo.size.width * 0.9)
+                            .background(Color.white.opacity(0.9))
+                            .cornerRadius(8)
+                            .shadow(radius: 4)
+                            .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
+                            .transition(.opacity)
+                        }
+                    } else if let call = calledPitch {
+                        CalledPitchView(
+                            isRecordingResult: $isRecordingResult,
+                            activeCalledPitchId: $activeCalledPitchId,
+                            call: call,
+                            pitchCodeAssignments: pitchCodeAssignments,
+                            batterSide: batterSide
+                        )
+                        .frame(maxWidth: geo.size.width * 0.9)
+                        .background(Color.white.opacity(0.9))
+                        .cornerRadius(8)
+                        .shadow(radius: 4)
+                        .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
+                        .transition(.opacity)
+                    }
+                }
+                .onChange(of: isRecordingResult) { oldValue, newValue in
+                    if newValue {
+                        showMessage = true
+                        if fadeTimer == nil {
+                            fadeTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+                                withAnimation(.easeInOut(duration: 0.5)) {
+                                    showMessage.toggle()
+                                }
+                            }
+                        }
+                    } else {
+                        fadeTimer?.invalidate()
+                        fadeTimer = nil
+                        showMessage = false
+                    }
                 }
                 if selectedTemplate == nil {
                     Text("")
@@ -276,8 +322,9 @@ struct PitchTrackerView: View {
                     if let label = pendingResultLabel {
                         actualLocationRecorded = label
                         resultVisualState = label
+                        activeCalledPitchId = UUID().uuidString
                         isRecordingResult = false
-                        
+                        showMessage = true // 👈 Reset for next pitch
                         // ✅ Reset pitch and location selection
                         selectedPitch = ""
                         selectedLocation = ""
@@ -468,7 +515,7 @@ struct CalledPitchView: View {
             
             Button(action: {
                 isRecordingResult = true
-                activeCalledPitchId = UUID().uuidString
+                
             }) {
                 HStack(spacing: 6) {
                     Image(systemName: "play.circle.fill")

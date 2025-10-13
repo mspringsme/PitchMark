@@ -19,4 +19,5 @@ struct CalledPitchRecord: Codable, Identifiable {
     let assignedCodes: [String] // optional metadata
     let batterSideRaw: String?  // "L" / "R" if helpful
     let notes: String?
+    let mode: String
 }
