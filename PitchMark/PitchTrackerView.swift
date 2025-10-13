@@ -197,8 +197,21 @@ struct PitchTrackerView: View {
                 .frame(maxHeight: .infinity, alignment: .top)
                                 
                 ResetPitchButton(geo: geo) {
-                    lastTappedPosition = nil
-                    calledPitch = nil
+                        isRecordingResult = false
+
+                        // ✅ Reset pitch and location selection
+                        selectedPitch = ""
+                        selectedLocation = ""
+
+                        // ✅ Reset tapped position and called pitch display
+                        lastTappedPosition = nil
+                        calledPitch = nil
+
+                        // ✅ Clear visual override state
+                        resultVisualState = nil
+                        actualLocationRecorded = nil
+                    
+                    pendingResultLabel = nil
                 }
                 
                 // 📝 Called Pitch Display
@@ -239,10 +252,19 @@ struct PitchTrackerView: View {
                         actualLocationRecorded = label
                         resultVisualState = label
                         isRecordingResult = false
+
+                        // ✅ Reset pitch and location selection
+                        selectedPitch = ""
+                        selectedLocation = ""
+
+                        // ✅ Reset tapped position and called pitch display
+                        lastTappedPosition = nil
+                        calledPitch = nil
+
+                        // ✅ Clear visual override state
+                        resultVisualState = nil
+                        actualLocationRecorded = nil
                     }
-                    pendingResultLabel = nil
-                }
-                Button("Cancel", role: .cancel) {
                     pendingResultLabel = nil
                 }
             }

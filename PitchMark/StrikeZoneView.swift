@@ -27,7 +27,6 @@ struct StrikeZoneView: View {
     let pendingResultLabel: Binding<String?>
     let showResultConfirmation: Binding<Bool>
     
-    
     var body: some View {
         let zoneWidth = geo.size.width * 0.4
         let zoneHeight = geo.size.height * 0.35
