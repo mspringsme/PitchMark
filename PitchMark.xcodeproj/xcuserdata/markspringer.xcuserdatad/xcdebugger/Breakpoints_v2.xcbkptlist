@@ -7,31 +7,31 @@
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "5391AB91-CCE8-413B-A1DC-9415170A41F7"
+            uuid = "43B9576E-679C-42BA-B291-4311C27BDC50"
             shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "223"
-            endingLineNumber = "223"
-            landmarkName = "body"
-            landmarkType = "24">
+            startingLineNumber = "438"
+            endingLineNumber = "438"
+            landmarkName = "ShowPitchLog"
+            landmarkType = "14">
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "94E3DD4D-E3C2-4162-BE4F-14B1D8D8F8A9"
+            uuid = "C0AAD456-8FCE-4B61-B21F-A4646DD67D83"
             shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "322"
-            endingLineNumber = "322"
+            startingLineNumber = "254"
+            endingLineNumber = "254"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>

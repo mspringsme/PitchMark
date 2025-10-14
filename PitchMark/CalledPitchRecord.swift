@@ -8,16 +8,59 @@
 
 import Foundation
 
-struct CalledPitchRecord: Codable, Identifiable {
+import SwiftUI
+
+struct CalledPitchRecord: Identifiable, Codable {
     let id: UUID
     let timestamp: Date
-    let pitch: String           // e.g. "2 Seam"
-    let calledLocation: String  // e.g. "Ball ↓"
-    let actualLocation: String? // e.g. "Strike Middle" (set when user records result)
+    let pitch: String
+    let calledLocation: String
+    let actualLocation: String?
     let isCalledStrike: Bool
-    let isActualStrike: Bool?   // set when actualLocation is recorded
-    let assignedCodes: [String] // optional metadata
-    let batterSideRaw: String?  // "L" / "R" if helpful
+    let isActualStrike: Bool?
+    let assignedCodes: [String]
+    let batterSideRaw: String?
     let notes: String?
     let mode: String
 }
+
+struct PitchResultsView: View {
+    @State private var showSheet = false
+
+    var body: some View {
+        VStack {
+            Button("Show Pitch Results") {
+                showSheet = true
+            }
+            .sheet(isPresented: $showSheet) {
+                PitchResultsSheet()
+            }
+        }
+    }
+}
+
+struct PitchResultsSheet: View {
+    // Placeholder empty array for now
+    let pitchRecords: [CalledPitchRecord] = []
+
+    var body: some View {
+        NavigationView {
+            List(pitchRecords) { record in
+                VStack(alignment: .leading) {
+                    Text(record.pitch)
+                        .font(.headline)
+                    Text("Called: \(record.calledLocation)")
+                        .font(.subheadline)
+                    if let actual = record.actualLocation {
+                        Text("Actual: \(actual)")
+                            .font(.subheadline)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .navigationTitle("Pitch Results")
+        }
+    }
+}
+
+

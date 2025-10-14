@@ -35,7 +35,7 @@ struct PitchTrackerView: View {
     @State private var pendingResultLabel: String? = nil
     @State private var showResultConfirmation = false
     @State private var isGameMode: Double = 1
-    
+    @State private var showPitchLogSheet = false
     
     var body: some View {
         GeometryReader { geo in
@@ -219,6 +219,7 @@ struct PitchTrackerView: View {
                     .clipped()
                     .padding(.top, 8)
                     
+                    // "Choose a Pitch Result" pop up text
                     let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
                     if shouldShowChooseResultText {
                         Text("Choose a Pitch Result")
@@ -249,6 +250,9 @@ struct PitchTrackerView: View {
                     actualLocationRecorded = nil
                     
                     pendingResultLabel = nil
+                }
+                ShowPitchLog(geo: geo) {
+                    showPitchLogSheet = true
                 }
                 
                 // 📝 Called Pitch Display
@@ -351,6 +355,9 @@ struct PitchTrackerView: View {
             )
             .environmentObject(authManager)
         }
+        .sheet(isPresented: $showPitchLogSheet) {
+            PitchResultsSheet()
+        }
     }
 }
 
@@ -428,7 +435,27 @@ struct BatterIconOverlay: View {
     }
 }
 
-
+struct ShowPitchLog: View {
+    let geo: GeometryProxy
+    let showLog: () -> Void
+    
+    var body: some View {
+        Button(action: {
+            withAnimation {
+                showLog()
+            }
+        }) {
+            Image(systemName: "baseball")
+                .font(.body)
+                .foregroundColor(.green)
+                .padding(6)
+                .background(Color.gray.opacity(0.2))
+                .clipShape(Circle())
+        }
+        .position(x: geo.size.width - 30, y: geo.size.height * 0.65)
+        .accessibilityLabel("Show pitches.")
+    }
+}
 struct ResetPitchButton: View {
     let geo: GeometryProxy
     let resetAction: () -> Void
@@ -499,11 +526,7 @@ struct CalledPitchView: View {
             Spacer()
             
             Button(action: {
-                isRecordingResult = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    isRecordingResult = true
-                }
-                
+                isRecordingResult = true
             }) {
                 HStack(spacing: 6) {
                     Image(systemName: "play.circle.fill")
