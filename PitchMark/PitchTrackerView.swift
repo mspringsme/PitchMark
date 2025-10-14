@@ -218,6 +218,18 @@ struct PitchTrackerView: View {
                     .frame(height: geo.size.height * 0.7) // ✅ Prevents overlap
                     .clipped()
                     .padding(.top, 8)
+                    
+                    let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
+                    if shouldShowChooseResultText {
+                        Text("Choose a Pitch Result")
+                            .opacity(shouldShowChooseResultText ? 1 : 0)
+                            .scaleEffect(shouldShowChooseResultText ? 1.05 : 1)
+                            .shadow(color: .yellow.opacity(shouldShowChooseResultText ? 0.3 : 0), radius: 4)
+                            .animation(.easeInOut(duration: 0.3), value: shouldShowChooseResultText)
+                            //.position(x: geo.size.width / 2, y: geo.size.height * 0.78)
+                    }
+                        
+                    
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
                 
@@ -307,6 +319,7 @@ struct PitchTrackerView: View {
                         // ✅ Clear visual override state
                         resultVisualState = nil
                         actualLocationRecorded = nil
+                        pendingResultLabel = nil
                     }
                     pendingResultLabel = nil
                 }
@@ -414,6 +427,7 @@ struct BatterIconOverlay: View {
         }
     }
 }
+
 
 struct ResetPitchButton: View {
     let geo: GeometryProxy
@@ -590,6 +604,6 @@ struct ToggleChip: View {
     }
 }
 
-#Preview {
-    PitchTrackerView()
-}
+//#Preview {
+//    PitchTrackerView()
+//}
