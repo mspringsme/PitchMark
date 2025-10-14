@@ -6,6 +6,8 @@
 //
 
 import SwiftUI
+import FirebaseCore
+import FirebaseFirestore
 
 struct PitchTrackerView: View {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
@@ -36,6 +38,10 @@ struct PitchTrackerView: View {
     @State private var showResultConfirmation = false
     @State private var isGameMode: Double = 1
     @State private var showPitchLogSheet = false
+    @StateObject var sessionManager = PitchSessionManager()
+    @State private var modeSliderValue: Double = 0 // 0 = practice, 1 = game
+    @State private var pitchEvents: [PitchEvent] = []
+    @State private var shouldShowPitchLogSheet = false
     
     var body: some View {
         GeometryReader { geo in
@@ -143,25 +149,19 @@ struct PitchTrackerView: View {
 
                         Spacer()
 
-                        // Slider with Labels
                         VStack(spacing: 4) {
                             Text("Mode")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
 
-                            Slider(value: $isGameMode, in: 0...1, step: 1)
-                                .accentColor(.blue)
-
-                            HStack {
-                                Text("Practice")
-                                    .font(.caption2)
-                                    .foregroundColor(isGameMode < 0.5 ? .primary : .gray)
-                                Spacer()
-                                Text("Game")
-                                    .font(.caption2)
-                                    .foregroundColor(isGameMode > 0.5 ? .primary : .gray)
+                            Picker("Mode", selection: $sessionManager.currentMode) {
+                                Text("Practice").tag(PitchMode.practice)
+                                Text("Game").tag(PitchMode.game)
                             }
-                            .padding(.horizontal, 4)
+                            .pickerStyle(.segmented)
+                            .onChange(of: sessionManager.currentMode) { newMode in
+                                sessionManager.switchMode(to: newMode)
+                            }
                         }
                         .frame(width: 160)
 
@@ -251,9 +251,17 @@ struct PitchTrackerView: View {
                     
                     pendingResultLabel = nil
                 }
-                ShowPitchLog(geo: geo) {
-                    showPitchLogSheet = true
-                }
+                
+                ShowPitchLog(
+                    geo: geo,
+                    showLog: {
+                        authManager.loadPitchEvents { events in
+                            pitchEvents = events
+                            shouldShowPitchLogSheet = true
+                        }
+                    }
+                )
+                
                 
                 // 📝 Called Pitch Display
                 Group {
@@ -309,6 +317,34 @@ struct PitchTrackerView: View {
                 Button("Confirm", role: .none) {
                     if let label = pendingResultLabel {
                         actualLocationRecorded = label
+                        
+                        if let pitch = calledPitch?.pitch,
+                           let codes = calledPitch?.codes {
+
+                            let event = PitchEvent(
+                                id: UUID().uuidString,
+                                timestamp: Date(),
+                                pitch: pitch,
+                                location: label, // ✅ use label directly
+                                codes: codes,
+                                isStrike: label.starts(with: "Strike"),
+                                mode: sessionManager.currentMode,
+                                calledPitch: calledPitch
+                            )
+                            
+                            authManager.savePitchEvent(event)
+                            sessionManager.incrementCount()
+                            
+                            // Optional: append locally for instant UI updates
+                            pitchEvents.append(event)
+
+                            // Optional: reload from Firestore if you want to sync latest
+                            // (but not necessary immediately after saving unless you're expecting external changes)
+                            authManager.loadPitchEvents { events in
+                                self.pitchEvents = events
+                            }
+                        }
+                        
                         resultVisualState = label
                         activeCalledPitchId = UUID().uuidString
                         isRecordingResult = false
@@ -356,7 +392,13 @@ struct PitchTrackerView: View {
             .environmentObject(authManager)
         }
         .sheet(isPresented: $showPitchLogSheet) {
-            PitchResultsSheet()
+            PitchResultSheet(allEvents: pitchEvents)
+        }
+        .onChange(of: shouldShowPitchLogSheet) {
+            if shouldShowPitchLogSheet {
+                showPitchLogSheet = true
+                shouldShowPitchLogSheet = false
+            }
         }
     }
 }

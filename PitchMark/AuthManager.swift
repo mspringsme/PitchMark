@@ -205,4 +205,55 @@ class AuthManager: ObservableObject {
                 completion(templates)
             }
     }
+    
+    func savePitchEvent(_ event: PitchEvent) {
+        guard let user = user else {
+            print("No signed-in user to save pitch event for.")
+            return
+        }
+
+        let db = Firestore.firestore()
+        let eventRef = db.collection("users")
+            .document(user.uid)
+            .collection("pitchEvents")
+            .document() // auto-generated ID
+
+        do {
+            try eventRef.setData(from: event) { error in
+                if let error = error {
+                    print("Error saving pitch event: \(error.localizedDescription)")
+                } else {
+                    print("Pitch event saved successfully.")
+                }
+            }
+        } catch {
+            print("Encoding error: \(error.localizedDescription)")
+        }
+    }
+    
+    func loadPitchEvents(completion: @escaping ([PitchEvent]) -> Void) {
+        guard let user = user else {
+            completion([])
+            return
+        }
+
+        let db = Firestore.firestore()
+        db.collection("users")
+            .document(user.uid)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error loading pitch events: \(error.localizedDescription)")
+                    completion([])
+                    return
+                }
+
+                let events = snapshot?.documents.compactMap { doc in
+                    try? doc.data(as: PitchEvent.self)
+                } ?? []
+
+                completion(events)
+            }
+    }
 }

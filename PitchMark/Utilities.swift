@@ -180,25 +180,10 @@ struct BatterLabelSet {
 }
 
 
-
-struct PitchCall {
-    let pitch: String
-    let location: String
-    let isStrike: Bool
-    let codes: [String]  // ✅ Use array instead of single code
-
-    var type: String {
-        isStrike ? "Strike" : "Ball"
-    }
-}
-
-
-
 struct PitchLocation {
     let label: String
     let isStrike: Bool
 }
-
 
 
 struct GridLocation: Identifiable {
@@ -287,7 +272,4 @@ enum BatterSide: String, CaseIterable, Identifiable {
 
 
 
-extension PitchCall {
-    var displayTitle: String { "\(type) \(location)" } // location will now already be "Up & In" style
-    var shortLabel: String { "\(pitch) — \(displayTitle)" }
-}
+
