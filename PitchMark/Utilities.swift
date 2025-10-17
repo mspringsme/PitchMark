@@ -39,11 +39,10 @@ let strikeGrid: [GridLocation] = [
 ]
 
 let allPitches = ["2 Seam", "4 Seam", "Change", "Curve", "Screw", "Smile", "Drop", "Rise", "Pipe"]
+
 let pitchOrder: [String] = [
-    "2 Seam", "4 Seam", "Change", "Curve", "Drop", "Pipe", "Rise", "Screw", "Smile" 
+    "2 Seam", "4 Seam", "Change", "Curve", "Drop", "Pipe", "Rise", "Screw", "Smile"
 ]
-
-
 
 func allLocationsFromGrid() -> [String] {
     strikeGrid.map(\.label) + [
@@ -179,12 +178,10 @@ struct BatterLabelSet {
     }
 }
 
-
 struct PitchLocation {
     let label: String
     let isStrike: Bool
 }
-
 
 struct GridLocation: Identifiable {
     let id = UUID()
@@ -255,20 +252,169 @@ struct PitchTemplate: Identifiable, Hashable {
     var codeAssignments: [PitchCodeAssignment]
 }
 
-
-enum BatterSide: String, CaseIterable, Identifiable {
+enum BatterSide: String, CaseIterable, Identifiable, Codable {
     case left, right
-    
+
     var id: String { rawValue }
-    
+
     var displayName: String {
         "\(self == .left ? "Left" : "Right")-Handed Batter"
     }
-    
+
     var opposite: BatterSide {
         self == .left ? .right : .left
     }
 }
+
+let pitchAssetNames: [String] = [
+    "ballHigh",
+    "ballHighLeft",
+    "ballHighRight",
+    "ballLeft",
+    "ballLow",
+    "ballLowLeft",
+    "ballLowRight",
+    "ballRight",
+    "StrikeHigh",
+    "StrikeHighLeft",
+    "StrikeHighRight",
+    "StrikeLeft",
+    "StrikeLow",
+    "StrikeLowLeft",
+    "StrikeLowRight",
+    "StrikeMiddle",
+    "StrikeRight"
+]
+
+enum PitchImageDictionary {
+    static let imageMap: [String: String] = [
+        // Right-handed batter
+        "Strike Middle|right": "StrikeMiddle",
+        "Strike High|right": "StrikeHigh",
+        "Strike Low|right": "StrikeLow",
+        "Strike Up & In|right": "StrikeHighRight",
+        "Strike Up & Out|right": "StrikeHighLeft",
+        "Strike ↓ & In|right": "StrikeLowRight",
+        "Strike ↓ & Out|right": "StrikeLowLeft",
+        "Strike In|right": "StrikeRight",
+        "Strike Out|right": "StrikeLeft",
+        
+        "Ball Middle|right": "ballMiddle",
+        "Ball High|right": "ballHigh",
+        "Ball Low|right": "ballLow",
+        "Ball ↓|right": "ballLow",
+        "Ball Up & In|right": "ballHighRight",
+        "Ball Up & Out|right": "ballHighLeft",
+        "Ball ↓ & In|right": "ballLowRight",
+        "Ball ↓ & Out|right": "ballLowLeft",
+        "Ball In|right": "ballRight",
+        "Ball Out|right": "ballLeft",
+        
+        // Left-handed batter (flipped)
+        "Strike Middle|left": "StrikeMiddle",
+        "Strike High|left": "StrikeHigh",
+        "Strike Low|left": "StrikeLow",
+        "Strike Up & In|left": "StrikeHighLeft",
+        "Strike Up & Out|left": "StrikeHighRight",
+        "Strike ↓ & In|left": "StrikeLowLeft",
+        "Strike ↓ & Out|left": "StrikeLowRight",
+        "Strike In|left": "StrikeLeft",
+        "Strike Out|left": "StrikeRight",
+        
+        "Ball Middle|left": "ballMiddle",
+        "Ball High|left": "ballHigh",
+        "Ball Low|left": "ballLow",
+        "Ball ↓|left": "ballLow",
+        "Ball Up & In|left": "ballHighLeft",
+        "Ball Up & Out|left": "ballHighRight",
+        "Ball ↓ & In|left": "ballLowLeft",
+        "Ball ↓ & Out|left": "ballLowRight",
+        "Ball In|left": "ballLeft",
+        "Ball Out|left": "ballRight",
+        
+        "Strike Up|right": "StrikeHigh",
+        "Strike Up|left": "StrikeHigh",
+        "Ball Up|right": "ballHigh",
+        "Ball Up|left": "ballHigh"
+        
+    ]
+    
+    
+    static func imageName(for location: String, isStrike: Bool, batterSide: BatterSide) -> String {
+        let trimmedLocation = location.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = "\(trimmedLocation)|\(batterSide.rawValue)"
+        print("🔍 Lookup key: \(key)")
+        
+        if let image = imageMap[key] {
+            return image
+        } else {
+            print("⚠️ Missing image for key: \(key)")
+            return "Bat"
+        }
+    }
+}
+struct PitchImageGridPreview: View {
+    let locations = [
+        "Middle", "High", "Low",
+        "Up & In", "Up & Out",
+        "↓ & In", "↓ & Out",
+        "In", "Out", "Up" // include "Up" if it's used
+    ]
+    
+    struct Combo: Identifiable {
+        let id = UUID()
+        let location: String
+        let isStrike: Bool
+        let side: PitchMark.BatterSide
+    }
+    
+    func allCombinations() -> [Combo] {
+        let sides: [PitchMark.BatterSide] = [.right, .left]
+        let strikeStates: [Bool] = [true, false]
+        
+        return sides.flatMap { side in
+            strikeStates.flatMap { isStrike in
+                locations.map { location in
+                    Combo(location: location, isStrike: isStrike, side: side)
+                }
+            }
+        }
+    }
+    
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(120), spacing: 16), count: 3), spacing: 24) {
+                ForEach(allCombinations()) { combo in
+                    let imageName = PitchImageDictionary.imageName(
+                        for: combo.location,
+                        isStrike: combo.isStrike,
+                        batterSide: combo.side
+                    )
+                    
+                    let isMissing = imageName == "Bat"
+                    
+                    VStack(spacing: 8) {
+                        Text(imageName)
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                            .frame(width: 100)
+                        Image(imageName)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 80, height: 100)
+                            .border(isMissing ? Color.red : Color.gray.opacity(0.3), width: 2)
+                        Text("\(combo.isStrike ? "Strike" : "Ball") \(combo.location)\n[\(combo.side.rawValue)]")
+                            .font(.footnote)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .padding()
+        }
+    }
+}
+
 
 
 

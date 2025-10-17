@@ -37,11 +37,14 @@ struct PitchTrackerView: View {
     @State private var pendingResultLabel: String? = nil
     @State private var showResultConfirmation = false
     @State private var isGameMode: Double = 1
-    @State private var showPitchLogSheet = false
+    //@State private var showPitchLogSheet = false
     @StateObject var sessionManager = PitchSessionManager()
     @State private var modeSliderValue: Double = 0 // 0 = practice, 1 = game
     @State private var pitchEvents: [PitchEvent] = []
-    @State private var shouldShowPitchLogSheet = false
+    //@State private var shouldShowPitchLogSheet = false
+    //@State private var showSheet = false
+    @State private var showPitchResults = false
+    @State private var filterMode: PitchMode? = nil
     
     var body: some View {
         GeometryReader { geo in
@@ -257,7 +260,8 @@ struct PitchTrackerView: View {
                     showLog: {
                         authManager.loadPitchEvents { events in
                             pitchEvents = events
-                            shouldShowPitchLogSheet = true
+                            showPitchResults = true
+                            print("🔥 ", pitchEvents)
                         }
                     }
                 )
@@ -329,7 +333,8 @@ struct PitchTrackerView: View {
                                 codes: codes,
                                 isStrike: label.starts(with: "Strike"),
                                 mode: sessionManager.currentMode,
-                                calledPitch: calledPitch
+                                calledPitch: calledPitch,
+                                batterSide: batterSide
                             )
                             
                             authManager.savePitchEvent(event)
@@ -391,14 +396,12 @@ struct PitchTrackerView: View {
             )
             .environmentObject(authManager)
         }
-        .sheet(isPresented: $showPitchLogSheet) {
-            PitchResultSheet(allEvents: pitchEvents)
-        }
-        .onChange(of: shouldShowPitchLogSheet) {
-            if shouldShowPitchLogSheet {
-                showPitchLogSheet = true
-                shouldShowPitchLogSheet = false
-            }
+        .sheet(isPresented: $showPitchResults) {
+            PitchResultSheet(
+                allEvents: pitchEvents,
+                filterMode: $filterMode
+            )
+            .environmentObject(authManager)
         }
     }
 }

@@ -233,6 +233,7 @@ class AuthManager: ObservableObject {
     
     func loadPitchEvents(completion: @escaping ([PitchEvent]) -> Void) {
         guard let user = user else {
+            print("❌ No signed-in user.")
             completion([])
             return
         }
@@ -244,16 +245,25 @@ class AuthManager: ObservableObject {
             .order(by: "timestamp", descending: false)
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("Error loading pitch events: \(error.localizedDescription)")
+                    print("❌ Firestore error: \(error.localizedDescription)")
                     completion([])
                     return
                 }
 
-                let events = snapshot?.documents.compactMap { doc in
-                    try? doc.data(as: PitchEvent.self)
+                let events: [PitchEvent] = snapshot?.documents.compactMap { doc in
+                    do {
+                        let event = try doc.data(as: PitchEvent.self)
+                        print("✅ Decoded event: \(event)")
+                        return event
+                    } catch {
+                        print("❌ Decoding failed for doc \(doc.documentID): \(error)")
+                        return nil
+                    }
                 } ?? []
 
+                print("📦 Loaded \(events.count) pitch events")
                 completion(events)
             }
     }
 }
+
