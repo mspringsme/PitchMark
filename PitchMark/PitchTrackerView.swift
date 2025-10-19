@@ -37,12 +37,9 @@ struct PitchTrackerView: View {
     @State private var pendingResultLabel: String? = nil
     @State private var showResultConfirmation = false
     @State private var isGameMode: Double = 1
-    //@State private var showPitchLogSheet = false
     @StateObject var sessionManager = PitchSessionManager()
     @State private var modeSliderValue: Double = 0 // 0 = practice, 1 = game
     @State private var pitchEvents: [PitchEvent] = []
-    //@State private var shouldShowPitchLogSheet = false
-    //@State private var showSheet = false
     @State private var showPitchResults = false
     @State private var filterMode: PitchMode? = nil
     
@@ -265,6 +262,28 @@ struct PitchTrackerView: View {
                         }
                     }
                 )
+                let sortedTemplates: [PitchTemplate] = {
+                    guard let activeID = selectedTemplate?.id else {
+                        return templates.sorted { $0.name < $1.name }
+                    }
+                    let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
+                    if let active = templates.first(where: { $0.id == activeID }) {
+                        return [active] + others
+                    }
+                    return others
+                }()
+                ShowPitchLogTemplates(
+                    geo: geo,
+                    sortedTemplates: sortedTemplates,
+                    onSelectTemplate: { template in
+                        selectedTemplate = template
+                        selectedPitches = Set(template.pitches)
+                        pitchCodeAssignments = template.codeAssignments
+                        lastTappedPosition = nil
+                        calledPitch = nil
+                        print("🔥 Selected template ID: \(template.id)")
+                    }
+                )
                 
                 
                 // 📝 Called Pitch Display
@@ -334,7 +353,8 @@ struct PitchTrackerView: View {
                                 isStrike: label.starts(with: "Strike"),
                                 mode: sessionManager.currentMode,
                                 calledPitch: calledPitch,
-                                batterSide: batterSide
+                                batterSide: batterSide,
+                                templateId: selectedTemplate?.id.uuidString
                             )
                             
                             authManager.savePitchEvent(event)
@@ -385,6 +405,12 @@ struct PitchTrackerView: View {
             if authManager.isSignedIn {
                 authManager.loadTemplates { loadedTemplates in
                     self.templates = loadedTemplates
+                }
+
+                authManager.loadPitchEvents { events in
+                    self.pitchEvents = events
+                    if !events.isEmpty {
+                    }
                 }
             }
         }
@@ -490,17 +516,54 @@ struct ShowPitchLog: View {
                 showLog()
             }
         }) {
-            Image(systemName: "baseball")
-                .font(.body)
-                .foregroundColor(.green)
-                .padding(6)
-                .background(Color.gray.opacity(0.2))
-                .clipShape(Circle())
+            VStack(spacing: 4) {
+                Image(systemName: "baseball")
+                    .font(.body)
+                    .foregroundColor(.green)
+                    .padding(6)
+                    .background(Color.gray.opacity(0.2))
+                    .clipShape(Circle())
+                
+                Text("Game")
+                    .font(.caption)
+                    .foregroundColor(.primary)
+            }
         }
-        .position(x: geo.size.width - 30, y: geo.size.height * 0.65)
+        .position(x: geo.size.width - 30, y: geo.size.height * 0.6)
         .accessibilityLabel("Show pitches.")
     }
 }
+
+struct ShowPitchLogTemplates: View {
+    let geo: GeometryProxy
+    let sortedTemplates: [PitchTemplate]
+    let onSelectTemplate: (PitchTemplate) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(sortedTemplates, id: \.self) { template in
+                Button(template.name) {
+                    onSelectTemplate(template)
+                }
+            }
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: "baseball")
+                    .font(.body)
+                    .foregroundColor(.black)
+                    .padding(6)
+                    .background(Color.gray.opacity(0.2))
+                    .clipShape(Circle())
+                Text("All")
+                    .font(.caption)
+                    .foregroundColor(.primary)
+            }
+        }
+        .position(x: geo.size.width - 30, y: geo.size.height * 0.40)
+        .accessibilityLabel("Show all templates.")
+    }
+}
+
 struct ResetPitchButton: View {
     let geo: GeometryProxy
     let resetAction: () -> Void

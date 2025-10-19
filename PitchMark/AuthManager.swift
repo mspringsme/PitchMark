@@ -252,9 +252,7 @@ class AuthManager: ObservableObject {
 
                 let events: [PitchEvent] = snapshot?.documents.compactMap { doc in
                     do {
-                        let event = try doc.data(as: PitchEvent.self)
-                        print("✅ Decoded event: \(event)")
-                        return event
+                        return try doc.data(as: PitchEvent.self)
                     } catch {
                         print("❌ Decoding failed for doc \(doc.documentID): \(error)")
                         return nil

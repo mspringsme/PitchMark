@@ -265,6 +265,7 @@ struct PitchEvent: Codable, Identifiable {
     let mode: PitchMode
     let calledPitch: PitchCall?
     var batterSide: BatterSide
+    var templateId: String?
 }
 
 enum PitchMode: String, Codable {
