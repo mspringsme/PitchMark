@@ -42,6 +42,8 @@ struct PitchTrackerView: View {
     @State private var pitchEvents: [PitchEvent] = []
     @State private var showPitchResults = false
     @State private var filterMode: PitchMode? = nil
+    @State private var showTemplateStatsSheet = false
+    @State private var menuSelectedStatsTemplate: PitchTemplate?
     
     var body: some View {
         GeometryReader { geo in
@@ -262,6 +264,7 @@ struct PitchTrackerView: View {
                         }
                     }
                 )
+                
                 let sortedTemplates: [PitchTemplate] = {
                     guard let activeID = selectedTemplate?.id else {
                         return templates.sorted { $0.name < $1.name }
@@ -276,12 +279,8 @@ struct PitchTrackerView: View {
                     geo: geo,
                     sortedTemplates: sortedTemplates,
                     onSelectTemplate: { template in
-                        selectedTemplate = template
-                        selectedPitches = Set(template.pitches)
-                        pitchCodeAssignments = template.codeAssignments
-                        lastTappedPosition = nil
-                        calledPitch = nil
-                        print("🔥 Selected template ID: \(template.id)")
+                        menuSelectedStatsTemplate = template
+                        showTemplateStatsSheet = true
                     }
                 )
                 
@@ -429,6 +428,9 @@ struct PitchTrackerView: View {
             )
             .environmentObject(authManager)
         }
+        .sheet(item: $menuSelectedStatsTemplate) { template in
+            TemplateSuccessSheet(template: template)
+        }
     }
 }
 
@@ -534,35 +536,7 @@ struct ShowPitchLog: View {
     }
 }
 
-struct ShowPitchLogTemplates: View {
-    let geo: GeometryProxy
-    let sortedTemplates: [PitchTemplate]
-    let onSelectTemplate: (PitchTemplate) -> Void
 
-    var body: some View {
-        Menu {
-            ForEach(sortedTemplates, id: \.self) { template in
-                Button(template.name) {
-                    onSelectTemplate(template)
-                }
-            }
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: "baseball")
-                    .font(.body)
-                    .foregroundColor(.black)
-                    .padding(6)
-                    .background(Color.gray.opacity(0.2))
-                    .clipShape(Circle())
-                Text("All")
-                    .font(.caption)
-                    .foregroundColor(.primary)
-            }
-        }
-        .position(x: geo.size.width - 30, y: geo.size.height * 0.40)
-        .accessibilityLabel("Show all templates.")
-    }
-}
 
 struct ResetPitchButton: View {
     let geo: GeometryProxy
