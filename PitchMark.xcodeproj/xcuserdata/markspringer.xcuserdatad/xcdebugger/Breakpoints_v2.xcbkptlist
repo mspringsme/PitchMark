@@ -14,8 +14,8 @@
             filePath = "PitchMark/Pitch%.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "181"
-            endingLineNumber = "181"
+            startingLineNumber = "270"
+            endingLineNumber = "270"
             landmarkName = "unknown"
             landmarkType = "0">
          </BreakpointContent>
@@ -30,8 +30,8 @@
             filePath = "PitchMark/Pitch%.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "182"
-            endingLineNumber = "182"
+            startingLineNumber = "271"
+            endingLineNumber = "271"
             landmarkName = "unknown"
             landmarkType = "0">
          </BreakpointContent>
@@ -46,8 +46,8 @@
             filePath = "PitchMark/Pitch%.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "184"
-            endingLineNumber = "184"
+            startingLineNumber = "273"
+            endingLineNumber = "273"
             landmarkName = "CellStats"
             landmarkType = "14">
          </BreakpointContent>
@@ -62,8 +62,8 @@
             filePath = "PitchMark/Pitch%.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "193"
-            endingLineNumber = "193"
+            startingLineNumber = "282"
+            endingLineNumber = "282"
             landmarkName = "aggregatePitchEvents(events:rowLabels:colLabels:)"
             landmarkType = "9">
          </BreakpointContent>
@@ -78,8 +78,8 @@
             filePath = "PitchMark/Pitch%.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "226"
-            endingLineNumber = "226"
+            startingLineNumber = "315"
+            endingLineNumber = "315"
             landmarkName = "TemplateSuccessViewModel"
             landmarkType = "3">
          </BreakpointContent>
@@ -94,8 +94,8 @@
             filePath = "PitchMark/Pitch%.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "30"
-            endingLineNumber = "30"
+            startingLineNumber = "35"
+            endingLineNumber = "35"
             landmarkName = "TemplateSuccessSheet"
             landmarkType = "14">
          </BreakpointContent>

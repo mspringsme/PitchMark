@@ -201,7 +201,6 @@ struct CodeAssignmentPanel: View {
     
     @ViewBuilder
     private func locationButton(label: String, isStrike: Bool) -> some View{
-        let strikeLabels = strikeGrid.map(\.label)
         let fullLabel = "\(isStrike ? "Strike" : "Ball") \(label)"
         let isSelected = selectedLocation == fullLabel
 

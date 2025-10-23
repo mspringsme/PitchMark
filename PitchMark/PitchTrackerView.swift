@@ -161,8 +161,8 @@ struct PitchTrackerView: View {
                                 Text("Game").tag(PitchMode.game)
                             }
                             .pickerStyle(.segmented)
-                            .onChange(of: sessionManager.currentMode) { newMode in
-                                sessionManager.switchMode(to: newMode)
+                            .onChange(of: sessionManager.currentMode) { oldValue, newValue in
+                                sessionManager.switchMode(to: newValue)
                             }
                         }
                         .frame(width: 160)
@@ -422,11 +422,18 @@ struct PitchTrackerView: View {
             .environmentObject(authManager)
         }
         .sheet(isPresented: $showPitchResults) {
-            PitchResultSheet(
-                allEvents: pitchEvents,
-                filterMode: $filterMode
-            )
-            .environmentObject(authManager)
+            if selectedTemplate != nil {
+                PitchResultSheet(
+                    allEvents: pitchEvents,
+                    templates: templates,
+                    filterMode: $filterMode
+                )
+                .environmentObject(authManager)
+            } else {
+                Text("No template selected.")
+                    .font(.headline)
+                    .padding()
+            }
         }
         .sheet(item: $menuSelectedStatsTemplate) { template in
             TemplateSuccessSheet(template: template)
@@ -570,7 +577,6 @@ struct CalledPitchView: View {
     let batterSide: BatterSide
     
     var body: some View {
-        let labelManager = PitchLabelManager(batterSide: batterSide)
         let displayLocation = call.location.trimmingCharacters(in: .whitespaces)
         let assignedCodes = pitchCodeAssignments
             .filter {

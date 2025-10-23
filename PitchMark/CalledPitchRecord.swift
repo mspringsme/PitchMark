@@ -20,15 +20,28 @@ struct PitchCardView: View {
     let verticalTopImage: Image
     let rightImage: Image
     let rightImageShouldHighlight: Bool
+    let footerText: String
     
     var body: some View {
-        VStack {
+        VStack(spacing: 0) {
+            // 🧠 Header at top-left
+            HStack {
+                Text(footerText)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 12)
+                    .padding(.top, 8)
+                Spacer()
+            }
+
+            // 🧩 Main card content
             content
                 .padding(.horizontal, 2)
                 .padding(.vertical, 6)
-                .background(cardBackground)
         }
-        .frame(maxWidth: .infinity, alignment: .center)
+        .background(cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 3)
     }
 
     private var content: some View {
@@ -56,7 +69,7 @@ struct PitchCardView: View {
             }
             .frame(minWidth: 100)
             .layoutPriority(1)
-
+            
             rightImage
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -124,7 +137,22 @@ enum PitchAssetMapper {
 
 struct PitchResultCard: View {
     let event: PitchEvent
+    let allEvents: [PitchEvent] // ✅ Add this
+    let templateName: String
+    
+    func formattedTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        let calendar = Calendar.current
 
+        if calendar.isDateInToday(date) {
+            formatter.dateFormat = "'Today,' h:mm a"
+        } else {
+            formatter.dateFormat = "MM/dd/yy h:mm a"
+        }
+
+        return formatter.string(from: date)
+    }
+    
     var body: some View {
         let leftImageName = PitchImageDictionary.imageName(
             for: event.calledPitch?.location ?? "-",
@@ -138,19 +166,40 @@ struct PitchResultCard: View {
             batterSide: event.batterSide
         )
 
-        // ✅ NEW: Determine if the actual pitch hit the called location
-        let didHitLocation = event.calledPitch?.location == event.location
+        let didHitLocation = isLocationMatch(event)
         let verticalTopImageName = didHitLocation ? "hitCircle" : "missedCircle"
 
+        let overallSuccessRate: Int = {
+            let matchingCalls = allEvents.filter {
+                $0.calledPitch?.pitch == event.calledPitch?.pitch
+            }
+            let successes = matchingCalls.filter { isFullySuccessful($0) }.count
+            let total = matchingCalls.count
+            return total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
+        }()
+        
+        let locationSuccessRate: Int = {
+            let matchingCalls = allEvents.filter {
+                $0.calledPitch?.pitch == event.calledPitch?.pitch &&
+                $0.calledPitch?.location == event.calledPitch?.location
+            }
+            let successes = matchingCalls.filter { isFullySuccessful($0) }.count
+            let total = matchingCalls.count
+            return total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
+        }()
+        
+        let timestampText = formattedTimestamp(event.timestamp)
+        
         return PitchCardView(
             batterSide: event.batterSide,
             leftImage: Image(leftImageName),
             topText: event.calledPitch?.pitch ?? "-",
-            middleText: "61% overall", // placeholder
-            bottomText: "41% @ location", // placeholder
+            middleText: "\(overallSuccessRate)% overall",
+            bottomText: "\(locationSuccessRate)% @ location",
             verticalTopImage: Image(verticalTopImageName),
             rightImage: Image(rightImageName),
-            rightImageShouldHighlight: didHitLocation
+            rightImageShouldHighlight: didHitLocation,
+            footerText: "\(templateName) • \(timestampText)"
         )
     }
 }
@@ -171,6 +220,7 @@ struct CalledPitchRecord: Identifiable, Codable {
 
 struct PitchResultsView: View {
     let thePitches: [PitchEvent]
+    let templateName: String
     @EnvironmentObject var authManager: AuthManager
 
     var body: some View {
@@ -182,7 +232,7 @@ struct PitchResultsView: View {
             } else {
                 VStack(spacing: 12) {
                     ForEach(thePitches.reversed()) { pitch in
-                        PitchResultCard(event: pitch)
+                        PitchResultCard(event: pitch, allEvents: thePitches, templateName: templateName)
                     }
                 }
                 .padding()
@@ -193,6 +243,7 @@ struct PitchResultsView: View {
 
 struct PitchResultSheet: View {
     let allEvents: [PitchEvent]
+    let templates: [PitchTemplate]
     @Binding var filterMode: PitchMode?
     @Environment(\.dismiss) private var dismiss
 
@@ -214,8 +265,13 @@ struct PitchResultSheet: View {
                 ScrollView([.vertical]) {
                     VStack(spacing: 12) {
                         ForEach(Array(filteredEvents.enumerated()), id: \.element.id) { index, event in
-                            PitchResultCard(event: event)
-                                .padding(.horizontal)
+                            if let template = templates.first(where: { $0.id.uuidString == event.templateId }) {
+                                PitchResultCard(event: event, allEvents: allEvents, templateName: template.name)
+                                    .padding(.horizontal)
+                            } else {
+                                PitchResultCard(event: event, allEvents: allEvents, templateName: "Unknown")
+                                    .padding(.horizontal)
+                            }
                         }
                     }
                     .frame(minHeight: geo.size.height, alignment: .top) // ✅ Force top alignment
@@ -266,6 +322,7 @@ struct PitchEvent: Codable, Identifiable {
     let calledPitch: PitchCall?
     var batterSide: BatterSide
     var templateId: String?
+    
 }
 
 enum PitchMode: String, Codable {
@@ -281,6 +338,24 @@ struct PitchCall: Codable {
     var type: String {
         isStrike ? "Strike" : "Ball"
     }
+}
+
+func summarizeOverallSuccess(events: [PitchEvent]) -> [String: Int] {
+    let grouped = Dictionary(grouping: events.compactMap { event -> (String, PitchEvent)? in
+        guard let call = event.calledPitch else { return nil }
+        return (call.pitch, event)
+    }, by: { $0.0 })
+
+    var result: [String: Int] = [:]
+
+    for (pitchType, pairs) in grouped {
+        let total = pairs.count
+        let successes = pairs.filter { isFullySuccessful($0.1) }.count
+        let percentage = total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
+        result[pitchType] = percentage
+    }
+
+    return result
 }
 
 extension PitchCall {
