@@ -257,7 +257,7 @@ struct ShowPitchLogTemplates: View {
                     .padding(6)
                     .background(Color.gray.opacity(0.2))
                     .clipShape(Circle())
-                Text("All")
+                Text("%")
                     .font(.caption)
                     .foregroundColor(.primary)
             }

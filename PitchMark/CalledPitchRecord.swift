@@ -21,16 +21,28 @@ struct PitchCardView: View {
     let rightImage: Image
     let rightImageShouldHighlight: Bool
     let footerText: String
+    let pitchNumber: Int?
     
     var body: some View {
         VStack(spacing: 0) {
             // 🧠 Header at top-left
-            HStack {
+            HStack(spacing: 4) {
+
                 Text(footerText)
-                    .font(.caption2)
+                    .font(.caption)
+                    .fontWeight(.bold)
                     .foregroundColor(.secondary)
-                    .padding(.leading, 12)
                     .padding(.top, 8)
+                                
+                if let pitchNumber = pitchNumber {
+                    Text("•   Pitch #\(pitchNumber)")
+                        .font(.caption)
+                        .fontWeight(.bold)
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 12)
+                        .padding(.top, 8)
+                }
+
                 Spacer()
             }
 
@@ -199,9 +211,21 @@ struct PitchResultCard: View {
             verticalTopImage: Image(verticalTopImageName),
             rightImage: Image(rightImageName),
             rightImageShouldHighlight: didHitLocation,
-            footerText: "\(templateName) • \(timestampText)"
+            footerText: "\(templateName) • \(timestampText)",
+            pitchNumber: pitchNumber(for: event, in: allEvents)
         )
     }
+}
+
+func pitchNumber(for event: PitchEvent, in allEvents: [PitchEvent]) -> Int {
+    let sameDayEvents = allEvents.filter {
+        Calendar.current.isDate($0.timestamp, inSameDayAs: event.timestamp) &&
+        $0.mode == event.mode &&
+        $0.templateId == event.templateId
+    }
+
+    let sorted = sameDayEvents.sorted { $0.timestamp < $1.timestamp }
+    return (sorted.firstIndex { $0.id == event.id } ?? -1) + 1
 }
 
 struct CalledPitchRecord: Identifiable, Codable {
@@ -256,10 +280,6 @@ struct PitchResultSheet: View {
         VStack(alignment: .leading, spacing: 16) {
 
             modePicker
-            
-            Text("Pitch Count: \(filteredEvents.count)")
-                .font(.headline)
-                .padding(.horizontal)
 
             GeometryReader { geo in
                 ScrollView([.vertical]) {
@@ -322,7 +342,9 @@ struct PitchEvent: Codable, Identifiable {
     let calledPitch: PitchCall?
     var batterSide: BatterSide
     var templateId: String?
-    
+    var strikeSwinging: Bool
+    var wildPitch: Bool
+    var passedBall: Bool
 }
 
 enum PitchMode: String, Codable {
@@ -363,4 +385,45 @@ extension PitchCall {
     var shortLabel: String { "\(pitch) — \(displayTitle)" }
 }
 
+struct PitchEventWithIndex {
+    var event: PitchEvent
+    var pitchNumber: Int
+}
 
+func computePitchIndexes(for date: Date, completion: @escaping ([PitchEventWithIndex]) -> Void) {
+    let db = Firestore.firestore()
+    let startOfDay = Calendar.current.startOfDay(for: date)
+    let endOfDay = Calendar.current.date(byAdding: .day, value: 1, to: startOfDay)!
+
+    db.collection("pitchEvents")
+        .whereField("timestamp", isGreaterThanOrEqualTo: Timestamp(date: startOfDay))
+        .whereField("timestamp", isLessThan: Timestamp(date: endOfDay))
+        .getDocuments { snapshot, error in
+            guard let documents = snapshot?.documents else {
+                completion([])
+                return
+            }
+
+            var grouped: [String: [PitchEvent]] = [:]
+
+            for doc in documents {
+                if let event = try? doc.data(as: PitchEvent.self) {
+                    let key = "\(event.mode)-\(String(describing: event.templateId))"
+                    grouped[key, default: []].append(event)
+                }
+            }
+
+            var indexed: [PitchEventWithIndex] = []
+
+            for (_, events) in grouped {
+                let sorted = events.sorted(by: { a, b in
+                    a.timestamp < b.timestamp
+                })
+                for (i, event) in sorted.enumerated() {
+                    indexed.append(PitchEventWithIndex(event: event, pitchNumber: i + 1))
+                }
+            }
+
+            completion(indexed)
+        }
+}

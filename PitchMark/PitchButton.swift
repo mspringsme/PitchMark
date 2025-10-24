@@ -29,7 +29,7 @@ func pitchButton(
     resultVisualState: String?,
     setResultVisualState: @escaping (String?) -> Void,
     pendingResultLabel: Binding<String?>,
-    showResultConfirmation: Binding<Bool>
+    showConfirmSheet: Binding<Bool>
 ) -> some View {
     let tappedPoint = CGPoint(x: x, y: y)
     let isSelected = lastTappedPosition == tappedPoint
@@ -73,7 +73,7 @@ func pitchButton(
         } else if isRecordingResult {
             Button(action: {
                 pendingResultLabel.wrappedValue = fullLabel
-                showResultConfirmation.wrappedValue = true
+                showConfirmSheet.wrappedValue = true
             }) {
                 StrikeZoneButtonLabel(
                     isStrike: location.isStrike,

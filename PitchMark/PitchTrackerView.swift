@@ -44,6 +44,10 @@ struct PitchTrackerView: View {
     @State private var filterMode: PitchMode? = nil
     @State private var showTemplateStatsSheet = false
     @State private var menuSelectedStatsTemplate: PitchTemplate?
+    @State private var showConfirmSheet = false
+    @State private var isStrikeSwinging = false
+    @State private var isWildPitch = false
+    @State private var isPassedBall = false
     
     var body: some View {
         GeometryReader { geo in
@@ -213,7 +217,8 @@ struct PitchTrackerView: View {
                             resultVisualState: resultVisualState,
                             setResultVisualState: { resultVisualState = $0 },
                             pendingResultLabel: $pendingResultLabel,
-                            showResultConfirmation: $showResultConfirmation
+                            showResultConfirmation: $showResultConfirmation,
+                            showConfirmSheet: $showConfirmSheet
                         )
                         //
                     }
@@ -331,63 +336,147 @@ struct PitchTrackerView: View {
                 }
                 
             } // end of z stack
-            .confirmationDialog(
-                "Confirm result location: \(pendingResultLabel ?? "")?",
-                isPresented: $showResultConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Confirm", role: .none) {
+            .sheet(isPresented: $showConfirmSheet) {
+                VStack(spacing: 20) {
+                    Text("Confirm Result")
+                        .font(.title2)
+                        .bold()
+
                     if let label = pendingResultLabel {
-                        actualLocationRecorded = label
-                        
-                        if let pitch = calledPitch?.pitch,
-                           let codes = calledPitch?.codes {
+                        Text("Location: \(label)")
+                            .font(.headline)
+                            .foregroundColor(.blue)
+                    }
 
-                            let event = PitchEvent(
-                                id: UUID().uuidString,
-                                timestamp: Date(),
-                                pitch: pitch,
-                                location: label, // ✅ use label directly
-                                codes: codes,
-                                isStrike: label.starts(with: "Strike"),
-                                mode: sessionManager.currentMode,
-                                calledPitch: calledPitch,
-                                batterSide: batterSide,
-                                templateId: selectedTemplate?.id.uuidString
-                            )
-                            
-                            authManager.savePitchEvent(event)
-                            sessionManager.incrementCount()
-                            
-                            // Optional: append locally for instant UI updates
-                            pitchEvents.append(event)
+                    Divider()
 
-                            // Optional: reload from Firestore if you want to sync latest
-                            // (but not necessary immediately after saving unless you're expecting external changes)
-                            authManager.loadPitchEvents { events in
-                                self.pitchEvents = events
-                            }
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Choose any that apply:")
+                            .font(.subheadline)
+                        Toggle("Strike Swinging", isOn: $isStrikeSwinging)
+                        Toggle("Wild Pitch", isOn: $isWildPitch)
+                        Toggle("Passed Ball", isOn: $isPassedBall)
+                    }
+                    .padding(.horizontal)
+
+                    Divider()
+
+                    Button("Save Pitch Event") {
+                        guard let label = pendingResultLabel,
+                              let pitch = calledPitch?.pitch,
+                              let codes = calledPitch?.codes else {
+                            showConfirmSheet = false
+                            return
                         }
-                        
+
+                        let event = PitchEvent(
+                            id: UUID().uuidString,
+                            timestamp: Date(),
+                            pitch: pitch,
+                            location: label,
+                            codes: codes,
+                            isStrike: label.starts(with: "Strike"),
+                            mode: sessionManager.currentMode,
+                            calledPitch: calledPitch,
+                            batterSide: batterSide,
+                            templateId: selectedTemplate?.id.uuidString,
+                            strikeSwinging: isStrikeSwinging,
+                            wildPitch: isWildPitch,
+                            passedBall: isPassedBall
+                        )
+
+                        authManager.savePitchEvent(event)
+                        sessionManager.incrementCount()
+                        pitchEvents.append(event)
+
+                        authManager.loadPitchEvents { events in
+                            self.pitchEvents = events
+                        }
+
+                        // Reset state
                         resultVisualState = label
                         activeCalledPitchId = UUID().uuidString
                         isRecordingResult = false
-                        // ✅ Reset pitch and location selection
                         selectedPitch = ""
                         selectedLocation = ""
-                        
-                        // ✅ Reset tapped position and called pitch display
                         lastTappedPosition = nil
                         calledPitch = nil
-                        
-                        // ✅ Clear visual override state
                         resultVisualState = nil
                         actualLocationRecorded = nil
                         pendingResultLabel = nil
+                        isStrikeSwinging = false
+                        isWildPitch = false
+                        isPassedBall = false
+                        showConfirmSheet = false
                     }
-                    pendingResultLabel = nil
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top)
+
+                    Button("Cancel", role: .cancel) {
+                        showConfirmSheet = false
+                    }
+                    .padding(.bottom)
                 }
+                .padding()
+                .presentationDetents([.medium])
             }
+//            .confirmationDialog(
+//                "Confirm result location: \(pendingResultLabel ?? "")?",
+//                isPresented: $showResultConfirmation,
+//                titleVisibility: .visible
+//            ) {
+//                Button("Confirm", role: .none) {
+//                    if let label = pendingResultLabel {
+//                        actualLocationRecorded = label
+//                        
+//                        if let pitch = calledPitch?.pitch,
+//                           let codes = calledPitch?.codes {
+//
+//                            let event = PitchEvent(
+//                                id: UUID().uuidString,
+//                                timestamp: Date(),
+//                                pitch: pitch,
+//                                location: label, // ✅ use label directly
+//                                codes: codes,
+//                                isStrike: label.starts(with: "Strike"),
+//                                mode: sessionManager.currentMode,
+//                                calledPitch: calledPitch,
+//                                batterSide: batterSide,
+//                                templateId: selectedTemplate?.id.uuidString
+//                            )
+//                            
+//                            authManager.savePitchEvent(event)
+//                            sessionManager.incrementCount()
+//                            
+//                            // Optional: append locally for instant UI updates
+//                            pitchEvents.append(event)
+//
+//                            // Optional: reload from Firestore if you want to sync latest
+//                            // (but not necessary immediately after saving unless you're expecting external changes)
+//                            authManager.loadPitchEvents { events in
+//                                self.pitchEvents = events
+//                            }
+//                        }
+//                        
+//                        resultVisualState = label
+//                        activeCalledPitchId = UUID().uuidString
+//                        isRecordingResult = false
+//                        // ✅ Reset pitch and location selection
+//                        selectedPitch = ""
+//                        selectedLocation = ""
+//                        
+//                        // ✅ Reset tapped position and called pitch display
+//                        lastTappedPosition = nil
+//                        calledPitch = nil
+//                        
+//                        // ✅ Clear visual override state
+//                        resultVisualState = nil
+//                        actualLocationRecorded = nil
+//                        pendingResultLabel = nil
+//                    }
+//                    pendingResultLabel = nil
+//                }
+//            }
             
         }
         .sheet(isPresented: $showCodeAssignmentSheet) {
@@ -533,7 +622,7 @@ struct ShowPitchLog: View {
                     .background(Color.gray.opacity(0.2))
                     .clipShape(Circle())
                 
-                Text("Game")
+                Text("Cards")
                     .font(.caption)
                     .foregroundColor(.primary)
             }

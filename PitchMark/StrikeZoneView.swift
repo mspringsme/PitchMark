@@ -26,6 +26,7 @@ struct StrikeZoneView: View {
     let setResultVisualState: (String?) -> Void
     let pendingResultLabel: Binding<String?>
     let showResultConfirmation: Binding<Bool>
+    let showConfirmSheet: Binding<Bool>
     
     var body: some View {
         let zoneWidth = geo.size.width * 0.4
@@ -71,7 +72,7 @@ struct StrikeZoneView: View {
                     resultVisualState: resultVisualState,
                     setResultVisualState: setResultVisualState,
                     pendingResultLabel: pendingResultLabel,
-                    showResultConfirmation: showResultConfirmation
+                    showConfirmSheet: showConfirmSheet
                 )
             }
 
@@ -91,7 +92,7 @@ struct StrikeZoneView: View {
                 pitchButton(
                     x: x,
                     y: y,
-                    location: .init(label: label, isStrike: false), // ✅ use label directly
+                    location: .init(label: label, isStrike: false),
                     labelManager: labelManager,
                     lastTappedPosition: lastTappedPosition,
                     setLastTapped: setLastTapped,
@@ -111,7 +112,7 @@ struct StrikeZoneView: View {
                     resultVisualState: resultVisualState,
                     setResultVisualState: setResultVisualState,
                     pendingResultLabel: pendingResultLabel,
-                    showResultConfirmation: showResultConfirmation
+                    showConfirmSheet: showConfirmSheet // ✅ This is the new binding
                 )
             }
         }
