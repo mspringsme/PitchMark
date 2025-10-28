@@ -51,7 +51,7 @@ struct PitchTrackerView: View {
     
     var body: some View {
         VStack(spacing: 4) {
-            // Top Hstack
+            // 🧩 Top Hstack
             HStack {
                 Text(selectedTemplate?.name ?? "Select a template")
                     .font(.headline)
@@ -108,119 +108,225 @@ struct PitchTrackerView: View {
             
             Divider()
             
-            // 🧩 Toggle Chips for Pitch Selection
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(pitchOrder, id: \.self) { pitch in
-                        ToggleChip(
-                            pitch: pitch,
-                            selectedPitches: $selectedPitches,
-                            template: selectedTemplate,
-                            codeAssignments: pitchCodeAssignments
-                        )
+            Group {
+                // 🧩 Toggle Chips for Pitch Selection
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pitchOrder, id: \.self) { pitch in
+                            ToggleChip(
+                                pitch: pitch,
+                                selectedPitches: $selectedPitches,
+                                template: selectedTemplate,
+                                codeAssignments: pitchCodeAssignments
+                            )
+                        }
                     }
+                    .padding(.horizontal)
+                    .padding(.bottom, 4)
+                    .padding(.top, 10)
                 }
+                
+                Divider()
+                    .padding(.bottom, 4)
+                
+                // 🧩 right and left batters and practice / game picker
+                let iconSize: CGFloat = 36
+                HStack {
+                    // Left Batter Button (Leading)
+                    Button(action: {
+                        withAnimation {
+                            batterSide = .left
+                        }
+                    }) {
+                        Image("rightBatterIcon")
+                            .resizable()
+                            .renderingMode(.template)
+                            .frame(width: iconSize, height: iconSize)
+                            .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 12)
+                    .background(Color.clear)
+                    .cornerRadius(6)
+                    .buttonStyle(.plain)
+                    
+                    Spacer()
+                    
+                    VStack(spacing: 4) {
+                        Text("Mode")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Picker("Mode", selection: $sessionManager.currentMode) {
+                            Text("Practice").tag(PitchMode.practice)
+                            Text("Game").tag(PitchMode.game)
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: sessionManager.currentMode) { oldValue, newValue in
+                            sessionManager.switchMode(to: newValue)
+                        }
+                    }
+                    .frame(width: 160)
+                    
+                    Spacer()
+                    
+                    // Right Batter Button (Trailing)
+                    Button(action: {
+                        withAnimation {
+                            batterSide = .right
+                        }
+                    }) {
+                        Image("leftBatterIcon")
+                            .resizable()
+                            .renderingMode(.template)
+                            .frame(width: iconSize, height: iconSize)
+                            .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
+                    }
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 12)
+                    .background(Color.clear)
+                    .cornerRadius(6)
+                    .buttonStyle(.plain)
+                }
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal)
                 .padding(.bottom, 4)
-                .padding(.top, 10)
-            }
-            
-            Divider()
-                .padding(.bottom, 4)
-            
-            let iconSize: CGFloat = 36
-            
-            HStack {
-                // Left Batter Button (Leading)
-                Button(action: {
-                    withAnimation {
-                        batterSide = .left
-                    }
-                }) {
-                    Image("rightBatterIcon")
-                        .resizable()
-                        .renderingMode(.template)
-                        .frame(width: iconSize, height: iconSize)
-                        .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
+                
+                let deviceWidth = UIScreen.main.bounds.width
+                let SZwidth = (deviceWidth * 0.85)
+                // 🧩 Strikezone
+                VStack {
+                    StrikeZoneView(
+                        batterSide: batterSide,
+                        lastTappedPosition: lastTappedPosition,
+                        setLastTapped: { lastTappedPosition = $0 },
+                        calledPitch: calledPitch,
+                        setCalledPitch: { calledPitch = $0 },
+                        selectedPitches: selectedPitches,
+                        gameIsActive: gameIsActive,
+                        selectedPitch: selectedPitch,
+                        pitchCodeAssignments: pitchCodeAssignments,
+                        isRecordingResult: isRecordingResult,
+                        setIsRecordingResult: { isRecordingResult = $0 },
+                        setActualLocation: { actualLocationRecorded = $0 },
+                        actualLocationRecorded: actualLocationRecorded,
+                        setSelectedPitch: { selectedPitch = $0 },
+                        resultVisualState: resultVisualState,
+                        setResultVisualState: { resultVisualState = $0 },
+                        pendingResultLabel: $pendingResultLabel,
+                        showResultConfirmation: $showResultConfirmation,
+                        showConfirmSheet: $showConfirmSheet
+                    )
                 }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 12)
-                .background(Color.clear)
-                .cornerRadius(6)
-                .buttonStyle(.plain)
-                
-                Spacer()
-                
-                VStack(spacing: 4) {
-                    Text("Mode")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Picker("Mode", selection: $sessionManager.currentMode) {
-                        Text("Practice").tag(PitchMode.practice)
-                        Text("Game").tag(PitchMode.game)
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: sessionManager.currentMode) { oldValue, newValue in
-                        sessionManager.switchMode(to: newValue)
-                    }
-                }
-                .frame(width: 160)
-                
-                Spacer()
-                
-                // Right Batter Button (Trailing)
-                Button(action: {
-                    withAnimation {
-                        batterSide = .right
-                    }
-                }) {
-                    Image("leftBatterIcon")
-                        .resizable()
-                        .renderingMode(.template)
-                        .frame(width: iconSize, height: iconSize)
-                        .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
-                }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 12)
-                .background(Color.clear)
-                .cornerRadius(6)
-                .buttonStyle(.plain)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal)
-            .padding(.bottom, 4)
-            
-            VStack {
-                //                        if let selectedTemplate = selectedTemplate {
-                //                            Text("")
-                StrikeZoneView(
-                    batterSide: batterSide,
-                    lastTappedPosition: lastTappedPosition,
-                    setLastTapped: { lastTappedPosition = $0 },
-                    calledPitch: calledPitch,
-                    setCalledPitch: { calledPitch = $0 },
-                    selectedPitches: selectedPitches,
-                    gameIsActive: gameIsActive,
-                    selectedPitch: selectedPitch,
-                    pitchCodeAssignments: pitchCodeAssignments,
-                    isRecordingResult: isRecordingResult,
-                    setIsRecordingResult: { isRecordingResult = $0 },
-                    setActualLocation: { actualLocationRecorded = $0 },
-                    actualLocationRecorded: actualLocationRecorded,
-                    setSelectedPitch: { selectedPitch = $0 },
-                    resultVisualState: resultVisualState,
-                    setResultVisualState: { resultVisualState = $0 },
-                    pendingResultLabel: $pendingResultLabel,
-                    showResultConfirmation: $showResultConfirmation,
-                    showConfirmSheet: $showConfirmSheet
+                .frame(height: 400)
+                .frame(width: SZwidth)
+                .padding(.top, 12)
+                .background(Color.white)
+                .cornerRadius(12)
+                .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+                .overlay(
+                    Group {
+                        ResetPitchButton() {
+                            isRecordingResult = false
+                            
+                            // ✅ Reset pitch and location selection
+                            selectedPitch = ""
+                            selectedLocation = ""
+                            
+                            // ✅ Reset tapped position and called pitch display
+                            lastTappedPosition = nil
+                            calledPitch = nil
+                            
+                            // ✅ Clear visual override state
+                            resultVisualState = nil
+                            actualLocationRecorded = nil
+                            
+                            pendingResultLabel = nil
+                        }
+                    },
+                    alignment: .bottomLeading
                 )
-                //
+                .overlay(
+                    Group {
+                        let sortedTemplates: [PitchTemplate] = {
+                            guard let activeID = selectedTemplate?.id else {
+                                return templates.sorted { $0.name < $1.name }
+                            }
+                            let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
+                            if let active = templates.first(where: { $0.id == activeID }) {
+                                return [active] + others
+                            }
+                            return others
+                        }()
+                        ShowPitchLogTemplates(
+                            sortedTemplates: sortedTemplates,
+                            onSelectTemplate: { template in
+                                menuSelectedStatsTemplate = template
+                                showTemplateStatsSheet = true
+                            }
+                        )
+                    },
+                    alignment: .bottomTrailing
+                )
+                
+                // 🧩 Called Pitch Display
+                Group {
+                    if isRecordingResult && activeCalledPitchId == nil {
+                        if let call = calledPitch {
+                            CalledPitchView(
+                                isRecordingResult: $isRecordingResult,
+                                activeCalledPitchId: $activeCalledPitchId,
+                                call: call,
+                                pitchCodeAssignments: pitchCodeAssignments,
+                                batterSide: batterSide
+                            )
+                            .background(Color.white.opacity(0.9))
+                            .cornerRadius(8)
+                            .shadow(radius: 4)
+                            .transition(.opacity)
+                        }
+                    } else if let call = calledPitch {
+                        CalledPitchView(
+                            isRecordingResult: $isRecordingResult,
+                            activeCalledPitchId: $activeCalledPitchId,
+                            call: call,
+                            pitchCodeAssignments: pitchCodeAssignments,
+                            batterSide: batterSide
+                        )
+                        .background(Color.white.opacity(0.9))
+                        .cornerRadius(8)
+                        .shadow(radius: 4)
+                        .transition(.opacity)
+                    }
+                }
+                
+                // 🧩 Cards
+                if showPitchResults {
+                        VStack {
+                            if selectedTemplate != nil {
+                                PitchResultSheet(
+                                    allEvents: pitchEvents,
+                                    templates: templates,
+                                    filterMode: $filterMode
+                                )
+                                .environmentObject(authManager)
+                            } else {
+                                Text("No template selected.")
+                                    .font(.headline)
+                                    .padding()
+                            }
+                        }
+                        .padding(.horizontal)
+                        .transition(.opacity)
+                }
+                
+                Spacer()
             }
-            .frame(height: 400)
-            .padding(.top, 8)
+            .opacity(selectedTemplate == nil ? 0.5 : 1.0)
+            .allowsHitTesting(selectedTemplate != nil)
             
-            // "Choose a Pitch Result" pop up text
+            Spacer()
+            // 🧩 conditional "Choose a Pitch Result" pop up TEXT
             let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
             if shouldShowChooseResultText {
                 Text("Choose a Pitch Result")
@@ -231,8 +337,7 @@ struct PitchTrackerView: View {
                 //.position(x: geo.size.width / 2, y: geo.size.height * 0.78)
             }
             
-            
-        } // end of VStack
+        } // 🧩🧩🧩🧩 end of VStack
         .frame(maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: $showConfirmSheet) {
             VStack(spacing: 20) {
@@ -338,6 +443,7 @@ struct PitchTrackerView: View {
                     self.pitchEvents = events
                     if !events.isEmpty {
                     }
+                    self.showPitchResults = true
                 }
             }
         }
@@ -349,110 +455,9 @@ struct PitchTrackerView: View {
             )
             .environmentObject(authManager)
         }
-        .sheet(isPresented: $showPitchResults) {
-            if selectedTemplate != nil {
-                PitchResultSheet(
-                    allEvents: pitchEvents,
-                    templates: templates,
-                    filterMode: $filterMode
-                )
-                .environmentObject(authManager)
-            } else {
-                Text("No template selected.")
-                    .font(.headline)
-                    .padding()
-            }
-        }
         .sheet(item: $menuSelectedStatsTemplate) { template in
             TemplateSuccessSheet(template: template)
         }
-        ResetPitchButton() {
-            isRecordingResult = false
-            
-            // ✅ Reset pitch and location selection
-            selectedPitch = ""
-            selectedLocation = ""
-            
-            // ✅ Reset tapped position and called pitch display
-            lastTappedPosition = nil
-            calledPitch = nil
-            
-            // ✅ Clear visual override state
-            resultVisualState = nil
-            actualLocationRecorded = nil
-            
-            pendingResultLabel = nil
-        }
-        
-        ShowPitchLog(
-            showLog: {
-                authManager.loadPitchEvents { events in
-                    pitchEvents = events
-                    showPitchResults = true
-                    print("🔥 ", pitchEvents)
-                }
-            }
-        )
-        
-        let sortedTemplates: [PitchTemplate] = {
-            guard let activeID = selectedTemplate?.id else {
-                return templates.sorted { $0.name < $1.name }
-            }
-            let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
-            if let active = templates.first(where: { $0.id == activeID }) {
-                return [active] + others
-            }
-            return others
-        }()
-        ShowPitchLogTemplates(
-            sortedTemplates: sortedTemplates,
-            onSelectTemplate: { template in
-                menuSelectedStatsTemplate = template
-                showTemplateStatsSheet = true
-            }
-        )
-        
-        
-        // 📝 Called Pitch Display
-        Group {
-            if isRecordingResult && activeCalledPitchId == nil {
-                if let call = calledPitch {
-                    CalledPitchView(
-                        isRecordingResult: $isRecordingResult,
-                        activeCalledPitchId: $activeCalledPitchId,
-                        call: call,
-                        pitchCodeAssignments: pitchCodeAssignments,
-                        batterSide: batterSide
-                    )
-                    .background(Color.white.opacity(0.9))
-                    .cornerRadius(8)
-                    .shadow(radius: 4)
-                    .transition(.opacity)
-                }
-            } else if let call = calledPitch {
-                CalledPitchView(
-                    isRecordingResult: $isRecordingResult,
-                    activeCalledPitchId: $activeCalledPitchId,
-                    call: call,
-                    pitchCodeAssignments: pitchCodeAssignments,
-                    batterSide: batterSide
-                )
-                .background(Color.white.opacity(0.9))
-                .cornerRadius(8)
-                .shadow(radius: 4)
-                .transition(.opacity)
-            }
-        }
-        if selectedTemplate == nil {
-            Text("")
-                .font(.headline)
-                .foregroundColor(.gray)
-                .frame(maxWidth: .infinity)
-                .background(Color.white.opacity(0.9))
-                .cornerRadius(20)
-                .padding(.top, 8)
-        }
-        
     }
 }
 
@@ -508,28 +513,6 @@ func menuContent(
     }
 }
 
-struct BatterIconOverlay: View {
-    let batterSide: BatterSide
-    let geo: GeometryProxy
-    let iconSize: CGFloat = 28
-    
-    var body: some View {
-        Group {
-            if batterSide == .left {
-                Image("rightBatterIcon")
-                    .resizable()
-                    .frame(width: iconSize, height: iconSize)
-                    .position(x: 30, y: geo.size.height * 0.25)
-            } else {
-                Image("leftBatterIcon")
-                    .resizable()
-                    .frame(width: iconSize, height: iconSize)
-                    .position(x: geo.size.width - 30, y: geo.size.height * 0.25)
-            }
-        }
-    }
-}
-
 struct ShowPitchLog: View {
     let showLog: () -> Void
     
@@ -555,8 +538,6 @@ struct ShowPitchLog: View {
         .accessibilityLabel("Show pitches.")
     }
 }
-
-
 
 struct ResetPitchButton: View {
     let resetAction: () -> Void
@@ -642,33 +623,6 @@ struct CalledPitchView: View {
         .font(.headline)
         .padding(.horizontal)
         .transition(.opacity)
-    }
-}
-
-struct LocationImageView: View {
-    let location: String
-    let isSelected: Bool
-    
-    var body: some View {
-        ZStack {
-            // Base grid or strike zone
-            Image("locationGrid") // your base image
-                .resizable()
-                .scaledToFit()
-                .frame(width: 40, height: 40)
-            
-            // Highlight overlay
-            if isSelected {
-                Rectangle()
-                    .fill(Color.blue.opacity(0.3))
-                    .frame(width: 40, height: 40)
-                    .overlay(
-                        Text(location)
-                            .font(.caption2)
-                            .foregroundColor(.white)
-                    )
-            }
-        }
     }
 }
 
