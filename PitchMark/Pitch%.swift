@@ -238,7 +238,6 @@ struct BallStrikeSummaryGrid: View {
 }
 
 struct ShowPitchLogTemplates: View {
-    let geo: GeometryProxy
     let sortedTemplates: [PitchTemplate]
     let onSelectTemplate: (PitchTemplate) -> Void
     
@@ -262,7 +261,6 @@ struct ShowPitchLogTemplates: View {
                     .foregroundColor(.primary)
             }
         }
-        .position(x: geo.size.width - 30, y: geo.size.height * 0.40)
         .accessibilityLabel("Show all templates.")
     }
 }

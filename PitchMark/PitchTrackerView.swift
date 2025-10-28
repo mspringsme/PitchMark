@@ -50,434 +50,273 @@ struct PitchTrackerView: View {
     @State private var isPassedBall = false
     
     var body: some View {
-        GeometryReader { geo in
-            
-            // 🟦 Scrollable top section
-            //ScrollView {
-            
-            ZStack {
-                VStack(spacing: 4) {
-                    HStack {
-                        Text(selectedTemplate?.name ?? "Select a template")
-                            .font(.headline)
-                            .foregroundColor(templates.isEmpty ? .gray : .primary)
-                        
-                        Menu {
-                            ForEach(templates, id: \.self) { template in
-                                Button(template.name) {
-                                    selectedTemplate = template
-                                    selectedPitches = Set(template.pitches)
-                                    pitchCodeAssignments = template.codeAssignments
-                                    // 🧹 Reset strike zone and called pitch state
-                                    lastTappedPosition = nil
-                                    calledPitch = nil
-                                    
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "chevron.down.circle")
-                                .imageScale(.large)
-                                .foregroundColor(templates.isEmpty ? .gray : .blue)
-                        }
-                        .disabled(templates.isEmpty) // ✅ disables interaction
-                        Spacer() // 👈 Pushes content to the trailing edge
-                        
-                        Button(action: {
-                            showSettings = true
-                        }) {
-                            Image(systemName: "gearshape")
-                                .imageScale(.large)
-                        }
-                        Button(action: {
-                            showSignOutConfirmation = true
-                        }) {
-                            Image(systemName: "person.crop.circle")
-                                .foregroundColor(.green)
-                                .imageScale(.large)
-                        }
-                        .accessibilityLabel("Sign Out")
-                        .confirmationDialog(
-                            "Are you sure you want to sign out of \(authManager.userEmail)?",
-                            isPresented: $showSignOutConfirmation,
-                            titleVisibility: .visible
-                        ) {
-                            Button("Sign Out", role: .destructive) {
-                                authManager.signOut()
-                            }
-                            Button("Cancel", role: .cancel) { }
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.top, 6) // 👈 Optional: reduce top spacing
-                    .padding(.bottom, 12)
-                    
-                    Divider()
-                    // 🧩 Toggle Chips for Pitch Selection
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(pitchOrder, id: \.self) { pitch in
-                                ToggleChip(
-                                    pitch: pitch,
-                                    selectedPitches: $selectedPitches,
-                                    template: selectedTemplate,
-                                    codeAssignments: pitchCodeAssignments
-                                )
-                            }
-                        }
-                        .padding(.horizontal)
-                        .padding(.bottom, 4)
-                        .padding(.top, 10)
-                    }
-                    
-                    Divider()
-                        .padding(.bottom, 4)
-                    
-                    let iconSize: CGFloat = 36
-
-                    HStack {
-                        // Left Batter Button (Leading)
-                        Button(action: {
-                            withAnimation {
-                                batterSide = .left
-                            }
-                        }) {
-                            Image("rightBatterIcon")
-                                .resizable()
-                                .renderingMode(.template)
-                                .frame(width: iconSize, height: iconSize)
-                                .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .background(Color.clear)
-                        .cornerRadius(6)
-                        .buttonStyle(.plain)
-
-                        Spacer()
-
-                        VStack(spacing: 4) {
-                            Text("Mode")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            Picker("Mode", selection: $sessionManager.currentMode) {
-                                Text("Practice").tag(PitchMode.practice)
-                                Text("Game").tag(PitchMode.game)
-                            }
-                            .pickerStyle(.segmented)
-                            .onChange(of: sessionManager.currentMode) { oldValue, newValue in
-                                sessionManager.switchMode(to: newValue)
-                            }
-                        }
-                        .frame(width: 160)
-
-                        Spacer()
-
-                        // Right Batter Button (Trailing)
-                        Button(action: {
-                            withAnimation {
-                                batterSide = .right
-                            }
-                        }) {
-                            Image("leftBatterIcon")
-                                .resizable()
-                                .renderingMode(.template)
-                                .frame(width: iconSize, height: iconSize)
-                                .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .background(Color.clear)
-                        .cornerRadius(6)
-                        .buttonStyle(.plain)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal)
-                    .padding(.bottom, 4)
-                    
-                    VStack {
-                        //                        if let selectedTemplate = selectedTemplate {
-                        //                            Text("")
-                        StrikeZoneView(
-                            geo: geo,
-                            batterSide: batterSide,
-                            lastTappedPosition: lastTappedPosition,
-                            setLastTapped: { lastTappedPosition = $0 },
-                            calledPitch: calledPitch,
-                            setCalledPitch: { calledPitch = $0 },
-                            selectedPitches: selectedPitches,
-                            gameIsActive: gameIsActive,
-                            selectedPitch: selectedPitch,
-                            pitchCodeAssignments: pitchCodeAssignments,
-                            isRecordingResult: isRecordingResult,
-                            setIsRecordingResult: { isRecordingResult = $0 },
-                            setActualLocation: { actualLocationRecorded = $0 },
-                            actualLocationRecorded: actualLocationRecorded,
-                            setSelectedPitch: { selectedPitch = $0 },
-                            resultVisualState: resultVisualState,
-                            setResultVisualState: { resultVisualState = $0 },
-                            pendingResultLabel: $pendingResultLabel,
-                            showResultConfirmation: $showResultConfirmation,
-                            showConfirmSheet: $showConfirmSheet
-                        )
-                        //
-                    }
-                    .frame(height: geo.size.height * 0.7) // ✅ Prevents overlap
-                    .clipped()
-                    .padding(.top, 8)
-                    
-                    // "Choose a Pitch Result" pop up text
-                    let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
-                    if shouldShowChooseResultText {
-                        Text("Choose a Pitch Result")
-                            .opacity(shouldShowChooseResultText ? 1 : 0)
-                            .scaleEffect(shouldShowChooseResultText ? 1.05 : 1)
-                            .shadow(color: .yellow.opacity(shouldShowChooseResultText ? 0.3 : 0), radius: 4)
-                            .animation(.easeInOut(duration: 0.3), value: shouldShowChooseResultText)
-                            //.position(x: geo.size.width / 2, y: geo.size.height * 0.78)
-                    }
-                        
-                    
-                }
-                .frame(maxHeight: .infinity, alignment: .top)
+        VStack(spacing: 4) {
+            // Top Hstack
+            HStack {
+                Text(selectedTemplate?.name ?? "Select a template")
+                    .font(.headline)
+                    .foregroundColor(templates.isEmpty ? .gray : .primary)
                 
-                ResetPitchButton(geo: geo) {
-                    isRecordingResult = false
+                Menu {
+                    ForEach(templates, id: \.self) { template in
+                        Button(template.name) {
+                            selectedTemplate = template
+                            selectedPitches = Set(template.pitches)
+                            pitchCodeAssignments = template.codeAssignments
+                            // 🧹 Reset strike zone and called pitch state
+                            lastTappedPosition = nil
+                            calledPitch = nil
+                            
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down.circle")
+                        .imageScale(.large)
+                        .foregroundColor(templates.isEmpty ? .gray : .blue)
+                }
+                .disabled(templates.isEmpty) // ✅ disables interaction
+                Spacer() // 👈 Pushes content to the trailing edge
+                
+                Button(action: {
+                    showSettings = true
+                }) {
+                    Image(systemName: "gearshape")
+                        .imageScale(.large)
+                }
+                Button(action: {
+                    showSignOutConfirmation = true
+                }) {
+                    Image(systemName: "person.crop.circle")
+                        .foregroundColor(.green)
+                        .imageScale(.large)
+                }
+                .accessibilityLabel("Sign Out")
+                .confirmationDialog(
+                    "Are you sure you want to sign out of \(authManager.userEmail)?",
+                    isPresented: $showSignOutConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Sign Out", role: .destructive) {
+                        authManager.signOut()
+                    }
+                    Button("Cancel", role: .cancel) { }
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 6) // 👈 Optional: reduce top spacing
+            .padding(.bottom, 12)
+            
+            Divider()
+            
+            // 🧩 Toggle Chips for Pitch Selection
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(pitchOrder, id: \.self) { pitch in
+                        ToggleChip(
+                            pitch: pitch,
+                            selectedPitches: $selectedPitches,
+                            template: selectedTemplate,
+                            codeAssignments: pitchCodeAssignments
+                        )
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 4)
+                .padding(.top, 10)
+            }
+            
+            Divider()
+                .padding(.bottom, 4)
+            
+            let iconSize: CGFloat = 36
+            
+            HStack {
+                // Left Batter Button (Leading)
+                Button(action: {
+                    withAnimation {
+                        batterSide = .left
+                    }
+                }) {
+                    Image("rightBatterIcon")
+                        .resizable()
+                        .renderingMode(.template)
+                        .frame(width: iconSize, height: iconSize)
+                        .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .background(Color.clear)
+                .cornerRadius(6)
+                .buttonStyle(.plain)
+                
+                Spacer()
+                
+                VStack(spacing: 4) {
+                    Text("Mode")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     
-                    // ✅ Reset pitch and location selection
+                    Picker("Mode", selection: $sessionManager.currentMode) {
+                        Text("Practice").tag(PitchMode.practice)
+                        Text("Game").tag(PitchMode.game)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: sessionManager.currentMode) { oldValue, newValue in
+                        sessionManager.switchMode(to: newValue)
+                    }
+                }
+                .frame(width: 160)
+                
+                Spacer()
+                
+                // Right Batter Button (Trailing)
+                Button(action: {
+                    withAnimation {
+                        batterSide = .right
+                    }
+                }) {
+                    Image("leftBatterIcon")
+                        .resizable()
+                        .renderingMode(.template)
+                        .frame(width: iconSize, height: iconSize)
+                        .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
+                }
+                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .background(Color.clear)
+                .cornerRadius(6)
+                .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
+            .padding(.bottom, 4)
+            
+            VStack {
+                //                        if let selectedTemplate = selectedTemplate {
+                //                            Text("")
+                StrikeZoneView(
+                    batterSide: batterSide,
+                    lastTappedPosition: lastTappedPosition,
+                    setLastTapped: { lastTappedPosition = $0 },
+                    calledPitch: calledPitch,
+                    setCalledPitch: { calledPitch = $0 },
+                    selectedPitches: selectedPitches,
+                    gameIsActive: gameIsActive,
+                    selectedPitch: selectedPitch,
+                    pitchCodeAssignments: pitchCodeAssignments,
+                    isRecordingResult: isRecordingResult,
+                    setIsRecordingResult: { isRecordingResult = $0 },
+                    setActualLocation: { actualLocationRecorded = $0 },
+                    actualLocationRecorded: actualLocationRecorded,
+                    setSelectedPitch: { selectedPitch = $0 },
+                    resultVisualState: resultVisualState,
+                    setResultVisualState: { resultVisualState = $0 },
+                    pendingResultLabel: $pendingResultLabel,
+                    showResultConfirmation: $showResultConfirmation,
+                    showConfirmSheet: $showConfirmSheet
+                )
+                //
+            }
+            .frame(height: 400)
+            .padding(.top, 8)
+            
+            // "Choose a Pitch Result" pop up text
+            let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
+            if shouldShowChooseResultText {
+                Text("Choose a Pitch Result")
+                    .opacity(shouldShowChooseResultText ? 1 : 0)
+                    .scaleEffect(shouldShowChooseResultText ? 1.05 : 1)
+                    .shadow(color: .yellow.opacity(shouldShowChooseResultText ? 0.3 : 0), radius: 4)
+                    .animation(.easeInOut(duration: 0.3), value: shouldShowChooseResultText)
+                //.position(x: geo.size.width / 2, y: geo.size.height * 0.78)
+            }
+            
+            
+        } // end of VStack
+        .frame(maxHeight: .infinity, alignment: .top)
+        .sheet(isPresented: $showConfirmSheet) {
+            VStack(spacing: 20) {
+                Text("Confirm Result")
+                    .font(.title2)
+                    .bold()
+                
+                if let label = pendingResultLabel {
+                    Text("Location: \(label)")
+                        .font(.headline)
+                        .foregroundColor(.blue)
+                }
+                
+                Divider()
+                
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Choose any that apply:")
+                        .font(.subheadline)
+                    Toggle("Strike Swinging", isOn: $isStrikeSwinging)
+                    Toggle("Wild Pitch", isOn: $isWildPitch)
+                    Toggle("Passed Ball", isOn: $isPassedBall)
+                }
+                .padding(.horizontal)
+                
+                Divider()
+                
+                Button("Save Pitch Event") {
+                    guard let label = pendingResultLabel,
+                          let pitch = calledPitch?.pitch,
+                          let codes = calledPitch?.codes else {
+                        showConfirmSheet = false
+                        return
+                    }
+                    
+                    let event = PitchEvent(
+                        id: UUID().uuidString,
+                        timestamp: Date(),
+                        pitch: pitch,
+                        location: label,
+                        codes: codes,
+                        isStrike: label.starts(with: "Strike"),
+                        mode: sessionManager.currentMode,
+                        calledPitch: calledPitch,
+                        batterSide: batterSide,
+                        templateId: selectedTemplate?.id.uuidString,
+                        strikeSwinging: isStrikeSwinging,
+                        wildPitch: isWildPitch,
+                        passedBall: isPassedBall
+                    )
+                    
+                    authManager.savePitchEvent(event)
+                    sessionManager.incrementCount()
+                    pitchEvents.append(event)
+                    
+                    authManager.loadPitchEvents { events in
+                        self.pitchEvents = events
+                    }
+                    
+                    // Reset state
+                    resultVisualState = label
+                    activeCalledPitchId = UUID().uuidString
+                    isRecordingResult = false
                     selectedPitch = ""
                     selectedLocation = ""
-                    
-                    // ✅ Reset tapped position and called pitch display
                     lastTappedPosition = nil
                     calledPitch = nil
-                    
-                    // ✅ Clear visual override state
                     resultVisualState = nil
                     actualLocationRecorded = nil
-                    
                     pendingResultLabel = nil
+                    isStrikeSwinging = false
+                    isWildPitch = false
+                    isPassedBall = false
+                    showConfirmSheet = false
                 }
+                .buttonStyle(.borderedProminent)
+                .padding(.top)
                 
-                ShowPitchLog(
-                    geo: geo,
-                    showLog: {
-                        authManager.loadPitchEvents { events in
-                            pitchEvents = events
-                            showPitchResults = true
-                            print("🔥 ", pitchEvents)
-                        }
-                    }
-                )
-                
-                let sortedTemplates: [PitchTemplate] = {
-                    guard let activeID = selectedTemplate?.id else {
-                        return templates.sorted { $0.name < $1.name }
-                    }
-                    let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
-                    if let active = templates.first(where: { $0.id == activeID }) {
-                        return [active] + others
-                    }
-                    return others
-                }()
-                ShowPitchLogTemplates(
-                    geo: geo,
-                    sortedTemplates: sortedTemplates,
-                    onSelectTemplate: { template in
-                        menuSelectedStatsTemplate = template
-                        showTemplateStatsSheet = true
-                    }
-                )
-                
-                
-                // 📝 Called Pitch Display
-                Group {
-                    if isRecordingResult && activeCalledPitchId == nil {
-                         if let call = calledPitch {
-                            CalledPitchView(
-                                isRecordingResult: $isRecordingResult,
-                                activeCalledPitchId: $activeCalledPitchId,
-                                call: call,
-                                pitchCodeAssignments: pitchCodeAssignments,
-                                batterSide: batterSide
-                            )
-                            .frame(maxWidth: geo.size.width * 0.9)
-                            .background(Color.white.opacity(0.9))
-                            .cornerRadius(8)
-                            .shadow(radius: 4)
-                            .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
-                            .transition(.opacity)
-                        }
-                    } else if let call = calledPitch {
-                        CalledPitchView(
-                            isRecordingResult: $isRecordingResult,
-                            activeCalledPitchId: $activeCalledPitchId,
-                            call: call,
-                            pitchCodeAssignments: pitchCodeAssignments,
-                            batterSide: batterSide
-                        )
-                        .frame(maxWidth: geo.size.width * 0.9)
-                        .background(Color.white.opacity(0.9))
-                        .cornerRadius(8)
-                        .shadow(radius: 4)
-                        .position(x: geo.size.width / 2, y: geo.size.height * 0.85)
-                        .transition(.opacity)
-                    }
+                Button("Cancel", role: .cancel) {
+                    showConfirmSheet = false
                 }
-                if selectedTemplate == nil {
-                    Text("")
-                        .font(.headline)
-                        .foregroundColor(.gray)
-                        .frame(height: geo.size.height * 0.88, alignment: .top)
-                        .frame(maxWidth: .infinity)
-                        .background(Color.white.opacity(0.9))
-                        .cornerRadius(20)
-                        .padding(.top, 8)
-                }
-                
-            } // end of z stack
-            .sheet(isPresented: $showConfirmSheet) {
-                VStack(spacing: 20) {
-                    Text("Confirm Result")
-                        .font(.title2)
-                        .bold()
-
-                    if let label = pendingResultLabel {
-                        Text("Location: \(label)")
-                            .font(.headline)
-                            .foregroundColor(.blue)
-                    }
-
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Choose any that apply:")
-                            .font(.subheadline)
-                        Toggle("Strike Swinging", isOn: $isStrikeSwinging)
-                        Toggle("Wild Pitch", isOn: $isWildPitch)
-                        Toggle("Passed Ball", isOn: $isPassedBall)
-                    }
-                    .padding(.horizontal)
-
-                    Divider()
-
-                    Button("Save Pitch Event") {
-                        guard let label = pendingResultLabel,
-                              let pitch = calledPitch?.pitch,
-                              let codes = calledPitch?.codes else {
-                            showConfirmSheet = false
-                            return
-                        }
-
-                        let event = PitchEvent(
-                            id: UUID().uuidString,
-                            timestamp: Date(),
-                            pitch: pitch,
-                            location: label,
-                            codes: codes,
-                            isStrike: label.starts(with: "Strike"),
-                            mode: sessionManager.currentMode,
-                            calledPitch: calledPitch,
-                            batterSide: batterSide,
-                            templateId: selectedTemplate?.id.uuidString,
-                            strikeSwinging: isStrikeSwinging,
-                            wildPitch: isWildPitch,
-                            passedBall: isPassedBall
-                        )
-
-                        authManager.savePitchEvent(event)
-                        sessionManager.incrementCount()
-                        pitchEvents.append(event)
-
-                        authManager.loadPitchEvents { events in
-                            self.pitchEvents = events
-                        }
-
-                        // Reset state
-                        resultVisualState = label
-                        activeCalledPitchId = UUID().uuidString
-                        isRecordingResult = false
-                        selectedPitch = ""
-                        selectedLocation = ""
-                        lastTappedPosition = nil
-                        calledPitch = nil
-                        resultVisualState = nil
-                        actualLocationRecorded = nil
-                        pendingResultLabel = nil
-                        isStrikeSwinging = false
-                        isWildPitch = false
-                        isPassedBall = false
-                        showConfirmSheet = false
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top)
-
-                    Button("Cancel", role: .cancel) {
-                        showConfirmSheet = false
-                    }
-                    .padding(.bottom)
-                }
-                .padding()
-                .presentationDetents([.medium])
+                .padding(.bottom)
             }
-//            .confirmationDialog(
-//                "Confirm result location: \(pendingResultLabel ?? "")?",
-//                isPresented: $showResultConfirmation,
-//                titleVisibility: .visible
-//            ) {
-//                Button("Confirm", role: .none) {
-//                    if let label = pendingResultLabel {
-//                        actualLocationRecorded = label
-//                        
-//                        if let pitch = calledPitch?.pitch,
-//                           let codes = calledPitch?.codes {
-//
-//                            let event = PitchEvent(
-//                                id: UUID().uuidString,
-//                                timestamp: Date(),
-//                                pitch: pitch,
-//                                location: label, // ✅ use label directly
-//                                codes: codes,
-//                                isStrike: label.starts(with: "Strike"),
-//                                mode: sessionManager.currentMode,
-//                                calledPitch: calledPitch,
-//                                batterSide: batterSide,
-//                                templateId: selectedTemplate?.id.uuidString
-//                            )
-//                            
-//                            authManager.savePitchEvent(event)
-//                            sessionManager.incrementCount()
-//                            
-//                            // Optional: append locally for instant UI updates
-//                            pitchEvents.append(event)
-//
-//                            // Optional: reload from Firestore if you want to sync latest
-//                            // (but not necessary immediately after saving unless you're expecting external changes)
-//                            authManager.loadPitchEvents { events in
-//                                self.pitchEvents = events
-//                            }
-//                        }
-//                        
-//                        resultVisualState = label
-//                        activeCalledPitchId = UUID().uuidString
-//                        isRecordingResult = false
-//                        // ✅ Reset pitch and location selection
-//                        selectedPitch = ""
-//                        selectedLocation = ""
-//                        
-//                        // ✅ Reset tapped position and called pitch display
-//                        lastTappedPosition = nil
-//                        calledPitch = nil
-//                        
-//                        // ✅ Clear visual override state
-//                        resultVisualState = nil
-//                        actualLocationRecorded = nil
-//                        pendingResultLabel = nil
-//                    }
-//                    pendingResultLabel = nil
-//                }
-//            }
-            
+            .padding()
+            .presentationDetents([.medium])
         }
         .sheet(isPresented: $showCodeAssignmentSheet) {
             CodeAssignmentSettingsView(
@@ -494,7 +333,7 @@ struct PitchTrackerView: View {
                 authManager.loadTemplates { loadedTemplates in
                     self.templates = loadedTemplates
                 }
-
+                
                 authManager.loadPitchEvents { events in
                     self.pitchEvents = events
                     if !events.isEmpty {
@@ -527,6 +366,93 @@ struct PitchTrackerView: View {
         .sheet(item: $menuSelectedStatsTemplate) { template in
             TemplateSuccessSheet(template: template)
         }
+        ResetPitchButton() {
+            isRecordingResult = false
+            
+            // ✅ Reset pitch and location selection
+            selectedPitch = ""
+            selectedLocation = ""
+            
+            // ✅ Reset tapped position and called pitch display
+            lastTappedPosition = nil
+            calledPitch = nil
+            
+            // ✅ Clear visual override state
+            resultVisualState = nil
+            actualLocationRecorded = nil
+            
+            pendingResultLabel = nil
+        }
+        
+        ShowPitchLog(
+            showLog: {
+                authManager.loadPitchEvents { events in
+                    pitchEvents = events
+                    showPitchResults = true
+                    print("🔥 ", pitchEvents)
+                }
+            }
+        )
+        
+        let sortedTemplates: [PitchTemplate] = {
+            guard let activeID = selectedTemplate?.id else {
+                return templates.sorted { $0.name < $1.name }
+            }
+            let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
+            if let active = templates.first(where: { $0.id == activeID }) {
+                return [active] + others
+            }
+            return others
+        }()
+        ShowPitchLogTemplates(
+            sortedTemplates: sortedTemplates,
+            onSelectTemplate: { template in
+                menuSelectedStatsTemplate = template
+                showTemplateStatsSheet = true
+            }
+        )
+        
+        
+        // 📝 Called Pitch Display
+        Group {
+            if isRecordingResult && activeCalledPitchId == nil {
+                if let call = calledPitch {
+                    CalledPitchView(
+                        isRecordingResult: $isRecordingResult,
+                        activeCalledPitchId: $activeCalledPitchId,
+                        call: call,
+                        pitchCodeAssignments: pitchCodeAssignments,
+                        batterSide: batterSide
+                    )
+                    .background(Color.white.opacity(0.9))
+                    .cornerRadius(8)
+                    .shadow(radius: 4)
+                    .transition(.opacity)
+                }
+            } else if let call = calledPitch {
+                CalledPitchView(
+                    isRecordingResult: $isRecordingResult,
+                    activeCalledPitchId: $activeCalledPitchId,
+                    call: call,
+                    pitchCodeAssignments: pitchCodeAssignments,
+                    batterSide: batterSide
+                )
+                .background(Color.white.opacity(0.9))
+                .cornerRadius(8)
+                .shadow(radius: 4)
+                .transition(.opacity)
+            }
+        }
+        if selectedTemplate == nil {
+            Text("")
+                .font(.headline)
+                .foregroundColor(.gray)
+                .frame(maxWidth: .infinity)
+                .background(Color.white.opacity(0.9))
+                .cornerRadius(20)
+                .padding(.top, 8)
+        }
+        
     }
 }
 
@@ -605,7 +531,6 @@ struct BatterIconOverlay: View {
 }
 
 struct ShowPitchLog: View {
-    let geo: GeometryProxy
     let showLog: () -> Void
     
     var body: some View {
@@ -627,7 +552,6 @@ struct ShowPitchLog: View {
                     .foregroundColor(.primary)
             }
         }
-        .position(x: geo.size.width - 30, y: geo.size.height * 0.6)
         .accessibilityLabel("Show pitches.")
     }
 }
@@ -635,7 +559,6 @@ struct ShowPitchLog: View {
 
 
 struct ResetPitchButton: View {
-    let geo: GeometryProxy
     let resetAction: () -> Void
     
     var body: some View {
@@ -651,7 +574,6 @@ struct ResetPitchButton: View {
                 .background(Color.gray.opacity(0.2))
                 .clipShape(Circle())
         }
-        .position(x: 30, y: geo.size.height * 0.65)
         .accessibilityLabel("Reset pitch selection")
     }
 }
