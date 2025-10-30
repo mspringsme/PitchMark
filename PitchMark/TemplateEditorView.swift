@@ -290,7 +290,7 @@ struct CodeAssignmentPanel: View {
                     ForEach([
                         "Up & Out", "Up", "Up & In",
                         "Out", "In",
-                        "↓ & Out", "↓ ", "↓ & In"
+                        "↓ & Out", "↓", "↓ & In"
                     ], id: \.self) { label in
                         let fullLabel = "Ball \(label)"
                         Button(action: {

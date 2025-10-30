@@ -84,7 +84,7 @@ struct StrikeZoneView: View {
                     ("Out", originX - buttonSize * 0.75, originY + zoneHeight / 2),
                     ("In", originX + zoneWidth + buttonSize * 0.75, originY + zoneHeight / 2),
                     ("↓ & Out", originX - buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6),
-                    ("↓ ", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
+                    ("↓", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
                     ("↓ & In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
                 ]
                 

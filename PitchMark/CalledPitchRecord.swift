@@ -20,7 +20,8 @@ struct PitchCardView: View {
     let verticalTopImage: Image
     let rightImage: Image
     let rightImageShouldHighlight: Bool
-    let footerText: String
+    let footerTextName: String
+    let footerTextDate: String
     let pitchNumber: Int?
     
     var body: some View {
@@ -28,22 +29,32 @@ struct PitchCardView: View {
             // 🧠 Header at top-left
             HStack(spacing: 4) {
                 
-                Text(footerText)
+                Text(footerTextDate)
                     .font(.caption)
                     .fontWeight(.bold)
                     .foregroundColor(.secondary)
                     .padding(.top, 8)
+                    .padding(.leading, 8)
+                                
+                Spacer()
+                
+                Text(footerTextName)
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 8)
+                    .padding(.leading, 8)
+                
+                Spacer()
                 
                 if let pitchNumber = pitchNumber {
-                    Text("•   Pitch #\(pitchNumber)")
+                    Text("Pitch #\(pitchNumber)")
                         .font(.caption)
                         .fontWeight(.bold)
                         .foregroundColor(.secondary)
-                        .padding(.leading, 12)
+                        .padding(.trailing, 8)
                         .padding(.top, 8)
                 }
-                
-                Spacer()
             }
             
             // 🧩 Main card content
@@ -53,43 +64,50 @@ struct PitchCardView: View {
         }
         .background(cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 3)
+        .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 3)
     }
     
     private var content: some View {
         HStack(alignment: .center, spacing: 8) {
             leadingImages
+                .padding(.leading, 8)
+            
+            Spacer()
             
             VStack(alignment: .center, spacing: 6) {
-                verticalTopImage
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 32, height: 32) // ⬅️ Slightly larger for clarity
-                
-                Text(topText)
-                    .font(.headline)
-                    .bold()
-                    .multilineTextAlignment(.center)
-                
+                HStack{
+                    Text(topText)
+                        .font(.subheadline)
+                        .bold()
+                        .multilineTextAlignment(.center)
+                    
+                    verticalTopImage
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 20, height: 20)
+                }
                 Text(middleText)
-                    .font(.subheadline)
+                    .font(.caption)
                     .multilineTextAlignment(.center)
                 
                 Text(bottomText)
-                    .font(.subheadline)
+                    .font(.caption)
                     .multilineTextAlignment(.center)
             }
-            .frame(minWidth: 100)
+            .frame(minWidth: 80)
             .layoutPriority(1)
+            
+            Spacer()
             
             rightImage
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(width: 100, height: 130)
+                .frame(width: 60, height: 90)
                 .shadow(
                     color: rightImageShouldHighlight ? .green.opacity(0.7) : .red.opacity(0.5),
                     radius: 6, x: 0, y: 0
                 )
+                .padding(.trailing, 8)
         }
     }
     
@@ -108,14 +126,14 @@ struct PitchCardView: View {
         leftImage
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(width: 100, height: 130)
+            .frame(width: 60, height: 90)
     }
     
     private var batImageView: some View {
         Image("Bat")
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(width: 20, height: 82)
+            .frame(width: 20, height: 70)
             .padding(.horizontal, 2)
     }
     
@@ -147,6 +165,7 @@ enum PitchAssetMapper {
     }
 }
 
+// Used in PitchResultSheet
 struct PitchResultCard: View {
     let event: PitchEvent
     let allEvents: [PitchEvent] // ✅ Add this
@@ -211,7 +230,8 @@ struct PitchResultCard: View {
             verticalTopImage: Image(verticalTopImageName),
             rightImage: Image(rightImageName),
             rightImageShouldHighlight: didHitLocation,
-            footerText: "\(templateName) • \(timestampText)",
+            footerTextName: "\(templateName)",
+            footerTextDate: "\(timestampText)",
             pitchNumber: pitchNumber(for: event, in: allEvents)
         )
     }
@@ -261,13 +281,11 @@ struct PitchResultSheet: View {
             ScrollView([.vertical]) {
                 VStack(spacing: 12) {
                     ForEach(Array(filteredEvents.enumerated()), id: \.element.id) { index, event in
-                        if let template = templates.first(where: { $0.id.uuidString == event.templateId }) {
-                            PitchResultCard(event: event, allEvents: allEvents, templateName: template.name)
-                                .padding(.horizontal)
-                        } else {
-                            PitchResultCard(event: event, allEvents: allEvents, templateName: "Unknown")
-                                .padding(.horizontal)
-                        }
+                        let templateName = templates.first(where: { $0.id.uuidString == event.templateId })?.name ?? "Unknown"
+                        
+                        PitchResultCard(event: event, allEvents: allEvents, templateName: templateName)
+                            .padding(.horizontal)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
                 .padding(.horizontal)

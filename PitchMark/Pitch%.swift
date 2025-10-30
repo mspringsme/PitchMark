@@ -250,15 +250,17 @@ struct ShowPitchLogTemplates: View {
             }
         } label: {
             VStack(spacing: 4) {
+                Text("%")
+                    .font(.caption)
+                    .foregroundColor(.primary)
                 Image(systemName: "baseball")
                     .font(.body)
                     .foregroundColor(.black)
                     .padding(6)
                     .background(Color.gray.opacity(0.2))
                     .clipShape(Circle())
-                Text("%")
-                    .font(.caption)
-                    .foregroundColor(.primary)
+                    .padding(.trailing, 2)
+                    .padding(.bottom, 2)
             }
         }
         .accessibilityLabel("Show all templates.")

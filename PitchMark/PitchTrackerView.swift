@@ -48,6 +48,7 @@ struct PitchTrackerView: View {
     @State private var isStrikeSwinging = false
     @State private var isWildPitch = false
     @State private var isPassedBall = false
+    @State private var isCalledPitchViewVisible = false
     
     var body: some View {
         VStack(spacing: 4) {
@@ -269,6 +270,19 @@ struct PitchTrackerView: View {
                     alignment: .bottomTrailing
                 )
                 
+                // 🧩 conditional "Choose a Pitch Result" pop up TEXT
+                let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
+                if shouldShowChooseResultText {
+                    Text("Choose a Pitch Result")
+                        .opacity(shouldShowChooseResultText ? 1 : 0)
+                        .scaleEffect(shouldShowChooseResultText ? 1.05 : 1)
+                        .shadow(color: .yellow.opacity(shouldShowChooseResultText ? 0.3 : 0), radius: 4)
+                        .animation(.easeInOut(duration: 0.3), value: shouldShowChooseResultText)
+                        .padding(.top, 4)
+                    //.position(x: geo.size.width / 2, y: geo.size.height * 0.78)
+                }
+                
+                
                 // 🧩 Called Pitch Display
                 Group {
                     if isRecordingResult && activeCalledPitchId == nil {
@@ -284,6 +298,7 @@ struct PitchTrackerView: View {
                             .cornerRadius(8)
                             .shadow(radius: 4)
                             .transition(.opacity)
+                            .padding(.top, 4)
                         }
                     } else if let call = calledPitch {
                         CalledPitchView(
@@ -297,6 +312,7 @@ struct PitchTrackerView: View {
                         .cornerRadius(8)
                         .shadow(radius: 4)
                         .transition(.opacity)
+                        .padding(.top, 4)
                     }
                 }
                 
@@ -310,32 +326,20 @@ struct PitchTrackerView: View {
                                     filterMode: $filterMode
                                 )
                                 .environmentObject(authManager)
-                            } else {
-                                Text("No template selected.")
-                                    .font(.headline)
-                                    .padding()
                             }
                         }
-                        .padding(.horizontal)
                         .transition(.opacity)
                 }
                 
-                Spacer()
+                //Spacer()
             }
-            .opacity(selectedTemplate == nil ? 0.5 : 1.0)
+            .opacity(selectedTemplate == nil ? 0.6 : 1.0)
+            .blur(radius: selectedTemplate == nil ? 4 : 0)
             .allowsHitTesting(selectedTemplate != nil)
+            .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
             
-            Spacer()
-            // 🧩 conditional "Choose a Pitch Result" pop up TEXT
-            let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
-            if shouldShowChooseResultText {
-                Text("Choose a Pitch Result")
-                    .opacity(shouldShowChooseResultText ? 1 : 0)
-                    .scaleEffect(shouldShowChooseResultText ? 1.05 : 1)
-                    .shadow(color: .yellow.opacity(shouldShowChooseResultText ? 0.3 : 0), radius: 4)
-                    .animation(.easeInOut(duration: 0.3), value: shouldShowChooseResultText)
-                //.position(x: geo.size.width / 2, y: geo.size.height * 0.78)
-            }
+            //Spacer()
+            
             
         } // 🧩🧩🧩🧩 end of VStack
         .frame(maxHeight: .infinity, alignment: .top)
@@ -390,7 +394,9 @@ struct PitchTrackerView: View {
                     
                     authManager.savePitchEvent(event)
                     sessionManager.incrementCount()
-                    pitchEvents.append(event)
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        pitchEvents.append(event)
+                    }
                     
                     authManager.loadPitchEvents { events in
                         self.pitchEvents = events
@@ -554,6 +560,13 @@ struct ResetPitchButton: View {
                 .padding(6)
                 .background(Color.gray.opacity(0.2))
                 .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.red, lineWidth: 1)
+                )
+                .padding(.leading, 2)
+                .padding(.bottom, 2)
+                
         }
         .accessibilityLabel("Reset pitch selection")
     }

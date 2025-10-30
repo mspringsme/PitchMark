@@ -34,7 +34,7 @@ let strikeGrid: [GridLocation] = [
     .init(row: 1, col: 1, label: "Middle"),
     .init(row: 1, col: 2, label: "In"),
     .init(row: 2, col: 0, label: "↓ & Out"),
-    .init(row: 2, col: 1, label: "↓ "),
+    .init(row: 2, col: 1, label: "↓"),
     .init(row: 2, col: 2, label: "↓ & In")
 ]
 
@@ -48,7 +48,7 @@ func allLocationsFromGrid() -> [String] {
     strikeGrid.map(\.label) + [
         "Up & Out", "Up", "Up & In",
         "Out", "In",
-        "↓ & Out", "↓ ", "↓ & In"
+        "↓ & Out", "↓", "↓ & In"
     ]
 }
 
@@ -69,7 +69,7 @@ func normalizedLabel(_ label: String) -> String {
     case "Up & Out":      return "Up & Out"
     case "↓ & Out":    return "↓ & Out"
     case "Up":              return "Up"
-    case "↓ ":            return "↓ "
+    case "↓":            return "↓"
     case "In":              return "In"
     case "Out":             return "Out"
     case "Middle":          return "Middle"
@@ -172,7 +172,7 @@ struct BatterLabelSet {
         let ballRaw = [
             "Up & Out", "Up", "Up & In",
             "Out", "In",
-            "↓ & Out", "↓ ", "↓ & In"
+            "↓ & Out", "↓", "↓ & In"
         ]
         ballFull = ballRaw.map { factory.fullLabel(prefix: "Ball", rawLabel: $0) }
     }
@@ -232,7 +232,7 @@ struct PitchLabelManager {
         let strikeZoneLabels: Set<String> = [
             "Up & In", "Up", "Up & Out",
             "In", "Middle", "Out",
-            "↓ & In", "↓ ", "↓ & Out"
+            "↓ & In", "↓", "↓ & Out"
         ]
 
         return strikeZoneLabels.contains(adjusted) ? "Strike" : "Ball"
@@ -266,76 +266,55 @@ enum BatterSide: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-let pitchAssetNames: [String] = [
-    "ballHigh",
-    "ballHighLeft",
-    "ballHighRight",
-    "ballLeft",
-    "ballLow",
-    "ballLowLeft",
-    "ballLowRight",
-    "ballRight",
-    "StrikeHigh",
-    "StrikeHighLeft",
-    "StrikeHighRight",
-    "StrikeLeft",
-    "StrikeLow",
-    "StrikeLowLeft",
-    "StrikeLowRight",
-    "StrikeMiddle",
-    "StrikeRight"
-]
-
 enum PitchImageDictionary {
     static let imageMap: [String: String] = [
         // Right-handed batter
-        "Strike Middle|right": "StrikeMiddle",
-        "Strike High|right": "StrikeHigh",
-        "Strike Low|right": "StrikeLow",
-        "Strike Up & In|right": "StrikeHighRight",
-        "Strike Up & Out|right": "StrikeHighLeft",
-        "Strike ↓ & In|right": "StrikeLowRight",
-        "Strike ↓ & Out|right": "StrikeLowLeft",
-        "Strike In|right": "StrikeRight",
-        "Strike Out|right": "StrikeLeft",
+        "Strike Middle|right": "Strike Middle",
+        "Strike High|right": "Strike High",
+        "Strike Low|right": "Strike Low",
+        "Strike Up & In|right": "Strike High Right_Inside_Righty",
+        "Strike Up & Out|right": "Strike High Left_Outside_Righty",
+        "Strike ↓ & In|right": "Strike Low Right_Inside_Righty",
+        "Strike ↓|right": "Strike Low",
+        "Strike ↓ & Out|right": "Strike Low Left_Outside_Righty png",
+        "Strike In|right": "Strike Right_Inside_Righty",
+        "Strike Out|right": "Strike Left_Outside_Righty",
         
-        "Ball Middle|right": "ballMiddle",
-        "Ball High|right": "ballHigh",
-        "Ball Low|right": "ballLow",
-        "Ball ↓|right": "ballLow",
-        "Ball Up & In|right": "ballHighRight",
-        "Ball Up & Out|right": "ballHighLeft",
-        "Ball ↓ & In|right": "ballLowRight",
-        "Ball ↓ & Out|right": "ballLowLeft",
-        "Ball In|right": "ballRight",
-        "Ball Out|right": "ballLeft",
+        "Ball High|right": "Ball High",
+        "Ball Low|right": "Ball Low",
+        "Ball ↓|right": "Ball Low",
+        "Ball Up & In|right": "Ball High Right_Inside_Righty",
+        "Ball Up & Out|right": "Ball High Left_Outside_Righty",
+        "Ball ↓ & In|right": "Ball Low Right_Inside_Righty",
+        "Ball ↓ & Out|right": "Ball Low Left_Outside_Righty",
+        "Ball In|right": "Ball Right_Inside_Righty",
+        "Ball Out|right": "Ball Left_Outside_Righty",
         
         // Left-handed batter (flipped)
-        "Strike Middle|left": "StrikeMiddle",
-        "Strike High|left": "StrikeHigh",
-        "Strike Low|left": "StrikeLow",
-        "Strike Up & In|left": "StrikeHighLeft",
-        "Strike Up & Out|left": "StrikeHighRight",
-        "Strike ↓ & In|left": "StrikeLowLeft",
-        "Strike ↓ & Out|left": "StrikeLowRight",
-        "Strike In|left": "StrikeLeft",
-        "Strike Out|left": "StrikeRight",
+        "Strike Middle|left": "Strike Middle",
+        "Strike High|left": "Strike High",
+        "Strike Low|left": "Strike Low",
+        "Strike Up & In|left": "Strike High Left_Inside_Lefty",
+        "Strike Up & Out|left": "Strike High Right_Outside_Lefty",
+        "Strike ↓ & In|left": "Strike Low Left_Inside_Lefty",
+        "Strike ↓ & Out|left": "Strike Low Right_Outside_Lefty",
+        "Strike In|left": "Strike Left_Inside_Lefty",
+        "Strike Out|left": "Strike Right_Outside_Lefty",
         
-        "Ball Middle|left": "ballMiddle",
-        "Ball High|left": "ballHigh",
-        "Ball Low|left": "ballLow",
-        "Ball ↓|left": "ballLow",
-        "Ball Up & In|left": "ballHighLeft",
-        "Ball Up & Out|left": "ballHighRight",
-        "Ball ↓ & In|left": "ballLowLeft",
-        "Ball ↓ & Out|left": "ballLowRight",
-        "Ball In|left": "ballLeft",
-        "Ball Out|left": "ballRight",
+        "Ball High|left": "Ball High",
+        "Ball Low|left": "Ball Low",
+        "Ball ↓|left": "Ball Low",
+        "Ball Up & In|left": "Ball High Left_Inside_Lefty",
+        "Ball Up & Out|left": "Ball High Right_Outside_Lefty",
+        "Ball ↓ & In|left": "Ball Low Left_Inside_Lefty",
+        "Ball ↓ & Out|left": "Ball Low Right_Outside_Lefty",
+        "Ball In|left": "Ball Left_Inside_Lefty",
+        "Ball Out|left": "Ball Right_Outside_Lefty",
         
-        "Strike Up|right": "StrikeHigh",
-        "Strike Up|left": "StrikeHigh",
-        "Ball Up|right": "ballHigh",
-        "Ball Up|left": "ballHigh"
+        "Strike Up|right": "Strike High",
+        "Strike Up|left": "Strike High",
+        "Ball Up|right": "Ball High",
+        "Ball Up|left": "Ball High"
         
     ]
     
