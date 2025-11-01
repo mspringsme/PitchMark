@@ -49,6 +49,7 @@ struct PitchTrackerView: View {
     @State private var isWildPitch = false
     @State private var isPassedBall = false
     @State private var isCalledPitchViewVisible = false
+    @State private var shouldBlurBackground = false
     
     var body: some View {
         VStack(spacing: 4) {
@@ -282,10 +283,24 @@ struct PitchTrackerView: View {
                     //.position(x: geo.size.width / 2, y: geo.size.height * 0.78)
                 }
                 
-                
-                // 🧩 Called Pitch Display
-                Group {
-                    if isRecordingResult && activeCalledPitchId == nil {
+                ZStack {
+                    // 🧩 Cards (PitchResultSheet)
+                    VStack {
+                        if selectedTemplate != nil {
+                            PitchResultSheet(
+                                allEvents: pitchEvents,
+                                templates: templates,
+                                filterMode: $filterMode
+                            )
+                            .environmentObject(authManager)
+                        }
+                    }
+                    .blur(radius: shouldBlurBackground ? 6 : 0)
+                    .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
+                    .transition(.opacity)
+
+                    // 🧩 Called Pitch Display
+                    Group {
                         if let call = calledPitch {
                             CalledPitchView(
                                 isRecordingResult: $isRecordingResult,
@@ -299,49 +314,70 @@ struct PitchTrackerView: View {
                             .shadow(radius: 4)
                             .transition(.opacity)
                             .padding(.top, 4)
+                            .onAppear {
+                                shouldBlurBackground = true
+                            }
+                            .onDisappear {
+                                shouldBlurBackground = false
+                            }
                         }
-                    } else if let call = calledPitch {
-                        CalledPitchView(
-                            isRecordingResult: $isRecordingResult,
-                            activeCalledPitchId: $activeCalledPitchId,
-                            call: call,
-                            pitchCodeAssignments: pitchCodeAssignments,
-                            batterSide: batterSide
-                        )
-                        .background(Color.white.opacity(0.9))
-                        .cornerRadius(8)
-                        .shadow(radius: 4)
-                        .transition(.opacity)
-                        .padding(.top, 4)
                     }
                 }
                 
-                // 🧩 Cards
-                if showPitchResults {
-                        VStack {
-                            if selectedTemplate != nil {
-                                PitchResultSheet(
-                                    allEvents: pitchEvents,
-                                    templates: templates,
-                                    filterMode: $filterMode
-                                )
-                                .environmentObject(authManager)
-                            }
-                        }
-                        .transition(.opacity)
-                }
-                
-                //Spacer()
+//                // 🧩 Called Pitch Display
+//                Group {
+//                    if isRecordingResult && activeCalledPitchId == nil {
+//                        if let call = calledPitch {
+//                            CalledPitchView(
+//                                isRecordingResult: $isRecordingResult,
+//                                activeCalledPitchId: $activeCalledPitchId,
+//                                call: call,
+//                                pitchCodeAssignments: pitchCodeAssignments,
+//                                batterSide: batterSide
+//                            )
+//                            .background(Color.white.opacity(0.9))
+//                            .cornerRadius(8)
+//                            .shadow(radius: 4)
+//                            .transition(.opacity)
+//                            .padding(.top, 4)
+//                        }
+//                    } else if let call = calledPitch {
+//                        CalledPitchView(
+//                            isRecordingResult: $isRecordingResult,
+//                            activeCalledPitchId: $activeCalledPitchId,
+//                            call: call,
+//                            pitchCodeAssignments: pitchCodeAssignments,
+//                            batterSide: batterSide
+//                        )
+//                        .background(Color.white.opacity(0.9))
+//                        .cornerRadius(8)
+//                        .shadow(radius: 4)
+//                        .transition(.opacity)
+//                        .padding(.top, 4)
+//                    }
+//                }
+//                
+//                // 🧩 Cards
+//                if showPitchResults {
+//                        VStack {
+//                            if selectedTemplate != nil {
+//                                PitchResultSheet(
+//                                    allEvents: pitchEvents,
+//                                    templates: templates,
+//                                    filterMode: $filterMode
+//                                )
+//                                .environmentObject(authManager)
+//                            }
+//                        }
+//                        .transition(.opacity)
+//                }
             }
             .opacity(selectedTemplate == nil ? 0.6 : 1.0)
             .blur(radius: selectedTemplate == nil ? 4 : 0)
             .allowsHitTesting(selectedTemplate != nil)
             .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
             
-            //Spacer()
-            
-            
-        } // 🧩🧩🧩🧩 end of VStack
+        } // 🧩🧩🧩🧩 end of VStack 🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩
         .frame(maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: $showConfirmSheet) {
             VStack(spacing: 20) {
