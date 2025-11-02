@@ -18,7 +18,7 @@ struct JerseyCellView: View {
         Text(cell.jerseyNumber)
             .font(.headline)
             .frame(width: 40, height: 40) // Square shape
-            .background(Color.blue.opacity(0.2))
+            .background(Color.white)
             .cornerRadius(6)
     }
 }

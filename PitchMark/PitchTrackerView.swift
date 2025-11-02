@@ -46,11 +46,13 @@ struct PitchTrackerView: View {
     @State private var menuSelectedStatsTemplate: PitchTemplate?
     @State private var showConfirmSheet = false
     @State private var isStrikeSwinging = false
+    @State private var isStrikeLooking = false
     @State private var isWildPitch = false
     @State private var isPassedBall = false
     @State private var isCalledPitchViewVisible = false
     @State private var shouldBlurBackground = false
     @State private var isGame = false
+    @State private var selectedOutcome: String? = nil
     
     var body: some View {
         VStack(spacing: 4) {
@@ -78,6 +80,7 @@ struct PitchTrackerView: View {
                         .foregroundColor(templates.isEmpty ? .gray : .blue)
                 }
                 .disabled(templates.isEmpty) // ✅ disables interaction
+                
                 Spacer() // 👈 Pushes content to the trailing edge
                 
                 Button(action: {
@@ -111,6 +114,7 @@ struct PitchTrackerView: View {
             
             Divider()
             
+            // everything below top bar:
             Group {
                 // 🧩 Toggle Chips for Pitch Selection
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -155,21 +159,20 @@ struct PitchTrackerView: View {
                     
                     Spacer()
                     
-                    VStack(spacing: 4) {
-                        Text("Mode")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        
-                        Picker("Mode", selection: $sessionManager.currentMode) {
-                            Text("Practice").tag(PitchMode.practice)
-                            Text("Game").tag(PitchMode.game)
+                    VStack {
+                            Picker("Mode", selection: $sessionManager.currentMode) {
+                                Text("Practice").tag(PitchMode.practice)
+                                Text("Game").tag(PitchMode.game)
+                            }
+                            .pickerStyle(.segmented)
+                            .onChange(of: sessionManager.currentMode) { oldValue, newValue in
+                                sessionManager.switchMode(to: newValue)
+                                isGame = (newValue == .game)
+                            }
+                            .onAppear {
+                                isGame = (sessionManager.currentMode == .game)
+                            }
                         }
-                        .pickerStyle(.segmented)
-                        .onChange(of: sessionManager.currentMode) { oldValue, newValue in
-                            sessionManager.switchMode(to: newValue)
-                        }
-                    }
-                    .frame(width: 160)
                     
                     Spacer()
                     
@@ -195,97 +198,118 @@ struct PitchTrackerView: View {
                 .padding(.horizontal)
                 .padding(.bottom, 4)
                 
+                
                 let deviceWidth = UIScreen.main.bounds.width
-                let SZwidth: CGFloat = isGame ? (deviceWidth * 0.8) : (deviceWidth * 0.85)
-
-                HStack(alignment: .top, spacing: 8) {
-                    // 🧩 Leading scrollable cells (only if game is active)
-                    if isGame {
-                            ScrollView(.vertical, showsIndicators: false) {
-                                VStack(spacing: 8) {
-                                    ForEach(jerseyCells) { cell in
-                                        JerseyCellView(cell: cell)
+                let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
+                VStack {
+                    HStack(alignment: .top, spacing: 8) {
+                        
+                        // 🧩 Leading scrollable cells (only if game is active)
+                        if isGame {
+                            VStack(spacing: 0) {
+                                // 🧢 Header
+                                Text("At Bat")
+                                    .font(.caption)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 6)
+                                    .background(Color.gray)
+                                
+                                // 🧩 Scrollable jersey cells
+                                ScrollView(.vertical, showsIndicators: false) {
+                                    VStack(spacing: 6) {
+                                        ForEach(jerseyCells) { cell in
+                                            JerseyCellView(cell: cell)
+                                        }
                                     }
+                                    .padding(.vertical, 2)        // Less vertical breathing room
+                                    .padding(.horizontal, 0)      // No horizontal inset — flush to edges
                                 }
-                                .frame(width: 50) // Narrow column
-                                .padding(.leading, 8)
                             }
+                            .frame(width: 60, height: 400)
+                            .background(Color.gray.opacity(0.15))
+                            .cornerRadius(10)
+                            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
                         }
-
-                    // 🧩 Strike Zone View
-                    VStack {
-                        StrikeZoneView(
-                            batterSide: batterSide,
-                            lastTappedPosition: lastTappedPosition,
-                            setLastTapped: { lastTappedPosition = $0 },
-                            calledPitch: calledPitch,
-                            setCalledPitch: { calledPitch = $0 },
-                            selectedPitches: selectedPitches,
-                            gameIsActive: gameIsActive,
-                            selectedPitch: selectedPitch,
-                            pitchCodeAssignments: pitchCodeAssignments,
-                            isRecordingResult: isRecordingResult,
-                            setIsRecordingResult: { isRecordingResult = $0 },
-                            setActualLocation: { actualLocationRecorded = $0 },
-                            actualLocationRecorded: actualLocationRecorded,
-                            setSelectedPitch: { selectedPitch = $0 },
-                            resultVisualState: resultVisualState,
-                            setResultVisualState: { resultVisualState = $0 },
-                            pendingResultLabel: $pendingResultLabel,
-                            showResultConfirmation: $showResultConfirmation,
-                            showConfirmSheet: $showConfirmSheet
+                        
+                        // 🧩 Strike Zone View
+                        VStack {
+                            StrikeZoneView(
+                                width: SZwidth,
+                                isGame: $isGame,
+                                batterSide: batterSide,
+                                lastTappedPosition: lastTappedPosition,
+                                setLastTapped: { lastTappedPosition = $0 },
+                                calledPitch: calledPitch,
+                                setCalledPitch: { calledPitch = $0 },
+                                selectedPitches: selectedPitches,
+                                gameIsActive: gameIsActive,
+                                selectedPitch: selectedPitch,
+                                pitchCodeAssignments: pitchCodeAssignments,
+                                isRecordingResult: isRecordingResult,
+                                setIsRecordingResult: { isRecordingResult = $0 },
+                                setActualLocation: { actualLocationRecorded = $0 },
+                                actualLocationRecorded: actualLocationRecorded,
+                                setSelectedPitch: { selectedPitch = $0 },
+                                resultVisualState: resultVisualState,
+                                setResultVisualState: { resultVisualState = $0 },
+                                pendingResultLabel: $pendingResultLabel,
+                                showResultConfirmation: $showResultConfirmation,
+                                showConfirmSheet: $showConfirmSheet
+                            )
+                        }
+                        .frame(width: SZwidth, height: 400)
+                        .cornerRadius(12)
+                        .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+                        .overlay(
+                            Group {
+                                ResetPitchButton() {
+                                    isRecordingResult = false
+                                    
+                                    // ✅ Reset pitch and location selection
+                                    selectedPitch = ""
+                                    selectedLocation = ""
+                                    
+                                    // ✅ Reset tapped position and called pitch display
+                                    lastTappedPosition = nil
+                                    calledPitch = nil
+                                    
+                                    // ✅ Clear visual override state
+                                    resultVisualState = nil
+                                    actualLocationRecorded = nil
+                                    
+                                    pendingResultLabel = nil
+                                }
+                            },
+                            alignment: .bottomLeading
+                        )
+                        .overlay(
+                            Group {
+                                let sortedTemplates: [PitchTemplate] = {
+                                    guard let activeID = selectedTemplate?.id else {
+                                        return templates.sorted { $0.name < $1.name }
+                                    }
+                                    let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
+                                    if let active = templates.first(where: { $0.id == activeID }) {
+                                        return [active] + others
+                                    }
+                                    return others
+                                }()
+                                ShowPitchLogTemplates(
+                                    sortedTemplates: sortedTemplates,
+                                    onSelectTemplate: { template in
+                                        menuSelectedStatsTemplate = template
+                                        showTemplateStatsSheet = true
+                                    }
+                                )
+                            },
+                            alignment: .bottomTrailing
                         )
                     }
-                    .frame(width: SZwidth, height: 400)
-                    .padding(.trailing, isGame ? 12 : 0)
-                    .background(Color.white)
-                    .cornerRadius(12)
-                    .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
-                    .overlay(
-                        Group {
-                            ResetPitchButton() {
-                                isRecordingResult = false
-                                
-                                // ✅ Reset pitch and location selection
-                                selectedPitch = ""
-                                selectedLocation = ""
-                                
-                                // ✅ Reset tapped position and called pitch display
-                                lastTappedPosition = nil
-                                calledPitch = nil
-                                
-                                // ✅ Clear visual override state
-                                resultVisualState = nil
-                                actualLocationRecorded = nil
-                                
-                                pendingResultLabel = nil
-                            }
-                        },
-                        alignment: .bottomLeading
-                    )
-                    .overlay(
-                        Group {
-                            let sortedTemplates: [PitchTemplate] = {
-                                guard let activeID = selectedTemplate?.id else {
-                                    return templates.sorted { $0.name < $1.name }
-                                }
-                                let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
-                                if let active = templates.first(where: { $0.id == activeID }) {
-                                    return [active] + others
-                                }
-                                return others
-                            }()
-                            ShowPitchLogTemplates(
-                                sortedTemplates: sortedTemplates,
-                                onSelectTemplate: { template in
-                                    menuSelectedStatsTemplate = template
-                                    showTemplateStatsSheet = true
-                                }
-                            )
-                        },
-                        alignment: .bottomTrailing
-                    )
                 }
+                //.border(Color.red, width: 4)
+                .padding(.horizontal, 12)
                 
                 // 🧩 conditional "Choose a Pitch Result" pop up TEXT
                 let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
@@ -393,69 +417,33 @@ struct PitchTrackerView: View {
             .allowsHitTesting(selectedTemplate != nil)
             .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
             
-        } // 🧩🧩🧩🧩 end of VStack 🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩
+        } // 🧩🧩🧩🧩 end of VStack 🧩🧩🧩🧩🧧🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩
         .frame(maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: $showConfirmSheet) {
-            VStack(spacing: 20) {
-                Text("Pitch Result")
-                    .font(.title2)
-                    .bold()
-                
-                if let label = pendingResultLabel {
-                    Text("Location: \(label)")
-                        .font(.headline)
-                        .foregroundColor(.blue)
-                }
-                
-                Divider()
-                
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Choose any that apply:")
-                        .font(.subheadline)
-                    Toggle("Strike Swinging", isOn: $isStrikeSwinging)
-                    Toggle("Wild Pitch", isOn: $isWildPitch)
-                    Toggle("Passed Ball", isOn: $isPassedBall)
-                }
-                .padding(.horizontal)
-                
-                Divider()
-                
-                Button("Save Pitch Event") {
-                    guard let label = pendingResultLabel,
-                          let pitch = calledPitch?.pitch,
-                          let codes = calledPitch?.codes else {
-                        showConfirmSheet = false
-                        return
-                    }
-                    
-                    let event = PitchEvent(
-                        id: UUID().uuidString,
-                        timestamp: Date(),
-                        pitch: pitch,
-                        location: label,
-                        codes: codes,
-                        isStrike: label.starts(with: "Strike"),
-                        mode: sessionManager.currentMode,
-                        calledPitch: calledPitch,
-                        batterSide: batterSide,
-                        templateId: selectedTemplate?.id.uuidString,
-                        strikeSwinging: isStrikeSwinging,
-                        wildPitch: isWildPitch,
-                        passedBall: isPassedBall
-                    )
-                    
+            PitchResultSheetView(
+                isPresented: $showConfirmSheet,
+                isStrikeSwinging: $isStrikeSwinging,
+                isStrikeLooking: $isStrikeLooking,
+                isWildPitch: $isWildPitch,
+                isPassedBall: $isPassedBall,
+                selectedOutcome: $selectedOutcome,
+                pendingResultLabel: pendingResultLabel,
+                pitchCall: calledPitch,
+                batterSide: batterSide,
+                selectedTemplateId: selectedTemplate?.id.uuidString,
+                currentMode: sessionManager.currentMode,
+                saveAction: { event in
                     authManager.savePitchEvent(event)
                     sessionManager.incrementCount()
                     withAnimation(.easeInOut(duration: 0.3)) {
                         pitchEvents.append(event)
                     }
-                    
                     authManager.loadPitchEvents { events in
                         self.pitchEvents = events
                     }
-                    
+
                     // Reset state
-                    resultVisualState = label
+                    resultVisualState = event.location
                     activeCalledPitchId = UUID().uuidString
                     isRecordingResult = false
                     selectedPitch = ""
@@ -468,18 +456,10 @@ struct PitchTrackerView: View {
                     isStrikeSwinging = false
                     isWildPitch = false
                     isPassedBall = false
-                    showConfirmSheet = false
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(.top)
-                
-                Button("Cancel", role: .cancel) {
-                    showConfirmSheet = false
-                }
-                .padding(.bottom)
-            }
-            .padding()
-            .presentationDetents([.medium])
+                    selectedOutcome = nil
+                },
+                template: selectedTemplate
+            )
         }
         .sheet(isPresented: $showCodeAssignmentSheet) {
             CodeAssignmentSettingsView(
@@ -748,3 +728,4 @@ struct ToggleChip: View {
 //#Preview {
 //    PitchTrackerView()
 //}
+

@@ -7,6 +7,8 @@
 import SwiftUI
 
 struct StrikeZoneView: View {
+    let width: CGFloat
+    @Binding var isGame: Bool
     let batterSide: BatterSide
     let lastTappedPosition: CGPoint?
     let setLastTapped: (CGPoint?) -> Void
@@ -28,96 +30,106 @@ struct StrikeZoneView: View {
     let showConfirmSheet: Binding<Bool>
     
     var body: some View {
-        GeometryReader { geo in
-        let zoneWidth = geo.size.width * 0.4
-        let zoneHeight = geo.size.height * 0.6
-        let cellWidth = zoneWidth / 3
-        let cellHeight = zoneHeight / 3
-        let buttonSize = min(cellWidth, cellHeight) * 0.8
-        let originX = (geo.size.width - zoneWidth) / 2
-        let originY: CGFloat = 60
-        let labelManager = PitchLabelManager(batterSide: batterSide)
-        
-            ZStack(alignment: .topLeading) {
-                Rectangle()
-                    .stroke(Color.black, lineWidth: 2)
-                    .frame(width: zoneWidth, height: zoneHeight)
-                    .position(x: originX + zoneWidth / 2, y: originY + zoneHeight / 2)
+        ZStack {
+            Color.clear // 👈 forces fixed size
+                    .frame(width: width, height: 400)
+            GeometryReader { geo in
+                let zoneWidth = geo.size.width * (isGame ? 0.47 : 0.4)
+                let zoneHeight = geo.size.height * 0.6
+                let cellWidth = zoneWidth / 3
+                let cellHeight = zoneHeight / 3
+                let buttonSize = min(cellWidth, cellHeight) * 0.8
+                let originX = (geo.size.width - zoneWidth) / 2
+                let originY: CGFloat = 60
+                let labelManager = PitchLabelManager(batterSide: batterSide)
                 
-                // Strike zone buttons
-                ForEach(strikeGrid) { loc in
-                    let x = originX + CGFloat(loc.col) * cellWidth + cellWidth / 2
-                    let y = originY + CGFloat(loc.row) * cellHeight + cellHeight / 2
+                ZStack(alignment: .topLeading) {
+                    Rectangle()
+                        .stroke(Color.black, lineWidth: 2)
+                        .frame(width: zoneWidth, height: zoneHeight)
+                        .position(x: originX + zoneWidth / 2, y: originY + zoneHeight / 2)
                     
-                    pitchButton(
-                        x: x,
-                        y: y,
-                        location: .init(label: loc.label, isStrike: true),
-                        labelManager: labelManager,
-                        lastTappedPosition: lastTappedPosition,
-                        setLastTapped: setLastTapped,
-                        setCalledPitch: setCalledPitch,
-                        buttonSize: buttonSize,
-                        selectedPitches: selectedPitches,
-                        pitchCodeAssignments: pitchCodeAssignments,
-                        calledPitch: calledPitch,
-                        selectedPitch: selectedPitch,
-                        gameIsActive: gameIsActive,
-                        isRecordingResult: isRecordingResult,
-                        setIsRecordingResult: setIsRecordingResult,
-                        setActualLocation: setActualLocation,
-                        actualLocationRecorded: actualLocationRecorded,
-                        calledPitchLocation: calledPitch?.location,
-                        setSelectedPitch: setSelectedPitch,
-                        resultVisualState: resultVisualState,
-                        setResultVisualState: setResultVisualState,
-                        pendingResultLabel: pendingResultLabel,
-                        showConfirmSheet: showConfirmSheet
-                    )
-                }
-                
-                // Ball zone buttons
-                let ballLocations: [(String, CGFloat, CGFloat)] = [
-                    ("Up & Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
-                    ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
-                    ("Up & In", originX + zoneWidth + buttonSize * 0.6, originY - buttonSize * 0.6),
-                    ("Out", originX - buttonSize * 0.75, originY + zoneHeight / 2),
-                    ("In", originX + zoneWidth + buttonSize * 0.75, originY + zoneHeight / 2),
-                    ("↓ & Out", originX - buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6),
-                    ("↓", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
-                    ("↓ & In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
-                ]
-                
-                ForEach(ballLocations, id: \.0) { label, x, y in
-                    pitchButton(
-                        x: x,
-                        y: y,
-                        location: .init(label: label, isStrike: false),
-                        labelManager: labelManager,
-                        lastTappedPosition: lastTappedPosition,
-                        setLastTapped: setLastTapped,
-                        setCalledPitch: setCalledPitch,
-                        buttonSize: buttonSize,
-                        selectedPitches: selectedPitches,
-                        pitchCodeAssignments: pitchCodeAssignments,
-                        calledPitch: calledPitch,
-                        selectedPitch: selectedPitch,
-                        gameIsActive: gameIsActive,
-                        isRecordingResult: isRecordingResult,
-                        setIsRecordingResult: setIsRecordingResult,
-                        setActualLocation: setActualLocation,
-                        actualLocationRecorded: actualLocationRecorded,
-                        calledPitchLocation: calledPitch?.location,
-                        setSelectedPitch: setSelectedPitch,
-                        resultVisualState: resultVisualState,
-                        setResultVisualState: setResultVisualState,
-                        pendingResultLabel: pendingResultLabel,
-                        showConfirmSheet: showConfirmSheet // ✅ This is the new binding
-                    )
+                    
+                    // Strike zone buttons
+                    ForEach(strikeGrid) { loc in
+                        let x = originX + CGFloat(loc.col) * cellWidth + cellWidth / 2
+                        let y = originY + CGFloat(loc.row) * cellHeight + cellHeight / 2
+                        
+                        pitchButton(
+                            x: x,
+                            y: y,
+                            location: .init(label: loc.label, isStrike: true),
+                            labelManager: labelManager,
+                            lastTappedPosition: lastTappedPosition,
+                            setLastTapped: setLastTapped,
+                            setCalledPitch: setCalledPitch,
+                            buttonSize: buttonSize,
+                            selectedPitches: selectedPitches,
+                            pitchCodeAssignments: pitchCodeAssignments,
+                            calledPitch: calledPitch,
+                            selectedPitch: selectedPitch,
+                            gameIsActive: gameIsActive,
+                            isRecordingResult: isRecordingResult,
+                            setIsRecordingResult: setIsRecordingResult,
+                            setActualLocation: setActualLocation,
+                            actualLocationRecorded: actualLocationRecorded,
+                            calledPitchLocation: calledPitch?.location,
+                            setSelectedPitch: setSelectedPitch,
+                            resultVisualState: resultVisualState,
+                            setResultVisualState: setResultVisualState,
+                            pendingResultLabel: pendingResultLabel,
+                            showConfirmSheet: showConfirmSheet
+                        )
+                    }
+                    
+                    // Ball zone buttons
+                    let ballLocations: [(String, CGFloat, CGFloat)] = [
+                        ("Up & Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
+                        ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
+                        ("Up & In", originX + zoneWidth + buttonSize * 0.6, originY - buttonSize * 0.6),
+                        ("Out", originX - buttonSize * 0.75, originY + zoneHeight / 2),
+                        ("In", originX + zoneWidth + buttonSize * 0.75, originY + zoneHeight / 2),
+                        ("↓ & Out", originX - buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6),
+                        ("↓", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
+                        ("↓ & In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
+                    ]
+                    
+                    ForEach(ballLocations, id: \.0) { label, x, y in
+                        pitchButton(
+                            x: x,
+                            y: y,
+                            location: .init(label: label, isStrike: false),
+                            labelManager: labelManager,
+                            lastTappedPosition: lastTappedPosition,
+                            setLastTapped: setLastTapped,
+                            setCalledPitch: setCalledPitch,
+                            buttonSize: buttonSize,
+                            selectedPitches: selectedPitches,
+                            pitchCodeAssignments: pitchCodeAssignments,
+                            calledPitch: calledPitch,
+                            selectedPitch: selectedPitch,
+                            gameIsActive: gameIsActive,
+                            isRecordingResult: isRecordingResult,
+                            setIsRecordingResult: setIsRecordingResult,
+                            setActualLocation: setActualLocation,
+                            actualLocationRecorded: actualLocationRecorded,
+                            calledPitchLocation: calledPitch?.location,
+                            setSelectedPitch: setSelectedPitch,
+                            resultVisualState: resultVisualState,
+                            setResultVisualState: setResultVisualState,
+                            pendingResultLabel: pendingResultLabel,
+                            showConfirmSheet: showConfirmSheet // ✅ This is the new binding
+                        )
+                    }
                 }
             }
+            .frame(width: width, height: 400) 
         }
+        .frame(width: width, height: 400) // ✅ Constrain the ZStack, not just the GeometryReader
+        .background(Color.white)
+        .cornerRadius(12)
     }
+        
 }
 
 @ViewBuilder
