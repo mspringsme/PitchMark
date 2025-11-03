@@ -11,6 +11,8 @@ struct JerseyCell: Identifiable {
     let jerseyNumber: String
 }
 
+//hi    
+
 struct JerseyCellView: View {
     let cell: JerseyCell
 
