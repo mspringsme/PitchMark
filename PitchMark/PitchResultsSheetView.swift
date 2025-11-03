@@ -6,6 +6,53 @@
 //
 import SwiftUI
 
+private struct OutcomeButton: View {
+    let label: String
+    @Binding var selectedOutcome: String?
+
+    var body: some View {
+        Button(label) {
+            if selectedOutcome == label {
+                selectedOutcome = nil
+            } else {
+                selectedOutcome = label
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 44)
+        .padding(.vertical, 8)
+        .background(selectedOutcome == label ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
+        .contentShape(Rectangle())
+        .cornerRadius(6)
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ToggleSection: View {
+    @Binding var isStrikeSwinging: Bool
+    @Binding var isStrikeLooking: Bool
+    @Binding var isWildPitch: Bool
+    @Binding var isPassedBall: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Choose any that apply:")
+                .font(.subheadline)
+            Toggle("Strike Swinging", isOn: $isStrikeSwinging)
+                .onChange(of: isStrikeSwinging) { oldValue, newValue in
+                    if newValue { isStrikeLooking = false }
+                }
+            Toggle("Strike Looking", isOn: $isStrikeLooking)
+                .onChange(of: isStrikeLooking) { oldValue, newValue in
+                    if newValue { isStrikeSwinging = false }
+                }
+            Toggle("Wild Pitch", isOn: $isWildPitch)
+            Toggle("Passed Ball", isOn: $isPassedBall)
+        }
+        .padding(.horizontal)
+    }
+}
+
 struct PitchResultSheetView: View {
     @Binding var isPresented: Bool
     @Binding var isStrikeSwinging: Bool
@@ -43,144 +90,38 @@ struct PitchResultSheetView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Choose any that apply:")
-                    .font(.subheadline)
-                Toggle("Strike Swinging", isOn: $isStrikeSwinging)
-                    .onChange(of: isStrikeSwinging) { oldValue, newValue in
-                        if newValue { isStrikeLooking = false }
-                    }
-                Toggle("Strike Looking", isOn: $isStrikeLooking)
-                    .onChange(of: isStrikeLooking) { oldValue, newValue in
-                        if newValue { isStrikeSwinging = false }
-                    }
-                
-                Toggle("Wild Pitch", isOn: $isWildPitch)
-                Toggle("Passed Ball", isOn: $isPassedBall)
-            }
-            .padding(.horizontal)
+            ToggleSection(isStrikeSwinging: $isStrikeSwinging, isStrikeLooking: $isStrikeLooking, isWildPitch: $isWildPitch, isPassedBall: $isPassedBall)
 
             Divider()
 
             VStack(spacing: 12) {
                 HStack(spacing: 8) {
                     Spacer(minLength: 60)
-                    Button("ꓘ") {
-                        selectedOutcome = "ꓘ"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "ꓘ" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("K") {
-                        selectedOutcome = "K"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "K" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
+                    OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "K", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "Safe", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome)
                     Spacer(minLength: 60)
                 }
                 HStack(spacing: 8) {
-                    Button("1B") {
-                        selectedOutcome = "1B"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "1B" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("Pop") {
-                        selectedOutcome = "Pop"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "Pop" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("BB") {
-                        selectedOutcome = "BB"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "BB" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
+                    OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "BB", selectedOutcome: $selectedOutcome)
                 }
                 HStack(spacing: 8) {
-                    Button("2B") {
-                        selectedOutcome = "2B"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "2B" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("Line") {
-                        selectedOutcome = "Line"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "Line" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("Bunt") {
-                        selectedOutcome = "Bunt"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "Bunt" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
+                    OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome)
                 }
                 HStack(spacing: 8) {
-                    Button("3B") {
-                        selectedOutcome = "3B"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "3B" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("Fly") {
-                        selectedOutcome = "Fly"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "Fly" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("E") {
-                        selectedOutcome = "E"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "E" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
+                    OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "Fly", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "E", selectedOutcome: $selectedOutcome)
                 }
                 HStack(spacing: 8) {
-                    Button("HR") {
-                        selectedOutcome = "HR"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "HR" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("Grounder") {
-                        selectedOutcome = "Grounder"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "Grounder" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-
-                    Button("Foul") {
-                        selectedOutcome = "Foul"
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(selectedOutcome == "Foul" ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
+                    OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "Foul", selectedOutcome: $selectedOutcome)
                 }
             }
             .padding(.horizontal)
