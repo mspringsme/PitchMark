@@ -97,7 +97,8 @@ struct StrikeZoneButtonLabel: View {
         let overrideFill: Color? = isCalledPitch ? (segmentColors.first ?? .gray) : nil
         
         return ZStack {
-            shapeView(isStrike: isStrike, isSelected: isSelected, overrideFill: overrideFill)
+            //shapeView(isStrike: isStrike, isSelected: isSelected, overrideFill: overrideFill)
+            GlowingShapeView(isStrike: isStrike, isSelected: isSelected, overrideFill: overrideFill)
 
             PieChartView(segments: segmentColors)
                 .frame(width: buttonSize, height: buttonSize)
@@ -115,9 +116,7 @@ struct StrikeZoneButtonLabel: View {
         .frame(width: buttonSize, height: buttonSize)
         .contentShape(Rectangle())
         .opacity(isFaded ? 0.4 : 1)
-        .scaleEffect(isResultSelected ? 1.4 : 1)
-        .shadow(color: Color.yellow.opacity(0.6), radius: isResultSelected ? 10 : 0)
-        .animation(.easeInOut(duration: 0.2), value: isResultSelected)
+        .compositingGroup()
     }
 }
 

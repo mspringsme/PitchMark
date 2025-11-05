@@ -138,15 +138,39 @@ func shapeView(isStrike: Bool, isSelected: Bool, overrideFill: Color? = nil) -> 
     let baseColor = overrideFill ?? (isStrike ? Color.green : Color.red)
     let fillColor = isOverride ? baseColor : baseColor.opacity(isSelected ? 0.6 : 1.0)
 
+    // Rotation state for animated gradient
+    @State var rotation: Angle = .zero
+
     Circle()
         .fill(fillColor)
         .overlay(
-            Circle()
-                .stroke(Color.black, lineWidth: isSelected ? 3 : 0)
+            ZStack {
+                // Static stroke
+                Circle()
+                    .stroke(Color.black, lineWidth: isSelected ? 2 : 0)
+
+                // Glowing animated stroke
+                if isSelected {
+                    Circle()
+                        .stroke(
+                            AngularGradient(
+                                gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
+                                center: .center,
+                                angle: rotation
+                            ),
+                            lineWidth: 6
+                        )
+                        .blur(radius: 2)
+                        .onAppear {
+                            withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                                rotation = .degrees(360)
+                            }
+                        }
+                }
+            }
         )
-        .shadow(color: isSelected ? Color.blue.opacity(0.8) : .clear, radius: isSelected ? 15 : 0)
-        .scaleEffect(isSelected ? 1.1 : 1.0)
-        .animation(.easeOut(duration: 0.2), value: isSelected)
+        .scaleEffect(isSelected ? 1.3    : 1.0)
+        .animation(.easeOut(duration: 2.0), value: isSelected)
 }
 
 @ViewBuilder
@@ -158,3 +182,66 @@ func disabledView(isStrike: Bool) -> some View {
     }
     
 }
+
+extension Color {
+    static let magenta = Color(red: 1.0, green: 0.0, blue: 1.0)
+    static let lime = Color(red: 0.0, green: 1.0, blue: 0.0)
+}
+
+struct GlowingShapeView: View {
+    let isStrike: Bool
+    let isSelected: Bool
+    let overrideFill: Color?
+
+    @State private var angle: Double = 0
+
+    var body: some View {
+        let isOverride = overrideFill != nil
+        let baseColor = overrideFill ?? (isStrike ? Color.green : Color.red)
+        let fillColor = isOverride ? baseColor : baseColor.opacity(isSelected ? 0.6 : 1.0)
+
+        Circle()
+            .fill(fillColor)
+            .modifier(RotatingGlowModifier(isSelected: isSelected, angle: angle))
+            .scaleEffect(isSelected ? 1.3 : 1.0)
+            .animation(.easeOut(duration: 2.0), value: isSelected)
+            .onAppear {
+                withAnimation(.linear(duration: 5).repeatForever(autoreverses: false)) {
+                    angle = 360
+                }
+            }
+    }
+}
+struct RotatingGlowModifier: AnimatableModifier {
+    var isSelected: Bool
+    var angle: Double
+
+    var animatableData: Double {
+        get { angle }
+        set { angle = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                ZStack {
+                    Circle()
+                        .stroke(Color.clear, lineWidth: isSelected ? 2 : 0)
+
+                    if isSelected {
+                        Circle()
+                            .stroke(
+                                AngularGradient(
+                                    gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
+                                    center: .center,
+                                    angle: .degrees(angle)
+                                ),
+                                lineWidth: 3
+                            )
+                            .blur(radius: 2)
+                    }
+                }
+            )
+    }
+}
+

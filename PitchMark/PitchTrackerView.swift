@@ -310,7 +310,6 @@ struct PitchTrackerView: View {
                         )
                     }
                 }
-                //.border(Color.red, width: 4)
                 .padding(.horizontal, 12)
                 
                 // 🧩 conditional "Choose a Pitch Result" pop up TEXT

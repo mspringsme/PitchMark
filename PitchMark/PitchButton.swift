@@ -104,20 +104,26 @@ func pitchButton(
                     setSelectedPitch: setSelectedPitch // ✅ Pass it in
                 )
             } label: {
-                StrikeZoneButtonLabel(
-                    isStrike: location.isStrike,
-                    isSelected: isSelected,
-                    fullLabel: fullLabel,
-                    segmentColors: segmentColors,
-                    buttonSize: buttonSize,
-                    isRecordingResult: isRecordingResult,
-                    actualLocationRecorded: actualLocationRecorded,
-                    calledPitchLocation: calledPitchLocation,
-                    pendingResultLabel: pendingResultLabel.wrappedValue 
-                )
+                ZStack {
+                    StrikeZoneButtonLabel(
+                        isStrike: location.isStrike,
+                        isSelected: isSelected,
+                        fullLabel: fullLabel,
+                        segmentColors: segmentColors,
+                        buttonSize: buttonSize,
+                        isRecordingResult: isRecordingResult,
+                        actualLocationRecorded: actualLocationRecorded,
+                        calledPitchLocation: calledPitchLocation,
+                        pendingResultLabel: pendingResultLabel.wrappedValue
+                    )
+                }
+                .padding(10)
+                .compositingGroup()
+                .contentShape(Rectangle())
             }
         }
     }
     .position(x: x, y: y)
     .zIndex(1)
 }
+
