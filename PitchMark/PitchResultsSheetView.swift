@@ -9,22 +9,43 @@ import SwiftUI
 private struct OutcomeButton: View {
     let label: String
     @Binding var selectedOutcome: String?
+    @Binding var selectedDescriptor: String?
+    let isDisabled: Bool
+    let usesDescriptorSelection: Bool
 
     var body: some View {
-        Button(label) {
-            if selectedOutcome == label {
-                selectedOutcome = nil
+        let isSelected: Bool = {
+            if usesDescriptorSelection {
+                return selectedDescriptor == label
             } else {
-                selectedOutcome = label
+                return selectedOutcome == label
+            }
+        }()
+
+        Button(label) {
+            if usesDescriptorSelection {
+                if selectedDescriptor == label {
+                    selectedDescriptor = nil
+                } else {
+                    selectedDescriptor = label
+                }
+            } else {
+                if selectedOutcome == label {
+                    selectedOutcome = nil
+                } else {
+                    selectedOutcome = label
+                }
             }
         }
         .frame(maxWidth: .infinity)
         .frame(height: 44)
         .padding(.vertical, 8)
-        .background(selectedOutcome == label ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
+        .background(isSelected ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
+        .opacity(isDisabled ? 0.4 : 1.0)
         .contentShape(Rectangle())
         .cornerRadius(6)
         .buttonStyle(.plain)
+        .disabled(isDisabled)
     }
 }
 
@@ -66,6 +87,8 @@ struct PitchResultSheetView: View {
     @Binding var isWildPitch: Bool
     @Binding var isPassedBall: Bool
     @Binding var selectedOutcome: String?
+    @Binding var selectedDescriptor: String?
+    @Binding var isError: Bool
 
     let pendingResultLabel: String?
     let pitchCall: PitchCall?
@@ -74,6 +97,76 @@ struct PitchResultSheetView: View {
     let currentMode: PitchMode
     let saveAction: (PitchEvent) -> Void
     let template: PitchTemplate?
+
+    private func resetSelections() {
+        isStrikeSwinging = false
+        isStrikeLooking = false
+        isWildPitch = false
+        isPassedBall = false
+        selectedOutcome = nil
+        selectedDescriptor = nil
+        isError = false
+    }
+
+    private func isOutcomeDisabled(_ label: String) -> Bool {
+        // Determine if any of the top toggles are selected
+        let anyTopToggle = isStrikeSwinging || isStrikeLooking || isWildPitch || isPassedBall
+        // Determine if either strike toggle is selected
+        let anyStrikeToggle = isStrikeSwinging || isStrikeLooking
+        // Determine if either K or backwards K is selected
+        let isKSelected = selectedOutcome == "K" || selectedOutcome == "ꓘ"
+
+        // Descriptor group (mutually exclusive within the group, but can co-exist with base outcome)
+        let descriptorGroup: Set<String> = ["Pop", "Line", "Fly", "Grounder"]
+        // Base outcome group that should be mutually exclusive among themselves
+        let baseOutcomeGroup: Set<String> = ["1B", "2B", "3B", "HR"]
+
+        // Ensure E remains available when a base (1B/2B/3B) is selected
+        if let current = selectedOutcome, ["1B", "2B", "3B"].contains(current), label == "E" {
+            return false
+        }
+
+        // Special rule: If HR is selected
+        if selectedOutcome == "HR" {
+            // Among descriptors, only allow Line or Fly; disable others.
+            let allowedDescriptors: Set<String> = ["Line", "Fly"]
+            if descriptorGroup.contains(label) {
+                return !allowedDescriptors.contains(label)
+            }
+            // Disable the following non-descriptor outcomes when HR is selected
+            let disallowedWhenHR: Set<String> = [
+                "BB", "Bunt", "E", "Foul", "K", "ꓘ", "HBP", "Safe", "Out"
+            ]
+            if disallowedWhenHR.contains(label) {
+                return true
+            }
+        }
+
+        // 1) If K or backwards K is selected, deactivate all other buttons except 1B, E, Foul.
+        //    K/ꓘ must remain active to allow deselection.
+        if isKSelected {
+            if label == "K" || label == "ꓘ" { return false }
+            if label == "1B" || label == "E" || label == "Foul" { return false }
+            return true
+        }
+
+        // 2) If any top toggle is on, disable descriptor group only (per earlier rule)
+        if anyTopToggle && descriptorGroup.contains(label) {
+            return true
+        }
+
+        // 3) If either strike toggle is on, also deactivate BB
+        if anyStrikeToggle && label == "BB" {
+            return true
+        }
+
+        // 4) Do not disable descriptor or base groups due to each other — co-selection is allowed.
+        if descriptorGroup.contains(label) || baseOutcomeGroup.contains(label) {
+            return false
+        }
+
+        return false
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -102,32 +195,44 @@ struct PitchResultSheetView: View {
 
             VStack(spacing: 12) {
                 HStack(spacing: 8) {
-                    Spacer(minLength: 60)
-                    OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "K", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "Safe", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome)
-                    Spacer(minLength: 60)
+                    OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
+                    OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                    Spacer()
+                    OutcomeButton(label: "HBP", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HBP"), usesDescriptorSelection: false)
+                    Spacer()
+                    OutcomeButton(label: "Safe", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Safe"), usesDescriptorSelection: false)
+                    OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
                 }
                 HStack(spacing: 8) {
-                    OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "BB", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("1B"), usesDescriptorSelection: false)
+                    OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Pop"), usesDescriptorSelection: true)
+                    OutcomeButton(label: "BB", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("BB"), usesDescriptorSelection: false)
                 }
                 HStack(spacing: 8) {
-                    OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("2B"), usesDescriptorSelection: false)
+                    OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Line"), usesDescriptorSelection: true)
+                    OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Bunt"), usesDescriptorSelection: false)
                 }
                 HStack(spacing: 8) {
-                    OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "Fly", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "E", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("3B"), usesDescriptorSelection: false)
+                    OutcomeButton(label: "Fly", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Fly"), usesDescriptorSelection: true)
+                    Button {
+                        isError.toggle()
+                    } label: {
+                        Text("E")
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .padding(.vertical, 8)
+                            .background(isError ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
+                            .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isOutcomeDisabled("E"))
                 }
                 HStack(spacing: 8) {
-                    OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome)
-                    OutcomeButton(label: "Foul", selectedOutcome: $selectedOutcome)
+                    OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
+                    OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)
+                    OutcomeButton(label: "Foul", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Foul"), usesDescriptorSelection: false)
                 }
             }
             .padding(.horizontal)
@@ -157,17 +262,25 @@ struct PitchResultSheetView: View {
 
                 saveAction(event)
                 isPresented = false
+                resetSelections()
             }
             .buttonStyle(.borderedProminent)
             .padding(.top)
 
             Button("Cancel", role: .cancel) {
                 isPresented = false
+                resetSelections()
             }
             .padding(.bottom)
         }
         .padding()
         .presentationDetents([.large])
+        .onChange(of: isPresented) { oldValue, newValue in
+            // When the sheet is dismissed (e.g., swipe down), reset state
+            if newValue == false {
+                resetSelections()
+            }
+        }
     }
 }
 
@@ -179,6 +292,8 @@ struct PitchResultSheetView: View {
         isWildPitch: .constant(false),
         isPassedBall: .constant(false),
         selectedOutcome: .constant(nil),
+        selectedDescriptor: .constant(nil),
+        isError: .constant(false),
         pendingResultLabel: "A2",
         pitchCall: PitchCall(pitch: "Fastball", location: "A2", isStrike: true, codes: ["S", "C"]),
         batterSide: .left,
@@ -193,4 +308,3 @@ struct PitchResultSheetView: View {
         )
     )
 }
-

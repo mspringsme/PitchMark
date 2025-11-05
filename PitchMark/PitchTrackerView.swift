@@ -53,6 +53,8 @@ struct PitchTrackerView: View {
     @State private var shouldBlurBackground = false
     @State private var isGame = false
     @State private var selectedOutcome: String? = nil
+    @State private var selectedDescriptor: String? = nil
+    @State private var isError: Bool = false
     
     var body: some View {
         VStack(spacing: 4) {
@@ -427,6 +429,8 @@ struct PitchTrackerView: View {
                 isWildPitch: $isWildPitch,
                 isPassedBall: $isPassedBall,
                 selectedOutcome: $selectedOutcome,
+                selectedDescriptor: $selectedDescriptor,
+                isError: $isError,
                 pendingResultLabel: pendingResultLabel,
                 pitchCall: calledPitch,
                 batterSide: batterSide,
@@ -457,6 +461,7 @@ struct PitchTrackerView: View {
                     isWildPitch = false
                     isPassedBall = false
                     selectedOutcome = nil
+                    selectedDescriptor = nil
                 },
                 template: selectedTemplate
             )
