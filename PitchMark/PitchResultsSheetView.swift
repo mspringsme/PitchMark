@@ -47,7 +47,13 @@ private struct ToggleSection: View {
                     if newValue { isStrikeSwinging = false }
                 }
             Toggle("Wild Pitch", isOn: $isWildPitch)
+                .onChange(of: isWildPitch) { oldValue, newValue in
+                    if newValue { isPassedBall = false }
+                }
             Toggle("Passed Ball", isOn: $isPassedBall)
+                .onChange(of: isPassedBall) { oldValue, newValue in
+                    if newValue { isWildPitch = false }
+                }
         }
         .padding(.horizontal)
     }
