@@ -7,6 +7,46 @@
 import SwiftUI
 import UIKit
 
+private enum OverlaySelection {
+    case field, hr, foul
+}
+
+private struct ColorKey: Hashable {
+    let r: UInt8
+    let g: UInt8
+    let b: UInt8
+    let a: UInt8
+}
+
+private func colorKey(from color: UIColor) -> ColorKey {
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    color.getRed(&r, green: &g, blue: &b, alpha: &a)
+    return ColorKey(r: UInt8((r * 255.0).rounded()),
+                    g: UInt8((g * 255.0).rounded()),
+                    b: UInt8((b * 255.0).rounded()),
+                    a: UInt8((a * 255.0).rounded()))
+}
+
+private extension UIImage {
+    func pixelColor(at point: CGPoint) -> UIColor? {
+        guard let cgImage = self.cgImage else { return nil }
+        guard Int(point.x) >= 0, Int(point.y) >= 0, Int(point.x) < cgImage.width, Int(point.y) < cgImage.height else { return nil }
+        guard let dataProvider = cgImage.dataProvider, let data = dataProvider.data else { return nil }
+        let ptr = CFDataGetBytePtr(data)
+        let bytesPerPixel = 4
+        let bytesPerRow = cgImage.bytesPerRow
+        let offset = Int(point.y) * bytesPerRow + Int(point.x) * bytesPerPixel
+        let r = ptr![offset]
+        let g = ptr![offset + 1]
+        let b = ptr![offset + 2]
+        let a = ptr![offset + 3]
+        return UIColor(red: CGFloat(r) / 255.0,
+                       green: CGFloat(g) / 255.0,
+                       blue: CGFloat(b) / 255.0,
+                       alpha: CGFloat(a) / 255.0)
+    }
+}
+
 private struct OutcomeButton: View {
     let label: String
     @Binding var selectedOutcome: String?
@@ -73,8 +113,9 @@ private struct ToggleSection: View {
                 }
                 .padding(.horizontal)
                 Spacer()
-                Image("field2")
+                Image("FieldImage")
                     .resizable()
+                    .scaledToFit()
                     .frame(width: 100, height: 100)
                     .onTapGesture {
                         withAnimation(.easeOut) { showOverlay = true }
@@ -95,168 +136,35 @@ struct PitchResultSheetView: View {
     @Binding var isError: Bool
     @State private var showFieldOverlay: Bool = false
 
-    private enum OverlaySelection {
-        case field, hr, foul
-    }
-    @State private var overlayTapPoint: CGPoint? = nil
-    @State private var overlaySelection: OverlaySelection? = nil
-    
-    @State private var fieldCGImage: CGImage? = nil
-    @State private var fieldRegionsCGImage: CGImage? = nil
+    @State private var colorMapImage: UIImage? = UIImage(named: "colorMap")
 
-    private func describeTap(point: CGPoint, in imageRect: CGRect) -> String {
-        // Calibrate to the artwork: home plate sits a bit above the bottom edge.
-        let homeYOffsetFraction: CGFloat = 0.12 // adjust if needed after testing
-
-        // Home plate origin (bottom-center, lifted by a fraction of height)
-        let home = CGPoint(x: imageRect.midX, y: imageRect.maxY - imageRect.height * homeYOffsetFraction)
-
-        // Vector from home toward the tap. Use screen-up as positive Y by flipping dy.
-        let dx = point.x - home.x
-        let dyUp = home.y - point.y // upfield is positive
-        let distance = sqrt(dx*dx + dyUp*dyUp)
-
-        // Normalize distance by approximate fence depth (home to top of imageRect)
-        let maxDepth = max(1, home.y - imageRect.minY) // avoid divide-by-zero
-        let normR = distance / maxDepth
-
-        // Angle with 0 = straight up (center field), positive to right field
-        var angle = atan2(dx, dyUp) // -pi..pi
-        if angle > .pi { angle -= 2 * .pi }
-        if angle < -.pi { angle += 2 * .pi }
-
-        // Depth bands tuned to the art
-        let depth: String = {
-            switch normR {
-            case ..<0.28: return "Infield"
-            case 0.28..<0.55: return "Shallow outfield"
-            case 0.55..<0.88: return "Deep outfield"
-            default: return "Track"
-            }
-        }()
-
-        // Special infield areas: mound and infield quadrants
-        if normR < 0.12 { return "Pitcher’s mound area" }
-        if normR < 0.28 {
-            if angle < -.pi * 0.5 { return "Infield near 3B" }
-            else if angle < 0 { return "Infield between SS and 3B" }
-            else if angle < .pi * 0.5 { return "Infield between 1B and 2B" }
-            else { return "Infield near 1B" }
-        }
-
-        // Side bands
-        let side: String = {
-            switch angle {
-            case (-.pi)...(-.pi * 0.6): return "Left field"
-            case (-.pi * 0.6)..<(-.pi * 0.25): return "Left-center"
-            case (-.pi * 0.25)...(.pi * 0.25): return "Center field"
-            case (.pi * 0.25)..<(.pi * 0.6): return "Right-center"
-            default: return "Right field"
-            }
-        }()
-
-        return "\(depth) \(side)".trimmingCharacters(in: .whitespaces)
-    }
-    
-    private func alphaAtNormalizedPoint(_ p: CGPoint, in cgImage: CGImage) -> CGFloat? {
-        // p is normalized [0,1] in both axes relative to the image (top-left origin)
-        guard p.x >= 0, p.x <= 1, p.y >= 0, p.y <= 1 else { return nil }
-        let width = cgImage.width
-        let height = cgImage.height
-
-        let x = Int(round(p.x * CGFloat(width - 1)))
-        let y = Int(round((1 - p.y) * CGFloat(height - 1))) // flipped Y for CG bitmap
-
-        var pixel: [UInt8] = [0, 0, 0, 0]
-        guard let ctx = CGContext(
-            data: &pixel,
-            width: 1,
-            height: 1,
-            bitsPerComponent: 8,
-            bytesPerRow: 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        ctx.interpolationQuality = .none
-        ctx.translateBy(x: -CGFloat(x), y: -CGFloat(y))
-        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
-
-        return CGFloat(pixel[3]) / 255.0
-    }
-
-    private func rgbaAtNormalizedPoint(_ p: CGPoint, in cgImage: CGImage) -> (r: UInt8, g: UInt8, b: UInt8, a: UInt8)? {
-        guard p.x >= 0, p.x <= 1, p.y >= 0, p.y <= 1 else { return nil }
-        let width = cgImage.width
-        let height = cgImage.height
-
-        let x = Int(round(p.x * CGFloat(width - 1)))
-        let y = Int(round((1 - p.y) * CGFloat(height - 1)))
-
-        var pixel: [UInt8] = [0, 0, 0, 0]
-        guard let ctx = CGContext(
-            data: &pixel,
-            width: 1,
-            height: 1,
-            bitsPerComponent: 8,
-            bytesPerRow: 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        ctx.interpolationQuality = .none
-        ctx.translateBy(x: -CGFloat(x), y: -CGFloat(y))
-        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
-
-        return (pixel[0], pixel[1], pixel[2], pixel[3])
-    }
-
-    private func regionNameAtNormalizedPoint(_ p: CGPoint, in cgImage: CGImage) -> String? {
-        guard let px = rgbaAtNormalizedPoint(p, in: cgImage) else { return nil }
-
-        func packRGB(_ r: UInt8, _ g: UInt8, _ b: UInt8) -> UInt32 {
-            return (UInt32(r) << 16) | (UInt32(g) << 8) | UInt32(b)
-        }
-
-        // Exact RGB map (alpha ignored). Update if your mask uses different exact RGB values.
-        let map: [UInt32: String] = [
-            packRGB(0xFF, 0x00, 0x01): "In play — To pitcher",            // FF0001
-            packRGB(0x00, 0x00, 0x00): "In play — In front of pitcher",            // 000000
-            packRGB(0x00, 0x2F, 0xFE): "In play — In front of 3rd",                // 002FFE
-            packRGB(0x00, 0xFE, 0x84): "In play — In front of first",              // 00FE84
-            packRGB(0x00, 0xCB, 0x92): "In play — Third",                          // 00CB92
-            packRGB(0x86, 0x01, 0x98): "In play — Shortstop",                      // 860198
-            packRGB(0xFF, 0x00, 0xE1): "In play — Up the middle",                  // FF00E1
-            packRGB(0x88, 0x76, 0x00): "In play — 2nd",                            // 887600
-            packRGB(0x77, 0x4C, 0x01): "In play — 1st",                            // 774C01
-            packRGB(0x00, 0xA5, 0xFE): "In play — Short right field",              // 00A5FE
-            packRGB(0xFF, 0x8C, 0x01): "In play — Right field",                    // FF8C01
-            packRGB(0xFF, 0xD8, 0x9D): "In play — Deep right field",               // FFD89D
-            packRGB(0x8C, 0x01, 0xFE): "In play — Short center field",             // 8C01FE
-            packRGB(0xFF, 0xAA, 0x01): "In play — Center field",                   // FFAA01
-            packRGB(0xFF, 0xAE, 0xB5): "In play — Deep center field",              // FFAEB5
-            packRGB(0xC8, 0x01, 0xFE): "In play — Short left field",               // C801FE
-            packRGB(0xFF, 0xD4, 0x01): "In play — Left field",                     // FFD401
-            packRGB(0xA1, 0xBE, 0xFF): "In play — Deep left field"                  // A1BEFF
-        ]
-
-        let key = packRGB(px.r, px.g, px.b)
-        if let name = map[key] { return name }
-
-        // Optional tiny tolerance for anti-aliasing; set tol=0 for strict matching
-        let tol: UInt8 = 2
-        func close(_ a: UInt8, _ b: UInt8) -> Bool { return a > b &- tol && a < b &+ tol }
-        for (k, name) in map {
-            let kr = UInt8((k >> 16) & 0xFF)
-            let kg = UInt8((k >> 8) & 0xFF)
-            let kb = UInt8(k & 0xFF)
-            if close(px.r, kr) && close(px.g, kg) && close(px.b, kb) {
-                return name
-            }
-        }
-
-        return nil
-    }
+    // Map specific RGBA keys from the colorMap to semantic results. Update these to match your asset.
+    private let colorMapping: [ColorKey: (selection: OverlaySelection, label: String, outcome: String?)] = [
+        ColorKey(r: 0xE6, g: 0x19, b: 0x4B, a: 0xFF): (.hr, "Left Field HR", "HR"),
+        ColorKey(r: 0x91, g: 0x1E, b: 0xB4, a: 0xFF): (.foul, "Foul Left", nil),
+        ColorKey(r: 0xDC, g: 0xBE, b: 0xFF, a: 0xFF): (.field, "Deep Center", nil),
+        
+        
+        ColorKey(r: 0xBF, g: 0xEF, b: 0x45, a: 0xFF): (.field, "Deep Left", nil),
+        ColorKey(r: 0x4e, g: 0x51, b: 0x2e, a: 0xFF): (.field, "Deep Right", nil),
+        ColorKey(r: 0x42, g: 0xd4, b: 0xf4, a: 0xFF): (.field, "Shallow Left", nil),
+        ColorKey(r: 0xf7, g: 0x81, b: 0xbf, a: 0xFF): (.field, "Shallow Center", nil),
+        ColorKey(r: 0x00, g: 0x00, b: 0x75, a: 0xFF): (.field, "Shallow Right", nil),
+        ColorKey(r: 0x80, g: 0x80, b: 0x00, a: 0xFF): (.field, "3B area", nil),
+        ColorKey(r: 0xff, g: 0xd8, b: 0xb1, a: 0xFF): (.field, "SS area", nil),
+        ColorKey(r: 0xff, g: 0xe1, b: 0x19, a: 0xFF): (.field, "2B area", nil),
+        ColorKey(r: 0xaa, g: 0x6e, b: 0x28, a: 0xFF): (.field, "1B area", nil),
+        ColorKey(r: 0xfa, g: 0xbe, b: 0x28, a: 0xFF): (.field, "Front of 3B", nil),
+        ColorKey(r: 0x00, g: 0x80, b: 0x80, a: 0xFF): (.field, "Front of catcher", nil),
+        ColorKey(r: 0xe6, g: 0xbe, b: 0xff, a: 0xFF): (.field, "Front of 1B", nil),
+        ColorKey(r: 0x80, g: 0x00, b: 0x00, a: 0xFF): (.field, "Pitcher", nil),
+        ColorKey(r: 0xf0, g: 0x32, b: 0xe6, a: 0xFF): (.foul, "Foul Right", nil),
+        ColorKey(r: 0xf5, g: 0x82, b: 0x31, a: 0xFF): (.foul, "Foul Left field", nil),
+        ColorKey(r: 0xd2, g: 0xf5, b: 0x3c, a: 0xFF): (.foul, "Foul Right field", nil),
+        ColorKey(r: 0x46, g: 0xf0, b: 0xf0, a: 0xFF): (.foul, "Foul behind", nil),
+        ColorKey(r: 0x3c, g: 0xb4, b: 0x4B, a: 0xFF): (.hr, "Center Field HR", "HR"),
+        ColorKey(r: 0x00, g: 0x82, b: 0xc8, a: 0xFF): (.hr, "Right Field HR", "HR")
+    ]
 
     let pendingResultLabel: String?
     let pitchCall: PitchCall?
@@ -338,305 +246,147 @@ struct PitchResultSheetView: View {
         return false
     }
 
+    private func handleSave() {
+        guard let label = pendingResultLabel,
+              let pitchCall = pitchCall else {
+            isPresented = false
+            return
+        }
+
+        let event = PitchEvent(
+            id: UUID().uuidString,
+            timestamp: Date(),
+            pitch: pitchCall.pitch,
+            location: label,
+            codes: pitchCall.codes,
+            isStrike: pitchCall.isStrike,
+            mode: currentMode,
+            calledPitch: pitchCall,
+            batterSide: batterSide,
+            templateId: selectedTemplateId,
+            strikeSwinging: isStrikeSwinging,
+            wildPitch: isWildPitch,
+            passedBall: isPassedBall
+        )
+
+        saveAction(event)
+        isPresented = false
+        resetSelections()
+    }
+
+    private struct OutcomeChangeHandlers: ViewModifier {
+        @Binding var isPresented: Bool
+        @Binding var isStrikeSwinging: Bool
+        @Binding var isStrikeLooking: Bool
+        @Binding var isWildPitch: Bool
+        @Binding var isPassedBall: Bool
+        @Binding var selectedOutcome: String?
+        @Binding var selectedDescriptor: String?
+        @Binding var isError: Bool
+        let deselectIfDisabled: () -> Void
+
+        func body(content: Content) -> some View {
+            content
+                .onChange(of: isPresented) { _, newValue in
+                    if newValue == false {
+                        deselectIfDisabled()
+                    }
+                }
+                .onChange(of: isStrikeSwinging) { _, _ in deselectIfDisabled() }
+                .onChange(of: isStrikeLooking) { _, _ in deselectIfDisabled() }
+                .onChange(of: isWildPitch) { _, _ in deselectIfDisabled() }
+                .onChange(of: isPassedBall) { _, _ in deselectIfDisabled() }
+                .onChange(of: selectedOutcome) { _, _ in deselectIfDisabled() }
+                .onChange(of: selectedDescriptor) { _, _ in deselectIfDisabled() }
+                .onChange(of: isError) { _, _ in deselectIfDisabled() }
+                .onChange(of: selectedOutcome) { _, newValue in
+                    if newValue == "HBP" {
+                        isWildPitch = true
+                        isStrikeSwinging = false
+                        isStrikeLooking = false
+                        isPassedBall = false
+                    }
+                    if newValue == "ꓘ" && selectedDescriptor == "Foul" {
+                        selectedDescriptor = nil
+                    }
+                    deselectIfDisabled()
+                }
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 20) {
-            
-            if let template = template {
-                Text(template.name)
-                    .font(.headline)
-                    .foregroundColor(.secondary)
-            }
-            
-            Text("Save Pitch")
-                .font(.title2)
-                .bold()
-
-            if let label = pendingResultLabel {
-                Text("Location: \(label)")
-                    .font(.headline)
-                    .foregroundColor(.blue)
-            }
-
-            Divider()
-
-            ToggleSection(isStrikeSwinging: $isStrikeSwinging, isStrikeLooking: $isStrikeLooking, isWildPitch: $isWildPitch, isPassedBall: $isPassedBall, showOverlay: $showFieldOverlay)
-
-            Divider()
-
-            VStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
-                    OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
-                    Spacer()
-                    OutcomeButton(label: "HBP", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HBP"), usesDescriptorSelection: false)
-                    Spacer()
-                    OutcomeButton(label: "Safe", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Safe"), usesDescriptorSelection: false)
-                    OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
+        AnyView(
+            VStack(spacing: 20) {
+                
+                if let template = template {
+                    Text(template.name)
+                        .font(.headline)
+                        .foregroundColor(.secondary)
                 }
-                HStack(spacing: 8) {
-                    OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("1B"), usesDescriptorSelection: false)
-                    OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Pop"), usesDescriptorSelection: true)
-                    OutcomeButton(label: "BB", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("BB"), usesDescriptorSelection: false)
-                }
-                HStack(spacing: 8) {
-                    OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("2B"), usesDescriptorSelection: false)
-                    OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Line"), usesDescriptorSelection: true)
-                    OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Bunt"), usesDescriptorSelection: true)
-                }
-                HStack(spacing: 8) {
-                    OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("3B"), usesDescriptorSelection: false)
-                    OutcomeButton(label: "Fly", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Fly"), usesDescriptorSelection: true)
-                    Button {
-                        isError.toggle()
-                    } label: {
-                        Text("E")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 36) // 👈 Shorter height
-                            .background(isError ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
-                            .cornerRadius(6)
-                            .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2) // 👈 Add shadow
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isOutcomeDisabled("E"))
-                }
-                HStack(spacing: 8) {
-                    OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
-                    OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)
-                    OutcomeButton(label: "Foul", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Foul"), usesDescriptorSelection: false)
-                }
-            }
-            .padding(.horizontal)
+                
+                Text("Save Pitch")
+                    .font(.title2)
+                    .bold()
 
-            Button("Save Pitch Event") {
-                guard let label = pendingResultLabel,
-                      let pitchCall = pitchCall else {
+                if let label = pendingResultLabel {
+                    Text("Location: \(label)")
+                        .font(.headline)
+                        .foregroundColor(.blue)
+                }
+
+                Divider()
+
+                ToggleSection(isStrikeSwinging: $isStrikeSwinging, isStrikeLooking: $isStrikeLooking, isWildPitch: $isWildPitch, isPassedBall: $isPassedBall, showOverlay: $showFieldOverlay)
+
+                Divider()
+
+                OutcomeButtonsSection(
+                    selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
+                    isError: $isError,
+                    isOutcomeDisabled: isOutcomeDisabled
+                )
+                .padding(.horizontal)
+
+                Button("Save Pitch Event") {
+                    handleSave()
+                }
+                .buttonStyle(.borderedProminent)
+                .padding(.top)
+
+                Button("Cancel", role: .cancel) {
                     isPresented = false
-                    return
+                    resetSelections()
                 }
-
-                let event = PitchEvent(
-                    id: UUID().uuidString,
-                    timestamp: Date(),
-                    pitch: pitchCall.pitch,
-                    location: label,
-                    codes: pitchCall.codes,
-                    isStrike: pitchCall.isStrike,
-                    mode: currentMode,
-                    calledPitch: pitchCall,
-                    batterSide: batterSide,
-                    templateId: selectedTemplateId,
-                    strikeSwinging: isStrikeSwinging,
-                    wildPitch: isWildPitch,
-                    passedBall: isPassedBall
+                .padding(.bottom)
+            }
+            .padding()
+            .fullScreenCover(isPresented: $showFieldOverlay) {
+                FieldOverlayView(
+                    isPresented: $showFieldOverlay,
+                    colorMapImage: colorMapImage,
+                    colorMapping: colorMapping,
+                    selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
+                    isError: $isError
                 )
-
-                saveAction(event)
-                isPresented = false
-                resetSelections()
+                .ignoresSafeArea()
             }
-            .buttonStyle(.borderedProminent)
-            .padding(.top)
-
-            Button("Cancel", role: .cancel) {
-                isPresented = false
-                resetSelections()
-            }
-            .padding(.bottom)
-        }
-        .padding()
-        .fullScreenCover(isPresented: $showFieldOverlay) {
-            GeometryReader { proxy in
-                let side = min(proxy.size.width, proxy.size.height) * 0.8
-                let imageOrigin = CGPoint(x: (proxy.size.width - side) / 2, y: (proxy.size.height - side) / 2)
-                let imageRect = CGRect(origin: imageOrigin, size: CGSize(width: side, height: side))
-
-                ZStack {
-                    Color.black.opacity(0.5)
-                        .ignoresSafeArea()
-
-                    // Centered field image
-                    Image("field2")
-                        .resizable()
-                        .aspectRatio(1, contentMode: .fit)
-                        .frame(width: side, height: side)
-                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                        .shadow(radius: 10)
-                        .onAppear {
-                            if fieldCGImage == nil {
-                                fieldCGImage = UIImage(named: "field2")?.cgImage
-                                print("[DEBUG] field2 loaded:", fieldCGImage != nil)
-                            }
-                            if fieldRegionsCGImage == nil {
-                                fieldRegionsCGImage = UIImage(named: "field2_map")?.cgImage
-                                print("[DEBUG] field2_map loaded:", fieldRegionsCGImage != nil)
-                            }
-                        }
-                        
-                    // Tap marker and label
-                    if let point = overlayTapPoint {
-                        // Marker
-                        Circle()
-                            .fill(Color.red)
-                            .frame(width: 14, height: 14)
-                            .overlay(Circle().stroke(Color.white, lineWidth: 2))
-                            .position(x: point.x, y: point.y)
-
-                        // Label near marker
-                        let labelText: String = {
-                            switch overlaySelection {
-                            case .hr: return "Home Run area"
-                            case .foul: return "Foul area"
-                            case .field:
-                                let nx = max(0, min(1, (point.x - imageRect.minX) / imageRect.width))
-                                let ny = max(0, min(1, (point.y - imageRect.minY) / imageRect.height))
-                                if let mask = fieldRegionsCGImage, let name = regionNameAtNormalizedPoint(CGPoint(x: nx, y: ny), in: mask) {
-                                    return name
-                                } else if fieldRegionsCGImage == nil {
-                                    return "(map not loaded) " + describeTap(point: point, in: imageRect)
-                                } else {
-                                    return describeTap(point: point, in: imageRect)
-                                }
-                            case .none: return ""
-                            }
-                        }()
-                        Text(labelText)
-                            .font(.headline)
-                            .padding(8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .position(x: min(max(point.x, 60), proxy.size.width - 60), y: min(point.y + 28, proxy.size.height - 24))
-                    }
-
-                    VStack {
-                        Spacer()
-                        Button {
-                            withAnimation(.easeOut) { showFieldOverlay = false }
-                        } label: {
-                            Text("Save")
-                                .font(.headline)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                        .padding(.bottom, 24)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onEnded { value in
-                            let loc = value.location
-                            overlayTapPoint = loc
-                            
-                            let nx = max(0, min(1, (loc.x - imageRect.minX) / imageRect.width))
-                            let ny = max(0, min(1, (loc.y - imageRect.minY) / imageRect.height))
-                            print(String(format: "[DEBUG] Tap loc: (%.1f, %.1f), norm: (%.3f, %.3f)", loc.x, loc.y, nx, ny))
-                            if let mask = fieldRegionsCGImage {
-                                if let px = rgbaAtNormalizedPoint(CGPoint(x: nx, y: ny), in: mask) {
-                                    print(String(format: "[DEBUG] Mask RGBA: #%02X%02X%02X alpha=%d", px.r, px.g, px.b, px.a))
-                                    if let matched = regionNameAtNormalizedPoint(CGPoint(x: nx, y: ny), in: mask) {
-                                        print("[DEBUG] Matched region:", matched)
-                                    } else {
-                                        print("[DEBUG] No region match for this color")
-                                    }
-                                } else {
-                                    print("[DEBUG] Failed to sample mask at normalized point")
-                                }
-                            } else {
-                                print("[DEBUG] Mask not loaded")
-                            }
-                            if let cg = fieldCGImage, let a = alphaAtNormalizedPoint(CGPoint(x: nx, y: ny), in: cg) {
-                                print(String(format: "[DEBUG] Field alpha at tap: %.3f", a))
-                            }
-                            
-                            if loc.y < imageRect.minY {
-                                // Above the top of the image: HR only if horizontally within the image width; otherwise Foul
-                                if loc.x >= imageRect.minX && loc.x <= imageRect.maxX {
-                                    overlaySelection = .hr
-                                    selectedOutcome = "HR"
-                                    selectedDescriptor = nil
-                                    isError = false
-                                } else {
-                                    overlaySelection = .foul
-                                    selectedOutcome = "Foul"
-                                    selectedDescriptor = nil
-                                    isError = false
-                                }
-                            } else if loc.x < imageRect.minX || loc.x > imageRect.maxX || loc.y > imageRect.maxY {
-                                // Sides or below the image => Foul
-                                overlaySelection = .foul
-                                selectedOutcome = "Foul"
-                                selectedDescriptor = nil
-                                isError = false
-                            } else {
-                                // Inside the image: use alpha-based hit testing to determine if it's on-field or transparent
-                                if let cg = fieldCGImage, let alpha = alphaAtNormalizedPoint(CGPoint(x: nx, y: ny), in: cg) {
-                                    if alpha > 0.1 {
-                                        // Opaque pixel: treat as on-field; record point and let user choose outcome below
-                                        overlaySelection = .field
-                                        // Keep overlayTapPoint at the visual location
-                                    } else {
-                                        // Transparent region within the image: decide HR vs Foul based on position relative to top arch
-                                        // Approximate the outfield arc as a semicircle that fits the image square
-                                        let cx = imageRect.midX
-                                        let r = imageRect.width / 2.0
-                                        let cy = imageRect.minY + r
-                                        let dx = loc.x - cx
-                                        let dy = loc.y - cy
-                                        let dist2 = dx*dx + dy*dy
-                                        let r2 = r * r
-
-                                        // If the point is in the top half (above circle center) and outside the circle => above the arch => HR
-                                        if loc.y <= cy && dist2 > r2 {
-                                            overlaySelection = .hr
-                                            selectedOutcome = "HR"
-                                            selectedDescriptor = nil
-                                            isError = false
-                                        } else {
-                                            overlaySelection = .foul
-                                            selectedOutcome = "Foul"
-                                            selectedDescriptor = nil
-                                            isError = false
-                                        }
-                                    }
-                                } else {
-                                    // Fallback if image not available: assume on-field
-                                    overlaySelection = .field
-                                }
-                            }
-                        }
+            .presentationDetents([.large])
+            .modifier(
+                OutcomeChangeHandlers(
+                    isPresented: $isPresented,
+                    isStrikeSwinging: $isStrikeSwinging,
+                    isStrikeLooking: $isStrikeLooking,
+                    isWildPitch: $isWildPitch,
+                    isPassedBall: $isPassedBall,
+                    selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
+                    isError: $isError,
+                    deselectIfDisabled: { self.deselectIfDisabled() }
                 )
-            }
-            .ignoresSafeArea()
-        }
-        .presentationDetents([.large])
-        .onChange(of: isPresented) { _, newValue in
-            if newValue == false {
-                resetSelections()
-            }
-        }
-
-        .onChange(of: isStrikeSwinging) { _, _ in deselectIfDisabled() }
-        .onChange(of: isStrikeLooking) { _, _ in deselectIfDisabled() }
-        .onChange(of: isWildPitch) { _, _ in deselectIfDisabled() }
-        .onChange(of: isPassedBall) { _, _ in deselectIfDisabled() }
-        .onChange(of: selectedOutcome) { _, _ in deselectIfDisabled() }
-        .onChange(of: selectedDescriptor) { _, _ in deselectIfDisabled() }
-        .onChange(of: isError) { _, _ in deselectIfDisabled() }
-        .onChange(of: selectedOutcome) { _, newValue in
-            if newValue == "HBP" {
-                isWildPitch = true
-                isStrikeSwinging = false
-                isStrikeLooking = false
-                isPassedBall = false
-            }
-            if newValue == "ꓘ" && selectedDescriptor == "Foul" {
-                    selectedDescriptor = nil
-            }
-            
-            deselectIfDisabled()
-        }
+            )
+        )
     }
     private func deselectIfDisabled() {
         if let outcome = selectedOutcome, isOutcomeDisabled(outcome) {
@@ -647,6 +397,239 @@ struct PitchResultSheetView: View {
         }
         if isError && isOutcomeDisabled("E") {
             isError = false
+        }
+    }
+}
+
+private struct OutcomeButtonsSection: View {
+    @Binding var selectedOutcome: String?
+    @Binding var selectedDescriptor: String?
+    @Binding var isError: Bool
+    var isOutcomeDisabled: (String) -> Bool
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
+                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                Spacer()
+                OutcomeButton(label: "HBP", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HBP"), usesDescriptorSelection: false)
+                Spacer()
+                OutcomeButton(label: "Safe", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Safe"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
+            }
+            HStack(spacing: 8) {
+                OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("1B"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Pop"), usesDescriptorSelection: true)
+                OutcomeButton(label: "BB", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("BB"), usesDescriptorSelection: false)
+            }
+            HStack(spacing: 8) {
+                OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("2B"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Line"), usesDescriptorSelection: true)
+                OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Bunt"), usesDescriptorSelection: true)
+            }
+            HStack(spacing: 8) {
+                OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("3B"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Fly", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Fly"), usesDescriptorSelection: true)
+                Button {
+                    isError.toggle()
+                } label: {
+                    Text("E")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(isError ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOutcomeDisabled("E"))
+            }
+            HStack(spacing: 8) {
+                OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)
+                OutcomeButton(label: "Foul", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Foul"), usesDescriptorSelection: false)
+            }
+        }
+    }
+}
+
+private struct FieldOverlayView: View {
+    @Binding var isPresented: Bool
+    let colorMapImage: UIImage?
+    let colorMapping: [ColorKey: (selection: OverlaySelection, label: String, outcome: String?)]
+    @Binding var selectedOutcome: String?
+    @Binding var selectedDescriptor: String?
+    @Binding var isError: Bool
+
+    @State private var overlayTapPoint: CGPoint? = nil
+    @State private var overlaySelection: OverlaySelection? = nil
+    @State private var overlayRegionName: String? = nil
+
+    private func handleTap(at location: CGPoint, in imageRect: CGRect) {
+        guard imageRect.contains(location) else { return }
+        overlayTapPoint = location
+
+        let nx = (location.x - imageRect.minX) / imageRect.width
+        let ny = (location.y - imageRect.minY) / imageRect.height
+
+        if let img = colorMapImage, let cg = img.cgImage {
+            let px = max(0, min(CGFloat(cg.width - 1), nx * CGFloat(cg.width)))
+            let py = max(0, min(CGFloat(cg.height - 1), ny * CGFloat(cg.height)))
+            if let uiColor = img.pixelColor(at: CGPoint(x: floor(px), y: floor(py))) {
+                let key = colorKey(from: uiColor)
+                if let mapped = colorMapping[key] {
+                    overlaySelection = mapped.selection
+                    overlayRegionName = mapped.label
+                    if let out = mapped.outcome {
+                        selectedOutcome = out
+                        selectedDescriptor = nil
+                        isError = false
+                    } else {
+                        selectedOutcome = nil
+                        selectedDescriptor = nil
+                        isError = false
+                    }
+                    return
+                } else {
+                    overlaySelection = .field
+                    let comps = key
+                    overlayRegionName = String(format: "Unmapped color #%02X%02X%02X%02X", comps.r, comps.g, comps.b, comps.a)
+                    selectedOutcome = nil
+                    selectedDescriptor = nil
+                    isError = false
+                    return
+                }
+            }
+        }
+
+        overlaySelection = .field
+        overlayRegionName = "No color map"
+        selectedOutcome = nil
+        selectedDescriptor = nil
+        isError = false
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let availableWidth = proxy.size.width
+            let availableHeight = proxy.size.height
+            let baseCenter = CGPoint(x: availableWidth / 2, y: availableHeight / 2)
+            // Prefer the color map's aspect to ensure tap sampling aligns with the displayed image
+            let drivingImage: UIImage? = colorMapImage ?? UIImage(named: "FieldImage")
+            let aspect: CGFloat = {
+                if let img = drivingImage { return img.size.width / max(img.size.height, 1) }
+                return 1
+            }()
+            // Try to use full width; if that makes the height too tall for the screen, fall back to height-fit
+            let widthFitHeight = availableWidth / aspect
+            let (finalWidth, finalHeight): (CGFloat, CGFloat) = {
+                if widthFitHeight <= availableHeight {
+                    return (availableWidth, widthFitHeight)
+                } else {
+                    // Fit by height instead
+                    let h = availableHeight
+                    let w = h * aspect
+                    return (w, h)
+                }
+            }()
+            let imageRect = CGRect(
+                x: baseCenter.x - finalWidth / 2,
+                y: baseCenter.y - finalHeight / 2,
+                width: finalWidth,
+                height: finalHeight
+            )
+
+            ZStack {
+                // Removed dimming background as per instructions
+                
+                VStack {
+                    HStack {
+                        if colorMapImage == nil {
+                            Text("colorMap image not found")
+                                .font(.caption)
+                                .padding(6)
+                                .background(Color.red.opacity(0.8), in: Capsule())
+                                .foregroundColor(.white)
+                        } else if colorMapping.isEmpty {
+                            Text("colorMapping is empty — taps won't map")
+                                .font(.caption)
+                                .padding(6)
+                                .background(Color.orange.opacity(0.8), in: Capsule())
+                                .foregroundColor(.white)
+                        }
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding()
+                .allowsHitTesting(false)
+
+                Rectangle()
+                    .stroke(Color.purple.opacity(0.25), lineWidth: 1)
+                    .frame(width: imageRect.width, height: imageRect.height)
+                    .position(x: imageRect.midX, y: imageRect.midY)
+                    .allowsHitTesting(false)
+
+                Image("FieldImage")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: imageRect.width, height: imageRect.height)
+                    .position(x: imageRect.midX, y: imageRect.midY)
+                    .shadow(radius: 10)
+                    .allowsHitTesting(false)
+
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: imageRect.width, height: imageRect.height)
+                    .position(x: imageRect.midX, y: imageRect.midY)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onEnded { value in
+                                handleTap(at: value.location, in: imageRect)
+                            }
+                    )
+
+                if let point = overlayTapPoint {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 14, height: 14)
+                        .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                        .position(x: point.x, y: point.y)
+
+                    let labelText: String = {
+                        switch overlaySelection {
+                        case .hr: return overlayRegionName ?? ""
+                        case .foul: return overlayRegionName ?? ""
+                        case .field:
+                            return overlayRegionName ?? ""
+                        case .none: return ""
+                        }
+                    }()
+                    Text(labelText)
+                        .font(.headline)
+                        .padding(8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .position(x: min(max(point.x, 60), proxy.size.width - 60), y: min(point.y + 28, proxy.size.height - 24))
+                }
+
+                VStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.easeOut) { isPresented = false }
+                    } label: {
+                        Text("Save")
+                            .font(.headline)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .padding(.bottom, 24)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .contentShape(Rectangle())
         }
     }
 }
