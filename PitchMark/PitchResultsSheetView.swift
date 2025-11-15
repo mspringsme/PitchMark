@@ -521,18 +521,10 @@ private struct FieldOverlayView: View {
                 if let img = drivingImage { return img.size.width / max(img.size.height, 1) }
                 return 1
             }()
-            // Try to use full width; if that makes the height too tall for the screen, fall back to height-fit
-            let widthFitHeight = availableWidth / aspect
-            let (finalWidth, finalHeight): (CGFloat, CGFloat) = {
-                if widthFitHeight <= availableHeight {
-                    return (availableWidth, widthFitHeight)
-                } else {
-                    // Fit by height instead
-                    let h = availableHeight
-                    let w = h * aspect
-                    return (w, h)
-                }
-            }()
+            // Fit by height with slight scale-down to make the image a bit smaller, still allowing horizontal clipping
+            let scale: CGFloat = 0.92
+            let finalHeight: CGFloat = availableHeight * scale
+            let finalWidth: CGFloat = finalHeight * aspect
             let imageRect = CGRect(
                 x: baseCenter.x - finalWidth / 2,
                 y: baseCenter.y - finalHeight / 2,
@@ -616,6 +608,7 @@ private struct FieldOverlayView: View {
 
                 VStack {
                     Spacer()
+                    Text("Ball in play location")
                     Button {
                         withAnimation(.easeOut) { isPresented = false }
                     } label: {
@@ -630,6 +623,7 @@ private struct FieldOverlayView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .contentShape(Rectangle())
+            .clipped()
         }
     }
 }
