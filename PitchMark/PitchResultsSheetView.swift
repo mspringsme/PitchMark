@@ -468,7 +468,7 @@ private struct FieldOverlayView: View {
 
     private func handleTap(at location: CGPoint, in imageRect: CGRect) {
         guard imageRect.contains(location) else { return }
-        overlayTapPoint = location
+        // Removed the line: overlayTapPoint = location
 
         let nx = (location.x - imageRect.minX) / imageRect.width
         let ny = (location.y - imageRect.minY) / imageRect.height
@@ -479,6 +479,7 @@ private struct FieldOverlayView: View {
             if let uiColor = img.pixelColor(at: CGPoint(x: floor(px), y: floor(py))) {
                 let key = colorKey(from: uiColor)
                 if let mapped = colorMapping[key] {
+                    overlayTapPoint = location
                     overlaySelection = mapped.selection
                     overlayRegionName = mapped.label
                     if let out = mapped.outcome {
@@ -492,12 +493,7 @@ private struct FieldOverlayView: View {
                     }
                     return
                 } else {
-                    overlaySelection = .field
-                    let comps = key
-                    overlayRegionName = String(format: "Unmapped color #%02X%02X%02X%02X", comps.r, comps.g, comps.b, comps.a)
-                    selectedOutcome = nil
-                    selectedDescriptor = nil
-                    isError = false
+                    // Unmapped color: do nothing and return without showing overlay
                     return
                 }
             }
@@ -609,16 +605,31 @@ private struct FieldOverlayView: View {
                 VStack {
                     Spacer()
                     Text("Ball in play location")
-                    Button {
-                        withAnimation(.easeOut) { isPresented = false }
-                    } label: {
-                        Text("Save")
-                            .font(.headline)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 12)
-                            .background(.ultraThinMaterial, in: Capsule())
+                    HStack{
+                        Spacer()
+                        Button {
+                            withAnimation(.easeOut) { isPresented = false }
+                        } label: {
+                            Text("Save")
+                                .font(.headline)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .padding(.bottom, 24)
+                        Spacer()
+                        Button {
+                            withAnimation(.easeOut) { isPresented = false }
+                        } label: {
+                            Text("Cancel")
+                                .font(.headline)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .padding(.bottom, 24)
+                        Spacer()
                     }
-                    .padding(.bottom, 24)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
