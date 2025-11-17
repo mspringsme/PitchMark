@@ -1,10 +1,15 @@
 //
-//  BatterCell.swift
+//  Games.swift
 //  PitchMark
 //
 //  Created by Mark Springer on 11/1/25.
 //
 import SwiftUI
+
+
+
+
+
 
 struct JerseyCell: Identifiable {
     let id = UUID()

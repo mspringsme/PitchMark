@@ -308,6 +308,29 @@ struct PitchTrackerView: View {
                             },
                             alignment: .bottomTrailing
                         )
+                        .overlay(
+                            Group {
+                                if isGame {
+                                    Button(action: {
+                                        // Open game settings ...
+                                        
+                                        
+                                        
+                                    }) {
+                                        Label("Game", systemImage: "gearshape")
+                                            .font(.subheadline.weight(.semibold))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .background(.ultraThinMaterial)
+                                            .clipShape(Capsule())
+                                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .offset(y: 20)
+                                }
+                            },
+                            alignment: .bottom
+                        )
                     }
                 }
                 .padding(.horizontal, 12)
