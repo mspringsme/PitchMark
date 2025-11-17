@@ -237,6 +237,7 @@ struct BallStrikeSummaryGrid: View {
     }
 }
 
+// Added ShowPitchLogTemplates struct with requested modifications
 struct ShowPitchLogTemplates: View {
     let sortedTemplates: [PitchTemplate]
     let onSelectTemplate: (PitchTemplate) -> Void
@@ -249,20 +250,22 @@ struct ShowPitchLogTemplates: View {
                 }
             }
         } label: {
-            VStack(spacing: 4) {
-                Text("%")
-                    .font(.caption)
-                    .foregroundColor(.primary)
+            HStack(spacing: 8) {
                 Image(systemName: "baseball")
                     .font(.body)
-                    .foregroundColor(.black)
-                    .padding(6)
-                    .background(Color.gray.opacity(0.2))
-                    .clipShape(Circle())
-                    .padding(.trailing, 2)
-                    .padding(.bottom, 2)
+                    .foregroundStyle(.primary)
+                Text("%")
+                    .font(.callout)
+                    .foregroundStyle(.primary)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+            .offset(y: 6)
         }
+        .buttonStyle(.plain)
         .accessibilityLabel("Show all templates.")
     }
 }

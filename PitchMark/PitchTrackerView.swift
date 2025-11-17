@@ -55,6 +55,22 @@ struct PitchTrackerView: View {
     @State private var selectedOutcome: String? = nil
     @State private var selectedDescriptor: String? = nil
     @State private var isError: Bool = false
+
+    // MARK: - Preview-friendly initializer
+    // Allows previews to seed internal @State with dummy data without affecting app code
+    init(
+        previewTemplate: PitchTemplate? = nil,
+        previewTemplates: [PitchTemplate] = [],
+        previewIsGame: Bool = false
+    ) {
+        if let t = previewTemplate {
+            _selectedTemplate = State(initialValue: t)
+            _selectedPitches = State(initialValue: Set(t.pitches))
+            _pitchCodeAssignments = State(initialValue: t.codeAssignments)
+        }
+        _templates = State(initialValue: previewTemplates)
+        _isGame = State(initialValue: previewIsGame)
+    }
     
     var body: some View {
         VStack(spacing: 4) {
@@ -318,7 +334,6 @@ struct PitchTrackerView: View {
                                         
                                     }) {
                                         Label("Game", systemImage: "gearshape")
-                                            .font(.subheadline.weight(.semibold))
                                             .padding(.horizontal, 12)
                                             .padding(.vertical, 8)
                                             .background(.ultraThinMaterial)
@@ -326,7 +341,7 @@ struct PitchTrackerView: View {
                                             .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
                                     }
                                     .buttonStyle(.plain)
-                                    .offset(y: 20)
+                                    .offset(y: 6)
                                 }
                             },
                             alignment: .bottom
@@ -388,53 +403,6 @@ struct PitchTrackerView: View {
                     }
                 }
                 
-//                // 🧩 Called Pitch Display
-//                Group {
-//                    if isRecordingResult && activeCalledPitchId == nil {
-//                        if let call = calledPitch {
-//                            CalledPitchView(
-//                                isRecordingResult: $isRecordingResult,
-//                                activeCalledPitchId: $activeCalledPitchId,
-//                                call: call,
-//                                pitchCodeAssignments: pitchCodeAssignments,
-//                                batterSide: batterSide
-//                            )
-//                            .background(Color.white.opacity(0.9))
-//                            .cornerRadius(8)
-//                            .shadow(radius: 4)
-//                            .transition(.opacity)
-//                            .padding(.top, 4)
-//                        }
-//                    } else if let call = calledPitch {
-//                        CalledPitchView(
-//                            isRecordingResult: $isRecordingResult,
-//                            activeCalledPitchId: $activeCalledPitchId,
-//                            call: call,
-//                            pitchCodeAssignments: pitchCodeAssignments,
-//                            batterSide: batterSide
-//                        )
-//                        .background(Color.white.opacity(0.9))
-//                        .cornerRadius(8)
-//                        .shadow(radius: 4)
-//                        .transition(.opacity)
-//                        .padding(.top, 4)
-//                    }
-//                }
-//                
-//                // 🧩 Cards
-//                if showPitchResults {
-//                        VStack {
-//                            if selectedTemplate != nil {
-//                                PitchResultSheet(
-//                                    allEvents: pitchEvents,
-//                                    templates: templates,
-//                                    filterMode: $filterMode
-//                                )
-//                                .environmentObject(authManager)
-//                            }
-//                        }
-//                        .transition(.opacity)
-//                }
             }
             .opacity(selectedTemplate == nil ? 0.6 : 1.0)
             .blur(radius: selectedTemplate == nil ? 4 : 0)
@@ -617,14 +585,14 @@ struct ResetPitchButton: View {
                 .font(.body)
                 .foregroundColor(.red)
                 .padding(6)
-                .background(Color.gray.opacity(0.2))
+                .background(.ultraThinMaterial)
                 .clipShape(Circle())
                 .overlay(
                     Circle()
                         .stroke(Color.red, lineWidth: 1)
                 )
                 .padding(.leading, 2)
-                .padding(.bottom, 2)
+                .offset(y: 6)
                 
         }
         .accessibilityLabel("Reset pitch selection")
@@ -752,7 +720,65 @@ struct ToggleChip: View {
     }
 }
 
-//#Preview {
-//    PitchTrackerView()
-//}
 
+
+
+#Preview("PitchTracker Layout – Practice") {
+    // Dummy pitch codes
+    let dummyCodes: [PitchCodeAssignment] = [
+        PitchCodeAssignment(code: "1", pitch: "FB", location: "Up Middle"),
+        PitchCodeAssignment(code: "2", pitch: "FB", location: "Down Away"),
+        PitchCodeAssignment(code: "7", pitch: "SL", location: "Down Middle")
+    ]
+
+    // Dummy template
+    let template = PitchTemplate(
+        id: UUID(),
+        name: "Bullpen A",
+        pitches: ["FB", "SL", "CH"],
+        codeAssignments: dummyCodes
+    )
+
+    // Provide a couple of templates to populate the menu
+    let templates = [
+        template,
+        PitchTemplate(id: UUID(), name: "Game Plan 1", pitches: ["FB", "CH"], codeAssignments: []),
+        PitchTemplate(id: UUID(), name: "Mix – Offspeed", pitches: ["SL", "CH"], codeAssignments: [])
+    ]
+
+    // Build the view with preview-seeded state
+    PitchTrackerView(
+        previewTemplate: template,
+        previewTemplates: templates,
+        previewIsGame: false
+    )
+    .environmentObject(AuthManager())
+}
+
+#Preview("PitchTracker Layout – Game", traits: .landscapeLeft) {
+    let dummyCodes: [PitchCodeAssignment] = [
+        PitchCodeAssignment(code: "A", pitch: "FB", location: "Up In"),
+        PitchCodeAssignment(code: "B", pitch: "FB", location: "Down Away"),
+        PitchCodeAssignment(code: "C", pitch: "SL", location: "Down In")
+    ]
+
+    let template = PitchTemplate(
+        id: UUID(),
+        name: "Game Plan – RHB",
+        pitches: ["FB", "SL", "CH"],
+        codeAssignments: dummyCodes
+    )
+
+    let templates = [
+        template,
+        PitchTemplate(id: UUID(), name: "Alt Plan", pitches: ["FB", "SL"], codeAssignments: [])
+    ]
+
+    PitchTrackerView(
+        previewTemplate: template,
+        previewTemplates: templates,
+        previewIsGame: true
+    )
+    .environmentObject(AuthManager())
+    .preferredColorScheme(.dark)
+}
