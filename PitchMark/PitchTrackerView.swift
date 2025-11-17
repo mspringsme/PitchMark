@@ -72,6 +72,71 @@ struct PitchTrackerView: View {
         _isGame = State(initialValue: previewIsGame)
     }
     
+    private var batterAndModeBar: some View {
+        let iconSize: CGFloat = 36
+        return HStack {
+            // Left Batter Button (Leading)
+            Button(action: {
+                withAnimation {
+                    batterSide = .left
+                }
+            }) {
+                Image("rightBatterIcon")
+                    .resizable()
+                    .renderingMode(.template)
+                    .frame(width: iconSize, height: iconSize)
+                    .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .background(Color.clear)
+            .cornerRadius(6)
+            .buttonStyle(.plain)
+            
+            
+            Spacer()
+            
+            VStack {
+                Picker("Mode", selection: $sessionManager.currentMode) {
+                    Text("Practice").tag(PitchMode.practice)
+                    Text("Game").tag(PitchMode.game)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: sessionManager.currentMode) { oldValue, newValue in
+                    sessionManager.switchMode(to: newValue)
+                    isGame = (newValue == .game)
+                }
+                .onAppear {
+                    isGame = (sessionManager.currentMode == .game)
+                }
+            }
+            
+            Spacer()
+            
+            // Right Batter Button (Trailing)
+            Button(action: {
+                withAnimation {
+                    batterSide = .right
+                }
+            }) {
+                Image("leftBatterIcon")
+                    .resizable()
+                    .renderingMode(.template)
+                    .frame(width: iconSize, height: iconSize)
+                    .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .background(Color.clear)
+            .cornerRadius(6)
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal)
+        .padding(.bottom, 4)
+    }
+    
+    
     var body: some View {
         VStack(spacing: 4) {
             // 🧩 Top Hstack
@@ -163,67 +228,7 @@ struct PitchTrackerView: View {
                 Divider()
                     .padding(.bottom, 4)
                 
-                // 🧩 right and left batters and practice / game picker
-                let iconSize: CGFloat = 36
-                HStack {
-                    // Left Batter Button (Leading)
-                    Button(action: {
-                        withAnimation {
-                            batterSide = .left
-                        }
-                    }) {
-                        Image("rightBatterIcon")
-                            .resizable()
-                            .renderingMode(.template)
-                            .frame(width: iconSize, height: iconSize)
-                            .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 12)
-                    .background(Color.clear)
-                    .cornerRadius(6)
-                    .buttonStyle(.plain)
-                    
-                    Spacer()
-                    
-                    VStack {
-                            Picker("Mode", selection: $sessionManager.currentMode) {
-                                Text("Practice").tag(PitchMode.practice)
-                                Text("Game").tag(PitchMode.game)
-                            }
-                            .pickerStyle(.segmented)
-                            .onChange(of: sessionManager.currentMode) { oldValue, newValue in
-                                sessionManager.switchMode(to: newValue)
-                                isGame = (newValue == .game)
-                            }
-                            .onAppear {
-                                isGame = (sessionManager.currentMode == .game)
-                            }
-                        }
-                    
-                    Spacer()
-                    
-                    // Right Batter Button (Trailing)
-                    Button(action: {
-                        withAnimation {
-                            batterSide = .right
-                        }
-                    }) {
-                        Image("leftBatterIcon")
-                            .resizable()
-                            .renderingMode(.template)
-                            .frame(width: iconSize, height: iconSize)
-                            .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
-                    }
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 12)
-                    .background(Color.clear)
-                    .cornerRadius(6)
-                    .buttonStyle(.plain)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal)
-                .padding(.bottom, 4)
+                batterAndModeBar
                 
                 
                 let deviceWidth = UIScreen.main.bounds.width
@@ -791,3 +796,4 @@ struct ToggleChip: View {
     .environmentObject(AuthManager())
     .preferredColorScheme(.dark)
 }
+
