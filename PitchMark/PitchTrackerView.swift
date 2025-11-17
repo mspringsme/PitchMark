@@ -76,10 +76,6 @@ struct PitchTrackerView: View {
         VStack(spacing: 4) {
             // 🧩 Top Hstack
             HStack {
-                Text(selectedTemplate?.name ?? "Select a template")
-                    .font(.headline)
-                    .foregroundColor(templates.isEmpty ? .gray : .primary)
-                
                 Menu {
                     ForEach(templates, id: \.self) { template in
                         Button(template.name) {
@@ -89,15 +85,28 @@ struct PitchTrackerView: View {
                             // 🧹 Reset strike zone and called pitch state
                             lastTappedPosition = nil
                             calledPitch = nil
-                            
                         }
                     }
                 } label: {
-                    Image(systemName: "chevron.down.circle")
-                        .imageScale(.large)
-                        .foregroundColor(templates.isEmpty ? .gray : .blue)
+                    HStack(spacing: 8) {
+                        Text(selectedTemplate?.name ?? "Select a template")
+                            .font(.headline)
+                        Image(systemName: "chevron.down")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .foregroundColor(templates.isEmpty ? .gray : .primary)
+                    .background(templates.isEmpty ? Color.gray.opacity(0.12) : Color.clear)
+                    .overlay(
+                        Capsule()
+                            .stroke(templates.isEmpty ? Color.gray.opacity(0.35) : Color.blue, lineWidth: 1)
+                    )
+                    .clipShape(Capsule())
+                    .contentShape(Capsule()) // ensures the whole capsule is tappable
                 }
-                .disabled(templates.isEmpty) // ✅ disables interaction
+                .disabled(templates.isEmpty)
+                
                 
                 Spacer() // 👈 Pushes content to the trailing edge
                 
