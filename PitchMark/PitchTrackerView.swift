@@ -55,6 +55,8 @@ struct PitchTrackerView: View {
     @State private var selectedOutcome: String? = nil
     @State private var selectedDescriptor: String? = nil
     @State private var isError: Bool = false
+    @State private var showGameSheet = false
+    @State private var opponentName: String? = nil
 
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
@@ -87,6 +89,8 @@ struct PitchTrackerView: View {
                 .onChange(of: sessionManager.currentMode) { oldValue, newValue in
                     sessionManager.switchMode(to: newValue)
                     isGame = (newValue == .game)
+                    if newValue == .game { showGameSheet = true }
+                    if newValue == .practice { opponentName = nil }
                 }
                 .onAppear {
                     isGame = (sessionManager.currentMode == .game)
@@ -300,14 +304,20 @@ struct PitchTrackerView: View {
                                 Group {
                                     if isGame {
                                         Button(action: {
-                                            // Open game settings ...
+                                            showGameSheet = true
                                         }) {
-                                            Label("Game", systemImage: "gearshape")
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 8)
-                                                .background(.ultraThinMaterial)
-                                                .clipShape(Capsule())
-                                                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                                            HStack(spacing: 6) {
+                                                Image(systemName: "gearshape")
+                                                Text(opponentName ?? "Game")
+                                                    .lineLimit(1)
+                                                    .truncationMode(.tail)
+                                            }
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .frame(maxWidth: 160)
+                                            .background(.ultraThinMaterial)
+                                            .clipShape(Capsule())
+                                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
                                         }
                                         .buttonStyle(.plain)
                                         .offset(y: 6)
@@ -493,6 +503,34 @@ struct PitchTrackerView: View {
         }
         .sheet(item: $menuSelectedStatsTemplate) { template in
             TemplateSuccessSheet(template: template)
+        }
+        .sheet(isPresented: $showGameSheet, onDismiss: {
+            // If user canceled without creating/choosing, optionally revert to practice
+            if sessionManager.currentMode == .game && !isGame {
+                sessionManager.switchMode(to: .practice)
+            }
+        }) {
+            GameSelectionSheet(
+                onCreate: { name in
+                    opponentName = name
+                    // TODO: Hook into your session manager or model to start a new game
+                    isGame = true
+                    showGameSheet = false
+                },
+                onChoose: { name in
+                    opponentName = name
+                    // TODO: Hook into your data source to load an existing game
+                    isGame = true
+                    showGameSheet = false
+                },
+                onCancel: {
+                    // Revert to practice if user cancels
+                    opponentName = nil
+                    isGame = false
+                    sessionManager.switchMode(to: .practice)
+                    showGameSheet = false
+                }
+            )
         }
     }
 }
@@ -723,6 +761,66 @@ struct ToggleChip: View {
     }
 }
 
+struct GameSelectionSheet: View {
+    var onCreate: (String) -> Void
+    var onChoose: (String) -> Void
+    var onCancel: () -> Void
+    @State private var newGameName: String = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Group {
+                    Text("Create New Game")
+                        .font(.headline)
+                    TextField("Game name (e.g., vs. Tigers)", text: $newGameName)
+                        .textFieldStyle(.roundedBorder)
+                    Button(action: {
+                        let name = newGameName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !name.isEmpty else { return }
+                        onCreate(name)
+                        dismiss()
+                    }) {
+                        Label("Create Game", systemImage: "plus.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newGameName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                Divider()
+
+                Group {
+                    Text("Choose Existing Game")
+                        .font(.headline)
+                    // Replace with your real data source of recent or saved games
+                    VStack(spacing: 8) {
+                        Button("Scrimmage – 10/01") { onChoose("Foxes"); dismiss() }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("League Game – 10/05") { onChoose("Storm"); dismiss() }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("Tournament – 10/12") { onChoose("Sycamore 18U gold"); dismiss() }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Game Setup")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onCancel()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
 
 
 
@@ -785,4 +883,6 @@ struct ToggleChip: View {
     .environmentObject(AuthManager())
     .preferredColorScheme(.dark)
 }
+
+
 
