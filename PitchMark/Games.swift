@@ -5,7 +5,7 @@
 //  Created by Mark Springer on 11/1/25.
 //
 import SwiftUI
-
+import FirebaseFirestore
 
 
 
@@ -35,3 +35,12 @@ let sampleJerseyCells: [JerseyCell] = [
     JerseyCell(jerseyNumber: "2"),
     JerseyCell(jerseyNumber: "3")
 ]
+
+struct Game: Identifiable, Codable {
+    @DocumentID var id: String?
+    var opponent: String
+    var date: Date
+    var jerseyNumbers: [String]
+    var createdAt: Date = Date()
+}
+

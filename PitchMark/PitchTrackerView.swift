@@ -58,6 +58,7 @@ struct PitchTrackerView: View {
     @State private var isError: Bool = false
     @State private var showGameSheet = false
     @State private var opponentName: String? = nil
+    @State private var selectedGameId: String? = nil
     @State private var jerseyCells: [JerseyCell] = sampleJerseyCells
     @State private var draggingJersey: JerseyCell?
     
@@ -446,6 +447,10 @@ struct PitchTrackerView: View {
             .allowsHitTesting(selectedTemplate != nil)
             .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
             
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { output in
+            guard let numbers = output.object as? [String], let gameId = selectedGameId else { return }
+            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: numbers)
         } // 🧩🧩🧩🧩 end of VStack 🧩🧩🧩🧩🧧🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩
         .frame(maxHeight: .infinity, alignment: .top)
         .sheet(isPresented: $showConfirmSheet) {
@@ -535,14 +540,28 @@ struct PitchTrackerView: View {
             }
         }) {
             GameSelectionSheet(
-                onCreate: { name in
-                      // Keep sheet open; do not switch layout yet. The new game will appear in the list.
-                  },
-                  onChoose: { name in
-                      opponentName = name
-                      isGame = true
-                      showGameSheet = false
-                  },
+                onCreate: { name, date in
+                    let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                    authManager.saveGame(newGame)
+                },
+                onChoose: { gameId in
+                    if gameId == "Practice" { // quick pick
+                        opponentName = "Practice"
+                        selectedGameId = nil
+                        isGame = true
+                        showGameSheet = false
+                        return
+                    }
+                    authManager.loadGames { games in
+                        if let game = games.first(where: { $0.id == gameId }) {
+                            selectedGameId = game.id
+                            opponentName = game.opponent
+                            jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                        }
+                        isGame = true
+                        showGameSheet = false
+                    }
+                },
                 onCancel: {
                     // User canceled: preserve any existing game state.
                     // If no game was active, onDismiss will revert to practice.
@@ -551,6 +570,7 @@ struct PitchTrackerView: View {
             )
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
+            .environmentObject(authManager)
         }
     }
 }
@@ -573,8 +593,17 @@ private struct JerseyDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         dragging = nil
+        // Persist new order if possible
+        // We need access to AuthManager and selectedGameId from the environment/scope.
+        // Since DropDelegate is not a view, we post a notification with the new order.
+        let order = items.map { $0.jerseyNumber }
+        NotificationCenter.default.post(name: .jerseyOrderChanged, object: order)
         return true
     }
+}
+
+extension Notification.Name {
+    static let jerseyOrderChanged = Notification.Name("jerseyOrderChanged")
 }
 
 @ViewBuilder
@@ -804,16 +833,17 @@ struct ToggleChip: View {
 }
 
 struct GameSelectionSheet: View {
-    var onCreate: (String) -> Void
+    var onCreate: (String, Date) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
 
-    @State private var games: [GameItem] = []
+    @State private var games: [Game] = []
     @State private var showAddGamePopover: Bool = false
     @State private var newOpponentName: String = ""
     @State private var newGameDate: Date = Date()
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var authManager: AuthManager
 
     var body: some View {
         NavigationStack {
@@ -844,7 +874,7 @@ struct GameSelectionSheet: View {
                     Section() {
                         ForEach(games) { game in
                             Button(action: {
-                                onChoose(game.opponent)
+                                onChoose(game.id ?? "")
                                 dismiss()
                             }) {
                                 HStack {
@@ -894,9 +924,9 @@ struct GameSelectionSheet: View {
                             onSave: {
                                 let name = newOpponentName.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !name.isEmpty else { return }
-                                let item = GameItem(opponent: name, date: newGameDate)
+                                let item = Game(opponent: name, date: newGameDate, jerseyNumbers: [])
                                 games.append(item)
-                                onCreate(name)
+                                onCreate(name, newGameDate)
                                 showAddGamePopover = false
                                 // Keep the game selection sheet open; do not dismiss here.
                             }
@@ -909,6 +939,11 @@ struct GameSelectionSheet: View {
                 }
             }
         )
+        .onAppear {
+            authManager.loadGames { loadedGames in
+                self.games = loadedGames
+            }
+        }
     }
 
     private static let formatter: DateFormatter = {
@@ -924,6 +959,7 @@ struct GameItem: Identifiable {
     var opponent: String
     var date: Date
 }
+
 
 struct AddGameCard: View {
     @Binding var opponentName: String

@@ -5,7 +5,6 @@
 //  Created by Mark Springer on 9/25/25.
 //
 
-
 import Foundation
 import Combine
 import GoogleSignIn
@@ -265,3 +264,50 @@ class AuthManager: ObservableObject {
     }
 }
 
+extension AuthManager {
+    func saveGame(_ game: Game) {
+        guard let user = user else {
+            print("No signed-in user to save game for.")
+            return
+        }
+        let db = Firestore.firestore()
+        let ref = db.collection("users").document(user.uid).collection("games")
+        let doc = (game.id != nil) ? ref.document(game.id!) : ref.document()
+        do {
+            var toSave = game
+            toSave.id = doc.documentID
+            try doc.setData(from: toSave, merge: true) { error in
+                if let error = error { print("Error saving game: \(error)") }
+            }
+        } catch {
+            print("Encoding error saving game: \(error)")
+        }
+    }
+
+    func loadGames(completion: @escaping ([Game]) -> Void) {
+        guard let user = user else { completion([]); return }
+        Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games")
+            .order(by: "date", descending: true)
+            .getDocuments { snapshot, error in
+                guard let docs = snapshot?.documents, error == nil else {
+                    print("Error loading games: \(error?.localizedDescription ?? "Unknown")")
+                    completion([])
+                    return
+                }
+                let games: [Game] = docs.compactMap { try? $0.data(as: Game.self) }
+                completion(games)
+            }
+    }
+
+    func updateGameLineup(gameId: String, jerseyNumbers: [String]) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.updateData(["jerseyNumbers": jerseyNumbers]) { error in
+            if let error = error { print("Error updating lineup: \(error)") }
+        }
+    }
+}
