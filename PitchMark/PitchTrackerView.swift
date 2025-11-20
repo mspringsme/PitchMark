@@ -467,13 +467,17 @@ struct PitchTrackerView: View {
         .toolbar {
             if showAddJerseyPopover {
                 ToolbarItemGroup(placement: .keyboard) {
-                    Button("Cancel") {
+                    Button {
                         newJerseyNumber = ""
                         showAddJerseyPopover = false
                         jerseyInputFocused = false
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle.fill")
                     }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
                     Spacer()
-                    Button("Save") {
+                    Button {
                         let number = newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !number.isEmpty else { return }
                         jerseyCells.append(JerseyCell(jerseyNumber: number))
@@ -483,7 +487,12 @@ struct PitchTrackerView: View {
                         newJerseyNumber = ""
                         showAddJerseyPopover = false
                         jerseyInputFocused = false
+                    } label: {
+                        Label("Save", systemImage: "checkmark.circle.fill")
+                            .fontWeight(.semibold)
                     }
+                    .buttonStyle(.bordered)
+                    .tint(.green)
                     .disabled(newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -1101,4 +1110,5 @@ struct AddGameCard: View {
     .environmentObject(AuthManager())
     .preferredColorScheme(.dark)
 }
+
 
