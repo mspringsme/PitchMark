@@ -252,9 +252,10 @@ struct PitchTrackerView: View {
                                             jerseyInputFocused = true
                                         }) {
                                             ZStack {
-                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                Circle()
                                                     .fill(Color.white)
-                                                    .frame(height: 44)
+                                                    .frame(width: 32, height: 32)
+
                                                 Image(systemName: "plus")
                                                     .foregroundColor(.secondary)
                                                     .font(.headline)
@@ -263,7 +264,7 @@ struct PitchTrackerView: View {
                                         .buttonStyle(.plain)
                                         .padding(.horizontal, 6)
                                     }
-                                    .padding(.vertical, 2)        // Less vertical breathing room
+                                    .padding(.vertical,12)        // Less vertical breathing room
                                     .padding(.horizontal, 0)      // No horizontal inset — flush to edges
                                 }
                             }
@@ -897,22 +898,6 @@ struct GameSelectionSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                // Permanent quick-pick: Practice Game
-                Section {
-                    Button(action: {
-                        onChoose("Practice")
-                        dismiss()
-                    }) {
-                        HStack {
-                            Image(systemName: "figure.run.circle")
-                                .foregroundColor(.green)
-                            Text("Practice Game")
-                                .font(.headline)
-                            Spacer()
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
 
                 if games.isEmpty {
 //                    Section {
