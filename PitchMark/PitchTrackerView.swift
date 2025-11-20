@@ -511,9 +511,7 @@ struct PitchTrackerView: View {
         }) {
             GameSelectionSheet(
                 onCreate: { name in
-                      opponentName = name
-                      isGame = true
-                      showGameSheet = false
+                      // Keep sheet open; do not switch layout yet. The new game will appear in the list.
                   },
                   onChoose: { name in
                       opponentName = name
@@ -836,7 +834,7 @@ struct GameSelectionSheet: View {
                                 games.append(item)
                                 onCreate(name)
                                 showAddGamePopover = false
-                                dismiss()
+                                // Keep the game selection sheet open; do not dismiss here.
                             }
                         )
                         .frame(maxWidth: 360)
@@ -963,3 +961,4 @@ struct AddGameCard: View {
     .environmentObject(AuthManager())
     .preferredColorScheme(.dark)
 }
+
