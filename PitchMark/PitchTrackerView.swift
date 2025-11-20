@@ -88,12 +88,12 @@ struct PitchTrackerView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .onChange(of: sessionManager.currentMode) { oldValue, newValue in
                     sessionManager.switchMode(to: newValue)
-                    isGame = (newValue == .game)
-                    if newValue == .game { showGameSheet = true }
-                    if newValue == .practice { opponentName = nil }
-                }
-                .onAppear {
-                    isGame = (sessionManager.currentMode == .game)
+                    if newValue == .game {
+                        showGameSheet = true
+                    } else {
+                        opponentName = nil
+                        // Do not touch isGame here
+                    }
                 }
             }
             Spacer()
@@ -102,7 +102,6 @@ struct PitchTrackerView: View {
         .padding(.horizontal)
         .padding(.bottom, 4)
     }
-    
     
     var body: some View {
         VStack(spacing: 4) {
@@ -512,17 +511,15 @@ struct PitchTrackerView: View {
         }) {
             GameSelectionSheet(
                 onCreate: { name in
-                    opponentName = name
-                    // TODO: Hook into your session manager or model to start a new game
-                    isGame = true
-                    showGameSheet = false
-                },
-                onChoose: { name in
-                    opponentName = name
-                    // TODO: Hook into your data source to load an existing game
-                    isGame = true
-                    showGameSheet = false
-                },
+                      opponentName = name
+                      isGame = true
+                      showGameSheet = false
+                  },
+                  onChoose: { name in
+                      opponentName = name
+                      isGame = true
+                      showGameSheet = false
+                  },
                 onCancel: {
                     // Revert to practice if user cancels
                     opponentName = nil
