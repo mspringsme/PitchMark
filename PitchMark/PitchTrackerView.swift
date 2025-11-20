@@ -531,6 +531,8 @@ struct PitchTrackerView: View {
                     showGameSheet = false
                 }
             )
+            .presentationDetents([.fraction(0.5)])
+            .presentationDragIndicator(.visible)
         }
     }
 }
@@ -765,51 +767,46 @@ struct GameSelectionSheet: View {
     var onCreate: (String) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
-    @State private var newGameName: String = ""
+
+    @State private var games: [GameItem] = []
+    @State private var showAddGamePopover: Bool = false
+    @State private var newOpponentName: String = ""
+    @State private var newGameDate: Date = Date()
+
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Group {
-                    Text("Create New Game")
-                        .font(.headline)
-                    TextField("Game name (e.g., vs. Tigers)", text: $newGameName)
-                        .textFieldStyle(.roundedBorder)
-                    Button(action: {
-                        let name = newGameName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !name.isEmpty else { return }
-                        onCreate(name)
-                        dismiss()
-                    }) {
-                        Label("Create Game", systemImage: "plus.circle.fill")
-                            .frame(maxWidth: .infinity)
+            List {
+                if games.isEmpty {
+//                    Section {
+//                        Text("No games yet. Tap + to add one.")
+//                            .foregroundColor(.secondary)
+//                    }
+                } else {
+                    Section(header: Text("Games")) {
+                        ForEach(games) { game in
+                            Button(action: {
+                                onChoose(game.opponent)
+                                dismiss()
+                            }) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(game.opponent)
+                                            .font(.headline)
+                                        Text(Self.formatter.string(from: game.date))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(newGameName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-
-                Divider()
-
-                Group {
-                    Text("Choose Existing Game")
-                        .font(.headline)
-                    // Replace with your real data source of recent or saved games
-                    VStack(spacing: 8) {
-                        Button("Scrimmage – 10/01") { onChoose("Foxes"); dismiss() }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("League Game – 10/05") { onChoose("Storm"); dismiss() }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button("Tournament – 10/12") { onChoose("Sycamore 18U gold"); dismiss() }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Spacer()
             }
-            .padding()
-            .navigationTitle("Game Setup")
+            .navigationTitle("Games")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -817,11 +814,99 @@ struct GameSelectionSheet: View {
                         dismiss()
                     }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: { showAddGamePopover = true }) {
+                        Image(systemName: "plus.circle.fill")
+                    }
+                    .accessibilityLabel("Add Game")
+                }
             }
         }
+        .overlay(
+            Group {
+                if showAddGamePopover {
+                    ZStack {
+                        Color.black.opacity(0.35)
+                            .ignoresSafeArea()
+                            .onTapGesture { showAddGamePopover = false }
+
+                        AddGameCard(
+                            opponentName: $newOpponentName,
+                            gameDate: $newGameDate,
+                            onCancel: { showAddGamePopover = false },
+                            onSave: {
+                                let name = newOpponentName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !name.isEmpty else { return }
+                                let item = GameItem(opponent: name, date: newGameDate)
+                                games.append(item)
+                                onCreate(name)
+                                showAddGamePopover = false
+                                dismiss()
+                            }
+                        )
+                        .frame(maxWidth: 360)
+                        .padding()
+                    }
+                    .transition(.opacity.combined(with: .scale))
+                    .animation(.easeInOut(duration: 0.2), value: showAddGamePopover)
+                }
+            }
+        )
     }
+
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
 }
 
+struct GameItem: Identifiable {
+    let id = UUID()
+    var opponent: String
+    var date: Date
+}
+
+struct AddGameCard: View {
+    @Binding var opponentName: String
+    @Binding var gameDate: Date
+    var onCancel: () -> Void
+    var onSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("New Game")
+                    .font(.headline)
+                Spacer()
+                Button(action: onCancel) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            TextField("Opponent name", text: $opponentName)
+                .textFieldStyle(.roundedBorder)
+
+            DatePicker("Date & Time", selection: $gameDate, displayedComponents: [.date, .hourAndMinute])
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Save", action: onSave)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(opponentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(radius: 10)
+    }
+}
 
 
 #Preview("PitchTracker Layout – Practice") {
@@ -883,6 +968,5 @@ struct GameSelectionSheet: View {
     .environmentObject(AuthManager())
     .preferredColorScheme(.dark)
 }
-
 
 
