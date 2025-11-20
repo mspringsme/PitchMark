@@ -777,7 +777,7 @@ struct GameSelectionSheet: View {
 //                            .foregroundColor(.secondary)
 //                    }
                 } else {
-                    Section(header: Text("Games")) {
+                    Section() {
                         ForEach(games) { game in
                             Button(action: {
                                 onChoose(game.opponent)
