@@ -30,7 +30,7 @@ struct JerseyCellView: View {
     }
 }
 
-let jerseyCells: [JerseyCell] = [
+let sampleJerseyCells: [JerseyCell] = [
     JerseyCell(jerseyNumber: "1"),
     JerseyCell(jerseyNumber: "2"),
     JerseyCell(jerseyNumber: "3")

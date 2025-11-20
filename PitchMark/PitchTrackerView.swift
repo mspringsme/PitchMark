@@ -8,6 +8,7 @@
 import SwiftUI
 import FirebaseCore
 import FirebaseFirestore
+import UniformTypeIdentifiers
 
 struct PitchTrackerView: View {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
@@ -57,7 +58,9 @@ struct PitchTrackerView: View {
     @State private var isError: Bool = false
     @State private var showGameSheet = false
     @State private var opponentName: String? = nil
-
+    @State private var jerseyCells: [JerseyCell] = sampleJerseyCells
+    @State private var draggingJersey: JerseyCell?
+    
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
     init(
@@ -217,7 +220,17 @@ struct PitchTrackerView: View {
                                 // 🧩 Scrollable jersey cells
                                 ScrollView(.vertical, showsIndicators: false) {
                                     VStack(spacing: 6) {
-                                        // Permanent plus cell always visible
+                                        // Existing jersey cells first
+                                        ForEach(jerseyCells) { cell in
+                                            JerseyCellView(cell: cell)
+                                                .onDrag {
+                                                    draggingJersey = cell
+                                                    return NSItemProvider(object: NSString(string: cell.id.uuidString))
+                                                }
+                                                .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
+                                        }
+
+                                        // Permanent plus cell at the bottom
                                         Button(action: {
                                             // TODO: Implement add jersey cell action
                                         }) {
@@ -232,11 +245,6 @@ struct PitchTrackerView: View {
                                         }
                                         .buttonStyle(.plain)
                                         .padding(.horizontal, 6)
-                                        
-                                        // Existing jersey cells
-                                        ForEach(jerseyCells) { cell in
-                                            JerseyCellView(cell: cell)
-                                        }
                                     }
                                     .padding(.vertical, 2)        // Less vertical breathing room
                                     .padding(.horizontal, 0)      // No horizontal inset — flush to edges
@@ -544,6 +552,28 @@ struct PitchTrackerView: View {
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
         }
+    }
+}
+
+private struct JerseyDropDelegate: DropDelegate {
+    let current: JerseyCell
+    @Binding var items: [JerseyCell]
+    @Binding var dragging: JerseyCell?
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging = dragging, dragging.id != current.id else { return }
+        if let from = items.firstIndex(where: { $0.id == dragging.id }),
+           let to = items.firstIndex(where: { $0.id == current.id }) {
+            withAnimation {
+                let item = items.remove(at: from)
+                items.insert(item, at: to)
+            }
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        return true
     }
 }
 
