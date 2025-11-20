@@ -521,10 +521,8 @@ struct PitchTrackerView: View {
                       showGameSheet = false
                   },
                 onCancel: {
-                    // Revert to practice if user cancels
-                    opponentName = nil
-                    isGame = false
-                    sessionManager.switchMode(to: .practice)
+                    // User canceled: preserve any existing game state.
+                    // If no game was active, onDismiss will revert to practice.
                     showGameSheet = false
                 }
             )
