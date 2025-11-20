@@ -31,16 +31,7 @@ struct JerseyCellView: View {
 }
 
 let jerseyCells: [JerseyCell] = [
-    JerseyCell(jerseyNumber: "12"),
-    JerseyCell(jerseyNumber: "7"),
-    JerseyCell(jerseyNumber: "34"),
-    JerseyCell(jerseyNumber: "22"),
-    JerseyCell(jerseyNumber: "9"),
-    JerseyCell(jerseyNumber: "13"),
-    JerseyCell(jerseyNumber: "2"),
-    JerseyCell(jerseyNumber: "38"),
-    JerseyCell(jerseyNumber: "24"),
     JerseyCell(jerseyNumber: "1"),
-    JerseyCell(jerseyNumber: "20"),
+    JerseyCell(jerseyNumber: "2"),
     JerseyCell(jerseyNumber: "3")
 ]

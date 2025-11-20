@@ -217,6 +217,23 @@ struct PitchTrackerView: View {
                                 // 🧩 Scrollable jersey cells
                                 ScrollView(.vertical, showsIndicators: false) {
                                     VStack(spacing: 6) {
+                                        // Permanent plus cell always visible
+                                        Button(action: {
+                                            // TODO: Implement add jersey cell action
+                                        }) {
+                                            ZStack {
+                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                    .fill(Color.white)
+                                                    .frame(height: 44)
+                                                Image(systemName: "plus")
+                                                    .foregroundColor(.secondary)
+                                                    .font(.headline)
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                        .padding(.horizontal, 6)
+                                        
+                                        // Existing jersey cells
                                         ForEach(jerseyCells) { cell in
                                             JerseyCellView(cell: cell)
                                         }
@@ -771,6 +788,23 @@ struct GameSelectionSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                // Permanent quick-pick: Practice Game
+                Section {
+                    Button(action: {
+                        onChoose("Practice")
+                        dismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: "figure.run.circle")
+                                .foregroundColor(.green)
+                            Text("Practice Game")
+                                .font(.headline)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+
                 if games.isEmpty {
 //                    Section {
 //                        Text("No games yet. Tap + to add one.")
