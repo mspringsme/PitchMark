@@ -92,7 +92,7 @@ struct PitchTrackerView: View {
                         showGameSheet = true
                     } else {
                         opponentName = nil
-                        // Do not touch isGame here
+                        isGame = false
                     }
                 }
             }
@@ -963,5 +963,3 @@ struct AddGameCard: View {
     .environmentObject(AuthManager())
     .preferredColorScheme(.dark)
 }
-
-
