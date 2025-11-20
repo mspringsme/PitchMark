@@ -61,6 +61,9 @@ struct PitchTrackerView: View {
     @State private var selectedGameId: String? = nil
     @State private var jerseyCells: [JerseyCell] = sampleJerseyCells
     @State private var draggingJersey: JerseyCell?
+    @State private var showAddJerseyPopover = false
+    @State private var newJerseyNumber: String = ""
+    @FocusState private var jerseyInputFocused: Bool
     
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
@@ -230,10 +233,23 @@ struct PitchTrackerView: View {
                                                 }
                                                 .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
                                         }
+                                        
+                                        if showAddJerseyPopover {
+                                            VStack(spacing: 6) {
+                                                TextField("##", text: $newJerseyNumber)
+                                                    .keyboardType(.numberPad)
+                                                    .textFieldStyle(.roundedBorder)
+                                                    .frame(height: 36)
+                                                    .focused($jerseyInputFocused)
+                                                    .onAppear { jerseyInputFocused = true }
+                                            }
+                                        }
 
                                         // Permanent plus cell at the bottom
                                         Button(action: {
-                                            // TODO: Implement add jersey cell action
+                                            newJerseyNumber = ""
+                                            showAddJerseyPopover = true
+                                            jerseyInputFocused = true
                                         }) {
                                             ZStack {
                                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -447,6 +463,30 @@ struct PitchTrackerView: View {
             .allowsHitTesting(selectedTemplate != nil)
             .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
             
+        }
+        .toolbar {
+            if showAddJerseyPopover {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button("Cancel") {
+                        newJerseyNumber = ""
+                        showAddJerseyPopover = false
+                        jerseyInputFocused = false
+                    }
+                    Spacer()
+                    Button("Save") {
+                        let number = newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !number.isEmpty else { return }
+                        jerseyCells.append(JerseyCell(jerseyNumber: number))
+                        if let gameId = selectedGameId {
+                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                        }
+                        newJerseyNumber = ""
+                        showAddJerseyPopover = false
+                        jerseyInputFocused = false
+                    }
+                    .disabled(newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { output in
             guard let numbers = output.object as? [String], let gameId = selectedGameId else { return }
