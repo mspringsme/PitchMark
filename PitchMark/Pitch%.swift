@@ -260,6 +260,7 @@ struct ShowPitchLogTemplates: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+            .frame(width: 70, height: 36)
             .background(.ultraThinMaterial)
             .clipShape(Capsule())
             .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)

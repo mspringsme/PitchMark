@@ -743,17 +743,25 @@ struct ResetPitchButton: View {
                 resetAction()
             }
         }) {
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.body)
+            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+//                .font(.body)
+//                .foregroundColor(.red)
+//                .padding(6)
+//                .background(.ultraThinMaterial)
+//                .clipShape(Capsule())
+////                .overlay(
+////                    Circle()
+////                        .stroke(Color.red, lineWidth: 1)
+////                )
+//                .padding(.leading, 2)
+//                .offset(y: 6)
                 .foregroundColor(.red)
-                .padding(6)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(width: 70, height: 36)
                 .background(.ultraThinMaterial)
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(Color.red, lineWidth: 1)
-                )
-                .padding(.leading, 2)
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
                 .offset(y: 6)
                 
         }
