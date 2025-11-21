@@ -66,8 +66,6 @@ struct PitchTrackerView: View {
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
-    @State private var showEditSheet = false
-    @State private var editNumber: String = ""
     
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
@@ -197,8 +195,9 @@ struct PitchTrackerView: View {
                                         .contextMenu {
                                             Button("Edit", systemImage: "pencil") {
                                                 editingCell = cell
-                                                editNumber = cell.jerseyNumber
-                                                showEditSheet = true
+                                                newJerseyNumber = cell.jerseyNumber
+                                                showAddJerseyPopover = true
+                                                jerseyInputFocused = true
                                             }
                                             Button("Delete", systemImage: "trash", role: .destructive) {
                                                 if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
@@ -223,6 +222,7 @@ struct PitchTrackerView: View {
                                 }
 
                                 Button(action: {
+                                    editingCell = nil
                                     newJerseyNumber = ""
                                     showAddJerseyPopover = true
                                     jerseyInputFocused = true
@@ -492,6 +492,7 @@ struct PitchTrackerView: View {
                 ToolbarItemGroup(placement: .keyboard) {
                     Button {
                         newJerseyNumber = ""
+                        editingCell = nil
                         showAddJerseyPopover = false
                         jerseyInputFocused = false
                     } label: {
@@ -503,11 +504,19 @@ struct PitchTrackerView: View {
                     Button {
                         let number = newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !number.isEmpty else { return }
-                        jerseyCells.append(JerseyCell(jerseyNumber: number))
+
+                        if let editing = editingCell, let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
+                            jerseyCells[idx].jerseyNumber = number
+                        } else {
+                            jerseyCells.append(JerseyCell(jerseyNumber: number))
+                        }
+
                         if let gameId = selectedGameId {
                             authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
                         }
+
                         newJerseyNumber = ""
+                        editingCell = nil
                         showAddJerseyPopover = false
                         jerseyInputFocused = false
                     } label: {
@@ -579,41 +588,6 @@ struct PitchTrackerView: View {
                 allLocations: allLocationsFromGrid()
             )
             .padding()
-        }
-        .sheet(isPresented: $showEditSheet) {
-            NavigationStack {
-                VStack(spacing: 16) {
-                    TextField("Jersey #", text: $editNumber)
-                        .keyboardType(.numberPad)
-                        .textFieldStyle(.roundedBorder)
-                        .padding(.top)
-
-                    Spacer()
-
-                    HStack {
-                        Button("Cancel") { showEditSheet = false }
-                        Spacer()
-                        Button("Save") {
-                            guard let editingCell else { return }
-                            if let idx = jerseyCells.firstIndex(where: { $0.id == editingCell.id }) {
-                                jerseyCells[idx].jerseyNumber = editNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-                                if let gameId = selectedGameId {
-                                    authManager.updateGameLineup(
-                                        gameId: gameId,
-                                        jerseyNumbers: jerseyCells.map { $0.jerseyNumber }
-                                    )
-                                }
-                            }
-                            showEditSheet = false
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(editNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
-                .padding()
-                .navigationTitle("Edit Jersey")
-                .navigationBarTitleDisplayMode(.inline)
-            }
         }
         .onAppear {
             if authManager.isSignedIn {
