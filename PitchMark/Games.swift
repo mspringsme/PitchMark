@@ -12,8 +12,12 @@ import FirebaseFirestore
 
 
 struct JerseyCell: Identifiable {
-    let id = UUID()
+    let id: UUID
     var jerseyNumber: String
+    init(id: UUID = UUID(), jerseyNumber: String) {
+        self.id = id
+        self.jerseyNumber = jerseyNumber
+    }
 }
 
 //hi    
@@ -25,8 +29,9 @@ struct JerseyCellView: View {
         Text(cell.jerseyNumber)
             .font(.headline)
             .frame(width: 40, height: 40) // Square shape
-            .background(Color.white)
+            .background(Color.clear)
             .cornerRadius(6)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
     }
 }
 
@@ -38,6 +43,7 @@ struct Game: Identifiable, Codable {
     var opponent: String
     var date: Date
     var jerseyNumbers: [String]
+    var batterIds: [String]? = nil
     var createdAt: Date = Date()
 }
 

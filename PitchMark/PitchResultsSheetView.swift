@@ -171,6 +171,8 @@ struct PitchResultSheetView: View {
     let batterSide: BatterSide
     let selectedTemplateId: String?
     let currentMode: PitchMode
+    let selectedOpponentJersey: String?
+    let selectedOpponentBatterId: String?
     let saveAction: (PitchEvent) -> Void
     let template: PitchTemplate?
 
@@ -654,6 +656,8 @@ private struct FieldOverlayView: View {
         batterSide: .left,
         selectedTemplateId: nil,
         currentMode: .practice, // Use a valid case for PitchMode
+        selectedOpponentJersey: nil,
+        selectedOpponentBatterId: nil,
         saveAction: { _ in },
         template: PitchTemplate(
             id: UUID(),
@@ -663,4 +667,3 @@ private struct FieldOverlayView: View {
         )
     )
 }
-
