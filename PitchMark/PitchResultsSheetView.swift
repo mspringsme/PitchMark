@@ -285,9 +285,9 @@ struct PitchResultSheetView: View {
             battedBallRegion: battedBallRegionName,
             battedBallType: {
                 switch battedBallSelection {
-                case .hr?: return "hr"
-                case .foul?: return "foul"
-                case .field?: return "field"
+                case .hr?: return "HR"
+                case .foul?: return "Foul"
+                case .field?: return "Field"
                 case nil: return nil
                 }
             }(),
@@ -297,7 +297,7 @@ struct PitchResultSheetView: View {
             opponentJersey: selectedOpponentJersey,
             opponentBatterId: selectedOpponentBatterId
         )
-
+        event.debugLog()
         saveAction(event)
         isPresented = false
         resetSelections()

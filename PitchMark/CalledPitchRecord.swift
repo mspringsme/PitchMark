@@ -5,7 +5,6 @@
 //  Created by Mark Springer on 10/9/25.
 //
 
-
 import Foundation
 import FirebaseFirestore
 import SwiftUI
@@ -23,6 +22,7 @@ struct PitchCardView: View {
     let footerTextName: String
     let footerTextDate: String
     let pitchNumber: Int?
+    let outcomeSummary: [String]?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -68,18 +68,16 @@ struct PitchCardView: View {
     }
     
     private var content: some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 2) {
             leadingImages
-                .padding(.leading, 8)
+                .padding(.leading, 2)
             
-            Spacer()
-            
-            VStack(alignment: .center, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack{
                     Text(topText)
                         .font(.subheadline)
                         .bold()
-                        .multilineTextAlignment(.center)
+                        .multilineTextAlignment(.leading)
                     
                     verticalTopImage
                         .resizable()
@@ -88,16 +86,38 @@ struct PitchCardView: View {
                 }
                 Text(middleText)
                     .font(.caption)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
                 
                 Text(bottomText)
                     .font(.caption)
-                    .multilineTextAlignment(.center)
+                    .multilineTextAlignment(.leading)
             }
             .frame(minWidth: 80)
             .layoutPriority(1)
             
             Spacer()
+            
+            if let outcomeSummary, !outcomeSummary.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(outcomeSummary, id: \.self) { line in
+                        HStack(spacing: 4) {
+                            let showRunner = ["1B", "2B", "3B", "HR"].contains { prefix in
+                                line.uppercased().hasPrefix(prefix)
+                            }
+                            if showRunner {
+                                Image(systemName: "figure.run")
+                                    .foregroundColor(.secondary)
+                            }
+                            Text(line)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .frame(minWidth: 80)
+                .padding(.trailing, 10)
+            }
             
             rightImage
                 .resizable()
@@ -134,7 +154,7 @@ struct PitchCardView: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: 20, height: 70)
-            .padding(.horizontal, 2)
+            .padding(.horizontal, 0)
     }
     
     private var cardBackground: some View {
@@ -170,6 +190,76 @@ struct PitchResultCard: View {
     let event: PitchEvent
     let allEvents: [PitchEvent] // ✅ Add this
     let templateName: String
+    
+    private func outcomeSummaryLines(for event: PitchEvent) -> [String] {
+        var lines: [String] = []
+
+        // Remove any leading label before a separator for outcome/descriptor only
+        func sanitize(_ input: String?) -> String? {
+            guard let input = input?.trimmingCharacters(in: .whitespacesAndNewlines), !input.isEmpty else { return nil }
+
+            // Consider multiple separator variants
+            let separators = ["--", " — ", " – ", "-", "—", "–", ":"]
+            // Labels we want to strip if they appear before the separator
+            let stripLabels: Set<String> = [
+                "foul", "field", "hr", "home run", "homerun", "fly", "ground", "line drive", "linedrive"
+            ]
+
+            for sep in separators {
+                if let range = input.range(of: sep) {
+                    let before = input[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    let after = input[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    // If the prefix is a known label or very short (likely a label), strip it
+                    if stripLabels.contains(before) || before.count <= 6 {
+                        if !after.isEmpty { return after }
+                    }
+                }
+            }
+            return input
+        }
+
+        // Add a line if unique; optionally sanitize first
+        func addUnique(_ line: String?, sanitizeText: Bool = true) {
+            var candidate: String?
+            if sanitizeText {
+                candidate = sanitize(line)
+            } else {
+                candidate = line?.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard let raw = candidate, !raw.isEmpty else { return }
+            let lower = raw.lowercased()
+            if lines.contains(where: { $0.lowercased() == lower }) { return }
+            lines.append(raw)
+        }
+
+        // Primary flags
+        if event.strikeSwinging { addUnique("Strike — Swinging") }
+        if event.strikeLooking { addUnique("Strike — Looking") }
+        if event.wildPitch { addUnique("Wild Pitch") }
+        if event.passedBall { addUnique("Passed Ball") }
+
+        // Outcome/descriptor first (sanitize these to remove labels like "field --")
+        addUnique(event.outcome, sanitizeText: true)
+        addUnique(event.descriptor, sanitizeText: true)
+
+        // Batted ball details — show only the region label in cards (ignore type)
+        let regionLower = (event.battedBallRegion ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let existingCombined = lines.map { $0.lowercased() }.joined(separator: " \n ")
+
+        func alreadyRepresentsRegion(_ region: String) -> Bool {
+            return !region.isEmpty && existingCombined.contains(region)
+        }
+
+        if let region = event.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines), !region.isEmpty {
+            if !alreadyRepresentsRegion(regionLower) {
+                // Do NOT sanitize constructed lines; keep user-facing label intact
+                addUnique(region, sanitizeText: false)
+            }
+        }
+
+        return lines
+    }
     
     func formattedTimestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -220,6 +310,7 @@ struct PitchResultCard: View {
         }()
         
         let timestampText = formattedTimestamp(event.timestamp)
+        let outcomeSummary = outcomeSummaryLines(for: event)
         
         return PitchCardView(
             batterSide: event.batterSide,
@@ -232,7 +323,8 @@ struct PitchResultCard: View {
             rightImageShouldHighlight: didHitLocation,
             footerTextName: "\(templateName)",
             footerTextDate: "\(timestampText)",
-            pitchNumber: pitchNumber(for: event, in: allEvents)
+            pitchNumber: pitchNumber(for: event, in: allEvents),
+            outcomeSummary: outcomeSummary
         )
     }
 }
@@ -374,5 +466,71 @@ func summarizeOverallSuccess(events: [PitchEvent]) -> [String: Int] {
 extension PitchCall {
     var displayTitle: String { "\(type) \(location)" } // location will now already be "Up & In" style
     var shortLabel: String { "\(pitch) — \(displayTitle)" }
+}
+
+extension PitchEvent {
+    func debugLog(prefix: String = "📤 Saving PitchEvent") {
+        struct DebugEvent: Encodable {
+            let id: String?
+            let timestamp: Date
+            let pitch: String
+            let location: String
+            let codes: [String]
+            let isStrike: Bool
+            let mode: PitchMode
+            let calledPitch: PitchCall?
+            let batterSide: BatterSide
+            let templateId: String?
+            let strikeSwinging: Bool
+            let wildPitch: Bool
+            let passedBall: Bool
+            let strikeLooking: Bool
+            let outcome: String?
+            let descriptor: String?
+            let errorOnPlay: Bool
+            let battedBallRegion: String?
+            let battedBallType: String?
+            let battedBallTapX: Double?
+            let battedBallTapY: Double?
+            let gameId: String?
+            let opponentJersey: String?
+            let opponentBatterId: String?
+        }
+        let debug = DebugEvent(
+            id: self.id,
+            timestamp: self.timestamp,
+            pitch: self.pitch,
+            location: self.location,
+            codes: self.codes,
+            isStrike: self.isStrike,
+            mode: self.mode,
+            calledPitch: self.calledPitch,
+            batterSide: self.batterSide,
+            templateId: self.templateId,
+            strikeSwinging: self.strikeSwinging,
+            wildPitch: self.wildPitch,
+            passedBall: self.passedBall,
+            strikeLooking: self.strikeLooking,
+            outcome: self.outcome,
+            descriptor: self.descriptor,
+            errorOnPlay: self.errorOnPlay,
+            battedBallRegion: self.battedBallRegion,
+            battedBallType: self.battedBallType,
+            battedBallTapX: self.battedBallTapX,
+            battedBallTapY: self.battedBallTapY,
+            gameId: self.gameId,
+            opponentJersey: self.opponentJersey,
+            opponentBatterId: self.opponentBatterId
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(debug), let json = String(data: data, encoding: .utf8) {
+            print("\(prefix):\n\(json)")
+        } else {
+            print("\(prefix): <failed to encode>")
+            print(self)
+        }
+    }
 }
 
