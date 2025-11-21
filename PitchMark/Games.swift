@@ -13,7 +13,7 @@ import FirebaseFirestore
 
 struct JerseyCell: Identifiable {
     let id = UUID()
-    let jerseyNumber: String
+    var jerseyNumber: String
 }
 
 //hi    

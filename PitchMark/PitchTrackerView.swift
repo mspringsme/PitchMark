@@ -65,6 +65,10 @@ struct PitchTrackerView: View {
     @State private var newJerseyNumber: String = ""
     @FocusState private var jerseyInputFocused: Bool
     
+    @State private var editingCell: JerseyCell?
+    @State private var showEditSheet = false
+    @State private var editNumber: String = ""
+    
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
     init(
@@ -79,6 +83,300 @@ struct PitchTrackerView: View {
         }
         _templates = State(initialValue: previewTemplates)
         _isGame = State(initialValue: previewIsGame)
+    }
+    
+    // MARK: - Extracted subviews to help type-checker
+    private var topBar: some View {
+        HStack {
+            Menu {
+                ForEach(templates, id: \.id) { template in
+                    Button(template.name) {
+                        selectedTemplate = template
+                        selectedPitches = Set(template.pitches)
+                        pitchCodeAssignments = template.codeAssignments
+                        // 🧹 Reset strike zone and called pitch state
+                        lastTappedPosition = nil
+                        calledPitch = nil
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(selectedTemplate?.name ?? "Select a template")
+                        .font(.headline)
+                    Image(systemName: "chevron.down")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .foregroundColor(templates.isEmpty ? .gray : .primary)
+                .background(templates.isEmpty ? Color.gray.opacity(0.12) : Color.clear)
+                .overlay(
+                    Capsule()
+                        .stroke(templates.isEmpty ? Color.gray.opacity(0.35) : Color.blue, lineWidth: 1)
+                )
+                .clipShape(Capsule())
+                .contentShape(Capsule())
+            }
+            .disabled(templates.isEmpty)
+
+            Spacer()
+
+            Button(action: {
+                showSettings = true
+            }) {
+                Image(systemName: "gearshape")
+                    .imageScale(.large)
+            }
+            Button(action: {
+                showSignOutConfirmation = true
+            }) {
+                Image(systemName: "person.crop.circle")
+                    .foregroundColor(.green)
+                    .imageScale(.large)
+            }
+            .accessibilityLabel("Sign Out")
+            .confirmationDialog(
+                "Are you sure you want to sign out of \(authManager.userEmail)?",
+                isPresented: $showSignOutConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Sign Out", role: .destructive) {
+                    authManager.signOut()
+                }
+                Button("Cancel", role: .cancel) { }
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 6)
+        .padding(.bottom, 12)
+    }
+    
+    private var pitchSelectionChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(pitchOrder, id: \.self) { pitch in
+                    ToggleChip(
+                        pitch: pitch,
+                        selectedPitches: $selectedPitches,
+                        template: selectedTemplate,
+                        codeAssignments: pitchCodeAssignments
+                    )
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 4)
+            .padding(.top, 10)
+        }
+    }
+    
+    private var mainStrikeZoneSection: some View {
+        let deviceWidth = UIScreen.main.bounds.width
+        let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
+
+        return VStack {
+            HStack(alignment: .top, spacing: 8) {
+                if isGame {
+                    VStack(spacing: 0) {
+                        Text("At Bat")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(Color.gray)
+
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(spacing: 6) {
+                                ForEach(jerseyCells) { cell in
+                                    JerseyCellView(cell: cell)
+                                        .onDrag {
+                                            draggingJersey = cell
+                                            return NSItemProvider(object: NSString(string: cell.id.uuidString))
+                                        }
+                                        .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
+                                        .contextMenu {
+                                            Button("Edit", systemImage: "pencil") {
+                                                editingCell = cell
+                                                editNumber = cell.jerseyNumber
+                                                showEditSheet = true
+                                            }
+                                            Button("Delete", systemImage: "trash", role: .destructive) {
+                                                if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
+                                                    jerseyCells.remove(at: idx)
+                                                    if let gameId = selectedGameId {
+                                                        authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                                                    }
+                                                }
+                                            }
+                                        }
+                                }
+
+                                if showAddJerseyPopover {
+                                    VStack(spacing: 6) {
+                                        TextField("##", text: $newJerseyNumber)
+                                            .keyboardType(.numberPad)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(height: 36)
+                                            .focused($jerseyInputFocused)
+                                            .onAppear { jerseyInputFocused = true }
+                                    }
+                                }
+
+                                Button(action: {
+                                    newJerseyNumber = ""
+                                    showAddJerseyPopover = true
+                                    jerseyInputFocused = true
+                                }) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Color.white)
+                                            .frame(width: 32, height: 32)
+
+                                        Image(systemName: "plus")
+                                            .foregroundColor(.secondary)
+                                            .font(.headline)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.horizontal, 6)
+                            }
+                            .padding(.vertical,12)
+                            .padding(.horizontal, 0)
+                        }
+                    }
+                    .frame(width: 60, height: 400)
+                    .background(Color.gray.opacity(0.15))
+                    .cornerRadius(10)
+                    .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+                }
+
+                ZStack(alignment: .top) {
+                    VStack {
+                        StrikeZoneView(
+                            width: SZwidth,
+                            isGame: $isGame,
+                            batterSide: batterSide,
+                            lastTappedPosition: lastTappedPosition,
+                            setLastTapped: { lastTappedPosition = $0 },
+                            calledPitch: calledPitch,
+                            setCalledPitch: { calledPitch = $0 },
+                            selectedPitches: selectedPitches,
+                            gameIsActive: gameIsActive,
+                            selectedPitch: selectedPitch,
+                            pitchCodeAssignments: pitchCodeAssignments,
+                            isRecordingResult: isRecordingResult,
+                            setIsRecordingResult: { isRecordingResult = $0 },
+                            setActualLocation: { actualLocationRecorded = $0 },
+                            actualLocationRecorded: actualLocationRecorded,
+                            setSelectedPitch: { selectedPitch = $0 },
+                            resultVisualState: resultVisualState,
+                            setResultVisualState: { resultVisualState = $0 },
+                            pendingResultLabel: $pendingResultLabel,
+                            showResultConfirmation: $showResultConfirmation,
+                            showConfirmSheet: $showConfirmSheet
+                        )
+                    }
+                    .frame(width: SZwidth, height: 400)
+                    .cornerRadius(12)
+                    .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+                    .overlay(
+                        Group {
+                            ResetPitchButton() {
+                                isRecordingResult = false
+                                selectedPitch = ""
+                                selectedLocation = ""
+                                lastTappedPosition = nil
+                                calledPitch = nil
+                                resultVisualState = nil
+                                actualLocationRecorded = nil
+                                pendingResultLabel = nil
+                            }
+                        },
+                        alignment: .bottomLeading
+                    )
+                    .overlay(
+                        Group {
+                            let sortedTemplates: [PitchTemplate] = {
+                                guard let activeID = selectedTemplate?.id else {
+                                    return templates.sorted { $0.name < $1.name }
+                                }
+                                let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
+                                if let active = templates.first(where: { $0.id == activeID }) {
+                                    return [active] + others
+                                }
+                                return others
+                            }()
+                            ShowPitchLogTemplates(
+                                sortedTemplates: sortedTemplates,
+                                onSelectTemplate: { template in
+                                    menuSelectedStatsTemplate = template
+                                    showTemplateStatsSheet = true
+                                }
+                            )
+                        },
+                        alignment: .bottomTrailing
+                    )
+                    .overlay(
+                        Group {
+                            if isGame {
+                                Button(action: {
+                                    showGameSheet = true
+                                }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "gearshape")
+                                        Text(opponentName ?? "Game")
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: 160)
+                                    .background(.ultraThinMaterial)
+                                    .clipShape(Capsule())
+                                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                                }
+                                .buttonStyle(.plain)
+                                .offset(y: 6)
+                            }
+                        },
+                        alignment: .bottom
+                    )
+
+                    HStack {
+                        let iconSize: CGFloat = 36
+                        Button(action: {
+                            withAnimation { batterSide = .left }
+                        }) {
+                            Image("rightBatterIcon")
+                                .resizable()
+                                .renderingMode(.template)
+                                .frame(width: iconSize, height: iconSize)
+                                .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button(action: {
+                            withAnimation { batterSide = .right }
+                        }) {
+                            Image("leftBatterIcon")
+                                .resizable()
+                                .renderingMode(.template)
+                                .frame(width: iconSize, height: iconSize)
+                                .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .frame(width: SZwidth)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
+                    .offset(y: -20)
+                }
+                .frame(width: SZwidth, height: 400)
+            }
+        }
+        .padding(.horizontal, 12)
     }
     
     private var batterAndModeBar: some View {
@@ -113,297 +411,21 @@ struct PitchTrackerView: View {
     var body: some View {
         VStack(spacing: 4) {
             // 🧩 Top Hstack
-            HStack {
-                Menu {
-                    ForEach(templates, id: \.self) { template in
-                        Button(template.name) {
-                            selectedTemplate = template
-                            selectedPitches = Set(template.pitches)
-                            pitchCodeAssignments = template.codeAssignments
-                            // 🧹 Reset strike zone and called pitch state
-                            lastTappedPosition = nil
-                            calledPitch = nil
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(selectedTemplate?.name ?? "Select a template")
-                            .font(.headline)
-                        Image(systemName: "chevron.down")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .foregroundColor(templates.isEmpty ? .gray : .primary)
-                    .background(templates.isEmpty ? Color.gray.opacity(0.12) : Color.clear)
-                    .overlay(
-                        Capsule()
-                            .stroke(templates.isEmpty ? Color.gray.opacity(0.35) : Color.blue, lineWidth: 1)
-                    )
-                    .clipShape(Capsule())
-                    .contentShape(Capsule()) // ensures the whole capsule is tappable
-                }
-                .disabled(templates.isEmpty)
-                
-                
-                Spacer() // 👈 Pushes content to the trailing edge
-                
-                Button(action: {
-                    showSettings = true
-                }) {
-                    Image(systemName: "gearshape")
-                        .imageScale(.large)
-                }
-                Button(action: {
-                    showSignOutConfirmation = true
-                }) {
-                    Image(systemName: "person.crop.circle")
-                        .foregroundColor(.green)
-                        .imageScale(.large)
-                }
-                .accessibilityLabel("Sign Out")
-                .confirmationDialog(
-                    "Are you sure you want to sign out of \(authManager.userEmail)?",
-                    isPresented: $showSignOutConfirmation,
-                    titleVisibility: .visible
-                ) {
-                    Button("Sign Out", role: .destructive) {
-                        authManager.signOut()
-                    }
-                    Button("Cancel", role: .cancel) { }
-                }
-            }
-            .padding(.horizontal)
-            .padding(.top, 6) // 👈 Optional: reduce top spacing
-            .padding(.bottom, 12)
+            topBar
             
             Divider()
             
             // everything below top bar:
             Group {
                 // 🧩 Toggle Chips for Pitch Selection
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(pitchOrder, id: \.self) { pitch in
-                            ToggleChip(
-                                pitch: pitch,
-                                selectedPitches: $selectedPitches,
-                                template: selectedTemplate,
-                                codeAssignments: pitchCodeAssignments
-                            )
-                        }
-                    }
-                    .padding(.horizontal)
-                    .padding(.bottom, 4)
-                    .padding(.top, 10)
-                }
+                pitchSelectionChips
                 
                 Divider()
                     .padding(.bottom, 4)
                 
                 batterAndModeBar
                 
-                
-                let deviceWidth = UIScreen.main.bounds.width
-                let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
-                VStack {
-                    HStack(alignment: .top, spacing: 8) {
-                        
-                        // 🧩 Leading scrollable cells (only if game is active)
-                        if isGame {
-                            VStack(spacing: 0) {
-                                // 🧢 Header
-                                Text("At Bat")
-                                    .font(.caption)
-                                    .fontWeight(.semibold)
-                                    .foregroundColor(.white)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 6)
-                                    .background(Color.gray)
-                                
-                                // 🧩 Scrollable jersey cells
-                                ScrollView(.vertical, showsIndicators: false) {
-                                    VStack(spacing: 6) {
-                                        // Existing jersey cells first
-                                        ForEach(jerseyCells) { cell in
-                                            JerseyCellView(cell: cell)
-                                                .onDrag {
-                                                    draggingJersey = cell
-                                                    return NSItemProvider(object: NSString(string: cell.id.uuidString))
-                                                }
-                                                .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
-                                        }
-                                        
-                                        if showAddJerseyPopover {
-                                            VStack(spacing: 6) {
-                                                TextField("##", text: $newJerseyNumber)
-                                                    .keyboardType(.numberPad)
-                                                    .textFieldStyle(.roundedBorder)
-                                                    .frame(height: 36)
-                                                    .focused($jerseyInputFocused)
-                                                    .onAppear { jerseyInputFocused = true }
-                                            }
-                                        }
-
-                                        // Permanent plus cell at the bottom
-                                        Button(action: {
-                                            newJerseyNumber = ""
-                                            showAddJerseyPopover = true
-                                            jerseyInputFocused = true
-                                        }) {
-                                            ZStack {
-                                                Circle()
-                                                    .fill(Color.white)
-                                                    .frame(width: 32, height: 32)
-
-                                                Image(systemName: "plus")
-                                                    .foregroundColor(.secondary)
-                                                    .font(.headline)
-                                            }
-                                        }
-                                        .buttonStyle(.plain)
-                                        .padding(.horizontal, 6)
-                                    }
-                                    .padding(.vertical,12)        // Less vertical breathing room
-                                    .padding(.horizontal, 0)      // No horizontal inset — flush to edges
-                                }
-                            }
-                            .frame(width: 60, height: 400)
-                            .background(Color.gray.opacity(0.15))
-                            .cornerRadius(10)
-                            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
-                        }
-                        
-                        // 🧩 Strike Zone View
-                        ZStack(alignment: .top) {
-                            // Rounded container holding the StrikeZoneView and bottom overlays
-                            VStack {
-                                StrikeZoneView(
-                                    width: SZwidth,
-                                    isGame: $isGame,
-                                    batterSide: batterSide,
-                                    lastTappedPosition: lastTappedPosition,
-                                    setLastTapped: { lastTappedPosition = $0 },
-                                    calledPitch: calledPitch,
-                                    setCalledPitch: { calledPitch = $0 },
-                                    selectedPitches: selectedPitches,
-                                    gameIsActive: gameIsActive,
-                                    selectedPitch: selectedPitch,
-                                    pitchCodeAssignments: pitchCodeAssignments,
-                                    isRecordingResult: isRecordingResult,
-                                    setIsRecordingResult: { isRecordingResult = $0 },
-                                    setActualLocation: { actualLocationRecorded = $0 },
-                                    actualLocationRecorded: actualLocationRecorded,
-                                    setSelectedPitch: { selectedPitch = $0 },
-                                    resultVisualState: resultVisualState,
-                                    setResultVisualState: { resultVisualState = $0 },
-                                    pendingResultLabel: $pendingResultLabel,
-                                    showResultConfirmation: $showResultConfirmation,
-                                    showConfirmSheet: $showConfirmSheet
-                                )
-                            }
-                            .frame(width: SZwidth, height: 400)
-                            .cornerRadius(12)
-                            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
-                            .overlay(
-                                Group {
-                                    ResetPitchButton() {
-                                        isRecordingResult = false
-                                        selectedPitch = ""
-                                        selectedLocation = ""
-                                        lastTappedPosition = nil
-                                        calledPitch = nil
-                                        resultVisualState = nil
-                                        actualLocationRecorded = nil
-                                        pendingResultLabel = nil
-                                    }
-                                },
-                                alignment: .bottomLeading
-                            )
-                            .overlay(
-                                Group {
-                                    let sortedTemplates: [PitchTemplate] = {
-                                        guard let activeID = selectedTemplate?.id else {
-                                            return templates.sorted { $0.name < $1.name }
-                                        }
-                                        let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
-                                        if let active = templates.first(where: { $0.id == activeID }) {
-                                            return [active] + others
-                                        }
-                                        return others
-                                    }()
-                                    ShowPitchLogTemplates(
-                                        sortedTemplates: sortedTemplates,
-                                        onSelectTemplate: { template in
-                                            menuSelectedStatsTemplate = template
-                                            showTemplateStatsSheet = true
-                                        }
-                                    )
-                                },
-                                alignment: .bottomTrailing
-                            )
-                            .overlay(
-                                Group {
-                                    if isGame {
-                                        Button(action: {
-                                            showGameSheet = true
-                                        }) {
-                                            HStack(spacing: 6) {
-                                                Image(systemName: "gearshape")
-                                                Text(opponentName ?? "Game")
-                                                    .lineLimit(1)
-                                                    .truncationMode(.tail)
-                                            }
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                            .frame(maxWidth: 160)
-                                            .background(.ultraThinMaterial)
-                                            .clipShape(Capsule())
-                                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .offset(y: 6)
-                                    }
-                                },
-                                alignment: .bottom
-                            )
-                            
-                            // Top batter icons as a sibling, not clipped by corner radius
-                            HStack {
-                                let iconSize: CGFloat = 36
-                                Button(action: {
-                                    withAnimation { batterSide = .left }
-                                }) {
-                                    Image("rightBatterIcon")
-                                        .resizable()
-                                        .renderingMode(.template)
-                                        .frame(width: iconSize, height: iconSize)
-                                        .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
-                                }
-                                .buttonStyle(.plain)
-
-                                Spacer()
-
-                                Button(action: {
-                                    withAnimation { batterSide = .right }
-                                }) {
-                                    Image("leftBatterIcon")
-                                        .resizable()
-                                        .renderingMode(.template)
-                                        .frame(width: iconSize, height: iconSize)
-                                        .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .frame(width: SZwidth)
-                            .padding(.horizontal, 12)
-                            .padding(.top, 6)
-                            .offset(y: -20)
-                        }
-                        .frame(width: SZwidth, height: 400)
-                    }
-                }
-                .padding(.horizontal, 12)
+                mainStrikeZoneSection
                 
                 // 🧩 conditional "Choose a Pitch Result" pop up TEXT
                 let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
@@ -557,6 +579,41 @@ struct PitchTrackerView: View {
                 allLocations: allLocationsFromGrid()
             )
             .padding()
+        }
+        .sheet(isPresented: $showEditSheet) {
+            NavigationStack {
+                VStack(spacing: 16) {
+                    TextField("Jersey #", text: $editNumber)
+                        .keyboardType(.numberPad)
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.top)
+
+                    Spacer()
+
+                    HStack {
+                        Button("Cancel") { showEditSheet = false }
+                        Spacer()
+                        Button("Save") {
+                            guard let editingCell else { return }
+                            if let idx = jerseyCells.firstIndex(where: { $0.id == editingCell.id }) {
+                                jerseyCells[idx].jerseyNumber = editNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if let gameId = selectedGameId {
+                                    authManager.updateGameLineup(
+                                        gameId: gameId,
+                                        jerseyNumbers: jerseyCells.map { $0.jerseyNumber }
+                                    )
+                                }
+                            }
+                            showEditSheet = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(editNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                .padding()
+                .navigationTitle("Edit Jersey")
+                .navigationBarTitleDisplayMode(.inline)
+            }
         }
         .onAppear {
             if authManager.isSignedIn {
@@ -744,17 +801,6 @@ struct ResetPitchButton: View {
             }
         }) {
             Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
-//                .font(.body)
-//                .foregroundColor(.red)
-//                .padding(6)
-//                .background(.ultraThinMaterial)
-//                .clipShape(Capsule())
-////                .overlay(
-////                    Circle()
-////                        .stroke(Color.red, lineWidth: 1)
-////                )
-//                .padding(.leading, 2)
-//                .offset(y: 6)
                 .foregroundColor(.red)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -1103,5 +1149,4 @@ struct AddGameCard: View {
     .environmentObject(AuthManager())
     .preferredColorScheme(.dark)
 }
-
 
