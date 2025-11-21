@@ -37,10 +37,22 @@ struct OutcomeSummaryView: View {
             if let num = jerseyNumber, !num.isEmpty {
                 HStack {
                     Text(num)
-                        .font(.system(size: 14))
-                        .frame(width: 18, height: 18)
-                        .background(Circle().fill(Color.blue))
+                        .font(.system(size: 12, weight: .bold))
+                        .monospacedDigit()
                         .foregroundColor(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .padding(.horizontal, num.count > 1 ? 6 : 0)
+                        .frame(width: num.count > 1 ? nil : 18, height: 18)
+                        .background(
+                            Group {
+                                if num.count > 1 {
+                                    Capsule().fill(Color.blue)
+                                } else {
+                                    Circle().fill(Color.blue)
+                                }
+                            }
+                        )
                 }
                 .padding(.bottom, 6)
             }

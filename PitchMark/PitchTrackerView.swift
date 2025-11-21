@@ -583,6 +583,69 @@ struct PitchTrackerView: View {
             authManager.updateGameLineup(gameId: gameId, jerseyNumbers: numbers)
         } // 🧩🧩🧩🧩 end of VStack 🧩🧩🧩🧩🧧🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩
         .frame(maxHeight: .infinity, alignment: .top)
+        .onChange(of: pendingResultLabel) { _, newValue in
+            // Auto-save in Practice mode without presenting the PitchResultSheetView
+            guard newValue != nil else { return }
+            guard sessionManager.currentMode == .practice else { return }
+            guard let pitchCall = calledPitch, let label = pendingResultLabel else { return }
+
+            // Build minimal practice event
+            let event = PitchEvent(
+                id: UUID().uuidString,
+                timestamp: Date(),
+                pitch: pitchCall.pitch,
+                location: label,
+                codes: pitchCall.codes,
+                isStrike: pitchCall.isStrike,
+                mode: sessionManager.currentMode,
+                calledPitch: pitchCall,
+                batterSide: batterSide,
+                templateId: selectedTemplate?.id.uuidString,
+                strikeSwinging: false,
+                wildPitch: false,
+                passedBall: false,
+                strikeLooking: false,
+                outcome: nil,
+                descriptor: nil,
+                errorOnPlay: false,
+                battedBallRegion: nil,
+                battedBallType: nil,
+                battedBallTapX: nil,
+                battedBallTapY: nil,
+                gameId: nil,
+                opponentJersey: nil,
+                opponentBatterId: nil
+            )
+            event.debugLog(prefix: "📤 Auto-saving Practice PitchEvent")
+
+            // Persist and update UI state
+            authManager.savePitchEvent(event)
+            sessionManager.incrementCount()
+            withAnimation(.easeInOut(duration: 0.3)) {
+                pitchEvents.append(event)
+            }
+            authManager.loadPitchEvents { events in
+                self.pitchEvents = events
+            }
+
+            // Prevent sheet from showing and reset UI state (mirror sheet save reset)
+            showConfirmSheet = false
+            resultVisualState = event.location
+            activeCalledPitchId = UUID().uuidString
+            isRecordingResult = false
+            selectedPitch = ""
+            selectedLocation = ""
+            lastTappedPosition = nil
+            calledPitch = nil
+            resultVisualState = nil
+            actualLocationRecorded = nil
+            pendingResultLabel = nil
+            isStrikeSwinging = false
+            isWildPitch = false
+            isPassedBall = false
+            selectedOutcome = nil
+            selectedDescriptor = nil
+        }
         .sheet(isPresented: $showConfirmSheet) {
             PitchResultSheetView(
                 isPresented: $showConfirmSheet,
