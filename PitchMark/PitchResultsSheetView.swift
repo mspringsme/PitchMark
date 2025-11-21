@@ -171,6 +171,7 @@ struct PitchResultSheetView: View {
     let batterSide: BatterSide
     let selectedTemplateId: String?
     let currentMode: PitchMode
+    let selectedGameId: String?
     let selectedOpponentJersey: String?
     let selectedOpponentBatterId: String?
     let saveAction: (PitchEvent) -> Void
@@ -268,7 +269,10 @@ struct PitchResultSheetView: View {
             templateId: selectedTemplateId,
             strikeSwinging: isStrikeSwinging,
             wildPitch: isWildPitch,
-            passedBall: isPassedBall
+            passedBall: isPassedBall,
+            gameId: selectedGameId,
+            opponentJersey: selectedOpponentJersey,
+            opponentBatterId: selectedOpponentBatterId
         )
 
         saveAction(event)
@@ -656,6 +660,7 @@ private struct FieldOverlayView: View {
         batterSide: .left,
         selectedTemplateId: nil,
         currentMode: .practice, // Use a valid case for PitchMode
+        selectedGameId: nil,
         selectedOpponentJersey: nil,
         selectedOpponentBatterId: nil,
         saveAction: { _ in },
@@ -667,3 +672,4 @@ private struct FieldOverlayView: View {
         )
     )
 }
+

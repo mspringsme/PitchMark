@@ -548,6 +548,7 @@ struct PitchTrackerView: View {
                 batterSide: batterSide,
                 selectedTemplateId: selectedTemplate?.id.uuidString,
                 currentMode: sessionManager.currentMode,
+                selectedGameId: selectedGameId,
                 selectedOpponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
                 selectedOpponentBatterId: selectedBatterId?.uuidString,
                 saveAction: { event in

@@ -321,6 +321,10 @@ struct PitchEvent: Codable, Identifiable {
     var strikeSwinging: Bool
     var wildPitch: Bool
     var passedBall: Bool
+    
+    var gameId: String?
+    var opponentJersey: String?
+    var opponentBatterId: String?
 }
 
 enum PitchMode: String, Codable {
@@ -360,3 +364,4 @@ extension PitchCall {
     var displayTitle: String { "\(type) \(location)" } // location will now already be "Up & In" style
     var shortLabel: String { "\(pitch) — \(displayTitle)" }
 }
+
