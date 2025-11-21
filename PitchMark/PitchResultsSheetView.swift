@@ -134,6 +134,11 @@ struct PitchResultSheetView: View {
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
     @Binding var isError: Bool
+
+    @State private var battedBallRegionName: String? = nil
+    @State private var battedBallSelection: OverlaySelection? = nil
+    @State private var battedBallTapNormalized: CGPoint? = nil
+
     @State private var showFieldOverlay: Bool = false
 
     @State private var colorMapImage: UIImage? = UIImage(named: "colorMap")
@@ -185,6 +190,9 @@ struct PitchResultSheetView: View {
         selectedOutcome = nil
         selectedDescriptor = nil
         isError = false
+        battedBallRegionName = nil
+        battedBallSelection = nil
+        battedBallTapNormalized = nil
     }
 
     private func isOutcomeDisabled(_ label: String) -> Bool {
@@ -270,6 +278,21 @@ struct PitchResultSheetView: View {
             strikeSwinging: isStrikeSwinging,
             wildPitch: isWildPitch,
             passedBall: isPassedBall,
+            strikeLooking: isStrikeLooking,
+            outcome: selectedOutcome,
+            descriptor: selectedDescriptor,
+            errorOnPlay: isError,
+            battedBallRegion: battedBallRegionName,
+            battedBallType: {
+                switch battedBallSelection {
+                case .hr?: return "hr"
+                case .foul?: return "foul"
+                case .field?: return "field"
+                case nil: return nil
+                }
+            }(),
+            battedBallTapX: battedBallTapNormalized.map { Double($0.x) },
+            battedBallTapY: battedBallTapNormalized.map { Double($0.y) },
             gameId: selectedGameId,
             opponentJersey: selectedOpponentJersey,
             opponentBatterId: selectedOpponentBatterId
@@ -354,11 +377,30 @@ struct PitchResultSheetView: View {
                 )
                 .padding(.horizontal)
 
+                let canSave: Bool = {
+                    // Require at least one of: overlay tap, outcome/descriptor/error, or any toggle
+                    (battedBallRegionName != nil) ||
+                    (selectedOutcome != nil) ||
+                    (selectedDescriptor != nil) ||
+                    isError ||
+                    isStrikeSwinging ||
+                    isStrikeLooking ||
+                    isWildPitch ||
+                    isPassedBall
+                }()
+
                 Button("Save Pitch Event") {
                     handleSave()
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(!canSave)
                 .padding(.top)
+
+                if !( (battedBallRegionName != nil) || (selectedOutcome != nil) || (selectedDescriptor != nil) || isError ) {
+                    Text("Select an outcome or tap a field location to enable Save.")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
 
                 Button("Cancel", role: .cancel) {
                     isPresented = false
@@ -374,7 +416,10 @@ struct PitchResultSheetView: View {
                     colorMapping: colorMapping,
                     selectedOutcome: $selectedOutcome,
                     selectedDescriptor: $selectedDescriptor,
-                    isError: $isError
+                    isError: $isError,
+                    battedBallRegionName: $battedBallRegionName,
+                    battedBallSelection: $battedBallSelection,
+                    battedBallTapNormalized: $battedBallTapNormalized
                 )
                 .ignoresSafeArea()
             }
@@ -468,13 +513,14 @@ private struct FieldOverlayView: View {
     @Binding var selectedDescriptor: String?
     @Binding var isError: Bool
 
+    @Binding var battedBallRegionName: String?
+    @Binding var battedBallSelection: OverlaySelection?
+    @Binding var battedBallTapNormalized: CGPoint?
+
     @State private var overlayTapPoint: CGPoint? = nil
-    @State private var overlaySelection: OverlaySelection? = nil
-    @State private var overlayRegionName: String? = nil
 
     private func handleTap(at location: CGPoint, in imageRect: CGRect) {
         guard imageRect.contains(location) else { return }
-        // Removed the line: overlayTapPoint = location
 
         let nx = (location.x - imageRect.minX) / imageRect.width
         let ny = (location.y - imageRect.minY) / imageRect.height
@@ -486,14 +532,15 @@ private struct FieldOverlayView: View {
                 let key = colorKey(from: uiColor)
                 if let mapped = colorMapping[key] {
                     overlayTapPoint = location
-                    overlaySelection = mapped.selection
-                    overlayRegionName = mapped.label
+                    battedBallSelection = mapped.selection
+                    battedBallRegionName = mapped.label
+                    // normalized 0...1 coordinates relative to imageRect
+                    let clampedX = max(0, min(1, nx))
+                    let clampedY = max(0, min(1, ny))
+                    battedBallTapNormalized = CGPoint(x: clampedX, y: clampedY)
                     if let out = mapped.outcome {
+                        // Only override selections when the map explicitly dictates an outcome
                         selectedOutcome = out
-                        selectedDescriptor = nil
-                        isError = false
-                    } else {
-                        selectedOutcome = nil
                         selectedDescriptor = nil
                         isError = false
                     }
@@ -505,11 +552,13 @@ private struct FieldOverlayView: View {
             }
         }
 
-        overlaySelection = .field
-        overlayRegionName = "No color map"
-        selectedOutcome = nil
-        selectedDescriptor = nil
-        isError = false
+        overlayTapPoint = location
+        battedBallSelection = .field
+        battedBallRegionName = colorMapImage == nil ? "No color map" : "Unmapped"
+        let clampedX = max(0, min(1, nx))
+        let clampedY = max(0, min(1, ny))
+        battedBallTapNormalized = CGPoint(x: clampedX, y: clampedY)
+        // Removed clearing of selections here as per instructions
     }
 
     var body: some View {
@@ -592,15 +641,7 @@ private struct FieldOverlayView: View {
                         .overlay(Circle().stroke(Color.white, lineWidth: 2))
                         .position(x: point.x, y: point.y)
 
-                    let labelText: String = {
-                        switch overlaySelection {
-                        case .hr: return overlayRegionName ?? ""
-                        case .foul: return overlayRegionName ?? ""
-                        case .field:
-                            return overlayRegionName ?? ""
-                        case .none: return ""
-                        }
-                    }()
+                    let labelText: String = battedBallRegionName ?? ""
                     Text(labelText)
                         .font(.headline)
                         .padding(8)

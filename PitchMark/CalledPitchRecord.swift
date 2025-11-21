@@ -322,6 +322,17 @@ struct PitchEvent: Codable, Identifiable {
     var wildPitch: Bool
     var passedBall: Bool
     
+    var strikeLooking: Bool
+
+    var outcome: String?
+    var descriptor: String?
+    var errorOnPlay: Bool
+
+    var battedBallRegion: String?
+    var battedBallType: String?
+    var battedBallTapX: Double?
+    var battedBallTapY: Double?
+    
     var gameId: String?
     var opponentJersey: String?
     var opponentBatterId: String?
