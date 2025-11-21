@@ -9,6 +9,65 @@ import Foundation
 import FirebaseFirestore
 import SwiftUI
 
+struct OutcomeSummaryBackground: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color(.white))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.black.opacity(0.1), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 3)
+    }
+}
+
+struct OutcomeSummaryView: View {
+    let lines: [String]
+    let jerseyNumber: String?
+    let minHeight: CGFloat?
+
+    init(lines: [String], jerseyNumber: String?, minHeight: CGFloat? = 44) {
+        self.lines = lines
+        self.jerseyNumber = jerseyNumber
+        self.minHeight = minHeight
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let num = jerseyNumber, !num.isEmpty {
+                HStack {
+                    Text(num)
+                        .font(.system(size: 14))
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(Color.blue))
+                        .foregroundColor(.white)
+                }
+                .padding(.bottom, 6)
+            }
+            ForEach(lines, id: \.self) { line in
+                HStack(spacing: 4) {
+                    let showRunner = ["1B", "2B", "3B", "HR"].contains { prefix in
+                        line.uppercased().hasPrefix(prefix)
+                    }
+                    if showRunner {
+                        Image(systemName: "figure.run")
+                            .foregroundColor(.secondary)
+                    }
+                    Text(line)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(minWidth: 80, minHeight: minHeight)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 2)
+        .background(OutcomeSummaryBackground())
+        .padding(.trailing, 10)
+    }
+}
+
 struct PitchCardView: View {
     
     let batterSide: BatterSide
@@ -23,6 +82,7 @@ struct PitchCardView: View {
     let footerTextDate: String
     let pitchNumber: Int?
     let outcomeSummary: [String]?
+    let jerseyNumber: String?
     
     var body: some View {
         VStack(spacing: 0) {
@@ -98,25 +158,7 @@ struct PitchCardView: View {
             Spacer()
             
             if let outcomeSummary, !outcomeSummary.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(outcomeSummary, id: \.self) { line in
-                        HStack(spacing: 4) {
-                            let showRunner = ["1B", "2B", "3B", "HR"].contains { prefix in
-                                line.uppercased().hasPrefix(prefix)
-                            }
-                            if showRunner {
-                                Image(systemName: "figure.run")
-                                    .foregroundColor(.secondary)
-                            }
-                            Text(line)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-                .frame(minWidth: 80)
-                .padding(.trailing, 10)
+                OutcomeSummaryView(lines: outcomeSummary, jerseyNumber: jerseyNumber)
             }
             
             rightImage
@@ -238,6 +280,7 @@ struct PitchResultCard: View {
         if event.strikeLooking { addUnique("Strike — Looking") }
         if event.wildPitch { addUnique("Wild Pitch") }
         if event.passedBall { addUnique("Passed Ball") }
+        if event.errorOnPlay { addUnique("Error on play") }
 
         // Outcome/descriptor first (sanitize these to remove labels like "field --")
         addUnique(event.outcome, sanitizeText: true)
@@ -311,6 +354,7 @@ struct PitchResultCard: View {
         
         let timestampText = formattedTimestamp(event.timestamp)
         let outcomeSummary = outcomeSummaryLines(for: event)
+        let jerseyNumber = event.opponentJersey
         
         return PitchCardView(
             batterSide: event.batterSide,
@@ -324,7 +368,8 @@ struct PitchResultCard: View {
             footerTextName: "\(templateName)",
             footerTextDate: "\(timestampText)",
             pitchNumber: pitchNumber(for: event, in: allEvents),
-            outcomeSummary: outcomeSummary
+            outcomeSummary: outcomeSummary,
+            jerseyNumber: jerseyNumber
         )
     }
 }
@@ -532,5 +577,79 @@ extension PitchEvent {
             print(self)
         }
     }
+}
+
+// MARK: - Previews
+
+#Preview("PitchCard — Right Batter — Hit Location") {
+    VStack(spacing: 16) {
+        PitchCardView(
+            batterSide: .right,
+            leftImage: Image(systemName: "square.fill"),
+            topText: "Four-Seam Fastball",
+            middleText: "62% overall",
+            bottomText: "55% @ location",
+            verticalTopImage: Image(systemName: "checkmark.circle.fill"),
+            rightImage: Image(systemName: "circle.fill"),
+            rightImageShouldHighlight: true,
+            footerTextName: "Template A",
+            footerTextDate: "Today, 3:42 PM",
+            pitchNumber: 7,
+            outcomeSummary: [
+                "Strike — Swinging",
+                "1B to LF",
+                "Runner to 2nd"
+            ],
+            jerseyNumber: "27"
+        )
+        .padding()
+        .background(Color(.systemGroupedBackground))
+    }
+}
+
+#Preview("PitchCard — Left Batter — Missed Location") {
+    VStack(spacing: 16) {
+        PitchCardView(
+            batterSide: .left,
+            leftImage: Image(systemName: "square"),
+            topText: "Curveball",
+            middleText: "48% overall",
+            bottomText: "33% @ location",
+            verticalTopImage: Image(systemName: "xmark.circle.fill"),
+            rightImage: Image(systemName: "circle"),
+            rightImageShouldHighlight: false,
+            footerTextName: "Template B",
+            footerTextDate: "10/09/25 7:18 PM",
+            pitchNumber: 2,
+            outcomeSummary: [
+                "Ball",
+                "Groundout — 6-3"
+            ],
+            jerseyNumber: "5"
+        )
+        .padding()
+        .background(Color(.systemGroupedBackground))
+    }
+}
+
+#Preview("Outcome Summary Variants") {
+    VStack(spacing: 16) {
+        OutcomeSummaryView(lines: [
+            "HR — Deep CF",
+            "Runner scores",
+            "Error on play"
+        ], jerseyNumber: "12")
+        .background(Color(.systemBackground))
+        .padding()
+
+        OutcomeSummaryView(lines: [
+            "1B — LF",
+            "Runner to 3rd"
+        ], jerseyNumber: nil)
+        .background(Color(.systemBackground))
+        .padding()
+    }
+    .padding()
+    .background(Color(.systemGroupedBackground))
 }
 

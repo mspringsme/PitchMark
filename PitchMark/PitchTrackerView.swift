@@ -68,6 +68,51 @@ struct PitchTrackerView: View {
     
     @State private var editingCell: JerseyCell?
     
+    private enum DefaultsKeys {
+        static let lastTemplateId = "lastTemplateId"
+        static let lastBatterSide = "lastBatterSide"
+        static let lastMode = "lastMode"
+    }
+    
+    // MARK: - Persistence
+    private func persistSelectedTemplate(_ template: PitchTemplate?) {
+        let defaults = UserDefaults.standard
+        if let id = template?.id.uuidString {
+            defaults.set(id, forKey: DefaultsKeys.lastTemplateId)
+        } else {
+            defaults.removeObject(forKey: DefaultsKeys.lastTemplateId)
+        }
+    }
+
+    private func persistBatterSide(_ side: BatterSide) {
+        UserDefaults.standard.set(side == .left ? "left" : "right", forKey: DefaultsKeys.lastBatterSide)
+    }
+
+    private func persistMode(_ mode: PitchMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: DefaultsKeys.lastMode)
+    }
+
+    private func restorePersistedState(loadedTemplates: [PitchTemplate]) {
+        let defaults = UserDefaults.standard
+        // Restore template
+        if let idString = defaults.string(forKey: DefaultsKeys.lastTemplateId),
+           let template = loadedTemplates.first(where: { $0.id.uuidString == idString }) {
+            selectedTemplate = template
+            selectedPitches = Set(template.pitches)
+            pitchCodeAssignments = template.codeAssignments
+        }
+        // Restore batter side
+        if let sideString = defaults.string(forKey: DefaultsKeys.lastBatterSide) {
+            batterSide = (sideString == "left") ? .left : .right
+        }
+        // Restore mode
+        if let modeString = defaults.string(forKey: DefaultsKeys.lastMode),
+           let restoredMode = PitchMode(rawValue: modeString) {
+            sessionManager.switchMode(to: restoredMode)
+            isGame = (restoredMode == .game)
+        }
+    }
+    
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
     init(
@@ -96,6 +141,8 @@ struct PitchTrackerView: View {
                         // 🧹 Reset strike zone and called pitch state
                         lastTappedPosition = nil
                         calledPitch = nil
+                        // 💾 Persist last used template
+                        persistSelectedTemplate(template)
                     }
                 }
             } label: {
@@ -348,6 +395,7 @@ struct PitchTrackerView: View {
                 let iconSize: CGFloat = 36
                 Button(action: {
                     withAnimation { batterSide = .left }
+                    persistBatterSide(.left)
                 }) {
                     Image("rightBatterIcon")
                         .resizable()
@@ -361,6 +409,7 @@ struct PitchTrackerView: View {
 
                 Button(action: {
                     withAnimation { batterSide = .right }
+                    persistBatterSide(.right)
                 }) {
                     Image("leftBatterIcon")
                         .resizable()
@@ -392,6 +441,7 @@ struct PitchTrackerView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .onChange(of: sessionManager.currentMode) { oldValue, newValue in
                     sessionManager.switchMode(to: newValue)
+                    persistMode(newValue)
                     if newValue == .game {
                         showGameSheet = true
                     } else {
@@ -595,6 +645,8 @@ struct PitchTrackerView: View {
             if authManager.isSignedIn {
                 authManager.loadTemplates { loadedTemplates in
                     self.templates = loadedTemplates
+                    // 💾 Restore last used template and settings
+                    restorePersistedState(loadedTemplates: loadedTemplates)
                 }
                 
                 authManager.loadPitchEvents { events in
@@ -662,6 +714,9 @@ struct PitchTrackerView: View {
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
             .environmentObject(authManager)
+        }
+        .onChange(of: selectedTemplate) { _, newValue in
+            persistSelectedTemplate(newValue)
         }
     }
 }
