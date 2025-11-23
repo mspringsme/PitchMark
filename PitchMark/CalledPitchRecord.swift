@@ -8,6 +8,7 @@
 import Foundation
 import FirebaseFirestore
 import SwiftUI
+import UIKit
 
 func outcomeSummaryLines(for event: PitchEvent) -> [String] {
     var lines: [String] = []
@@ -459,19 +460,24 @@ struct PitchEventDetailPopover: View {
     let templateName: String
 
     var batterEvents: [PitchEvent] {
-        allEvents.filter { other in
-            guard other.gameId == event.gameId else { return false }
-            if let batterId = event.opponentBatterId, !batterId.isEmpty {
-                return other.opponentBatterId == batterId
-            }
-            if let jersey = event.opponentJersey, !jersey.isEmpty {
-                return other.opponentJersey == jersey
-            }
-            return false
+        let sameGame = allEvents.filter { $0.gameId == event.gameId }
+
+        let idToMatch = (event.opponentBatterId?.isEmpty == false) ? event.opponentBatterId : nil
+        let jerseyToMatch = (event.opponentJersey?.isEmpty == false) ? event.opponentJersey : nil
+
+        let matches = sameGame.filter { other in
+            let idMatch = (idToMatch != nil) ? (other.opponentBatterId == idToMatch) : false
+            let jerseyMatch = (jerseyToMatch != nil) ? (other.opponentJersey == jerseyToMatch) : false
+            return idMatch || jerseyMatch
         }
+
+        return matches.sorted { $0.timestamp < $1.timestamp }
     }
 
     var body: some View {
+        let eventsWithCoords = batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil }
+        let hasIdentity = (batterEvents.first?.opponentBatterId?.isEmpty == false) || (batterEvents.first?.opponentJersey?.isEmpty == false)
+
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -490,22 +496,26 @@ struct PitchEventDetailPopover: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Text("Batter game heat map")
+                        Text("Batter spray chart")
                             .font(.subheadline).bold()
                         Spacer()
-                        if let count = batterEvents.first?.opponentBatterId != nil || batterEvents.first?.opponentJersey != nil ? Optional(batterEvents.count) : nil {
-                            Text("\(count) events")
+                        if hasIdentity {
+                            Text("\(eventsWithCoords.count) hits")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    BatterGameHeatMap(events: batterEvents)
-                        .frame(maxWidth: .infinity)
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .fill(Color(.secondarySystemBackground))
-                        )
+                    FieldSprayOverlay(
+                        fieldImageName: "FieldImage",
+                        events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
+                        homePlateNormalized: CGPoint(x: 0.5, y: 0.69) // tweak per asset if needed
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 270)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                    )
                 }
             }
             .padding(.vertical, 8)
@@ -513,51 +523,143 @@ struct PitchEventDetailPopover: View {
     }
 }
 
-struct BatterGameHeatMap: View {
+struct FieldSprayOverlay: View {
+    let fieldImageName: String
     let events: [PitchEvent]
+    // Normalized (0..1) position of home plate within the field image
+    let homePlateNormalized: CGPoint
 
-    private var buckets: [(region: String, count: Int)] {
-        let regions = events.compactMap { $0.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let counts = Dictionary(regions.map { ($0.lowercased(), 1) }, uniquingKeysWith: +)
-        let displayMap: [String: String] = Dictionary(uniqueKeysWithValues: regions.map { ($0.lowercased(), $0) })
-        let pairs = counts.map { (key: String, value: Int) in (region: displayMap[key] ?? key.uppercased(), count: value) }
-        return pairs.sorted { $0.count > $1.count }
+    init(fieldImageName: String, events: [PitchEvent], homePlateNormalized: CGPoint = CGPoint(x: 0.5, y: 0.88)) {
+        self.fieldImageName = fieldImageName
+        self.events = events
+        self.homePlateNormalized = homePlateNormalized
     }
 
     var body: some View {
-        if buckets.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "square.grid.3x3")
-                    .foregroundStyle(.secondary)
-                Text("No batted ball data for this batter in this game")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        GeometryReader { geo in
+            let availableSize = geo.size
+            let uiImage = UIImage(named: fieldImageName)
+            let aspect: CGFloat = {
+                if let img = uiImage, img.size.height > 0 { return img.size.width / img.size.height }
+                return 1
+            }()
+            // Fit by width to keep image size stable when container height changes
+            let baseWidth: CGFloat = availableSize.width
+            let baseHeight: CGFloat = baseWidth / max(aspect, 0.0001)
+
+            // Scale up the field image for a zoomed-in look; allow some vertical overflow for tighter crop
+            let scale: CGFloat = 2.5
+            let scaledWidth = baseWidth * scale
+            let scaledHeight = baseHeight * scale
+            // Allow up to 1.5x container height before clamping (will be clipped by parent)
+            let overflowAllowance: CGFloat = 1.5
+            let heightClamp = min((availableSize.height * overflowAllowance) / max(scaledHeight, 1), 1)
+            let targetWidth = scaledWidth * heightClamp
+            let targetHeight = scaledHeight * heightClamp
+
+            let imageRect = CGRect(
+                x: (availableSize.width - targetWidth) / 2,
+                y: (availableSize.height - targetHeight) / 2,
+                width: targetWidth,
+                height: targetHeight
+            )
+            
+            // Home plate position within the fitted image, configurable via `homePlateNormalized`
+            let origin = CGPoint(
+                x: imageRect.minX + imageRect.width * homePlateNormalized.x,
+                y: imageRect.minY + imageRect.height * homePlateNormalized.y
+            )
+            
+            // Convert normalized tap coordinates to points within the fitted image rect
+            let plottedPoints: [CGPoint] = events.compactMap { evt in
+                guard let nx = evt.battedBallTapX, let ny = evt.battedBallTapY else { return nil }
+                let px = imageRect.minX + CGFloat(nx) * imageRect.width
+                let py = imageRect.minY + CGFloat(ny) * imageRect.height
+                return CGPoint(x: px, y: py)
             }
-            .frame(maxWidth: .infinity)
-        } else {
-            let maxCount = max(buckets.map { $0.count }.max() ?? 1, 1)
-            let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-            LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(Array(buckets.enumerated()), id: \.offset) { _, bucket in
-                    let intensity = Double(bucket.count) / Double(maxCount)
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.red.opacity(0.15 + 0.55 * intensity))
-                        VStack(spacing: 4) {
-                            Text(bucket.region)
-                                .font(.caption2)
-                                .multilineTextAlignment(.center)
-                                .lineLimit(2)
-                            Text("\(bucket.count)")
-                                .font(.caption2)
-                                .bold()
-                        }
-                        .padding(6)
+
+            ZStack {
+                Image(fieldImageName)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: imageRect.width, height: imageRect.height)
+                    .position(x: imageRect.midX, y: imageRect.midY)
+
+                // Home plate reference marker
+                Circle()
+                    .fill(Color.black.opacity(0.25))
+                    .frame(width: 4, height: 4)
+                    .position(x: origin.x, y: origin.y)
+                    .allowsHitTesting(false)
+                
+                if plottedPoints.isEmpty {
+                    // Empty-state hint when there are no plotted points
+                    Text("No hits yet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: imageRect.width, height: imageRect.height)
+                        .position(x: imageRect.midX, y: imageRect.midY)
+                        .allowsHitTesting(false)
+                } else {
+                    ForEach(Array(plottedPoints.enumerated()), id: \.offset) { index, point in
+                        // Dotted path from home plate to marker
+                        DottedSprayPath(start: origin, end: point)
+                            .stroke(style: StrokeStyle(lineWidth: 1.5))
+                            .foregroundStyle(Color.black.opacity(0.25))
+                            .frame(width: availableSize.width, height: availableSize.height, alignment: .topLeading)
+
+                        // Use corresponding event to color the marker
+                        let event = events[index]
+                        MarkerView(isHR: event.isHomeRunInferred, isFoul: event.isFoulInferred)
+                            .position(x: point.x, y: point.y)
+                            .shadow(radius: 2)
                     }
-                    .frame(height: 60)
                 }
             }
+            .frame(width: availableSize.width, height: availableSize.height, alignment: .topLeading)
+            .clipped()
         }
+    }
+}
+
+private struct MarkerView: View {
+    let isHR: Bool
+    let isFoul: Bool
+
+    var body: some View {
+        let color: Color = isHR ? .purple : (isFoul ? .orange : .red)
+        let symbol: String = isHR ? "flag.checkered.fill" : (isFoul ? "xmark.circle.fill" : "smallcircle.filled.circle")
+
+        Image(systemName: symbol)
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(color)
+            .overlay(
+                Circle().stroke(color.opacity(0.4), lineWidth: 2)
+                    .frame(width: 18, height: 18)
+            )
+    }
+}
+
+private struct DottedSprayPath: Shape {
+    let start: CGPoint
+    let end: CGPoint
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let distance = max(hypot(dx, dy), 1)
+        // Dot spacing in points
+        let spacing: CGFloat = 10
+        let steps = max(Int(distance / spacing), 1)
+        for i in 0...steps {
+            let t = CGFloat(i) / CGFloat(steps)
+            let x = start.x + dx * t
+            let y = start.y + dy * t
+            let dotRect = CGRect(x: x - 1.5, y: y - 1.5, width: 3, height: 3)
+            path.addEllipse(in: dotRect)
+        }
+        return path
     }
 }
 
@@ -738,6 +840,17 @@ extension PitchEvent {
             print("\(prefix): <failed to encode>")
             print(self)
         }
+    }
+}
+
+extension PitchEvent {
+    var isFoulInferred: Bool {
+        let text = [outcome, descriptor].compactMap { $0?.lowercased() }.joined(separator: " ")
+        return text.contains("foul")
+    }
+    var isHomeRunInferred: Bool {
+        let text = [outcome, descriptor].compactMap { $0?.lowercased() }.joined(separator: " ")
+        return text.contains("hr") || text.contains("home run") || text.contains("homerun")
     }
 }
 
