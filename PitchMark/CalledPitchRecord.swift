@@ -9,6 +9,77 @@ import Foundation
 import FirebaseFirestore
 import SwiftUI
 
+func outcomeSummaryLines(for event: PitchEvent) -> [String] {
+    var lines: [String] = []
+
+    // Remove any leading label before a separator for outcome/descriptor only
+    func sanitize(_ input: String?) -> String? {
+        guard let input = input?.trimmingCharacters(in: .whitespacesAndNewlines), !input.isEmpty else { return nil }
+
+        // Consider multiple separator variants
+        let separators = ["--", " — ", " – ", "-", "—", "–", ":"]
+        // Labels we want to strip if they appear before the separator
+        let stripLabels: Set<String> = [
+            "foul", "field", "hr", "home run", "homerun", "fly", "ground", "line drive", "linedrive"
+        ]
+
+        for sep in separators {
+            if let range = input.range(of: sep) {
+                let before = input[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                let after = input[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // If the prefix is a known label or very short (likely a label), strip it
+                if stripLabels.contains(before) || before.count <= 6 {
+                    if !after.isEmpty { return after }
+                }
+            }
+        }
+        return input
+    }
+
+    // Add a line if unique; optionally sanitize first
+    func addUnique(_ line: String?, sanitizeText: Bool = true) {
+        var candidate: String?
+        if sanitizeText {
+            candidate = sanitize(line)
+        } else {
+            candidate = line?.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let raw = candidate, !raw.isEmpty else { return }
+        let lower = raw.lowercased()
+        if lines.contains(where: { $0.lowercased() == lower }) { return }
+        lines.append(raw)
+    }
+
+    // Primary flags
+    if event.strikeSwinging { addUnique("Strike — Swinging") }
+    if event.strikeLooking { addUnique("Strike — Looking") }
+    if event.wildPitch { addUnique("Wild Pitch") }
+    if event.passedBall { addUnique("Passed Ball") }
+    if event.errorOnPlay { addUnique("Error on play") }
+
+    // Outcome/descriptor first (sanitize these to remove labels like "field --")
+    addUnique(event.outcome, sanitizeText: true)
+    addUnique(event.descriptor, sanitizeText: true)
+
+    // Batted ball details — show only the region label in cards (ignore type)
+    let regionLower = (event.battedBallRegion ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let existingCombined = lines.map { $0.lowercased() }.joined(separator: " \n ")
+
+    func alreadyRepresentsRegion(_ region: String) -> Bool {
+        return !region.isEmpty && existingCombined.contains(region)
+    }
+
+    if let region = event.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines), !region.isEmpty {
+        if !alreadyRepresentsRegion(regionLower) {
+            // Do NOT sanitize constructed lines; keep user-facing label intact
+            addUnique(region, sanitizeText: false)
+        }
+    }
+
+    return lines
+}
+
 struct OutcomeSummaryBackground: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -95,6 +166,39 @@ struct PitchCardView: View {
     let pitchNumber: Int?
     let outcomeSummary: [String]?
     let jerseyNumber: String?
+    let onLongPress: () -> Void
+    
+    init(
+        batterSide: BatterSide,
+        leftImage: Image,
+        topText: String,
+        middleText: String,
+        bottomText: String,
+        verticalTopImage: Image,
+        rightImage: Image,
+        rightImageShouldHighlight: Bool,
+        footerTextName: String,
+        footerTextDate: String,
+        pitchNumber: Int?,
+        outcomeSummary: [String]?,
+        jerseyNumber: String?,
+        onLongPress: @escaping (() -> Void) = {}
+    ) {
+        self.batterSide = batterSide
+        self.leftImage = leftImage
+        self.topText = topText
+        self.middleText = middleText
+        self.bottomText = bottomText
+        self.verticalTopImage = verticalTopImage
+        self.rightImage = rightImage
+        self.rightImageShouldHighlight = rightImageShouldHighlight
+        self.footerTextName = footerTextName
+        self.footerTextDate = footerTextDate
+        self.pitchNumber = pitchNumber
+        self.outcomeSummary = outcomeSummary
+        self.jerseyNumber = jerseyNumber
+        self.onLongPress = onLongPress
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -137,6 +241,7 @@ struct PitchCardView: View {
         .background(cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 3)
+        .onLongPressGesture(minimumDuration: 0.45) { onLongPress() }
     }
     
     private var content: some View {
@@ -244,77 +349,7 @@ struct PitchResultCard: View {
     let event: PitchEvent
     let allEvents: [PitchEvent] // ✅ Add this
     let templateName: String
-    
-    private func outcomeSummaryLines(for event: PitchEvent) -> [String] {
-        var lines: [String] = []
-
-        // Remove any leading label before a separator for outcome/descriptor only
-        func sanitize(_ input: String?) -> String? {
-            guard let input = input?.trimmingCharacters(in: .whitespacesAndNewlines), !input.isEmpty else { return nil }
-
-            // Consider multiple separator variants
-            let separators = ["--", " — ", " – ", "-", "—", "–", ":"]
-            // Labels we want to strip if they appear before the separator
-            let stripLabels: Set<String> = [
-                "foul", "field", "hr", "home run", "homerun", "fly", "ground", "line drive", "linedrive"
-            ]
-
-            for sep in separators {
-                if let range = input.range(of: sep) {
-                    let before = input[..<range.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    let after = input[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-
-                    // If the prefix is a known label or very short (likely a label), strip it
-                    if stripLabels.contains(before) || before.count <= 6 {
-                        if !after.isEmpty { return after }
-                    }
-                }
-            }
-            return input
-        }
-
-        // Add a line if unique; optionally sanitize first
-        func addUnique(_ line: String?, sanitizeText: Bool = true) {
-            var candidate: String?
-            if sanitizeText {
-                candidate = sanitize(line)
-            } else {
-                candidate = line?.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            guard let raw = candidate, !raw.isEmpty else { return }
-            let lower = raw.lowercased()
-            if lines.contains(where: { $0.lowercased() == lower }) { return }
-            lines.append(raw)
-        }
-
-        // Primary flags
-        if event.strikeSwinging { addUnique("Strike — Swinging") }
-        if event.strikeLooking { addUnique("Strike — Looking") }
-        if event.wildPitch { addUnique("Wild Pitch") }
-        if event.passedBall { addUnique("Passed Ball") }
-        if event.errorOnPlay { addUnique("Error on play") }
-
-        // Outcome/descriptor first (sanitize these to remove labels like "field --")
-        addUnique(event.outcome, sanitizeText: true)
-        addUnique(event.descriptor, sanitizeText: true)
-
-        // Batted ball details — show only the region label in cards (ignore type)
-        let regionLower = (event.battedBallRegion ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let existingCombined = lines.map { $0.lowercased() }.joined(separator: " \n ")
-
-        func alreadyRepresentsRegion(_ region: String) -> Bool {
-            return !region.isEmpty && existingCombined.contains(region)
-        }
-
-        if let region = event.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines), !region.isEmpty {
-            if !alreadyRepresentsRegion(regionLower) {
-                // Do NOT sanitize constructed lines; keep user-facing label intact
-                addUnique(region, sanitizeText: false)
-            }
-        }
-
-        return lines
-    }
+    @State private var showDetails = false
     
     func formattedTimestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -381,8 +416,15 @@ struct PitchResultCard: View {
             footerTextDate: "\(timestampText)",
             pitchNumber: pitchNumber(for: event, in: allEvents),
             outcomeSummary: outcomeSummary,
-            jerseyNumber: jerseyNumber
+            jerseyNumber: jerseyNumber,
+            onLongPress: { showDetails = true }
         )
+        .popover(isPresented: $showDetails) {
+            PitchEventDetailPopover(event: event, allEvents: allEvents, templateName: templateName)
+                .padding()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 }
 
@@ -409,6 +451,114 @@ struct CalledPitchRecord: Identifiable, Codable {
     let batterSideRaw: String?
     let notes: String?
     let mode: String
+}
+
+struct PitchEventDetailPopover: View {
+    let event: PitchEvent
+    let allEvents: [PitchEvent]
+    let templateName: String
+
+    var batterEvents: [PitchEvent] {
+        allEvents.filter { other in
+            guard other.gameId == event.gameId else { return false }
+            if let batterId = event.opponentBatterId, !batterId.isEmpty {
+                return other.opponentBatterId == batterId
+            }
+            if let jersey = event.opponentJersey, !jersey.isEmpty {
+                return other.opponentJersey == jersey
+            }
+            return false
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event.calledPitch?.pitch ?? event.pitch)
+                        .font(.headline)
+                    Text(templateName)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                OutcomeSummaryView(
+                    lines: outcomeSummaryLines(for: event),
+                    jerseyNumber: event.opponentJersey,
+                    minHeight: 0
+                )
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Batter game heat map")
+                            .font(.subheadline).bold()
+                        Spacer()
+                        if let count = batterEvents.first?.opponentBatterId != nil || batterEvents.first?.opponentJersey != nil ? Optional(batterEvents.count) : nil {
+                            Text("\(count) events")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    BatterGameHeatMap(events: batterEvents)
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color(.secondarySystemBackground))
+                        )
+                }
+            }
+            .padding(.vertical, 8)
+        }
+    }
+}
+
+struct BatterGameHeatMap: View {
+    let events: [PitchEvent]
+
+    private var buckets: [(region: String, count: Int)] {
+        let regions = events.compactMap { $0.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let counts = Dictionary(regions.map { ($0.lowercased(), 1) }, uniquingKeysWith: +)
+        let displayMap: [String: String] = Dictionary(uniqueKeysWithValues: regions.map { ($0.lowercased(), $0) })
+        let pairs = counts.map { (key: String, value: Int) in (region: displayMap[key] ?? key.uppercased(), count: value) }
+        return pairs.sorted { $0.count > $1.count }
+    }
+
+    var body: some View {
+        if buckets.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "square.grid.3x3")
+                    .foregroundStyle(.secondary)
+                Text("No batted ball data for this batter in this game")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+        } else {
+            let maxCount = max(buckets.map { $0.count }.max() ?? 1, 1)
+            let columns = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(Array(buckets.enumerated()), id: \.offset) { _, bucket in
+                    let intensity = Double(bucket.count) / Double(maxCount)
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.red.opacity(0.15 + 0.55 * intensity))
+                        VStack(spacing: 4) {
+                            Text(bucket.region)
+                                .font(.caption2)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                            Text("\(bucket.count)")
+                                .font(.caption2)
+                                .bold()
+                        }
+                        .padding(6)
+                    }
+                    .frame(height: 60)
+                }
+            }
+        }
+    }
 }
 
 struct PitchResultSheet: View {
@@ -464,7 +614,7 @@ struct PitchEvent: Codable, Identifiable {
     let codes: [String]
     let isStrike: Bool
     let mode: PitchMode
-    let calledPitch: PitchCall?
+    var calledPitch: PitchCall?
     var batterSide: BatterSide
     var templateId: String?
     var strikeSwinging: Bool
