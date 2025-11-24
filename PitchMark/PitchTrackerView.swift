@@ -67,7 +67,8 @@ struct PitchTrackerView: View {
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
-    
+    @State private var pitchesFacedBatterId: UUID? = nil
+
     private enum DefaultsKeys {
         static let lastTemplateId = "lastTemplateId"
         static let lastBatterSide = "lastBatterSide"
@@ -127,6 +128,106 @@ struct PitchTrackerView: View {
         }
         _templates = State(initialValue: previewTemplates)
         _isGame = State(initialValue: previewIsGame)
+    }
+    
+    // MARK: - Helpers for Pitches Faced Popover
+    private func normalizeJersey(_ s: String?) -> String? {
+        guard let s = s else { return nil }
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        let noLeadingZeros = trimmed.drop { $0 == "0" }
+        return String(noLeadingZeros.isEmpty ? "0" : noLeadingZeros)
+    }
+
+    private var selectedJerseyNumberDisplay: String? {
+        jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber
+    }
+
+    private var pitchesFacedTitle: String {
+        if let num = selectedJerseyNumberDisplay, !num.isEmpty {
+            return "Pitches Faced – #\(num)"
+        }
+        return "Pitches Faced"
+    }
+
+    private var filteredPitchesFacedEvents: [PitchEvent] {
+        let batterIdStr = selectedBatterId?.uuidString
+        let normalizedSelectedJersey = normalizeJersey(selectedJerseyNumberDisplay)
+
+        return pitchEvents
+            .filter { event in
+                if let gid = selectedGameId, event.gameId != gid { return false }
+                if let idStr = batterIdStr, let evId = event.opponentBatterId, evId == idStr { return true }
+                if let selJersey = normalizedSelectedJersey, let evJersey = normalizeJersey(event.opponentJersey), selJersey == evJersey {
+                    return true
+                }
+                return false
+            }
+            .sorted { lhs, rhs in
+                lhs.timestamp > rhs.timestamp
+            }
+    }
+    
+    @ViewBuilder
+    private var chooseResultPrompt: some View {
+        let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
+        if shouldShowChooseResultText {
+            Text("Choose a Pitch Result")
+                .opacity(shouldShowChooseResultText ? 1 : 0)
+                .scaleEffect(shouldShowChooseResultText ? 1.05 : 1)
+                .shadow(color: .yellow.opacity(shouldShowChooseResultText ? 0.3 : 0), radius: 4)
+                .animation(.easeInOut(duration: 0.3), value: shouldShowChooseResultText)
+                .padding(.top, 4)
+        }
+    }
+    
+    @ViewBuilder
+    private var cardsAndOverlay: some View {
+        ZStack {
+            VStack {
+                if selectedTemplate != nil {
+                    PitchResultSheet(
+                        allEvents: pitchEvents,
+                        templates: templates,
+                        filterMode: $filterMode
+                    )
+                    .environmentObject(authManager)
+                }
+            }
+            .blur(radius: shouldBlurBackground ? 6 : 0)
+            .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
+            .transition(.opacity)
+
+            Group {
+                if let call = calledPitch {
+                    CalledPitchView(
+                        isRecordingResult: $isRecordingResult,
+                        activeCalledPitchId: $activeCalledPitchId,
+                        call: call,
+                        pitchCodeAssignments: pitchCodeAssignments,
+                        batterSide: batterSide
+                    )
+                    .background(Color.white.opacity(0.9))
+                    .cornerRadius(8)
+                    .shadow(radius: 4)
+                    .transition(.opacity)
+                    .padding(.top, 4)
+                    .onAppear { shouldBlurBackground = true }
+                    .onDisappear { shouldBlurBackground = false }
+                }
+            }
+        }
+    }
+    
+    private var contentSection: some View {
+        Group {
+            pitchSelectionChips
+            Divider()
+                .padding(.bottom, 4)
+            batterAndModeBar
+            mainStrikeZoneSection
+            chooseResultPrompt
+            cardsAndOverlay
+        }
     }
     
     // MARK: - Extracted subviews to help type-checker
@@ -251,7 +352,8 @@ struct PitchTrackerView: View {
                                 editingCell: $editingCell,
                                 newJerseyNumber: $newJerseyNumber,
                                 showAddJerseyPopover: $showAddJerseyPopover,
-                                selectedGameId: selectedGameId
+                                selectedGameId: selectedGameId,
+                                pitchesFacedBatterId: $pitchesFacedBatterId
                             )
                             .environmentObject(authManager)
                         }
@@ -439,7 +541,7 @@ struct PitchTrackerView: View {
                 .controlSize(.small)   // optional, makes it feel more compact
                 .frame(width: 180)     // <- adjust this to taste
                 .fixedSize(horizontal: true, vertical: false)
-                .onChange(of: sessionManager.currentMode) { oldValue, newValue in
+                .onChange(of: sessionManager.currentMode) { newValue in
                     sessionManager.switchMode(to: newValue)
                     persistMode(newValue)
                     if newValue == .game {
@@ -465,124 +567,15 @@ struct PitchTrackerView: View {
             Divider()
             
             // everything below top bar:
-            Group {
-                // 🧩 Toggle Chips for Pitch Selection
-                pitchSelectionChips
-                
-                Divider()
-                    .padding(.bottom, 4)
-                
-                batterAndModeBar
-                
-                mainStrikeZoneSection
-                
-                // 🧩 conditional "Choose a Pitch Result" pop up TEXT
-                let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
-                if shouldShowChooseResultText {
-                    Text("Choose a Pitch Result")
-                        .opacity(shouldShowChooseResultText ? 1 : 0)
-                        .scaleEffect(shouldShowChooseResultText ? 1.05 : 1)
-                        .shadow(color: .yellow.opacity(shouldShowChooseResultText ? 0.3 : 0), radius: 4)
-                        .animation(.easeInOut(duration: 0.3), value: shouldShowChooseResultText)
-                        .padding(.top, 4)
-                    //.position(x: geo.size.width / 2, y: geo.size.height * 0.78)
-                }
-                
-                ZStack {
-                    // 🧩 Cards (PitchResultSheet)
-                    VStack {
-                        if selectedTemplate != nil {
-                            PitchResultSheet(
-                                allEvents: pitchEvents,
-                                templates: templates,
-                                filterMode: $filterMode
-                            )
-                            .environmentObject(authManager)
-                        }
-                    }
-                    .blur(radius: shouldBlurBackground ? 6 : 0)
-                    .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
-                    .transition(.opacity)
-
-                    // 🧩 Called Pitch Display
-                    Group {
-                        if let call = calledPitch {
-                            CalledPitchView(
-                                isRecordingResult: $isRecordingResult,
-                                activeCalledPitchId: $activeCalledPitchId,
-                                call: call,
-                                pitchCodeAssignments: pitchCodeAssignments,
-                                batterSide: batterSide
-                            )
-                            .background(Color.white.opacity(0.9))
-                            .cornerRadius(8)
-                            .shadow(radius: 4)
-                            .transition(.opacity)
-                            .padding(.top, 4)
-                            .onAppear {
-                                shouldBlurBackground = true
-                            }
-                            .onDisappear {
-                                shouldBlurBackground = false
-                            }
-                        }
-                    }
-                }
-                
-            }
-            .opacity(selectedTemplate == nil ? 0.6 : 1.0)
-            .blur(radius: selectedTemplate == nil ? 4 : 0)
-            .allowsHitTesting(selectedTemplate != nil)
-            .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
+            contentSection
+                .opacity(selectedTemplate == nil ? 0.6 : 1.0)
+                .blur(radius: selectedTemplate == nil ? 4 : 0)
+                .allowsHitTesting(selectedTemplate != nil)
+                .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
             
         }
-        .toolbar {
-            if showAddJerseyPopover {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Button {
-                        newJerseyNumber = ""
-                        editingCell = nil
-                        showAddJerseyPopover = false
-                        jerseyInputFocused = false
-                    } label: {
-                        Label("Cancel", systemImage: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                    Spacer()
-                    Button {
-                        let number = newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !number.isEmpty else { return }
-
-                        if let editing = editingCell, let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
-                            jerseyCells[idx].jerseyNumber = number
-                        } else {
-                            jerseyCells.append(JerseyCell(jerseyNumber: number))
-                        }
-
-                        if let gameId = selectedGameId {
-                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                        }
-
-                        newJerseyNumber = ""
-                        editingCell = nil
-                        showAddJerseyPopover = false
-                        jerseyInputFocused = false
-                    } label: {
-                        Label("Save", systemImage: "checkmark.circle.fill")
-                            .fontWeight(.semibold)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.green)
-                    .disabled(newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { output in
-            guard let numbers = output.object as? [String], let gameId = selectedGameId else { return }
-            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: numbers)
-        } // 🧩🧩🧩🧩 end of VStack 🧩🧩🧩🧩🧧🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩🧩
         .frame(maxHeight: .infinity, alignment: .top)
+        .eraseToAnyView()
         .onChange(of: pendingResultLabel) { _, newValue in
             // Auto-save in Practice mode without presenting the PitchResultSheetView
             guard newValue != nil else { return }
@@ -781,6 +774,68 @@ struct PitchTrackerView: View {
         .onChange(of: selectedTemplate) { _, newValue in
             persistSelectedTemplate(newValue)
         }
+        .overlay(alignment: .top) {
+            if let batterId = pitchesFacedBatterId {
+                ZStack(alignment: .top) {
+                    // Backdrop to allow tap-to-dismiss
+                    Color.black.opacity(0.25)
+                        .ignoresSafeArea()
+                        .onTapGesture { withAnimation { pitchesFacedBatterId = nil } }
+
+                    // Compute title and events based on the specific batter id that triggered the sheet
+                    let jerseyNumber = jerseyCells.first(where: { $0.id == batterId })?.jerseyNumber ?? ""
+                    let normalizedSelectedJersey = normalizeJersey(jerseyNumber)
+                    let events = pitchEvents
+                        .filter { event in
+                            if let gid = selectedGameId, event.gameId != gid { return false }
+                            if let evId = event.opponentBatterId, evId == batterId.uuidString { return true }
+                            if let selJersey = normalizedSelectedJersey, let evJersey = normalizeJersey(event.opponentJersey), selJersey == evJersey { return true }
+                            return false
+                        }
+                        .sorted { $0.timestamp > $1.timestamp }
+
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text("vs. \(opponentName ?? "Practice")")
+                                .font(.headline)
+                            Spacer()
+                            Button {
+                                withAnimation { pitchesFacedBatterId = nil }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.title3)
+                                    .foregroundColor(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 12)
+                        .padding(.bottom, 8)
+
+                        Divider()
+
+                        ScrollView {
+                            PitchesFacedGridView(
+                                title: jerseyNumber.isEmpty ? "Pitches Faced" : "Pitches Faced – #\(jerseyNumber)",
+                                events: events
+                            )
+                            .padding(.horizontal)
+                            .padding(.top, 8)
+                            .padding(.bottom, 12)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: UIScreen.main.bounds.height * 0.33)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+                }
+                .animation(.easeInOut(duration: 0.25), value: pitchesFacedBatterId)
+            }
+        }
     }
 }
 
@@ -815,6 +870,10 @@ extension Notification.Name {
     static let jerseyOrderChanged = Notification.Name("jerseyOrderChanged")
 }
 
+extension UUID: Identifiable {
+    public var id: UUID { self }
+}
+
 struct JerseyRow: View {
     let cell: JerseyCell
     @Binding var jerseyCells: [JerseyCell]
@@ -824,6 +883,7 @@ struct JerseyRow: View {
     @Binding var newJerseyNumber: String
     @Binding var showAddJerseyPopover: Bool
     let selectedGameId: String?
+    @Binding var pitchesFacedBatterId: UUID?
     
     @EnvironmentObject var authManager: AuthManager
     
@@ -834,6 +894,8 @@ struct JerseyRow: View {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(selectedBatterId == cell.id ? Color.white.opacity(0.9) : Color.secondary.opacity(0.3), lineWidth: selectedBatterId == cell.id ? 2 : 1)
             )
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .foregroundColor(selectedBatterId == cell.id ? .white : .primary)
             .onTapGesture {
                 if selectedBatterId == cell.id {
@@ -842,12 +904,21 @@ struct JerseyRow: View {
                     selectedBatterId = cell.id
                 }
             }
+            .onLongPressGesture {
+                selectedBatterId = cell.id
+                pitchesFacedBatterId = cell.id
+            }
             .onDrag {
                 draggingJersey = cell
                 return NSItemProvider(object: NSString(string: cell.id.uuidString))
             }
             .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
             .contextMenu {
+                Button("Pitches Faced", systemImage: "baseball") {
+                    // Select this batter and drive popover via item binding
+                    selectedBatterId = cell.id
+                    pitchesFacedBatterId = cell.id
+                }
                 Button("Edit", systemImage: "pencil") {
                     editingCell = cell
                     newJerseyNumber = cell.jerseyNumber
@@ -1244,6 +1315,84 @@ struct AddGameCard: View {
     }
 }
 
+struct PitchesFacedGridView: View {
+    let title: String
+    let events: [PitchEvent]
+
+    private static let columns: [GridItem] = [
+        GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading),
+        GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading),
+        GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "baseball")
+                    .foregroundStyle(.green)
+                Text(title.isEmpty ? "Pitches Faced" : title)
+                    .font(.headline)
+                Spacer()
+                Text("\(events.count)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            if events.isEmpty {
+                Text("No pitches recorded for this batter yet.")
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
+            } else {
+                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 8) {
+                    // Header
+                    Text("Pitch Called").font(.subheadline.bold())
+                    Text("Result").font(.subheadline.bold())
+                    Text("Batter Outcome").font(.subheadline.bold())
+
+                    ForEach(events, id: \.id) { event in
+                        // Column 1: Pitch Called
+                        Text(event.pitch ?? "-")
+                            .font(.body)
+                            .lineLimit(1)
+
+                        // Column 2: Result (Strike/Ball/Foul if available)
+                        Text(resultText(for: event))
+                            .font(.body)
+                            .lineLimit(1)
+
+                        // Column 3: Batter Outcome
+                        Text(outcomeText(for: event))
+                            .font(.body)
+                            .lineLimit(1)
+                    }
+                }
+            }
+        }
+        .padding(16)
+    }
+
+    // Helpers
+    private func resultText(for event: PitchEvent) -> String {
+        if event.strikeLooking == true { return "Strike Looking" }
+        if event.strikeSwinging == true { return "Strike Swinging" }
+        if event.isStrike == true { return "Strike" }
+        if event.wildPitch == true { return "Wild Pitch" }
+        if event.passedBall == true { return "Passed Ball" }
+        // Fallback: use calledPitch type if present, else "Ball"
+        if let type = event.calledPitch?.type, !type.isEmpty { return type }
+        return "Ball"
+    }
+
+    private func outcomeText(for event: PitchEvent) -> String {
+        if let outcome = event.outcome, !outcome.isEmpty { return outcome }
+        if let descriptor = event.descriptor, !descriptor.isEmpty { return descriptor }
+        return "-"
+    }
+}
+
+extension View {
+    func eraseToAnyView() -> AnyView { AnyView(self) }
+}
 
 #Preview("PitchTracker Layout – Practice") {
     // Dummy pitch codes

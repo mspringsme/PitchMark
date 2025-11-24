@@ -477,22 +477,52 @@ struct PitchEventDetailPopover: View {
     var body: some View {
         let eventsWithCoords = batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil }
         let hasIdentity = (batterEvents.first?.opponentBatterId?.isEmpty == false) || (batterEvents.first?.opponentJersey?.isEmpty == false)
-
+        let jerseyEvents = batterEvents.filter { $0.opponentJersey == event.opponentJersey }
+        let playerEvents = jerseyEvents.isEmpty ? batterEvents : jerseyEvents
+        
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(event.calledPitch?.pitch ?? event.pitch)
-                        .font(.headline)
-                    Text(templateName)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(playerEvents.reversed().enumerated()), id: \.offset) { item in
+                            let evt = item.element
+                            VStack(alignment: .leading, spacing: 8) {
+                                let calledLabel = evt.calledPitch.map { "\($0.type) \($0.location)" }
+                                let resultLabel = "\(evt.isStrike ? "Strike" : "Ball") \(evt.location)"
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if let calledLabel {
+                                        Text("Called: \(calledLabel)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Text("Result: \(resultLabel)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                .padding(.bottom, 4)
 
-                OutcomeSummaryView(
-                    lines: outcomeSummaryLines(for: event),
-                    jerseyNumber: event.opponentJersey,
-                    minHeight: 0
-                )
+                                OutcomeSummaryView(
+                                    lines: outcomeSummaryLines(for: evt),
+                                    jerseyNumber: evt.opponentJersey,
+                                    minHeight: 0
+                                )
+                            }
+                            .padding(12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color(.systemBackground))
+                                    .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 3)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 2)
+                }
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -594,23 +624,37 @@ struct FieldSprayOverlay: View {
                 
                 if plottedPoints.isEmpty {
                     // Empty-state hint when there are no plotted points
-                    Text("No hits yet")
+                    Text("🥹")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(width: imageRect.width, height: imageRect.height)
                         .position(x: imageRect.midX, y: imageRect.midY)
                         .allowsHitTesting(false)
                 } else {
-                    ForEach(Array(plottedPoints.enumerated()), id: \.offset) { index, point in
-                        // Dotted path from home plate to marker
-                        DottedSprayPath(start: origin, end: point)
-                            .stroke(style: StrokeStyle(lineWidth: 1.5))
-                            .foregroundStyle(Color.black.opacity(0.25))
+                    ForEach(Array(plottedPoints.enumerated()), id: \.offset) { item in
+                        let index = item.offset
+                        let point = item.element
+                        let linesLower = outcomeSummaryLines(for: events[index]).map { $0.lowercased() }
+                        let isHit = linesLower.contains { line in
+                            line.contains("safe") || line.contains("1b") || line.contains("2b") || line.contains("3b") || line.contains("hr")
+                        }
+                        let isFoul = events[index].isFoulInferred || linesLower.contains { line in
+                            line.contains("foul")
+                        }
+                        let isOut = linesLower.contains { line in
+                            line.contains("out")
+                        }
+                        let foulOnly = isFoul && !isOut
+
+                        // Solid path from home plate to marker
+                        SprayPath(start: origin, end: point)
+                            .stroke(style: StrokeStyle(lineWidth: 2.0))
+                            .foregroundStyle((isHit && !isFoul) ? Color.white : Color.black.opacity(0.25))
                             .frame(width: availableSize.width, height: availableSize.height, alignment: .topLeading)
 
                         // Use corresponding event to color the marker
                         let event = events[index]
-                        MarkerView(isHR: event.isHomeRunInferred, isFoul: event.isFoulInferred)
+                        MarkerView(isHR: event.isHomeRunInferred, isFoul: foulOnly, highlight: (isHit && !isFoul))
                             .position(x: point.x, y: point.y)
                             .shadow(radius: 2)
                     }
@@ -625,40 +669,37 @@ struct FieldSprayOverlay: View {
 private struct MarkerView: View {
     let isHR: Bool
     let isFoul: Bool
+    let highlight: Bool
 
     var body: some View {
-        let color: Color = isHR ? .purple : (isFoul ? .orange : .red)
-        let symbol: String = isHR ? "flag.checkered.fill" : (isFoul ? "xmark.circle.fill" : "smallcircle.filled.circle")
+        let fill: Color = {
+            if highlight { return .green }
+            if isFoul { return .white }
+            return .red
+        }()
+        let stroke: Color = {
+            if highlight { return .white }
+            return .black
+        }()
 
-        Image(systemName: symbol)
-            .font(.system(size: 14, weight: .bold))
-            .foregroundStyle(color)
+        return Circle()
+            .fill(fill)
+            .frame(width: 8, height: 8)
             .overlay(
-                Circle().stroke(color.opacity(0.4), lineWidth: 2)
-                    .frame(width: 18, height: 18)
+                Circle()
+                    .stroke(stroke, lineWidth: 1)
             )
     }
 }
 
-private struct DottedSprayPath: Shape {
+private struct SprayPath: Shape {
     let start: CGPoint
     let end: CGPoint
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        let dx = end.x - start.x
-        let dy = end.y - start.y
-        let distance = max(hypot(dx, dy), 1)
-        // Dot spacing in points
-        let spacing: CGFloat = 10
-        let steps = max(Int(distance / spacing), 1)
-        for i in 0...steps {
-            let t = CGFloat(i) / CGFloat(steps)
-            let x = start.x + dx * t
-            let y = start.y + dy * t
-            let dotRect = CGRect(x: x - 1.5, y: y - 1.5, width: 3, height: 3)
-            path.addEllipse(in: dotRect)
-        }
+        path.move(to: start)
+        path.addLine(to: end)
         return path
     }
 }
@@ -681,7 +722,8 @@ struct PitchResultSheet: View {
             
             ScrollView([.vertical]) {
                 VStack(spacing: 12) {
-                    ForEach(Array(filteredEvents.enumerated()), id: \.element.id) { index, event in
+                    ForEach(Array(filteredEvents.enumerated()), id: \.offset) { item in
+                        let event = item.element
                         let templateName = templates.first(where: { $0.id.uuidString == event.templateId })?.name ?? "Unknown"
                         
                         PitchResultCard(event: event, allEvents: allEvents, templateName: templateName)
@@ -927,4 +969,3 @@ extension PitchEvent {
     .padding()
     .background(Color(.systemGroupedBackground))
 }
-
