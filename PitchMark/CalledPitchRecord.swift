@@ -416,7 +416,7 @@ struct PitchResultCard: View {
         .popover(isPresented: $showDetails) {
             PitchEventDetailPopover(event: event, allEvents: allEvents, templateName: templateName)
                 .padding()
-                .presentationDetents([.fraction(0.6), .large])
+                .presentationDetents([.fraction(0.70), .large])
                 .presentationDragIndicator(.visible)
         }
     }
@@ -490,6 +490,7 @@ struct PitchEventDetailPopover: View {
                     HStack(spacing: 12) {
                         ForEach(Array(playerEvents.reversed().enumerated()), id: \.offset) { item in
                             let evt = item.element
+                            let isSource = (evt.id != nil && evt.id == event.id) || (evt.id == nil && event.id == nil && evt.timestamp == event.timestamp)
                             VStack(alignment: .leading, spacing: 8) {
                                 let calledLabel = evt.calledPitch.map { "\($0.type) \($0.location)" }
                                 let resultLabel = "\(evt.isStrike ? "Strike" : "Ball") \(evt.location)"
@@ -517,21 +518,23 @@ struct PitchEventDetailPopover: View {
                             .background(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                                     .fill(Color(.systemBackground))
-                                    .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 3)
+                                    .shadow(color: isSource ? Color.blue.opacity(0.45) : Color.black.opacity(0.15), radius: isSource ? 12 : 6, x: 0, y: isSource ? 0 : 3)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                                    .stroke(isSource ? Color.blue.opacity(0.6) : Color.black.opacity(0.08), lineWidth: isSource ? 2 : 1)
                             )
                         }
                     }
                     .padding(.horizontal, 2)
                 }
+                .frame(minHeight: 180)
 
                 Text(timestampText)
                     .font(.caption)
                     .fontWeight(.bold)
-                    .foregroundStyle(.secondary)
+                    .foregroundColor(.blue)
+                    
                     .frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 8) {
