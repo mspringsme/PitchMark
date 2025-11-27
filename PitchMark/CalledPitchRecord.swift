@@ -206,13 +206,6 @@ struct PitchCardView: View {
             // 🧠 Header at top-left
             HStack(spacing: 4) {
                 
-                Text(footerTextDate)
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 8)
-                    .padding(.leading, 8)
-                                
                 Spacer()
                 
                 Text(footerTextName)
@@ -423,7 +416,7 @@ struct PitchResultCard: View {
         .popover(isPresented: $showDetails) {
             PitchEventDetailPopover(event: event, allEvents: allEvents, templateName: templateName)
                 .padding()
-                .presentationDetents([.medium, .large])
+                .presentationDetents([.fraction(0.6), .large])
                 .presentationDragIndicator(.visible)
         }
     }
@@ -475,6 +468,17 @@ struct PitchEventDetailPopover: View {
     }
 
     var body: some View {
+        let timestampText: String = {
+            let formatter = DateFormatter()
+            let calendar = Calendar.current
+            if calendar.isDateInToday(event.timestamp) {
+                formatter.dateFormat = "'Today,' h:mm a"
+            } else {
+                formatter.dateFormat = "MM/dd/yy h:mm a"
+            }
+            return formatter.string(from: event.timestamp)
+        }()
+
         let eventsWithCoords = batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil }
         let hasIdentity = (batterEvents.first?.opponentBatterId?.isEmpty == false) || (batterEvents.first?.opponentJersey?.isEmpty == false)
         let jerseyEvents = batterEvents.filter { $0.opponentJersey == event.opponentJersey }
@@ -524,6 +528,12 @@ struct PitchEventDetailPopover: View {
                     .padding(.horizontal, 2)
                 }
 
+                Text(timestampText)
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Batter spray chart")
@@ -540,7 +550,8 @@ struct PitchEventDetailPopover: View {
                         events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
                         homePlateNormalized: CGPoint(x: 0.5, y: 0.69) // tweak per asset if needed
                     )
-                    .frame(maxWidth: .infinity, minHeight: 270)
+                    .frame(maxWidth: .infinity, minHeight: 415)
+                    .offset(y: -75)
                     .padding(8)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -573,19 +584,27 @@ struct FieldSprayOverlay: View {
                 if let img = uiImage, img.size.height > 0 { return img.size.width / img.size.height }
                 return 1
             }()
-            // Fit by width to keep image size stable when container height changes
-            let baseWidth: CGFloat = availableSize.width
-            let baseHeight: CGFloat = baseWidth / max(aspect, 0.0001)
 
-            // Scale up the field image for a zoomed-in look; allow some vertical overflow for tighter crop
-            let scale: CGFloat = 2.5
-            let scaledWidth = baseWidth * scale
-            let scaledHeight = baseHeight * scale
-            // Allow up to 1.5x container height before clamping (will be clipped by parent)
-            let overflowAllowance: CGFloat = 1.5
-            let heightClamp = min((availableSize.height * overflowAllowance) / max(scaledHeight, 1), 1)
-            let targetWidth = scaledWidth * heightClamp
-            let targetHeight = scaledHeight * heightClamp
+            // Fit the image within the available size to avoid clipping
+            let targetSize: CGSize = {
+                if let img = uiImage, img.size.width > 0, img.size.height > 0 {
+                    let scale = min(availableSize.width / img.size.width, availableSize.height / img.size.height)
+                    return CGSize(width: img.size.width * scale, height: img.size.height * scale)
+                } else {
+                    // Fallback to fitting by width using the computed aspect
+                    let width = availableSize.width
+                    let height = width / max(aspect, 0.0001)
+                    if height > availableSize.height {
+                        // Fit by height if needed
+                        let height = availableSize.height
+                        let width = height * max(aspect, 0.0001)
+                        return CGSize(width: width, height: height)
+                    }
+                    return CGSize(width: width, height: height)
+                }
+            }()
+            let targetWidth = targetSize.width
+            let targetHeight = targetSize.height
 
             let imageRect = CGRect(
                 x: (availableSize.width - targetWidth) / 2,
@@ -661,7 +680,6 @@ struct FieldSprayOverlay: View {
                 }
             }
             .frame(width: availableSize.width, height: availableSize.height, alignment: .topLeading)
-            .clipped()
         }
     }
 }
@@ -969,3 +987,4 @@ extension PitchEvent {
     .padding()
     .background(Color(.systemGroupedBackground))
 }
+

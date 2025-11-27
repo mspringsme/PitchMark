@@ -14,7 +14,9 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if authManager.isSignedIn {
+            if authManager.isCheckingAuth {
+                SplashView()
+            } else if authManager.isSignedIn {
                 PitchTrackerView()
             } else {
                 SignInView()
@@ -22,6 +24,21 @@ struct RootView: View {
         }
         .onAppear {
             authManager.restoreSignIn() // ✅ safe here
+        }
+    }
+}
+
+struct SplashView: View {
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            VStack(spacing: 16) {
+                Text("PitchMark")
+                    .font(.largeTitle).bold()
+                    .foregroundColor(.blue)
+                ProgressView()
+                    .progressViewStyle(.circular)
+            }
         }
     }
 }

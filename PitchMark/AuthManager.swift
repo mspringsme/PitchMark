@@ -15,6 +15,7 @@ import FirebaseFirestore
 class AuthManager: ObservableObject {
     @Published var user: FirebaseAuth.User? = nil
     @Published var isSignedIn: Bool = false
+    @Published var isCheckingAuth: Bool = true
     
     var userEmail: String {
         user?.email ?? "Unknown"
@@ -67,10 +68,12 @@ class AuthManager: ObservableObject {
     }
 
     func restoreSignIn() {
+        isCheckingAuth = true
         GIDSignIn.sharedInstance.restorePreviousSignIn { user, error in
             guard let restoredUser = user,
                   let idToken = restoredUser.idToken?.tokenString else {
                 print("No previous Google sign-in found.")
+                self.isCheckingAuth = false
                 return
             }
 
@@ -80,9 +83,11 @@ class AuthManager: ObservableObject {
             Auth.auth().signIn(with: credential) { authResult, error in
                 if let error = error {
                     print("Firebase Sign-In failed: \(error.localizedDescription)")
+                    self.isCheckingAuth = false
                 } else if let firebaseUser = authResult?.user {
                     self.user = firebaseUser
                     self.isSignedIn = true
+                    self.isCheckingAuth = false
                     print("Restored Firebase session for: \(firebaseUser.email ?? "Unknown")")
                 }
             }
@@ -311,3 +316,4 @@ extension AuthManager {
         }
     }
 }
+

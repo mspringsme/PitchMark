@@ -69,6 +69,8 @@ struct PitchTrackerView: View {
     @State private var editingCell: JerseyCell?
     @State private var pitchesFacedBatterId: UUID? = nil
 
+    @State private var isReorderingMode: Bool = false
+
     private enum DefaultsKeys {
         static let lastTemplateId = "lastTemplateId"
         static let lastBatterSide = "lastBatterSide"
@@ -247,11 +249,27 @@ struct PitchTrackerView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 8) {
-                    Text(selectedTemplate?.name ?? "Select a template")
-                        .font(.headline)
-                    Image(systemName: "chevron.down")
-                        .font(.subheadline.weight(.semibold))
+                let currentLabel = selectedTemplate?.name ?? "Select a template"
+                let widestLabel = ([currentLabel] + templates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+
+                ZStack {
+                    // Invisible widest label to reserve width and prevent size jumps
+                    HStack(spacing: 8) {
+                        Text(widestLabel)
+                            .font(.headline)
+                            .opacity(0)
+                        Image(systemName: "chevron.down")
+                            .font(.subheadline.weight(.semibold))
+                            .opacity(0)
+                    }
+
+                    // Visible current label
+                    HStack(spacing: 8) {
+                        Text(currentLabel)
+                            .font(.headline)
+                        Image(systemName: "chevron.down")
+                            .font(.subheadline.weight(.semibold))
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -263,6 +281,7 @@ struct PitchTrackerView: View {
                 )
                 .clipShape(Capsule())
                 .contentShape(Capsule())
+                .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
             }
             .disabled(templates.isEmpty)
 
@@ -274,13 +293,15 @@ struct PitchTrackerView: View {
                 Image(systemName: "gearshape")
                     .imageScale(.large)
             }
+            .tint(.gray)
             Button(action: {
                 showSignOutConfirmation = true
             }) {
                 Image(systemName: "person.crop.circle")
-                    .foregroundColor(.green)
+                    .foregroundColor(.gray)
                     .imageScale(.large)
             }
+            
             .accessibilityLabel("Sign Out")
             .confirmationDialog(
                 "Are you sure you want to sign out of \(authManager.userEmail)?",
@@ -353,7 +374,8 @@ struct PitchTrackerView: View {
                                 newJerseyNumber: $newJerseyNumber,
                                 showAddJerseyPopover: $showAddJerseyPopover,
                                 selectedGameId: selectedGameId,
-                                pitchesFacedBatterId: $pitchesFacedBatterId
+                                pitchesFacedBatterId: $pitchesFacedBatterId,
+                                isReordering: $isReorderingMode
                             )
                             .environmentObject(authManager)
                         }
@@ -366,6 +388,44 @@ struct PitchTrackerView: View {
                                     .frame(height: 36)
                                     .focused($jerseyInputFocused)
                                     .onAppear { jerseyInputFocused = true }
+                            }
+                            .toolbar {
+                                ToolbarItemGroup(placement: .keyboard) {
+                                    Button("Cancel") {
+                                        // Dismiss without changes
+                                        showAddJerseyPopover = false
+                                        jerseyInputFocused = false
+                                        newJerseyNumber = ""
+                                        editingCell = nil
+                                    }
+                                    Spacer()
+                                    Button("Save") {
+                                        let trimmed = newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        guard !trimmed.isEmpty else { return }
+                                        let normalized = normalizeJersey(trimmed) ?? trimmed
+
+                                        if let editing = editingCell, let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
+                                            // Edit existing cell
+                                            jerseyCells[idx].jerseyNumber = normalized
+                                        } else {
+                                            // Add new cell
+                                            let newCell = JerseyCell(jerseyNumber: normalized)
+                                            jerseyCells.append(newCell)
+                                        }
+
+                                        // Persist lineup if in a selected game
+                                        if let gameId = selectedGameId {
+                                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                                        }
+
+                                        // Reset UI state
+                                        showAddJerseyPopover = false
+                                        jerseyInputFocused = false
+                                        newJerseyNumber = ""
+                                        editingCell = nil
+                                    }
+                                    .disabled(newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                }
                             }
                         }
 
@@ -774,6 +834,12 @@ struct PitchTrackerView: View {
         .onChange(of: selectedTemplate) { _, newValue in
             persistSelectedTemplate(newValue)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { notification in
+            guard let order = notification.object as? [String] else { return }
+            if let gameId = selectedGameId {
+                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: order)
+            }
+        }
         .overlay(alignment: .top) {
             if let batterId = pitchesFacedBatterId {
                 ZStack(alignment: .top) {
@@ -884,11 +950,13 @@ struct JerseyRow: View {
     @Binding var showAddJerseyPopover: Bool
     let selectedGameId: String?
     @Binding var pitchesFacedBatterId: UUID?
+    @Binding var isReordering: Bool
     
     @EnvironmentObject var authManager: AuthManager
     
     var body: some View {
         JerseyCellView(cell: cell)
+            .modifier(JiggleEffect(isActive: isReordering))
             .background(selectedBatterId == cell.id ? Color.blue : Color.white)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
@@ -898,6 +966,7 @@ struct JerseyRow: View {
             .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .foregroundColor(selectedBatterId == cell.id ? .white : .primary)
             .onTapGesture {
+                guard !isReordering else { return }
                 if selectedBatterId == cell.id {
                     selectedBatterId = nil
                 } else {
@@ -924,6 +993,40 @@ struct JerseyRow: View {
                     newJerseyNumber = cell.jerseyNumber
                     showAddJerseyPopover = true
                 }
+
+                Divider()
+                Button("Move Up", systemImage: "arrow.up") {
+                    if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx > 0 {
+                        withAnimation {
+                            let item = jerseyCells.remove(at: idx)
+                            jerseyCells.insert(item, at: idx - 1)
+                        }
+                        if let gameId = selectedGameId {
+                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                        }
+                        // Also notify any listeners of order change
+                        NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
+                    }
+                }
+                Button("Move Down", systemImage: "arrow.down") {
+                    if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx < jerseyCells.count - 1 {
+                        withAnimation {
+                            let item = jerseyCells.remove(at: idx)
+                            jerseyCells.insert(item, at: idx + 1)
+                        }
+                        if let gameId = selectedGameId {
+                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                        }
+                        // Also notify any listeners of order change
+                        NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
+                    }
+                }
+                Button(isReordering ? "Done Reordering" : "Reorder Mode", systemImage: "arrow.up.arrow.down") {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                        isReordering.toggle()
+                    }
+                }
+
                 Button("Delete", systemImage: "trash", role: .destructive) {
                     if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
                         jerseyCells.remove(at: idx)
@@ -934,6 +1037,35 @@ struct JerseyRow: View {
                             selectedBatterId = nil
                         }
                     }
+                }
+            }
+    }
+}
+
+struct JiggleEffect: ViewModifier {
+    let isActive: Bool
+    @State private var animate: Bool = false
+    @State private var seedDelay: Double = Double.random(in: 0...0.2)
+
+    func body(content: Content) -> some View {
+        content
+            .rotationEffect(.degrees(isActive && animate ? 2.0 : -2.0), anchor: .center)
+            .scaleEffect(isActive ? 0.98 : 1.0)
+            .animation(isActive ? .easeInOut(duration: 0.12).repeatForever(autoreverses: true).delay(seedDelay) : .default, value: animate)
+            .onAppear {
+                if isActive {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + seedDelay) {
+                        animate = true
+                    }
+                }
+            }
+            .onChange(of: isActive) { _, newValue in
+                if newValue {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + seedDelay) {
+                        animate = true
+                    }
+                } else {
+                    animate = false
                 }
             }
     }
