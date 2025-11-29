@@ -26,6 +26,7 @@ struct PitchTrackerView: View {
     @State private var showSettings = false
     @State private var showProfile = false
     @State private var templates: [PitchTemplate] = []
+    @State private var games: [Game] = []
     @EnvironmentObject var authManager: AuthManager
     @State private var showProfileSheet = false
     @State private var showSignOutConfirmation = false
@@ -189,6 +190,7 @@ struct PitchTrackerView: View {
                 if selectedTemplate != nil {
                     PitchResultSheet(
                         allEvents: pitchEvents,
+                        games: games,
                         templates: templates,
                         filterMode: $filterMode
                     )
@@ -771,6 +773,10 @@ struct PitchTrackerView: View {
                     }
                     self.showPitchResults = true
                 }
+                
+                authManager.loadGames { loadedGames in
+                    self.games = loadedGames
+                }
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -897,7 +903,6 @@ struct PitchTrackerView: View {
                     .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .padding(.horizontal, 12)
-                    .padding(.top, 12)
                 }
                 .animation(.easeInOut(duration: 0.25), value: pitchesFacedBatterId)
             }

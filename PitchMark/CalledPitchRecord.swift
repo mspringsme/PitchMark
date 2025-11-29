@@ -164,6 +164,7 @@ struct PitchCardView: View {
     let rightImageShouldHighlight: Bool
     let footerTextName: String
     let footerTextDate: String
+    let gameTitle: String?
     let pitchNumber: Int?
     let outcomeSummary: [String]?
     let jerseyNumber: String?
@@ -183,6 +184,7 @@ struct PitchCardView: View {
         pitchNumber: Int?,
         outcomeSummary: [String]?,
         jerseyNumber: String?,
+        gameTitle: String? = nil,
         onLongPress: @escaping (() -> Void) = {}
     ) {
         self.batterSide = batterSide
@@ -198,6 +200,7 @@ struct PitchCardView: View {
         self.pitchNumber = pitchNumber
         self.outcomeSummary = outcomeSummary
         self.jerseyNumber = jerseyNumber
+        self.gameTitle = gameTitle
         self.onLongPress = onLongPress
     }
     
@@ -206,9 +209,7 @@ struct PitchCardView: View {
             // 🧠 Header at top-left
             HStack(spacing: 4) {
                 
-                Spacer()
-                
-                Text(footerTextName)
+                Text(gameTitle.map { "\(footerTextName) vs. \($0)" } ?? footerTextName)
                     .font(.caption)
                     .fontWeight(.bold)
                     .foregroundColor(.secondary)
@@ -342,8 +343,17 @@ enum PitchAssetMapper {
 struct PitchResultCard: View {
     let event: PitchEvent
     let allEvents: [PitchEvent] // ✅ Add this
+    let games: [Game]
     let templateName: String
     @State private var showDetails = false
+
+    private func derivedGameTitle(from event: PitchEvent) -> String? {
+        guard let gid = event.gameId, !gid.isEmpty else { return nil }
+        if let game = games.first(where: { $0.id == gid }) {
+            return game.opponent
+        }
+        return nil
+    }
     
     func formattedTimestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -411,6 +421,7 @@ struct PitchResultCard: View {
             pitchNumber: pitchNumber(for: event, in: allEvents),
             outcomeSummary: outcomeSummary,
             jerseyNumber: jerseyNumber,
+            gameTitle: derivedGameTitle(from: event),
             onLongPress: { showDetails = true }
         )
         .popover(isPresented: $showDetails) {
@@ -656,7 +667,7 @@ struct FieldSprayOverlay: View {
                 if plottedPoints.isEmpty {
                     // Empty-state hint when there are no plotted points
                     Text("🥹")
-                        .font(.caption)
+                        .font(.headline)
                         .foregroundStyle(.secondary)
                         .frame(width: imageRect.width, height: imageRect.height)
                         .position(x: imageRect.midX + focalShift.x, y: imageRect.midY + focalShift.y)
@@ -736,6 +747,7 @@ private struct SprayPath: Shape {
 
 struct PitchResultSheet: View {
     let allEvents: [PitchEvent]
+    let games: [Game]
     let templates: [PitchTemplate]
     @Binding var filterMode: PitchMode?
     @Environment(\.dismiss) private var dismiss
@@ -756,7 +768,7 @@ struct PitchResultSheet: View {
                         let event = item.element
                         let templateName = templates.first(where: { $0.id.uuidString == event.templateId })?.name ?? "Unknown"
                         
-                        PitchResultCard(event: event, allEvents: allEvents, templateName: templateName)
+                        PitchResultCard(event: event, allEvents: allEvents, games: games, templateName: templateName)
                             .padding(.horizontal)
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
