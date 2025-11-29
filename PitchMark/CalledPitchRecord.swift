@@ -528,7 +528,7 @@ struct PitchEventDetailPopover: View {
                     }
                     .padding(.horizontal, 2)
                 }
-                .frame(minHeight: 180)
+                .frame(minHeight: 160)
 
                 Text(timestampText)
                     .font(.caption)
@@ -554,7 +554,6 @@ struct PitchEventDetailPopover: View {
                         homePlateNormalized: CGPoint(x: 0.5, y: 0.69) // tweak per asset if needed
                     )
                     .frame(maxWidth: .infinity, minHeight: 415)
-                    .offset(y: -75)
                     .padding(8)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -572,11 +571,13 @@ struct FieldSprayOverlay: View {
     let events: [PitchEvent]
     // Normalized (0..1) position of home plate within the field image
     let homePlateNormalized: CGPoint
+    let focalNormalized: CGPoint
 
-    init(fieldImageName: String, events: [PitchEvent], homePlateNormalized: CGPoint = CGPoint(x: 0.5, y: 0.88)) {
+    init(fieldImageName: String, events: [PitchEvent], homePlateNormalized: CGPoint = CGPoint(x: 0.5, y: 0.88), focalNormalized: CGPoint = CGPoint(x: 0.5, y: 0.60)) {
         self.fieldImageName = fieldImageName
         self.events = events
         self.homePlateNormalized = homePlateNormalized
+        self.focalNormalized = focalNormalized
     }
 
     var body: some View {
@@ -616,17 +617,25 @@ struct FieldSprayOverlay: View {
                 height: targetHeight
             )
             
+            // Compute focal shift to center a chosen point of the image within the container
+            let containerCenter = CGPoint(x: availableSize.width / 2, y: availableSize.height / 2)
+            let focalPoint = CGPoint(
+                x: imageRect.minX + imageRect.width * focalNormalized.x,
+                y: imageRect.minY + imageRect.height * focalNormalized.y
+            )
+            let focalShift = CGPoint(x: containerCenter.x - focalPoint.x, y: containerCenter.y - focalPoint.y)
+            
             // Home plate position within the fitted image, configurable via `homePlateNormalized`
             let origin = CGPoint(
-                x: imageRect.minX + imageRect.width * homePlateNormalized.x,
-                y: imageRect.minY + imageRect.height * homePlateNormalized.y
+                x: imageRect.minX + imageRect.width * homePlateNormalized.x + focalShift.x,
+                y: imageRect.minY + imageRect.height * homePlateNormalized.y + focalShift.y
             )
             
             // Convert normalized tap coordinates to points within the fitted image rect
             let plottedPoints: [CGPoint] = events.compactMap { evt in
                 guard let nx = evt.battedBallTapX, let ny = evt.battedBallTapY else { return nil }
-                let px = imageRect.minX + CGFloat(nx) * imageRect.width
-                let py = imageRect.minY + CGFloat(ny) * imageRect.height
+                let px = imageRect.minX + CGFloat(nx) * imageRect.width + focalShift.x
+                let py = imageRect.minY + CGFloat(ny) * imageRect.height + focalShift.y
                 return CGPoint(x: px, y: py)
             }
 
@@ -635,7 +644,7 @@ struct FieldSprayOverlay: View {
                     .resizable()
                     .scaledToFit()
                     .frame(width: imageRect.width, height: imageRect.height)
-                    .position(x: imageRect.midX, y: imageRect.midY)
+                    .position(x: imageRect.midX + focalShift.x, y: imageRect.midY + focalShift.y)
 
                 // Home plate reference marker
                 Circle()
@@ -650,7 +659,7 @@ struct FieldSprayOverlay: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(width: imageRect.width, height: imageRect.height)
-                        .position(x: imageRect.midX, y: imageRect.midY)
+                        .position(x: imageRect.midX + focalShift.x, y: imageRect.midY + focalShift.y)
                         .allowsHitTesting(false)
                 } else {
                     ForEach(Array(plottedPoints.enumerated()), id: \.offset) { item in
