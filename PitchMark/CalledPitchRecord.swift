@@ -231,7 +231,7 @@ struct PitchCardView: View {
             // 🧩 Main card content
             content
                 .padding(.horizontal, 2)
-                .padding(.vertical, 6)
+                .padding(.vertical, 0)
         }
         .background(cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
