@@ -341,20 +341,36 @@ struct CodeAssignmentPanel: View {
                 Button(action: { showLocationPicker = true }) {
                     let title: String = {
                         if selectedLocation.isEmpty { return "Choose Location" }
-                        // Display without the Strike/Ball prefix in the chip label
                         return selectedLocation
                             .replacingOccurrences(of: "Strike ", with: "")
                             .replacingOccurrences(of: "Ball ", with: "")
                     }()
-                    menuLabel(
-                        title: title,
-                        isActive: !selectedLocation.isEmpty,
-                        activeColor: Color.orange.opacity(0.2)
+                    HStack(spacing: 8) {
+                        Text(title)
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill((!selectedLocation.isEmpty) ? Color.orange.opacity(0.2) : Color.gray.opacity(0.1))
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke((!selectedLocation.isEmpty) ? Color.black : Color.blue.opacity(0.3), lineWidth: (!selectedLocation.isEmpty) ? 2 : 1)
                     )
                 }
                 .disabled(selectedPitch.isEmpty)
                 .sheet(isPresented: $showLocationPicker) {
-                    StrikeZoneLocationPicker { pickedLabel in
+                    StrikeZoneLocationPicker(
+                        selectedPitch: selectedPitch,
+                        pitchCodeAssignments: pitchCodeAssignments
+                    ) { pickedLabel in
                         // pickedLabel is full label like "Strike Up" or "Ball Out"
                         selectedLocation = pickedLabel
                         showLocationPicker = false
@@ -468,24 +484,37 @@ struct CodeAssignmentPanel: View {
 }
 
 struct StrikeZoneLocationPicker: View {
+    let selectedPitch: String
+    let pitchCodeAssignments: [PitchCodeAssignment]
     let onSelect: (String) -> Void
     @Environment(\.dismiss) private var dismiss
-
+    
+    private func codeCount(for fullLabel: String) -> Int {
+        guard !selectedPitch.isEmpty else { return 0 }
+        return pitchCodeAssignments.filter { $0.pitch == selectedPitch && $0.location == fullLabel }.count
+    }
+    
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Text("Tap a Location")
-                    .font(.headline)
-                    .padding(.top, 8)
-
+                HStack(spacing: 6) {
+                    Text("Tap a Location")
+                    if !selectedPitch.isEmpty {
+                        Text("— \(selectedPitch)")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .font(.headline)
+                .padding(.top, 8)
+                Spacer(minLength: 0)
                 GeometryReader { geo in
                     let availableWidth = geo.size.width
                     let availableHeight = geo.size.height
-                    let zoneWidth = availableWidth * 0.6
-                    let zoneHeight = availableHeight * 0.55
+                    let zoneWidth = availableWidth * 0.5
+                    let zoneHeight = availableHeight * 0.65
                     let cellWidth = zoneWidth / 3
                     let cellHeight = zoneHeight / 3
-                    let buttonSize = min(cellWidth, cellHeight) * 0.7
+                    let buttonSize = min(cellWidth, cellHeight) * 0.8
                     let originX = (availableWidth - zoneWidth) / 2
                     let originY: CGFloat = 40
 
@@ -505,12 +534,26 @@ struct StrikeZoneLocationPicker: View {
                                 onSelect("Strike \(loc.label)")
                                 dismiss()
                             }) {
-                                Text(loc.label)
-                                    .font(.caption)
-                                    .foregroundColor(.white)
-                                    .frame(width: buttonSize, height: buttonSize)
-                                    .background(Color.green.opacity(0.8))
-                                    .clipShape(Circle())
+                                let count = codeCount(for: "Strike \(loc.label)")
+                                ZStack {
+                                    Text(loc.label)
+                                        .font(.caption)
+                                        .foregroundColor(.white)
+                                        .frame(width: buttonSize, height: buttonSize)
+                                        .background(Color.green.opacity(0.8))
+                                        .clipShape(Circle())
+                                }
+                                .overlay(alignment: .topTrailing) {
+                                    if count > 0 {
+                                        Text("\(count)")
+                                            .font(.caption2)
+                                            .foregroundColor(.white)
+                                            .padding(4)
+                                            .background(Color.black.opacity(0.75))
+                                            .clipShape(Circle())
+                                            .offset(x: 6, y: -6)
+                                    }
+                                }
                             }
                             .position(x: x, y: y)
                         }
@@ -532,13 +575,29 @@ struct StrikeZoneLocationPicker: View {
                                 onSelect("Ball \(label)")
                                 dismiss()
                             }) {
-                                Text(label)
-                                    .font(.caption)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 6)
-                                    .background(Color.red.opacity(0.85))
-                                    .clipShape(Capsule())
+                                let count = codeCount(for: "Ball \(label)")
+                                ZStack {
+                                    Text(label)
+                                        .font(.caption2)
+                                        .multilineTextAlignment(.center)
+                                        .minimumScaleFactor(0.6)
+                                        .lineLimit(2)
+                                        .foregroundColor(.white)
+                                        .frame(width: buttonSize, height: buttonSize)
+                                        .background(Color.red.opacity(0.85))
+                                        .clipShape(Circle())
+                                }
+                                .overlay(alignment: .topTrailing) {
+                                    if count > 0 {
+                                        Text("\(count)")
+                                            .font(.caption2)
+                                            .foregroundColor(.white)
+                                            .padding(4)
+                                            .background(Color.black.opacity(0.75))
+                                            .clipShape(Circle())
+                                            .offset(x: 6, y: -6)
+                                    }
+                                }
                             }
                             .position(x: x, y: y)
                         }
@@ -549,7 +608,7 @@ struct StrikeZoneLocationPicker: View {
 
                 Spacer(minLength: 0)
             }
-            .navigationTitle("Choose Location")
+//            .navigationTitle("Choose Location")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
