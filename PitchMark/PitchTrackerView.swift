@@ -1101,7 +1101,11 @@ func menuContent(
     if selectedPitches.isEmpty {
         Button("Select pitches first") {}.disabled(true)
     } else {
-        let orderedSelected = PitchTrackerView().orderedPitchesForTemplate.filter { selectedPitches.contains($0) }
+        let orderedSelected: [String] = {
+            let base = pitchOrder.filter { selectedPitches.contains($0) }
+            let extras = Array(selectedPitches.subtracting(Set(pitchOrder))).sorted()
+            return base + extras
+        }()
         ForEach(orderedSelected, id: \.self) { pitch in
             let assignedCodes = pitchCodeAssignments
                 .filter { $0.pitch == pitch && $0.location == adjustedLabel }
