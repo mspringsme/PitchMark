@@ -77,43 +77,28 @@ struct TemplateEditorView: View {
                     
                     
                     
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack {
-                            ForEach(pitchOrder, id: \.self) { pitch in
-                                let isSelected = selectedPitches.contains(pitch)
-                                Button(action: {
-                                    if isSelected {
-                                        selectedPitches.remove(pitch)
-                                    } else {
-                                        selectedPitches.insert(pitch)
-                                    }
-                                }) {
-                                    HStack(spacing: 4) {
-                                        if isSelected {
-                                            Image(systemName: "checkmark")
-                                                .font(.caption)
-                                                .foregroundColor(.green)
-                                        }
-                                        
-                                        Text(pitch)
-                                            .font(.subheadline)
-                                            .foregroundColor(.primary)
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(isSelected ? Color.green.opacity(0.2) : Color.gray.opacity(0.2))
-                                    .cornerRadius(16)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .stroke(isSelected ? Color.green : Color.clear, lineWidth: 1)
-                                    )
+                    Menu {
+                        ForEach(pitchOrder, id: \.self) { pitch in
+                            let isSelected = selectedPitches.contains(pitch)
+                            Button(action: {
+                                if isSelected {
+                                    selectedPitches.remove(pitch)
+                                } else {
+                                    selectedPitches.insert(pitch)
                                 }
+                            }) {
+                                Label(pitch, systemImage: isSelected ? "checkmark" : "")
                             }
                         }
-                        .padding(.horizontal)
+                    } label: {
+                        let hasSelection = !selectedPitches.isEmpty
+                        let title = hasSelection ? "Selected Pitches (\(selectedPitches.count))" : "Select Pitches"
+                        menuLabel(
+                            title: title,
+                            isActive: hasSelection,
+                            activeColor: Color.green.opacity(0.2)
+                        )
                     }
-                    
-                    Divider()
                     
                     // 🔹 Code Assignment Panel
                     CodeAssignmentPanel(
@@ -494,3 +479,5 @@ func menuOption(label: String, isSelected: Bool) -> some View {
         onSave: { _ in }
     )
 }
+
+
