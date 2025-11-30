@@ -117,6 +117,15 @@ struct PitchTrackerView: View {
         }
     }
     
+    // Helper property to merge pitchOrder with template-specific custom pitches
+    fileprivate var orderedPitchesForTemplate: [String] {
+        let base = pitchOrder
+        let extras = selectedTemplate.map { tmpl in
+            tmpl.pitches.filter { !pitchOrder.contains($0) }
+        } ?? []
+        return base + extras
+    }
+    
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
     init(
@@ -324,7 +333,7 @@ struct PitchTrackerView: View {
     private var pitchSelectionChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(pitchOrder, id: \.self) { pitch in
+                ForEach(orderedPitchesForTemplate, id: \.self) { pitch in
                     ToggleChip(
                         pitch: pitch,
                         selectedPitches: $selectedPitches,
@@ -1092,7 +1101,8 @@ func menuContent(
     if selectedPitches.isEmpty {
         Button("Select pitches first") {}.disabled(true)
     } else {
-        ForEach(pitchOrder.filter { selectedPitches.contains($0) }, id: \.self) { pitch in
+        let orderedSelected = PitchTrackerView().orderedPitchesForTemplate.filter { selectedPitches.contains($0) }
+        ForEach(orderedSelected, id: \.self) { pitch in
             let assignedCodes = pitchCodeAssignments
                 .filter { $0.pitch == pitch && $0.location == adjustedLabel }
                 .map(\.code)

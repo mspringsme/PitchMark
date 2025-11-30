@@ -15,6 +15,9 @@ struct TemplateEditorView: View {
     @State private var codeAssignments: [PitchCodeAssignment]
     @State private var hasUnsavedChanges = false
     @State private var showSaveAlert = false
+    @State private var customPitchName: String = ""
+    @State private var customPitches: [String] = []
+    @FocusState private var customPitchFieldFocused: Bool
     
     let allPitches: [String]
     let templateID: UUID
@@ -58,7 +61,40 @@ struct TemplateEditorView: View {
         _name = State(initialValue: initialName)
         _selectedPitches = State(initialValue: initialPitches)
         _codeAssignments = State(initialValue: initialAssignments)
+        _customPitches = State(initialValue: (template?.pitches ?? []).filter { !pitchOrder.contains($0) })
         self.templateID = id
+    }
+    
+    private var availablePitches: [String] {
+        // Base pitch order followed by any custom pitches the user adds
+        pitchOrder + customPitches
+    }
+
+    private func addCustomPitch() {
+        let trimmed = customPitchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // Check if it already exists (case-insensitive) in the base list
+        if let existingBase = pitchOrder.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            selectedPitches.insert(existingBase)
+            customPitchName = ""
+            customPitchFieldFocused = false
+            return
+        }
+
+        // Check if it already exists (case-insensitive) in custom list
+        if let existingCustom = customPitches.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            selectedPitches.insert(existingCustom)
+            customPitchName = ""
+            customPitchFieldFocused = false
+            return
+        }
+
+        // Otherwise, add new custom pitch and select it
+        customPitches.append(trimmed)
+        selectedPitches.insert(trimmed)
+        customPitchName = ""
+        customPitchFieldFocused = false
     }
     
     var body: some View {
@@ -75,29 +111,64 @@ struct TemplateEditorView: View {
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .padding()
                     
-                    
-                    
-                    Menu {
-                        ForEach(pitchOrder, id: \.self) { pitch in
-                            let isSelected = selectedPitches.contains(pitch)
-                            Button(action: {
-                                if isSelected {
-                                    selectedPitches.remove(pitch)
-                                } else {
-                                    selectedPitches.insert(pitch)
+                    HStack(spacing: 12) {
+                        Menu {
+                            ForEach(availablePitches, id: \.self) { pitch in
+                                let isSelected = selectedPitches.contains(pitch)
+                                Button(action: {
+                                    if isSelected {
+                                        selectedPitches.remove(pitch)
+                                    } else {
+                                        selectedPitches.insert(pitch)
+                                    }
+                                }) {
+                                    Label(pitch, systemImage: isSelected ? "checkmark" : "")
                                 }
-                            }) {
-                                Label(pitch, systemImage: isSelected ? "checkmark" : "")
                             }
+                        } label: {
+                            let hasSelection = !selectedPitches.isEmpty
+                            let title = hasSelection ? "Selected Pitches (\(selectedPitches.count))" : "Select Pitches"
+                            menuLabel(
+                                title: title,
+                                isActive: hasSelection,
+                                activeColor: Color.green.opacity(0.2)
+                            )
                         }
-                    } label: {
-                        let hasSelection = !selectedPitches.isEmpty
-                        let title = hasSelection ? "Selected Pitches (\(selectedPitches.count))" : "Select Pitches"
-                        menuLabel(
-                            title: title,
-                            isActive: hasSelection,
-                            activeColor: Color.green.opacity(0.2)
-                        )
+
+                        HStack(spacing: 8) {
+                            TextField("Add custom pitch", text: $customPitchName)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .frame(minWidth: 140)
+                                .focused($customPitchFieldFocused)
+                                .onSubmit { addCustomPitch() }
+                                .toolbar {
+                                    ToolbarItemGroup(placement: .keyboard) {
+                                        Spacer()
+                                        Button("Done") {
+                                            customPitchFieldFocused = false
+                                        }
+                                    }
+                                }
+
+                            Button(action: { addCustomPitch() }) {
+                                Image(systemName: "plus.circle.fill")
+                                    .imageScale(.large)
+                            }
+                            .disabled(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .accessibilityLabel("Add custom pitch")
+
+                            Button(action: {
+                                customPitchName = ""
+                                customPitchFieldFocused = false
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .imageScale(.large)
+                                    .foregroundColor(.secondary)
+                            }
+                            .accessibilityLabel("Cancel adding custom pitch")
+                            .opacity(customPitchFieldFocused || !customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1 : 0)
+                            .disabled(!(customPitchFieldFocused || !customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                        }
                     }
                     
                     // 🔹 Code Assignment Panel
@@ -479,5 +550,4 @@ func menuOption(label: String, isSelected: Bool) -> some View {
         onSave: { _ in }
     )
 }
-
 
