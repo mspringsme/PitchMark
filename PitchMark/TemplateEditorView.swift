@@ -70,9 +70,12 @@ struct TemplateEditorView: View {
                         UIApplication.shared.endEditing()
                     }
                 VStack(spacing: 16) {
+                    
                     TextField("Template Name", text: $name)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .padding()
+                    
+                    
                     
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack {
@@ -152,6 +155,17 @@ struct TemplateEditorView: View {
                         saveTemplate()
                         dismiss()
                     }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: {
+                        dismiss()
+                    }) {
+                        Image(systemName: "xmark")
+                            .imageScale(.medium)
+                            .padding(8)
+                    }
+                    .accessibilityLabel("Close without saving")
                 }
             }
         }
@@ -450,3 +464,4 @@ func menuOption(label: String, isSelected: Bool) -> some View {
     }
     .padding(.vertical, 4)
 }
+

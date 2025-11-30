@@ -87,6 +87,7 @@ struct StrikeZoneButtonLabel: View {
     let actualLocationRecorded: String?
     let calledPitchLocation: String?
     let pendingResultLabel: String?
+    let outlineOnly: Bool
 
     var body: some View {
         
@@ -97,17 +98,18 @@ struct StrikeZoneButtonLabel: View {
         let overrideFill: Color? = isCalledPitch ? (segmentColors.first ?? .gray) : nil
         
         return ZStack {
-            //shapeView(isStrike: isStrike, isSelected: isSelected, overrideFill: overrideFill)
-            GlowingShapeView(isStrike: isStrike, isSelected: isSelected, overrideFill: overrideFill)
+            GlowingShapeView(isStrike: isStrike, isSelected: isSelected, overrideFill: overrideFill, outlineOnly: outlineOnly)
 
-            PieChartView(segments: segmentColors)
-                .frame(width: buttonSize, height: buttonSize)
-                .opacity(1) // Always show pie chart (red/green or pitch color)
-                .animation(.easeInOut(duration: 0.2), value: segmentColors)
+            if !outlineOnly && !segmentColors.isEmpty {
+                PieChartView(segments: segmentColors)
+                    .frame(width: buttonSize, height: buttonSize)
+                    .opacity(1)
+                    .animation(.easeInOut(duration: 0.2), value: segmentColors)
+            }
 
             Text(fullLabel)
                 .font(.system(size: buttonSize * 0.24, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundColor(outlineOnly ? Color.primary.opacity(0.7) : .white)
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .minimumScaleFactor(0.5)
@@ -124,27 +126,31 @@ struct PieChartView: View {
     let segments: [Color]
 
     var body: some View {
-        GeometryReader { geo in
-            let radius = min(geo.size.width, geo.size.height) / 2
-            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
-            let sliceCount = segments.count
-            let anglePerSlice = 2 * .pi / Double(sliceCount)
+        if segments.isEmpty {
+            Color.clear
+        } else {
+            GeometryReader { geo in
+                let radius = min(geo.size.width, geo.size.height) / 2
+                let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+                let sliceCount = segments.count
+                let anglePerSlice = 2 * .pi / Double(sliceCount)
 
-            ZStack {
-                ForEach(segments.indices, id: \.self) { index in
-                    let startAngle = anglePerSlice * Double(index) - .pi / 2
-                    let endAngle = startAngle + anglePerSlice
+                ZStack {
+                    ForEach(segments.indices, id: \.self) { index in
+                        let startAngle = anglePerSlice * Double(index) - .pi / 2
+                        let endAngle = startAngle + anglePerSlice
 
-                    Path { path in
-                        path.move(to: center)
-                        path.addArc(center: center,
-                                    radius: radius,
-                                    startAngle: Angle(radians: startAngle),
-                                    endAngle: Angle(radians: endAngle),
-                                    clockwise: false)
-                        path.closeSubpath()
+                        Path { path in
+                            path.move(to: center)
+                            path.addArc(center: center,
+                                        radius: radius,
+                                        startAngle: Angle(radians: startAngle),
+                                        endAngle: Angle(radians: endAngle),
+                                        clockwise: false)
+                            path.closeSubpath()
+                        }
+                        .fill(segments[index])
                     }
-                    .fill(segments[index])
                 }
             }
         }
@@ -392,9 +398,4 @@ struct PitchImageGridPreview: View {
         }
     }
 }
-
-
-
-
-
 

@@ -701,7 +701,7 @@ struct PitchTrackerView: View {
             selectedOutcome = nil
             selectedDescriptor = nil
         }
-        .sheet(isPresented: $showConfirmSheet) {
+        .sheet(isPresented: Binding(get: { showConfirmSheet && sessionManager.currentMode == .game }, set: { newValue in showConfirmSheet = newValue })) {
             PitchResultSheetView(
                 isPresented: $showConfirmSheet,
                 isStrikeSwinging: $isStrikeSwinging,

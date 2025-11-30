@@ -46,6 +46,7 @@ func pitchButton(
             .filter { $0.location == fullLabel && selectedPitches.contains($0.pitch) }
             .map(\.pitch)
     )
+    let shouldOutline = assignedPitches.isEmpty && !isRecordingResult
 
     let segmentColors: [Color] = {
         if let resultLabel = resultVisualState {
@@ -84,7 +85,8 @@ func pitchButton(
                     isRecordingResult: isRecordingResult,
                     actualLocationRecorded: actualLocationRecorded,
                     calledPitchLocation: calledPitchLocation,
-                    pendingResultLabel: pendingResultLabel.wrappedValue
+                    pendingResultLabel: pendingResultLabel.wrappedValue,
+                    outlineOnly: shouldOutline
                 )
             }
             .buttonStyle(.plain)
@@ -114,7 +116,8 @@ func pitchButton(
                         isRecordingResult: isRecordingResult,
                         actualLocationRecorded: actualLocationRecorded,
                         calledPitchLocation: calledPitchLocation,
-                        pendingResultLabel: pendingResultLabel.wrappedValue
+                        pendingResultLabel: pendingResultLabel.wrappedValue,
+                        outlineOnly: shouldOutline
                     )
                 }
                 .padding(10)

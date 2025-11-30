@@ -34,7 +34,7 @@ struct StrikeZoneView: View {
             Color.clear // 👈 forces fixed size
                     .frame(width: width, height: 400)
             GeometryReader { geo in
-                let zoneWidth = geo.size.width * (isGame ? 0.47 : 0.4)
+                let zoneWidth = geo.size.width * (isGame ? 0.47 : 0.431)
                 let zoneHeight = geo.size.height * 0.6
                 let cellWidth = zoneWidth / 3
                 let cellHeight = zoneHeight / 3
@@ -133,7 +133,7 @@ struct StrikeZoneView: View {
 }
 
 @ViewBuilder
-func shapeView(isStrike: Bool, isSelected: Bool, overrideFill: Color? = nil) -> some View {
+func shapeView(isStrike: Bool, isSelected: Bool, overrideFill: Color? = nil, outlineOnly: Bool = false) -> some View {
     let isOverride = overrideFill != nil
     let baseColor = overrideFill ?? (isStrike ? Color.green : Color.red)
     let fillColor = isOverride ? baseColor : baseColor.opacity(isSelected ? 0.6 : 1.0)
@@ -141,36 +141,69 @@ func shapeView(isStrike: Bool, isSelected: Bool, overrideFill: Color? = nil) -> 
     // Rotation state for animated gradient
     @State var rotation: Angle = .zero
 
-    Circle()
-        .fill(fillColor)
-        .overlay(
-            ZStack {
-                // Static stroke
-                Circle()
-                    .stroke(Color.black, lineWidth: isSelected ? 2 : 0)
-
-                // Glowing animated stroke
-                if isSelected {
+    if outlineOnly {
+        Circle()
+            .stroke(baseColor, lineWidth: isSelected ? 5 : 4)
+            .overlay(
+                ZStack {
+                    // Subtle static stroke to add definition
                     Circle()
-                        .stroke(
-                            AngularGradient(
-                                gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
-                                center: .center,
-                                angle: rotation
-                            ),
-                            lineWidth: 6
-                        )
-                        .blur(radius: 2)
-                        .onAppear {
-                            withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
-                                rotation = .degrees(360)
+                        .stroke(Color.black.opacity(0.6), lineWidth: isSelected ? 2 : 1.5)
+
+                    // Glowing animated stroke when selected
+                    if isSelected {
+                        Circle()
+                            .stroke(
+                                AngularGradient(
+                                    gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
+                                    center: .center,
+                                    angle: rotation
+                                ),
+                                lineWidth: 6
+                            )
+                            .blur(radius: 2)
+                            .onAppear {
+                                withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                                    rotation = .degrees(360)
+                                }
                             }
-                        }
+                    }
                 }
-            }
-        )
-        .scaleEffect(isSelected ? 1.3    : 1.0)
-        .animation(.easeOut(duration: 2.0), value: isSelected)
+            )
+            .scaleEffect(isSelected ? 1.3 : 1.0)
+            .animation(.easeOut(duration: 2.0), value: isSelected)
+    } else {
+        Circle()
+            .fill(fillColor)
+            .overlay(
+                ZStack {
+                    // Static stroke
+                    Circle()
+                        .stroke(Color.black, lineWidth: isSelected ? 2 : 0)
+
+                    // Glowing animated stroke
+                    if isSelected {
+                        Circle()
+                            .stroke(
+                                AngularGradient(
+                                    gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
+                                    center: .center,
+                                    angle: rotation
+                                ),
+                                lineWidth: 6
+                            )
+                            .blur(radius: 2)
+                            .onAppear {
+                                withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
+                                    rotation = .degrees(360)
+                                }
+                            }
+                    }
+                }
+            )
+            .scaleEffect(isSelected ? 1.3    : 1.0)
+            .animation(.easeOut(duration: 2.0), value: isSelected)
+    }
 }
 
 @ViewBuilder
@@ -192,24 +225,40 @@ struct GlowingShapeView: View {
     let isStrike: Bool
     let isSelected: Bool
     let overrideFill: Color?
+    let outlineOnly: Bool
 
     @State private var angle: Double = 0
+
+    init(isStrike: Bool, isSelected: Bool, overrideFill: Color? = nil, outlineOnly: Bool = false) {
+        self.isStrike = isStrike
+        self.isSelected = isSelected
+        self.overrideFill = overrideFill
+        self.outlineOnly = outlineOnly
+    }
 
     var body: some View {
         let isOverride = overrideFill != nil
         let baseColor = overrideFill ?? (isStrike ? Color.green : Color.red)
         let fillColor = isOverride ? baseColor : baseColor.opacity(isSelected ? 0.6 : 1.0)
 
-        Circle()
-            .fill(fillColor)
-            .modifier(RotatingGlowModifier(isSelected: isSelected, angle: angle))
-            .scaleEffect(isSelected ? 1.3 : 1.0)
-            .animation(.easeOut(duration: 2.0), value: isSelected)
-            .onAppear {
-                withAnimation(.linear(duration: 5).repeatForever(autoreverses: false)) {
-                    angle = 360
-                }
+        Group {
+            if outlineOnly {
+                Circle()
+                    .stroke(baseColor, lineWidth: isSelected ? 5 : 4)
+                    .modifier(RotatingGlowModifier(isSelected: isSelected, angle: angle))
+            } else {
+                Circle()
+                    .fill(fillColor)
+                    .modifier(RotatingGlowModifier(isSelected: isSelected, angle: angle))
             }
+        }
+        .scaleEffect(isSelected ? 1.3 : 1.0)
+        .animation(.easeOut(duration: 2.0), value: isSelected)
+        .onAppear {
+            withAnimation(.linear(duration: 5).repeatForever(autoreverses: false)) {
+                angle = 360
+            }
+        }
     }
 }
 struct RotatingGlowModifier: AnimatableModifier {
@@ -244,4 +293,3 @@ struct RotatingGlowModifier: AnimatableModifier {
             )
     }
 }
-
