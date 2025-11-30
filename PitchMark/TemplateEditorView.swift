@@ -105,13 +105,14 @@ struct TemplateEditorView: View {
                     .onTapGesture {
                         UIApplication.shared.endEditing()
                     }
-                VStack(spacing: 16) {
+                VStack(spacing: 10) {
                     Divider()
                     TextField("Template Name", text: $name)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .padding()
+                        .padding(.horizontal)
+                        .padding(.bottom, 4)
                     
-                    HStack(spacing: 12) {
+                    HStack(spacing: 8) {
                         Menu {
                             ForEach(availablePitches, id: \.self) { pitch in
                                 let isSelected = selectedPitches.contains(pitch)
@@ -127,7 +128,7 @@ struct TemplateEditorView: View {
                             }
                         } label: {
                             let hasSelection = !selectedPitches.isEmpty
-                            let title = hasSelection ? "Selected Pitches (\(selectedPitches.count))" : "Select Pitches"
+                            let title = hasSelection ? "Pitches (\(selectedPitches.count))" : "Pitches"
                             menuLabel(
                                 title: title,
                                 isActive: hasSelection,
@@ -135,8 +136,8 @@ struct TemplateEditorView: View {
                             )
                         }
 
-                        HStack(spacing: 8) {
-                            TextField("Add custom pitch", text: $customPitchName)
+                        HStack(spacing: 6) {
+                            TextField("Add custom", text: $customPitchName)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .frame(minWidth: 140)
                                 .focused($customPitchFieldFocused)
@@ -202,7 +203,7 @@ struct TemplateEditorView: View {
                     Spacer()
                     
                 }
-                .padding()
+                .padding(.horizontal)
             }
             .interactiveDismissDisabled(true)
             .toolbar {
@@ -237,6 +238,8 @@ struct CodeAssignmentPanel: View {
     let allPitches: [String]
     let allLocations: [String]
     let assignAction: () -> Void
+    
+    @State private var showLocationPicker: Bool = false
     
     private var groupedCodes: [[String]] {
         stride(from: 1, through: 599, by: 100).map { start in
@@ -334,51 +337,31 @@ struct CodeAssignmentPanel: View {
                     )
                 }
                 
-                // 🔹 Strike Location
-                Menu {
-                    ForEach(strikeGrid.map(\.label), id: \.self) { label in
-                        let fullLabel = "Strike \(label)"
-                        Button(action: {
-                            selectedLocation = fullLabel
-                        }) {
-                            let count = codeCount(forLocation: label, isStrike: true)
-                            menuOption(label: count > 0 ? "\(label) (\(count))" : label, isSelected: selectedLocation == fullLabel)
-                        }
-                    }
-                } label: {
+                // 🔹 Location Picker (Strike + Ball)
+                Button(action: { showLocationPicker = true }) {
+                    let title: String = {
+                        if selectedLocation.isEmpty { return "Choose Location" }
+                        // Display without the Strike/Ball prefix in the chip label
+                        return selectedLocation
+                            .replacingOccurrences(of: "Strike ", with: "")
+                            .replacingOccurrences(of: "Ball ", with: "")
+                    }()
                     menuLabel(
-                        title: selectedLocation.starts(with: "Strike") ?
-                            selectedLocation.replacingOccurrences(of: "Strike ", with: "") :
-                            "Strike Location",
-                        isActive: selectedLocation.starts(with: "Strike")
+                        title: title,
+                        isActive: !selectedLocation.isEmpty,
+                        activeColor: Color.orange.opacity(0.2)
                     )
                 }
                 .disabled(selectedPitch.isEmpty)
-                
-                // 🔹 Ball Location
-                Menu {
-                    ForEach([
-                        "Up & Out", "Up", "Up & In",
-                        "Out", "In",
-                        "↓ & Out", "↓", "↓ & In"
-                    ], id: \.self) { label in
-                        let fullLabel = "Ball \(label)"
-                        Button(action: {
-                            selectedLocation = fullLabel
-                        }) {
-                            let count = codeCount(forLocation: label, isStrike: false)
-                            menuOption(label: count > 0 ? "\(label) (\(count))" : label, isSelected: selectedLocation == fullLabel)
-                        }
+                .sheet(isPresented: $showLocationPicker) {
+                    StrikeZoneLocationPicker { pickedLabel in
+                        // pickedLabel is full label like "Strike Up" or "Ball Out"
+                        selectedLocation = pickedLabel
+                        showLocationPicker = false
                     }
-                } label: {
-                    menuLabel(
-                        title: selectedLocation.starts(with: "Ball") ?
-                            selectedLocation.replacingOccurrences(of: "Ball ", with: "") :
-                            "Ball Location",
-                        isActive: selectedLocation.starts(with: "Ball")
-                    )
+                    .presentationDetents([.fraction(0.8), .large])
+                    .presentationDragIndicator(.visible)
                 }
-                .disabled(selectedPitch.isEmpty)
             }
             .frame(maxWidth: .infinity)
             .multilineTextAlignment(.center)
@@ -483,6 +466,99 @@ struct CodeAssignmentPanel: View {
         
     }
 }
+
+struct StrikeZoneLocationPicker: View {
+    let onSelect: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Text("Tap a Location")
+                    .font(.headline)
+                    .padding(.top, 8)
+
+                GeometryReader { geo in
+                    let availableWidth = geo.size.width
+                    let availableHeight = geo.size.height
+                    let zoneWidth = availableWidth * 0.6
+                    let zoneHeight = availableHeight * 0.55
+                    let cellWidth = zoneWidth / 3
+                    let cellHeight = zoneHeight / 3
+                    let buttonSize = min(cellWidth, cellHeight) * 0.7
+                    let originX = (availableWidth - zoneWidth) / 2
+                    let originY: CGFloat = 40
+
+                    ZStack(alignment: .topLeading) {
+                        // Strike zone frame
+                        Rectangle()
+                            .stroke(Color.black, lineWidth: 2)
+                            .frame(width: zoneWidth, height: zoneHeight)
+                            .position(x: originX + zoneWidth / 2, y: originY + zoneHeight / 2)
+
+                        // Strike zone locations (3x3)
+                        ForEach(strikeGrid) { loc in
+                            let x = originX + CGFloat(loc.col) * cellWidth + cellWidth / 2
+                            let y = originY + CGFloat(loc.row) * cellHeight + cellHeight / 2
+
+                            Button(action: {
+                                onSelect("Strike \(loc.label)")
+                                dismiss()
+                            }) {
+                                Text(loc.label)
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                                    .frame(width: buttonSize, height: buttonSize)
+                                    .background(Color.green.opacity(0.8))
+                                    .clipShape(Circle())
+                            }
+                            .position(x: x, y: y)
+                        }
+
+                        // Ball locations around the zone
+                        let ballLocations: [(String, CGFloat, CGFloat)] = [
+                            ("Up & Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
+                            ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
+                            ("Up & In", originX + zoneWidth + buttonSize * 0.6, originY - buttonSize * 0.6),
+                            ("Out", originX - buttonSize * 0.75, originY + zoneHeight / 2),
+                            ("In", originX + zoneWidth + buttonSize * 0.75, originY + zoneHeight / 2),
+                            ("↓ & Out", originX - buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6),
+                            ("↓", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
+                            ("↓ & In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
+                        ]
+
+                        ForEach(ballLocations, id: \.0) { label, x, y in
+                            Button(action: {
+                                onSelect("Ball \(label)")
+                                dismiss()
+                            }) {
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 6)
+                                    .background(Color.red.opacity(0.85))
+                                    .clipShape(Capsule())
+                            }
+                            .position(x: x, y: y)
+                        }
+                    }
+                }
+                .frame(height: 420)
+                .padding(.horizontal)
+
+                Spacer(minLength: 0)
+            }
+            .navigationTitle("Choose Location")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 @ViewBuilder
 func menuLabel(title: String, isActive: Bool, activeColor: Color = Color.gray.opacity(0.1)) -> some View {
     HStack {
