@@ -400,38 +400,40 @@ struct CodeAssignmentPanel: View {
                     }
                     
                     // Action buttons shown after a location is selected
-                    if !selectedPitch.isEmpty && !selectedLocation.isEmpty {
-                        HStack(spacing: 8) {
-                            Button(action: {
-                                // Confirm assignment and reset selections (mirror overlay behavior)
-                                assignAction()
-                                selectedPitch = ""
-                                selectedLocation = ""
-                                showSelectionOverlay = false
-                            }) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .imageScale(.large)
-                                    .foregroundColor(selectedCodes.isEmpty ? Color.gray.opacity(0.5) : .green)
-                                    .opacity(selectedCodes.isEmpty ? 0.5 : 1.0)
-                                    .padding(.horizontal, 4)
-                            }
-                            .accessibilityLabel("Done")
-                            .disabled(selectedCodes.isEmpty)
-
-                            Button(action: {
-                                // Cancel selection and clear staged codes (mirror overlay behavior)
-                                selectedCodes.removeAll()
-                                selectedPitch = ""
-                                selectedLocation = ""
-                                showSelectionOverlay = false
-                            }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .imageScale(.large)
-                                    .foregroundColor(.red)
-                                    .padding(.horizontal, 4)
-                            }
-                            .accessibilityLabel("Cancel")
+                    // Action buttons are always shown, but inactive until a pitch and location are selected
+                    let hasSelection = !selectedPitch.isEmpty && !selectedLocation.isEmpty
+                    HStack(spacing: 8) {
+                        Button(action: {
+                            // Confirm assignment and reset selections (mirror overlay behavior)
+                            assignAction()
+                            selectedPitch = ""
+                            selectedLocation = ""
+                            showSelectionOverlay = false
+                        }) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .imageScale(.large)
+                                .foregroundColor((hasSelection && !selectedCodes.isEmpty) ? .green : Color.gray.opacity(0.5))
+                                .opacity((hasSelection && !selectedCodes.isEmpty) ? 1.0 : 0.6)
+                                .padding(.horizontal, 4)
                         }
+                        .accessibilityLabel("Done")
+                        .disabled(!hasSelection || selectedCodes.isEmpty)
+
+                        Button(action: {
+                            // Cancel selection and clear staged codes (mirror overlay behavior)
+                            selectedCodes.removeAll()
+                            selectedPitch = ""
+                            selectedLocation = ""
+                            showSelectionOverlay = false
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .imageScale(.large)
+                                .foregroundColor(hasSelection ? .red : Color.gray.opacity(0.5))
+                                .opacity(hasSelection ? 1.0 : 0.6)
+                                .padding(.horizontal, 4)
+                        }
+                        .accessibilityLabel("Cancel")
+                        .disabled(!hasSelection)
                     }
                 }
                 .blur(radius: showSelectionOverlay ? 3 : 0)
@@ -502,11 +504,7 @@ struct CodeAssignmentPanel: View {
             }
             .frame(minHeight: 28, maxHeight: 36, alignment: .leading)
             
-            if !selectedCodes.isEmpty {
-                Text(selectedCodes.sorted().joined(separator: ", "))
-                    .font(.headline)
-                    .padding(.top, 4)
-            }
+            
 
             
             Divider()
