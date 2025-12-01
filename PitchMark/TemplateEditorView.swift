@@ -539,12 +539,12 @@ struct CodeAssignmentPanel: View {
 
                                     // Visual styling
                                     let backgroundColor: Color = {
-                                        if isAssignedToSelectedPitch {
+                                        if isAssignedToCurrentLocation {
+                                            return Color.black
+                                        } else if isAssignedToSelectedPitch {
                                             return Color.gray.opacity(0.85)
                                         } else if isGloballyAssigned {
                                             return .clear
-                                        } else if isAssignedToCurrentLocation {
-                                            return Color.blue.opacity(0.2)
                                         } else if isSelected {
                                             return Color.green.opacity(0.2)
                                         } else {
@@ -554,7 +554,7 @@ struct CodeAssignmentPanel: View {
 
                                     let borderColor: Color = {
                                         if isAssignedToCurrentLocation {
-                                            return .black
+                                            return .clear
                                         } else if isAssignedToSelectedPitch {
                                             return .black
                                         } else if isGloballyAssigned {
@@ -566,11 +566,12 @@ struct CodeAssignmentPanel: View {
                                         }
                                     }()
 
-                                    let borderWidth: CGFloat = isAssignedToCurrentLocation ? 3 : 1
-//                                    let shadowColor: Color = isAssignedToSelectedPitch ? Color.purple.opacity(0.4) : .clear
+                                    let borderWidth: CGFloat = isAssignedToCurrentLocation ? 0 : (isAssignedToSelectedPitch ? 1 : 1)
                                     let pitchHighlight: Color = isAssignedToSelectedPitch ? Color.purple.opacity(0.2) : .clear
                                     let textColor: Color = {
-                                        if isAssignedToSelectedPitch {
+                                        if isAssignedToCurrentLocation {
+                                            return .white
+                                        } else if isAssignedToSelectedPitch {
                                             return .white
                                         } else if isGloballyAssigned {
                                             return .red
@@ -580,9 +581,16 @@ struct CodeAssignmentPanel: View {
                                     }()
 
                                     Button(action: {
-                                        if isAssignedToCurrentLocation {
+                                        // If both a pitch and a location are selected and this code is assigned at that exact pair,
+                                        // remove the assignment and clear any staged selection so the button returns to blue.
+                                        if !selectedPitch.isEmpty, !selectedLocation.isEmpty, isAssignedToCurrentLocation {
                                             pitchCodeAssignments.removeAll { $0 == assignment }
-                                        } else if !isGloballyAssigned {
+                                            selectedCodes.remove(code)
+                                            return
+                                        }
+
+                                        // Otherwise, if this code isn't globally assigned yet, toggle staged selection.
+                                        if !isGloballyAssigned {
                                             if isSelected {
                                                 selectedCodes.remove(code)
                                             } else {
@@ -599,7 +607,7 @@ struct CodeAssignmentPanel: View {
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .stroke(borderColor, lineWidth: borderWidth)
                                             )
-//                                            .shadow(color: shadowColor, radius: isAssignedToSelectedPitch ? 4 : 0)
+                                            .shadow(color: isAssignedToCurrentLocation ? Color.black.opacity(0.4) : .clear, radius: isAssignedToCurrentLocation ? 6 : 0, x: 0, y: 2)
                                             .background(pitchHighlight)
                                             .cornerRadius(6)
                                     }
