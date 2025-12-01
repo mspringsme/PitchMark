@@ -113,9 +113,13 @@ struct TemplateEditorView: View {
                         .focused($nameFieldFocused)
                         .submitLabel(.done)
                         .onSubmit { nameFieldFocused = false }
-                        .padding(.horizontal)
+                        .multilineTextAlignment(.center)
                         .padding(.bottom, 4)
-                    
+                        .frame(width: 200)
+                        .bold()
+                        .foregroundColor(.blue)
+                        
+                    Divider()
                     HStack(spacing: 8) {
                         Menu {
                             ForEach(availablePitches, id: \.self) { pitch in
@@ -151,12 +155,14 @@ struct TemplateEditorView: View {
                             )
                             .clipShape(Capsule())
                             .shadow(color: Color.black.opacity(0.2), radius: 3, x: 0, y: 2)
+                            .padding(.leading, 8)
                         }
-
+                        Spacer()
                         HStack(spacing: 6) {
+                            
                             TextField("Add custom", text: $customPitchName)
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .frame(minWidth: 140)
+                                .frame(width: 120)
                                 .focused($customPitchFieldFocused)
                                 .onSubmit { customPitchFieldFocused = false }
                                 .submitLabel(.done)
@@ -183,7 +189,7 @@ struct TemplateEditorView: View {
                             .disabled(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
-                    
+                    Divider()
                     // 🔹 Code Assignment Panel
                     CodeAssignmentPanel(
                         selectedCodes: $selectedCodes,
@@ -320,7 +326,9 @@ struct CodeAssignmentPanel: View {
 
 
             ZStack {
+                
                 HStack(spacing: 12) {
+                    Spacer()
                     // 🔹 Select Pitch
                     Menu {
                         ForEach(allPitches.sorted(by: {
@@ -372,7 +380,7 @@ struct CodeAssignmentPanel: View {
                         .padding(.vertical, 8)
                         .background(
                             Capsule()
-                                .fill((!selectedLocation.isEmpty) ? Color.orange.opacity(0.2) : Color.gray.opacity(0.1))
+                                .fill((!selectedLocation.isEmpty) ? Color.blue.opacity(0.2) : Color.gray.opacity(0.1))
                         )
                         .overlay(
                             Capsule()
@@ -396,8 +404,9 @@ struct CodeAssignmentPanel: View {
                     
                     // Action buttons shown after a location is selected
                     // Action buttons are always shown, but inactive until a pitch and location are selected
+                    //Spacer()
                     let hasSelection = !selectedPitch.isEmpty && !selectedLocation.isEmpty
-                    HStack(spacing: 8) {
+                    
                         Button(action: {
                             // Confirm assignment and reset selections (mirror overlay behavior)
                             assignAction()
@@ -409,7 +418,7 @@ struct CodeAssignmentPanel: View {
                                 .imageScale(.large)
                                 .foregroundColor((hasSelection && !selectedCodes.isEmpty) ? .green : Color.gray.opacity(0.5))
                                 .opacity((hasSelection && !selectedCodes.isEmpty) ? 1.0 : 0.6)
-                                .padding(.horizontal, 4)
+                                //.padding(.horizontal, 4)
                         }
                         .accessibilityLabel("Done")
                         .disabled(!hasSelection || selectedCodes.isEmpty)
@@ -425,11 +434,13 @@ struct CodeAssignmentPanel: View {
                                 .imageScale(.large)
                                 .foregroundColor(hasSelection ? .red : Color.gray.opacity(0.5))
                                 .opacity(hasSelection ? 1.0 : 0.6)
-                                .padding(.horizontal, 4)
+                                //.padding(.horizontal, 4)
                         }
                         .accessibilityLabel("Cancel")
                         .disabled(!hasSelection)
-                    }
+                    
+                    Spacer()
+                    
                 }
                 .blur(radius: showSelectionOverlay ? 3 : 0)
                 .allowsHitTesting(!showSelectionOverlay)
