@@ -129,11 +129,24 @@ struct TemplateEditorView: View {
                         } label: {
                             let hasSelection = !selectedPitches.isEmpty
                             let title = hasSelection ? "Pitches (\(selectedPitches.count))" : "Pitches"
-                            menuLabel(
-                                title: title,
-                                isActive: hasSelection,
-                                activeColor: Color.green.opacity(0.2)
+                            HStack(spacing: 8) {
+                                Text(title)
+                                    .font(.subheadline)
+                                    .foregroundColor(.red)
+                                    .lineLimit(1)
+                                Image(systemName: "chevron.down")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(Color.clear)
+                            .overlay(
+                                Capsule()
+                                    .stroke(Color.red, lineWidth: 2)
                             )
+                            .clipShape(Capsule())
+                            .shadow(color: Color.black.opacity(0.2), radius: 3, x: 0, y: 2)
                         }
 
                         HStack(spacing: 6) {
@@ -240,6 +253,7 @@ struct CodeAssignmentPanel: View {
     let assignAction: () -> Void
     
     @State private var showLocationPicker: Bool = false
+    @State private var showSelectionOverlay: Bool = false
     
     private var groupedCodes: [[String]] {
         stride(from: 1, through: 599, by: 100).map { start in
@@ -298,6 +312,142 @@ struct CodeAssignmentPanel: View {
         VStack(spacing: 12) {
 
 
+            ZStack {
+                HStack(spacing: 12) {
+                    // 🔹 Select Pitch
+                    Menu {
+                        ForEach(allPitches.sorted(by: {
+                            pitchOrder.firstIndex(of: $0) ?? .max
+                            < pitchOrder.firstIndex(of: $1) ?? .max
+                        }), id: \.self) { pitch in
+                            Button(action: {
+                                selectedPitch = pitch
+                            }) {
+                                let count = codeCount(for: pitch)
+                                Label(count > 0 ? "\(pitch) (\(count))" : pitch, systemImage: selectedPitch == pitch ? "checkmark" : "")
+                            }
+                        }
+                    } label: {
+                        let title = selectedPitch.isEmpty ? "Select Pitch" : selectedPitch
+                        HStack(spacing: 8) {
+                            Text(title)
+                                .font(.subheadline)
+                                .foregroundColor((!selectedPitch.isEmpty) ? .white : .primary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                                .foregroundColor((!selectedPitch.isEmpty) ? .white : .gray)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill((!selectedPitch.isEmpty) ? Color.gray.opacity(0.85) : Color.gray.opacity(0.1))
+                        )
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.black, lineWidth: 1)
+                        )
+                    }
+                    
+                    // 🔹 Location Picker (Strike + Ball)
+                    Button(action: { showLocationPicker = true }) {
+                        let title: String = {
+                            if selectedLocation.isEmpty { return "Choose Location" }
+                            return selectedLocation
+                                .replacingOccurrences(of: "Strike ", with: "")
+                                .replacingOccurrences(of: "Ball ", with: "")
+                        }()
+                        HStack(spacing: 8) {
+                            Text(title)
+                                .font(.subheadline)
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill((!selectedLocation.isEmpty) ? Color.orange.opacity(0.2) : Color.gray.opacity(0.1))
+                        )
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.black, lineWidth: 1)
+                        )
+                    }
+                    .disabled(selectedPitch.isEmpty)
+                    .sheet(isPresented: $showLocationPicker) {
+                        StrikeZoneLocationPicker(
+                            selectedPitch: selectedPitch,
+                            pitchCodeAssignments: pitchCodeAssignments
+                        ) { pickedLabel in
+                            selectedLocation = pickedLabel
+                            showLocationPicker = false
+                            if !selectedPitch.isEmpty && !selectedLocation.isEmpty {
+                                showSelectionOverlay = true
+                            }
+                        }
+                        .presentationDetents([.fraction(0.8), .large])
+                        .presentationDragIndicator(.visible)
+                    }
+                }
+                .blur(radius: showSelectionOverlay ? 3 : 0)
+                .allowsHitTesting(!showSelectionOverlay)
+
+                if showSelectionOverlay {
+                    // Overlay card prompting to choose codes
+                    VStack(spacing: 10) {
+                        Text("\(selectedPitch) — \(selectedLocation.replacingOccurrences(of: "Strike ", with: "").replacingOccurrences(of: "Ball ", with: ""))")
+                            .font(.headline)
+                        Text("Choose codes for this pitch/location")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .padding(.bottom, 6)
+                        HStack(spacing: 12) {
+                            Button("Cancel") {
+                                // Reset selections
+                                selectedCodes.removeAll()
+                                selectedPitch = ""
+                                selectedLocation = ""
+                                showSelectionOverlay = false
+                            }
+                            .buttonStyle(.bordered)
+                            
+                            Button("Done") {
+                                // Assign and reset
+                                assignAction()
+                                selectedPitch = ""
+                                selectedLocation = ""
+                                showSelectionOverlay = false
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(selectedCodes.isEmpty)
+                        }
+                    }
+                    .padding(14)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.2), radius: 6, x: 0, y: 4)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
+            .onChange(of: selectedPitch) { _, newValue in
+                showSelectionOverlay = (!newValue.isEmpty && !selectedLocation.isEmpty)
+            }
+            .onChange(of: selectedLocation) { _, newValue in
+                showSelectionOverlay = (!selectedPitch.isEmpty && !newValue.isEmpty)
+            }
+            
             // 🔹 Assigned Codes for Current Pitch/Location
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -313,80 +463,13 @@ struct CodeAssignmentPanel: View {
                 }
                 .padding(.horizontal)
             }
-
-            HStack(spacing: 12) {
-                
-                // 🔹 Select Pitch
-                Menu {
-                    ForEach(allPitches.sorted(by: {
-                        pitchOrder.firstIndex(of: $0) ?? .max
-                        < pitchOrder.firstIndex(of: $1) ?? .max
-                    }), id: \.self) { pitch in
-                        Button(action: {
-                            selectedPitch = pitch
-                        }) {
-                            let count = codeCount(for: pitch)
-                            Label(count > 0 ? "\(pitch) (\(count))" : pitch, systemImage: selectedPitch == pitch ? "checkmark" : "")
-                        }
-                    }
-                } label: {
-                    menuLabel(
-                        title: selectedPitch.isEmpty ? "Select Pitch" : selectedPitch,
-                        isActive: !selectedPitch.isEmpty,
-                        activeColor: Color.purple.opacity(0.2)
-                    )
-                }
-                
-                // 🔹 Location Picker (Strike + Ball)
-                Button(action: { showLocationPicker = true }) {
-                    let title: String = {
-                        if selectedLocation.isEmpty { return "Choose Location" }
-                        return selectedLocation
-                            .replacingOccurrences(of: "Strike ", with: "")
-                            .replacingOccurrences(of: "Ball ", with: "")
-                    }()
-                    HStack(spacing: 8) {
-                        Text(title)
-                            .font(.subheadline)
-                            .foregroundColor(.primary)
-                            .lineLimit(1)
-                        Image(systemName: "chevron.down")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule()
-                            .fill((!selectedLocation.isEmpty) ? Color.orange.opacity(0.2) : Color.gray.opacity(0.1))
-                    )
-                    .overlay(
-                        Capsule()
-                            .stroke((!selectedLocation.isEmpty) ? Color.black : Color.blue.opacity(0.3), lineWidth: (!selectedLocation.isEmpty) ? 2 : 1)
-                    )
-                }
-                .disabled(selectedPitch.isEmpty)
-                .sheet(isPresented: $showLocationPicker) {
-                    StrikeZoneLocationPicker(
-                        selectedPitch: selectedPitch,
-                        pitchCodeAssignments: pitchCodeAssignments
-                    ) { pickedLabel in
-                        // pickedLabel is full label like "Strike Up" or "Ball Out"
-                        selectedLocation = pickedLabel
-                        showLocationPicker = false
-                    }
-                    .presentationDetents([.fraction(0.8), .large])
-                    .presentationDragIndicator(.visible)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 8) // 👈 tighter left/right padding
-            .padding(.bottom, 4)
+            .frame(minHeight: 28, maxHeight: 36, alignment: .leading)
             
-            Text("\(selectedCodes.sorted().joined(separator: ", "))")
-                .font(.headline)
-                .padding(.top, 4)
+            if !selectedCodes.isEmpty {
+                Text(selectedCodes.sorted().joined(separator: ", "))
+                    .font(.headline)
+                    .padding(.top, 4)
+            }
 
             
             Divider()
@@ -415,7 +498,9 @@ struct CodeAssignmentPanel: View {
 
                                     // Visual styling
                                     let backgroundColor: Color = {
-                                        if isGloballyAssigned {
+                                        if isAssignedToSelectedPitch {
+                                            return Color.gray.opacity(0.85)
+                                        } else if isGloballyAssigned {
                                             return .clear
                                         } else if isAssignedToCurrentLocation {
                                             return Color.blue.opacity(0.2)
@@ -429,6 +514,8 @@ struct CodeAssignmentPanel: View {
                                     let borderColor: Color = {
                                         if isAssignedToCurrentLocation {
                                             return .black
+                                        } else if isAssignedToSelectedPitch {
+                                            return .black
                                         } else if isGloballyAssigned {
                                             return .red
                                         } else if isSelected {
@@ -439,9 +526,17 @@ struct CodeAssignmentPanel: View {
                                     }()
 
                                     let borderWidth: CGFloat = isAssignedToCurrentLocation ? 3 : 1
-                                    let shadowColor: Color = isAssignedToSelectedPitch ? Color.purple.opacity(0.4) : .clear
+//                                    let shadowColor: Color = isAssignedToSelectedPitch ? Color.purple.opacity(0.4) : .clear
                                     let pitchHighlight: Color = isAssignedToSelectedPitch ? Color.purple.opacity(0.2) : .clear
-                                    let textColor: Color = isGloballyAssigned ? .red : .black
+                                    let textColor: Color = {
+                                        if isAssignedToSelectedPitch {
+                                            return .white
+                                        } else if isGloballyAssigned {
+                                            return .red
+                                        } else {
+                                            return .black
+                                        }
+                                    }()
 
                                     Button(action: {
                                         if isAssignedToCurrentLocation {
@@ -463,7 +558,7 @@ struct CodeAssignmentPanel: View {
                                                 RoundedRectangle(cornerRadius: 6)
                                                     .stroke(borderColor, lineWidth: borderWidth)
                                             )
-                                            .shadow(color: shadowColor, radius: isAssignedToSelectedPitch ? 4 : 0)
+//                                            .shadow(color: shadowColor, radius: isAssignedToSelectedPitch ? 4 : 0)
                                             .background(pitchHighlight)
                                             .cornerRadius(6)
                                     }
@@ -685,4 +780,3 @@ func menuOption(label: String, isSelected: Bool) -> some View {
         onSave: { _ in }
     )
 }
-
