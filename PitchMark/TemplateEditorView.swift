@@ -162,8 +162,10 @@ struct TemplateEditorView: View {
                                 .submitLabel(.done)
 
                             Button(action: { addCustomPitch() }) {
-                                Image(systemName: "plus.circle.fill")
+                                Image(systemName: "checkmark.circle.fill")
                                     .imageScale(.large)
+                                    .foregroundColor(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray : .green)
+                                    .opacity(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 1.0)
                             }
                             .disabled(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             .accessibilityLabel("Add custom pitch")
@@ -174,11 +176,11 @@ struct TemplateEditorView: View {
                             }) {
                                 Image(systemName: "xmark.circle.fill")
                                     .imageScale(.large)
-                                    .foregroundColor(.secondary)
+                                    .foregroundColor(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .gray : .secondary)
+                                    .opacity(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 1.0)
                             }
                             .accessibilityLabel("Cancel adding custom pitch")
-                            .opacity(customPitchFieldFocused || !customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1 : 0)
-                            .disabled(!(customPitchFieldFocused || !customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+                            .disabled(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
                     
@@ -365,9 +367,6 @@ struct CodeAssignmentPanel: View {
                                 .font(.subheadline)
                                 .foregroundColor(.primary)
                                 .lineLimit(1)
-//                            Image(systemName: "chevron.down")
-//                                .font(.caption)
-//                                .foregroundColor(.gray)
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
