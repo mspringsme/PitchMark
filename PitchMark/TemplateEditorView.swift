@@ -386,16 +386,51 @@ struct CodeAssignmentPanel: View {
                         ) { pickedLabel in
                             selectedLocation = pickedLabel
                             showLocationPicker = false
-                            if !selectedPitch.isEmpty && !selectedLocation.isEmpty {
-                                showSelectionOverlay = true
-                            }
+                            // Do not present selection overlay; just update the button title
+                            showSelectionOverlay = false
                         }
                         .presentationDetents([.fraction(0.8), .large])
                         .presentationDragIndicator(.visible)
                     }
+                    
+                    // Action buttons shown after a location is selected
+                    if !selectedPitch.isEmpty && !selectedLocation.isEmpty {
+                        HStack(spacing: 8) {
+                            Button(action: {
+                                // Confirm assignment and reset selections (mirror overlay behavior)
+                                assignAction()
+                                selectedPitch = ""
+                                selectedLocation = ""
+                                showSelectionOverlay = false
+                            }) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .imageScale(.large)
+                                    .foregroundColor(selectedCodes.isEmpty ? Color.gray.opacity(0.5) : .green)
+                                    .opacity(selectedCodes.isEmpty ? 0.5 : 1.0)
+                                    .padding(.horizontal, 4)
+                            }
+                            .accessibilityLabel("Done")
+                            .disabled(selectedCodes.isEmpty)
+
+                            Button(action: {
+                                // Cancel selection and clear staged codes (mirror overlay behavior)
+                                selectedCodes.removeAll()
+                                selectedPitch = ""
+                                selectedLocation = ""
+                                showSelectionOverlay = false
+                            }) {
+                                Image(systemName: "xmark.circle.fill")
+                                    .imageScale(.large)
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 4)
+                            }
+                            .accessibilityLabel("Cancel")
+                        }
+                    }
                 }
                 .blur(radius: showSelectionOverlay ? 3 : 0)
                 .allowsHitTesting(!showSelectionOverlay)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 if showSelectionOverlay {
                     // Overlay card prompting to choose codes
@@ -441,12 +476,8 @@ struct CodeAssignmentPanel: View {
             .multilineTextAlignment(.center)
             .padding(.horizontal, 8)
             .padding(.bottom, 4)
-            .onChange(of: selectedPitch) { _, newValue in
-                showSelectionOverlay = (!newValue.isEmpty && !selectedLocation.isEmpty)
-            }
-            .onChange(of: selectedLocation) { _, newValue in
-                showSelectionOverlay = (!selectedPitch.isEmpty && !newValue.isEmpty)
-            }
+            
+            // Removed onChange modifiers as requested
             
             // 🔹 Assigned Codes for Current Pitch/Location
             ScrollView(.horizontal, showsIndicators: false) {
@@ -780,3 +811,4 @@ func menuOption(label: String, isSelected: Bool) -> some View {
         onSave: { _ in }
     )
 }
+
