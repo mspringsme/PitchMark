@@ -18,6 +18,7 @@ struct TemplateEditorView: View {
     @State private var customPitchName: String = ""
     @State private var customPitches: [String] = []
     @FocusState private var customPitchFieldFocused: Bool
+    @FocusState private var nameFieldFocused: Bool
     
     let allPitches: [String]
     let templateID: UUID
@@ -109,6 +110,9 @@ struct TemplateEditorView: View {
                     Divider()
                     TextField("Template Name", text: $name)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .focused($nameFieldFocused)
+                        .submitLabel(.done)
+                        .onSubmit { nameFieldFocused = false }
                         .padding(.horizontal)
                         .padding(.bottom, 4)
                     
@@ -154,15 +158,8 @@ struct TemplateEditorView: View {
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .frame(minWidth: 140)
                                 .focused($customPitchFieldFocused)
-                                .onSubmit { addCustomPitch() }
-                                .toolbar {
-                                    ToolbarItemGroup(placement: .keyboard) {
-                                        Spacer()
-                                        Button("Done") {
-                                            customPitchFieldFocused = false
-                                        }
-                                    }
-                                }
+                                .onSubmit { customPitchFieldFocused = false }
+                                .submitLabel(.done)
 
                             Button(action: { addCustomPitch() }) {
                                 Image(systemName: "plus.circle.fill")
@@ -204,14 +201,16 @@ struct TemplateEditorView: View {
                         }
                     )
                     
-                    Button("Save") {
-                        saveTemplate()
+                    if !(nameFieldFocused || customPitchFieldFocused) {
+                        Button("Save") {
+                            saveTemplate()
+                        }
+                        .disabled(
+                            name.isEmpty ||
+                            selectedPitches.isEmpty
+                        )
+                        .padding(.bottom)
                     }
-                    .disabled(
-                        name.isEmpty ||
-                        selectedPitches.isEmpty
-                    )
-                    .padding(.bottom)
                     
                     Spacer()
                     
@@ -334,15 +333,12 @@ struct CodeAssignmentPanel: View {
                             }
                         }
                     } label: {
-                        let title = selectedPitch.isEmpty ? "Select Pitch" : selectedPitch
+                        let title = selectedPitch.isEmpty ? "Pitch" : selectedPitch
                         HStack(spacing: 8) {
                             Text(title)
                                 .font(.subheadline)
                                 .foregroundColor((!selectedPitch.isEmpty) ? .white : .primary)
                                 .lineLimit(1)
-                            Image(systemName: "chevron.down")
-                                .font(.caption)
-                                .foregroundColor((!selectedPitch.isEmpty) ? .white : .gray)
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -359,7 +355,7 @@ struct CodeAssignmentPanel: View {
                     // 🔹 Location Picker (Strike + Ball)
                     Button(action: { showLocationPicker = true }) {
                         let title: String = {
-                            if selectedLocation.isEmpty { return "Choose Location" }
+                            if selectedLocation.isEmpty { return "Location" }
                             return selectedLocation
                                 .replacingOccurrences(of: "Strike ", with: "")
                                 .replacingOccurrences(of: "Ball ", with: "")
@@ -369,9 +365,9 @@ struct CodeAssignmentPanel: View {
                                 .font(.subheadline)
                                 .foregroundColor(.primary)
                                 .lineLimit(1)
-                            Image(systemName: "chevron.down")
-                                .font(.caption)
-                                .foregroundColor(.gray)
+//                            Image(systemName: "chevron.down")
+//                                .font(.caption)
+//                                .foregroundColor(.gray)
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
