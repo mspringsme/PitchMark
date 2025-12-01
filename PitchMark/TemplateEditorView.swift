@@ -263,15 +263,21 @@ struct CodeAssignmentPanel: View {
     }
 
     private var assignedCodesForSelection: [String] {
-        let allForPitch = pitchCodeAssignments.filter { $0.pitch == selectedPitch }
+        // If no pitch is selected, don't show anything
+        guard !selectedPitch.isEmpty else { return [] }
 
-        if selectedLocation.isEmpty {
-            return Array(Set(allForPitch.map(\.code))) // all codes for pitch
-        } else {
-            return allForPitch
-                .filter { $0.location == selectedLocation }
+        // All codes already assigned to this pitch (across all locations)
+        let assignedForPitch = Set(
+            pitchCodeAssignments
+                .filter { $0.pitch == selectedPitch }
                 .map(\.code)
-        }
+        )
+
+        // Union with currently selected (staged) codes so they appear immediately
+        let combined = assignedForPitch.union(selectedCodes)
+
+        // Return a stable ordering
+        return combined.sorted()
     }
     
     private func codeCount(for pitch: String) -> Int {
