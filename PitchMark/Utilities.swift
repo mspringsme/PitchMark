@@ -18,6 +18,20 @@ let pitchColors: [String: Color] = [
     "Rise": .mint,              // soft, upward movement---
     "Pipe": .black              // bold, center-cut
 ]
+
+// Shared helper: returns a stable color for any pitch name, including custom ones.
+// Uses `pitchColors` when available; otherwise falls back to a deterministic palette.
+func colorForPitch(_ pitch: String) -> Color {
+    if let base = pitchColors[pitch] { return base }
+    // Deterministic fallback based on the pitch name
+    let palette: [Color] = [.indigo, .teal, .mint, .pink, .purple, .orange, .brown, .cyan]
+    let key = pitch.lowercased()
+    var hash = 0
+    for scalar in key.unicodeScalars { hash = (hash &* 31) &+ Int(scalar.value) }
+    let index = abs(hash) % palette.count
+    return palette[index]
+}
+
 extension Color {
     static let _2Seam = Color(red: 1.0, green: 143/255, blue: 0)
     static let _Drop = Color(red: 1.0, green: 0.0, blue: 1.0)

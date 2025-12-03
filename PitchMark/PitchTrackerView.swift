@@ -10,6 +10,60 @@ import FirebaseCore
 import FirebaseFirestore
 import UniformTypeIdentifiers
 
+// 🧩 Toggle Chip Component
+struct ToggleChip: View {
+    let pitch: String
+    @Binding var selectedPitches: Set<String>
+    var template: PitchTemplate?
+    var codeAssignments: [PitchCodeAssignment] = []
+    
+    var isSelected: Bool {
+        selectedPitches.contains(pitch)
+    }
+    
+    var isInTemplate: Bool {
+        template?.pitches.contains(pitch) == true
+    }
+    
+    var assignedCodeCount: Int {
+        codeAssignments.filter { $0.pitch == pitch }.count
+    }
+    
+    var body: some View {
+        Text(pitch)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                colorForPitch(pitch)
+                    .opacity(isSelected ? 1.0 : 0.2)
+            )
+            .foregroundColor(.white)
+            .cornerRadius(16)
+            .shadow(color: isSelected ? colorForPitch(pitch).opacity(0.4) : .clear, radius: 2)
+            .overlay(
+                Group {
+                    if assignedCodeCount > 0 {
+                        Text("\(assignedCodeCount)")
+                            .font(.caption2)
+                            .foregroundColor(.white)
+                            .padding(4)
+                            .background(Color.black.opacity(0.6))
+                            .clipShape(Circle())
+                            .offset(x: 1, y: -12)
+                    }
+                },
+                alignment: .topTrailing
+            )
+            .onTapGesture {
+                if isSelected {
+                    selectedPitches.remove(pitch)
+                } else {
+                    selectedPitches.insert(pitch)
+                }
+            }
+    }
+}
+
 struct PitchTrackerView: View {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var showCodeAssignmentSheet = false
@@ -1256,60 +1310,6 @@ struct CalledPitchView: View {
         .font(.headline)
         .padding(.horizontal)
         .transition(.opacity)
-    }
-}
-
-// 🧩 Toggle Chip Component
-struct ToggleChip: View {
-    let pitch: String
-    @Binding var selectedPitches: Set<String>
-    var template: PitchTemplate?
-    var codeAssignments: [PitchCodeAssignment] = []
-    
-    var isSelected: Bool {
-        selectedPitches.contains(pitch)
-    }
-    
-    var isInTemplate: Bool {
-        template?.pitches.contains(pitch) == true
-    }
-    
-    var assignedCodeCount: Int {
-        codeAssignments.filter { $0.pitch == pitch }.count
-    }
-    
-    var body: some View {
-        Text(pitch)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                (pitchColors[pitch] ?? .gray)
-                    .opacity(isSelected ? 1.0 : 0.2)
-            )
-            .foregroundColor(.white)
-            .cornerRadius(16)
-            .shadow(color: isSelected ? pitchColors[pitch]?.opacity(0.4) ?? .gray : .clear, radius: 2)
-            .overlay(
-                Group {
-                    if assignedCodeCount > 0 {
-                        Text("\(assignedCodeCount)")
-                            .font(.caption2)
-                            .foregroundColor(.white)
-                            .padding(4)
-                            .background(Color.black.opacity(0.6))
-                            .clipShape(Circle())
-                            .offset(x: 1, y: -12)
-                    }
-                },
-                alignment: .topTrailing
-            )
-            .onTapGesture {
-                if isSelected {
-                    selectedPitches.remove(pitch)
-                } else {
-                    selectedPitches.insert(pitch)
-                }
-            }
     }
 }
 

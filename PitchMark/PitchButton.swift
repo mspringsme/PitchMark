@@ -57,14 +57,14 @@ func pitchButton(
             }
         } else if isRecordingResult {
             if fullLabel == calledPitchLocation {
-                return [pitchColors[selectedPitch] ?? .gray]
+                return [colorForPitch(selectedPitch)]
             } else {
                 return [location.isStrike ? .green : .red]
             }
         } else if lastTappedPosition == tappedPoint {
-            return [pitchColors[selectedPitch] ?? .gray]
+            return [colorForPitch(selectedPitch)]
         } else {
-            return Array(assignedPitches).compactMap { pitchColors[$0] }
+            return Array(assignedPitches).map { colorForPitch($0) }
         }
     }()
     return Group {
