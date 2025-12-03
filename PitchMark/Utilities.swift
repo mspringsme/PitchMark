@@ -6,6 +6,59 @@
 //
 
 import SwiftUI
+import UIKit
+
+// Shared helper: returns a stable color for any pitch name, including custom ones.
+// Order of precedence: user override -> pitchColors map -> deterministic palette.
+func colorForPitch(_ pitch: String) -> Color {
+    if let override = pitchColorOverride(for: pitch) { return override }
+    if let base = pitchColors[pitch] { return base }
+    let palette: [Color] = [.indigo, .teal, .mint, .pink, .purple, .orange, .brown, .cyan]
+    let key = pitch.lowercased()
+    var hash = 0
+    for scalar in key.unicodeScalars { hash = (hash &* 31) &+ Int(scalar.value) }
+    let index = abs(hash) % palette.count
+    return palette[index]
+}
+
+private let pitchColorOverridesKey = "pitchColorOverrides"
+
+// Convert Color <-> Hex for persistence
+private func colorToHex(_ color: Color) -> String? {
+    let ui = UIColor(color)
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return nil }
+    let ri = Int((r * 255).rounded())
+    let gi = Int((g * 255).rounded())
+    let bi = Int((b * 255).rounded())
+    return String(format: "#%02X%02X%02X", ri, gi, bi)
+}
+
+private func hexToColor(_ hex: String) -> Color? {
+    var s = hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    if s.hasPrefix("#") { s.removeFirst() }
+    guard s.count == 6, let val = Int(s, radix: 16) else { return nil }
+    let r = Double((val >> 16) & 0xFF) / 255.0
+    let g = Double((val >> 8) & 0xFF) / 255.0
+    let b = Double(val & 0xFF) / 255.0
+    return Color(red: r, green: g, blue: b)
+}
+
+func pitchColorOverride(for pitch: String) -> Color? {
+    let dict = UserDefaults.standard.dictionary(forKey: pitchColorOverridesKey) as? [String: String]
+    if let hex = dict?[pitch], let color = hexToColor(hex) { return color }
+    return nil
+}
+
+func setPitchColorOverride(pitch: String, color: Color?) {
+    var dict = UserDefaults.standard.dictionary(forKey: pitchColorOverridesKey) as? [String: String] ?? [:]
+    if let color = color, let hex = colorToHex(color) {
+        dict[pitch] = hex
+    } else {
+        dict.removeValue(forKey: pitch)
+    }
+    UserDefaults.standard.set(dict, forKey: pitchColorOverridesKey)
+}
 
 let pitchColors: [String: Color] = [
     "4 Seam": .blue,            // classic fastball
@@ -19,18 +72,7 @@ let pitchColors: [String: Color] = [
     "Pipe": .black              // bold, center-cut
 ]
 
-// Shared helper: returns a stable color for any pitch name, including custom ones.
-// Uses `pitchColors` when available; otherwise falls back to a deterministic palette.
-func colorForPitch(_ pitch: String) -> Color {
-    if let base = pitchColors[pitch] { return base }
-    // Deterministic fallback based on the pitch name
-    let palette: [Color] = [.indigo, .teal, .mint, .pink, .purple, .orange, .brown, .cyan]
-    let key = pitch.lowercased()
-    var hash = 0
-    for scalar in key.unicodeScalars { hash = (hash &* 31) &+ Int(scalar.value) }
-    let index = abs(hash) % palette.count
-    return palette[index]
-}
+// ... rest of the file unchanged ...
 
 extension Color {
     static let _2Seam = Color(red: 1.0, green: 143/255, blue: 0)

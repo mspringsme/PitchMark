@@ -17,6 +17,10 @@ struct ToggleChip: View {
     var template: PitchTemplate?
     var codeAssignments: [PitchCodeAssignment] = []
     
+    @State private var showColorPicker = false
+    @State private var tempColor: Color = .blue
+    @State private var showChipMenu = false
+    
     var isSelected: Bool {
         selectedPitches.contains(pitch)
     }
@@ -29,37 +33,69 @@ struct ToggleChip: View {
         codeAssignments.filter { $0.pitch == pitch }.count
     }
     
+    @ViewBuilder
+    private var codeBadge: some View {
+        if assignedCodeCount > 0 {
+            Text("\(assignedCodeCount)")
+                .font(.caption2)
+                .foregroundColor(.white)
+                .padding(4)
+                .background(Color.black.opacity(0.6))
+                .clipShape(Circle())
+                .offset(x: 1, y: -12)
+        }
+    }
+    
     var body: some View {
-        Text(pitch)
+        let chipColor = colorForPitch(pitch)
+        let isActive = isSelected
+        let bgColor = chipColor.opacity(isActive ? 1.0 : 0.2)
+        let shadowColor = isActive ? chipColor.opacity(0.4) : .clear
+
+        return Text(pitch)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(
-                colorForPitch(pitch)
-                    .opacity(isSelected ? 1.0 : 0.2)
-            )
+            .background(bgColor)
             .foregroundColor(.white)
             .cornerRadius(16)
-            .shadow(color: isSelected ? colorForPitch(pitch).opacity(0.4) : .clear, radius: 2)
-            .overlay(
-                Group {
-                    if assignedCodeCount > 0 {
-                        Text("\(assignedCodeCount)")
-                            .font(.caption2)
-                            .foregroundColor(.white)
-                            .padding(4)
-                            .background(Color.black.opacity(0.6))
-                            .clipShape(Circle())
-                            .offset(x: 1, y: -12)
-                    }
-                },
-                alignment: .topTrailing
-            )
+            .shadow(color: shadowColor, radius: 2)
+            .overlay(codeBadge, alignment: .topTrailing)
             .onTapGesture {
-                if isSelected {
-                    selectedPitches.remove(pitch)
-                } else {
-                    selectedPitches.insert(pitch)
+                // Show action menu on tap instead of quick toggle
+                tempColor = chipColor
+                showChipMenu = true
+            }
+            .confirmationDialog("Pitch Options", isPresented: $showChipMenu, titleVisibility: .visible) {
+                let isActive = isSelected
+                Button(isActive ? "Deactivate Pitch" : "Activate Pitch") {
+                    if isActive { selectedPitches.remove(pitch) } else { selectedPitches.insert(pitch) }
                 }
+                Button("Change Color…") {
+                    tempColor = chipColor
+                    showColorPicker = true
+                }
+                Button("Cancel", role: .cancel) { }
+            }
+            .sheet(isPresented: $showColorPicker) {
+                VStack(spacing: 12) {
+                    Text("Choose a color for \(pitch)").font(.headline)
+                    ColorPicker("Color", selection: $tempColor, supportsOpacity: false)
+                        .labelsHidden()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                    HStack {
+                        Button("Cancel") { showColorPicker = false }
+                        Spacer()
+                        Button("Save") {
+                            setPitchColorOverride(pitch: pitch, color: tempColor)
+                            // Notify the app that a pitch color changed so views can refresh
+                            NotificationCenter.default.post(name: .pitchColorDidChange, object: pitch)
+                            showColorPicker = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding()
+                .presentationDetents([.fraction(0.25), .medium])
             }
     }
 }
@@ -125,6 +161,7 @@ struct PitchTrackerView: View {
     @State private var pitchesFacedBatterId: UUID? = nil
 
     @State private var isReorderingMode: Bool = false
+    @State private var colorRefreshToken = UUID()
 
     private enum DefaultsKeys {
         static let lastTemplateId = "lastTemplateId"
@@ -399,6 +436,7 @@ struct PitchTrackerView: View {
             .padding(.horizontal)
             .padding(.bottom, 4)
             .padding(.top, 10)
+            .id(colorRefreshToken)
         }
     }
     
@@ -551,6 +589,7 @@ struct PitchTrackerView: View {
                     showResultConfirmation: $showResultConfirmation,
                     showConfirmSheet: $showConfirmSheet
                 )
+                .id(colorRefreshToken)
             }
             .frame(width: SZwidth, height: 400)
             .cornerRadius(12)
@@ -700,7 +739,6 @@ struct PitchTrackerView: View {
             
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .eraseToAnyView()
         .onChange(of: pendingResultLabel) { _, newValue in
             // Auto-save in Practice mode without presenting the PitchResultSheetView
             guard newValue != nil else { return }
@@ -909,6 +947,10 @@ struct PitchTrackerView: View {
                 authManager.updateGameLineup(gameId: gameId, jerseyNumbers: order)
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .pitchColorDidChange)) { _ in
+            // Force chips and strike zone to rebuild with updated colors
+            colorRefreshToken = UUID()
+        }
         .overlay(alignment: .top) {
             if let batterId = pitchesFacedBatterId {
                 ZStack(alignment: .top) {
@@ -970,7 +1012,6 @@ struct PitchTrackerView: View {
                 .animation(.easeInOut(duration: 0.25), value: pitchesFacedBatterId)
             }
         }
-    }
 }
 
 private struct JerseyDropDelegate: DropDelegate {
@@ -998,14 +1039,6 @@ private struct JerseyDropDelegate: DropDelegate {
         NotificationCenter.default.post(name: .jerseyOrderChanged, object: order)
         return true
     }
-}
-
-extension Notification.Name {
-    static let jerseyOrderChanged = Notification.Name("jerseyOrderChanged")
-}
-
-extension UUID: Identifiable {
-    public var id: UUID { self }
 }
 
 struct JerseyRow: View {
@@ -1540,68 +1573,4 @@ struct PitchesFacedGridView: View {
         return "-"
     }
 }
-
-extension View {
-    func eraseToAnyView() -> AnyView { AnyView(self) }
 }
-
-#Preview("PitchTracker Layout – Practice") {
-    // Dummy pitch codes
-    let dummyCodes: [PitchCodeAssignment] = [
-        PitchCodeAssignment(code: "1", pitch: "FB", location: "Up Middle"),
-        PitchCodeAssignment(code: "2", pitch: "FB", location: "Down Away"),
-        PitchCodeAssignment(code: "7", pitch: "SL", location: "Down Middle")
-    ]
-
-    // Dummy template
-    let template = PitchTemplate(
-        id: UUID(),
-        name: "Bullpen A",
-        pitches: ["FB", "SL", "CH"],
-        codeAssignments: dummyCodes
-    )
-
-    // Provide a couple of templates to populate the menu
-    let templates = [
-        template,
-        PitchTemplate(id: UUID(), name: "Game Plan 1", pitches: ["FB", "CH"], codeAssignments: []),
-        PitchTemplate(id: UUID(), name: "Mix – Offspeed", pitches: ["SL", "CH"], codeAssignments: [])
-    ]
-
-    // Build the view with preview-seeded state
-    PitchTrackerView(
-        previewTemplate: template,
-        previewTemplates: templates,
-        previewIsGame: false
-    )
-    .environmentObject(AuthManager())
-}
-
-#Preview("PitchTracker Layout – Game", traits: .landscapeLeft) {
-    let dummyCodes: [PitchCodeAssignment] = [
-        PitchCodeAssignment(code: "A", pitch: "FB", location: "Up In"),
-        PitchCodeAssignment(code: "B", pitch: "FB", location: "Down Away"),
-        PitchCodeAssignment(code: "C", pitch: "SL", location: "Down In")
-    ]
-
-    let template = PitchTemplate(
-        id: UUID(),
-        name: "Game Plan – RHB",
-        pitches: ["FB", "SL", "CH"],
-        codeAssignments: dummyCodes
-    )
-
-    let templates = [
-        template,
-        PitchTemplate(id: UUID(), name: "Alt Plan", pitches: ["FB", "SL"], codeAssignments: [])
-    ]
-
-    PitchTrackerView(
-        previewTemplate: template,
-        previewTemplates: templates,
-        previewIsGame: true
-    )
-    .environmentObject(AuthManager())
-    .preferredColorScheme(.dark)
-}
-
