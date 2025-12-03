@@ -24,6 +24,15 @@ struct TemplateEditorView: View {
     let templateID: UUID
     let onSave: (PitchTemplate) -> Void
     @Environment(\.dismiss) var dismiss
+
+    // MARK: - Active Pitches Overrides (per-template)
+    private static func loadActivePitches(for templateId: UUID, fallback: [String]) -> Set<String> {
+        let key = "activePitches." + templateId.uuidString
+        if let arr = UserDefaults.standard.stringArray(forKey: key) {
+            return Set(arr)
+        }
+        return Set(fallback)
+    }
     
     private func saveTemplate() {
         if !selectedCodes.isEmpty && !selectedPitch.isEmpty && !selectedLocation.isEmpty {
@@ -55,7 +64,13 @@ struct TemplateEditorView: View {
         
         // Use local vars to initialize @State
         let initialName = template?.name ?? ""
-        let initialPitches = Set(template?.pitches ?? [])
+        let initialPitches: Set<String> = {
+            if let t = template {
+                return Self.loadActivePitches(for: t.id, fallback: t.pitches)
+            } else {
+                return Set([])
+            }
+        }()
         let initialAssignments = template?.codeAssignments ?? []
         let id = template?.id ?? UUID()
         
@@ -849,4 +864,5 @@ func menuOption(label: String, isSelected: Bool) -> some View {
         onSave: { _ in }
     )
 }
+
 

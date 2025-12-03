@@ -167,6 +167,7 @@ struct PitchTrackerView: View {
         static let lastTemplateId = "lastTemplateId"
         static let lastBatterSide = "lastBatterSide"
         static let lastMode = "lastMode"
+        static let activePitchesPrefix = "activePitches."
     }
     
     // MARK: - Persistence
@@ -193,7 +194,7 @@ struct PitchTrackerView: View {
         if let idString = defaults.string(forKey: DefaultsKeys.lastTemplateId),
            let template = loadedTemplates.first(where: { $0.id.uuidString == idString }) {
             selectedTemplate = template
-            selectedPitches = Set(template.pitches)
+            selectedPitches = loadActivePitches(for: template.id, fallback: template.pitches)
             pitchCodeAssignments = template.codeAssignments
         }
         // Restore batter side
@@ -206,6 +207,20 @@ struct PitchTrackerView: View {
             sessionManager.switchMode(to: restoredMode)
             isGame = (restoredMode == .game)
         }
+    }
+    
+    // MARK: - Active Pitches Overrides (per-template)
+    private func persistActivePitches(for templateId: UUID, active: Set<String>) {
+        let key = DefaultsKeys.activePitchesPrefix + templateId.uuidString
+        UserDefaults.standard.set(Array(active), forKey: key)
+    }
+
+    private func loadActivePitches(for templateId: UUID, fallback: [String]) -> Set<String> {
+        let key = DefaultsKeys.activePitchesPrefix + templateId.uuidString
+        if let arr = UserDefaults.standard.stringArray(forKey: key) {
+            return Set(arr)
+        }
+        return Set(fallback)
     }
     
     // Helper property to merge pitchOrder with template-specific custom pitches
@@ -341,7 +356,7 @@ struct PitchTrackerView: View {
                 ForEach(templates, id: \.id) { template in
                     Button(template.name) {
                         selectedTemplate = template
-                        selectedPitches = Set(template.pitches)
+                        selectedPitches = loadActivePitches(for: template.id, fallback: template.pitches)
                         pitchCodeAssignments = template.codeAssignments
                         // 🧹 Reset strike zone and called pitch state
                         lastTappedPosition = nil
@@ -801,6 +816,11 @@ struct PitchTrackerView: View {
             isPassedBall = false
             selectedOutcome = nil
             selectedDescriptor = nil
+        }
+        .onChange(of: selectedPitches) { _, newValue in
+            if let template = selectedTemplate {
+                persistActivePitches(for: template.id, active: newValue)
+            }
         }
         .sheet(isPresented: Binding(get: { showConfirmSheet && sessionManager.currentMode == .game }, set: { newValue in showConfirmSheet = newValue })) {
             PitchResultSheetView(
