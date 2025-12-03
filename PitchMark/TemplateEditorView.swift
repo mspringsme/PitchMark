@@ -118,6 +118,20 @@ struct TemplateEditorView: View {
                         .frame(width: 200)
                         .bold()
                         .foregroundColor(.blue)
+                        // Add some right padding so text doesn't run under the icon
+                        .padding(.trailing, 32)
+                        // Overlay the icon on the trailing edge
+                        .overlay(alignment: .trailing) {
+                            Button {
+                                nameFieldFocused = true
+                            } label: {
+                                Image(systemName: "square.and.pencil") // or "pencil"
+                                    .foregroundColor(nameFieldFocused ? .blue : .secondary)
+                                    .padding(.trailing, 8)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Edit template name")
+                        }
                         
                     Divider()
                     HStack(spacing: 8) {
@@ -213,11 +227,17 @@ struct TemplateEditorView: View {
                         Button("Save") {
                             saveTemplate()
                         }
+                        .buttonStyle(.borderedProminent)
+                        .buttonBorderShape(.capsule)
+                        .tint(.white)
+                        .foregroundColor(.black)
+                        .shadow(color: .black.opacity(0.2),
+                                radius: 3, x: 0, y: 2)
                         .disabled(
-                            name.isEmpty ||
+                            name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                             selectedPitches.isEmpty
                         )
-                        .padding(.bottom)
+                        .padding(.top)
                     }
                     
                     Spacer()

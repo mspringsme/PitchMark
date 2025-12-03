@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var showSignOutConfirmation = false
     @State private var templatePendingDeletion: PitchTemplate?
     @State private var showDeleteAlert = false
+    @Environment(\.dismiss) private var dismiss
 
     private func showDeleteConfirmation(for template: PitchTemplate) {
         templatePendingDeletion = template
@@ -32,24 +33,26 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             ZStack {
+                
                 VStack(alignment: .leading, spacing: 20) {
+                    Color.clear.frame(height: 24)
                     // 🔹 Templates Header
-                    Text("Templates")
-                        .font(.title2)
-                        .bold()
+                    HStack{
+                        Text("Templates")
+                            .font(.title2)
+                            .bold()
+                            .padding(.horizontal)
+                        Spacer()
+                        Button("New Template") {
+                            selectedTemplate = PitchTemplate(
+                                id: UUID(),
+                                name: "",
+                                pitches: [],
+                                codeAssignments: []
+                            )
+                        }
                         .padding(.horizontal)
-                    
-                    // 🔹 New Template Button
-                    Button("New Template") {
-                        selectedTemplate = PitchTemplate(
-                            id: UUID(),
-                            name: "",
-                            pitches: [],
-                            codeAssignments: []
-                        )
                     }
-                    .padding(.horizontal)
-                    
                     // 🔹 Empty State
                     if templates.isEmpty {
                         Text("No templates saved")
@@ -57,6 +60,7 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.vertical, 12)
+                        
                     } else {
                         // 🔹 Alphabetical Template List
                         List {
@@ -86,7 +90,7 @@ struct SettingsView: View {
                                     }
                                 }
                         }
-                        .frame(maxHeight: 400) // Optional: constrain height
+                        .frame(maxHeight: 360) // Optional: constrain height
                         .listStyle(.plain)
                         .padding(.horizontal)
                         
@@ -141,7 +145,16 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark")
+                            .imageScale(.medium)
+                    }
+                    .accessibilityLabel("Close Settings")
+                }
+            }
+            //.navigationTitle("Settings")
             .sheet(item: $selectedTemplate) { template in
                 TemplateEditorView(
                     template: template,
@@ -187,3 +200,50 @@ struct CodeAssignmentPanelWrapper: View {
         .padding()
     }
 }
+
+private struct SettingsPreviewContainer: View {
+    @State private var templates: [PitchTemplate] = [
+        PitchTemplate(
+            id: UUID(),
+            name: "Bullpen vs L",
+            pitches: ["FB", "SL", "CH"],
+            codeAssignments: [
+                PitchCodeAssignment(code: "101", pitch: "FB", location: "Strike Middle"),
+                PitchCodeAssignment(code: "115", pitch: "FB", location: "Strike Up")
+            ]
+        ),
+        PitchTemplate(
+            id: UUID(),
+            name: "Game Plan – RHB",
+            pitches: ["FB", "SL", "CH"],
+            codeAssignments: []
+        )
+    ]
+
+    @State private var selectedTemplate: PitchTemplate? = nil
+
+    private let allPitches: [String] = ["FB", "SL", "CH", "CB", "SI", "CT"]
+
+    var body: some View {
+        SettingsView(
+            templates: $templates,
+            allPitches: allPitches,
+            selectedTemplate: $selectedTemplate
+        )
+        .environmentObject(AuthManager())
+    }
+}
+
+#Preview("Settings – Empty") {
+    SettingsView(
+        templates: .constant([]),
+        allPitches: ["FB", "SL", "CH"],
+        selectedTemplate: .constant(nil)
+    )
+    .environmentObject(AuthManager())
+}
+
+#Preview("Settings – With Templates") {
+    SettingsPreviewContainer()
+}
+
