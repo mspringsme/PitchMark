@@ -68,63 +68,6 @@ func pitchButton(
         }
     }()
     
-    @ViewBuilder
-    func menuContent(
-        for adjustedLabel: String,
-        tappedPoint: CGPoint,
-        location: PitchLocation,
-        setLastTapped: @escaping (CGPoint?) -> Void,
-        setCalledPitch: @escaping (PitchCall?) -> Void,
-        selectedPitches: Set<String>,
-        pitchCodeAssignments: [PitchCodeAssignment],
-        lastTappedPosition: CGPoint?,
-        calledPitch: PitchCall?,
-        setSelectedPitch: @escaping (String) -> Void
-    ) -> some View {
-        if selectedPitches.isEmpty {
-            Button("Select pitches first") {}.disabled(true)
-        } else {
-            let orderedSelected: [String] = {
-                let base = pitchOrder.filter { selectedPitches.contains($0) }
-                let extras = Array(selectedPitches.subtracting(Set(pitchOrder))).sorted()
-                return base + extras
-            }()
-            ForEach(orderedSelected, id: \.self) { pitch in
-                let assignedCodes = pitchCodeAssignments
-                    .filter { $0.pitch == pitch && $0.location == adjustedLabel }
-                    .map(\.code)
-                
-                let codeSuffix = assignedCodes.isEmpty
-                ? "     --"
-                : "   \(assignedCodes.joined(separator: ", "))"
-                
-                Button("\(pitch)\(codeSuffix)") {
-                    withAnimation {
-                        setSelectedPitch(pitch)
-                        
-                        let newCall = PitchCall(
-                            pitch: pitch,
-                            location: adjustedLabel,
-                            isStrike: location.isStrike,
-                            codes: assignedCodes
-                        )
-                        
-                        if lastTappedPosition == tappedPoint,
-                           let currentCall = calledPitch,
-                           currentCall.location == newCall.location,
-                           currentCall.pitch == newCall.pitch {
-                            setLastTapped(nil)
-                            setCalledPitch(nil)
-                        } else {
-                            setLastTapped(tappedPoint)
-                            setCalledPitch(newCall)
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
     return Group {
         if isDisabled {
             disabledView(isStrike: location.isStrike)
@@ -151,8 +94,8 @@ func pitchButton(
             
         } else {
             Menu {
-                menuContent(
-                    for: fullLabel,
+                PitchMenuContent(
+                    adjustedLabel: fullLabel,
                     tappedPoint: tappedPoint,
                     location: location,
                     setLastTapped: setLastTapped,
@@ -161,7 +104,7 @@ func pitchButton(
                     pitchCodeAssignments: pitchCodeAssignments,
                     lastTappedPosition: lastTappedPosition,
                     calledPitch: calledPitch,
-                    setSelectedPitch: setSelectedPitch // ✅ Pass it in
+                    setSelectedPitch: setSelectedPitch
                 )
             } label: {
                 ZStack {
@@ -187,3 +130,4 @@ func pitchButton(
     .position(x: x, y: y)
     .zIndex(1)
 }
+
