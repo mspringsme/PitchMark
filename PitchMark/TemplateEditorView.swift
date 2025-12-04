@@ -5,6 +5,7 @@
 //  Created by Mark Springer on 9/30/25.
 //
 import SwiftUI
+import UIKit
 
 struct TemplateEditorView: View {
     @State private var name: String
@@ -122,8 +123,11 @@ struct TemplateEditorView: View {
                         UIApplication.shared.endEditing()
                     }
                 VStack(spacing: 10) {
-                    Divider()
-                    TextField("Template Name", text: $name)
+                    ColoredDivider(color: .blue, height: 1.0)
+                    Text("Template Name")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.gray)
+                    TextField("", text: $name)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .focused($nameFieldFocused)
                         .submitLabel(.done)
@@ -148,7 +152,10 @@ struct TemplateEditorView: View {
                             .accessibilityLabel("Edit template name")
                         }
                         
-                    Divider()
+                    ColoredDivider(color: .blue, height: 1.0)
+                    Text("Pitcher's Pitches")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.gray)
                     HStack(spacing: 8) {
                         Menu {
                             ForEach(availablePitches, id: \.self) { pitch in
@@ -218,7 +225,10 @@ struct TemplateEditorView: View {
                             .disabled(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         }
                     }
-                    Divider()
+                    ColoredDivider(color: .blue, height: 1.0)
+                    Text("Assign locations / codes to pitches")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.gray)
                     // 🔹 Code Assignment Panel
                     CodeAssignmentPanel(
                         selectedCodes: $selectedCodes,
@@ -548,7 +558,8 @@ struct CodeAssignmentPanel: View {
             
 
             
-            Divider()
+            ColoredDivider(color: .blue, height: 1.0)
+            
 
             // 🔹 Embedded Scrollable Code Picker
             ScrollView {
@@ -835,6 +846,21 @@ func menuOption(label: String, isSelected: Bool) -> some View {
     .padding(.vertical, 4)
 }
 
+struct ColoredDivider: View {
+    let color: Color
+    let height: CGFloat
+
+    init(color: Color = Color(UIColor.separator), height: CGFloat = 1) {
+        self.color = color
+        self.height = height
+    }
+
+    var body: some View {
+        Rectangle()
+            .fill(color)
+            .frame(height: height)
+    }
+}
 
 #Preview("Template Editor – New Template") {
     let samplePitches = ["FB", "SL", "CH", "CB", "SI", "CT"]

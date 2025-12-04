@@ -126,8 +126,8 @@ struct StrikeZoneView: View {
             .frame(width: width, height: 400) 
         }
         .frame(width: width, height: 400) // ✅ Constrain the ZStack, not just the GeometryReader
-        .background(Color.white)
-        .cornerRadius(12)
+//        .background(Color.white)
+//        .cornerRadius(12)
     }
         
 }

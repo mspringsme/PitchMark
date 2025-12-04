@@ -9,6 +9,7 @@ import SwiftUI
 import FirebaseCore
 import FirebaseFirestore
 import UniformTypeIdentifiers
+import UIKit
 
 // 🧩 Toggle Chip Component
 struct ToggleChip: View {
@@ -337,11 +338,32 @@ struct PitchTrackerView: View {
         }
     }
     
+    private var headerContainer: some View {
+        VStack(spacing: 8) {
+            topBar
+            pitchSelectionChips
+        }
+        .padding(.vertical, 8)
+//        .background(.regularMaterial)
+//        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+//        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+        
+        .background(
+            .thickMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous) // proper clipping for the material
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1) // optional: edge definition
+        )
+        .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+        
+        .padding(.horizontal)
+        .padding(.top, 8)
+    }
+    
     private var contentSection: some View {
         Group {
-            pitchSelectionChips
-            Divider()
-                .padding(.bottom, 4)
             batterAndModeBar
             mainStrikeZoneSection
             chooseResultPrompt
@@ -390,13 +412,15 @@ struct PitchTrackerView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .foregroundColor(templates.isEmpty ? .gray : .primary)
-                .background(templates.isEmpty ? Color.gray.opacity(0.12) : Color.clear)
+                .foregroundColor(.primary)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
                 .overlay(
                     Capsule()
-                        .stroke(templates.isEmpty ? Color.gray.opacity(0.35) : Color.blue, lineWidth: 1)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 )
-                .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                .opacity(templates.isEmpty ? 0.6 : 1.0)
                 .contentShape(Capsule())
                 .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
             }
@@ -607,8 +631,20 @@ struct PitchTrackerView: View {
                 .id(colorRefreshToken)
             }
             .frame(width: SZwidth, height: 400)
-            .cornerRadius(12)
+            .background(
+                .thickMaterial,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous) // proper clipping for the material
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1) // optional: edge definition
+            )
             .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+            
+//            .background(.regularMaterial)
+//            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+//            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
+            
             .overlay(
                 Group {
                     ResetPitchButton() {
@@ -739,19 +775,21 @@ struct PitchTrackerView: View {
     }
     
     var body: some View {
-        VStack(spacing: 4) {
-            // 🧩 Top Hstack
-            topBar
-            
-            Divider()
-            
-            // everything below top bar:
-            contentSection
-                .opacity(selectedTemplate == nil ? 0.6 : 1.0)
-                .blur(radius: selectedTemplate == nil ? 4 : 0)
-                .allowsHitTesting(selectedTemplate != nil)
-                .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
-            
+        ZStack {
+            Color.appBrandBackground
+                .ignoresSafeArea()
+            VStack(spacing: 4) {
+                // 🧩 Header container (top bar + chips)
+                headerContainer
+
+                // everything below header
+                contentSection
+                    .opacity(selectedTemplate == nil ? 0.6 : 1.0)
+                    .blur(radius: selectedTemplate == nil ? 4 : 0)
+                    .allowsHitTesting(selectedTemplate != nil)
+                    .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
+                
+            }
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .onChange(of: pendingResultLabel) { _, newValue in
@@ -1032,6 +1070,8 @@ struct PitchTrackerView: View {
                 .animation(.easeInOut(duration: 0.25), value: pitchesFacedBatterId)
             }
         }
+    }
+
 }
 
 private struct JerseyDropDelegate: DropDelegate {
@@ -1536,4 +1576,24 @@ struct PitchesFacedGridView: View {
         return "-"
     }
 }
+
+#Preview("PitchTracker — Dataless") {
+    // Provide a lightweight AuthManager and keep it signed-out to avoid network calls in previews
+    let auth = AuthManager()
+    auth.isSignedIn = false
+
+    // Seed a simple template so the UI has chips and structure without hitting any backend
+    let sampleTemplate = PitchTemplate(
+        id: UUID(),
+        name: "Preview Template",
+        pitches: ["4 Seam", "Curve", "Change"],
+        codeAssignments: []
+    )
+
+    return PitchTrackerView(
+        previewTemplate: sampleTemplate,
+        previewTemplates: [sampleTemplate],
+        previewIsGame: false
+    )
+    .environmentObject(auth)
 }
