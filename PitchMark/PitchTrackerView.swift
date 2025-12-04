@@ -20,7 +20,6 @@ struct ToggleChip: View {
     
     @State private var showColorPicker = false
     @State private var tempColor: Color = .blue
-    @State private var showChipMenu = false
     
     var isSelected: Bool {
         selectedPitches.contains(pitch)
@@ -37,11 +36,14 @@ struct ToggleChip: View {
     @ViewBuilder
     private var codeBadge: some View {
         if assignedCodeCount > 0 {
+            let chipColor = colorForPitch(pitch)
+            let badgeBackground = isSelected ? chipColor : chipColor.opacity(0.25)
+
             Text("\(assignedCodeCount)")
                 .font(.caption2)
                 .foregroundColor(.white)
                 .padding(4)
-                .background(Color.black.opacity(0.6))
+                .background(badgeBackground)
                 .clipShape(Circle())
                 .offset(x: 1, y: -12)
         }
@@ -60,23 +62,27 @@ struct ToggleChip: View {
             .foregroundColor(.white)
             .cornerRadius(16)
             .shadow(color: shadowColor, radius: 2)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.black.opacity(1.0), lineWidth: isActive ? 1.5 : 0)
+            )
             .overlay(codeBadge, alignment: .topTrailing)
-            .onTapGesture {
-                // Show action menu on tap instead of quick toggle
-                tempColor = chipColor
-                showChipMenu = true
-            }
-            .confirmationDialog("Pitch Options", isPresented: $showChipMenu, titleVisibility: .visible) {
-                let isActive = isSelected
-                Button(isActive ? "Deactivate Pitch" : "Activate Pitch") {
-                    if isActive { selectedPitches.remove(pitch) } else { selectedPitches.insert(pitch) }
-                }
-                Button("Change Color…") {
-                    tempColor = chipColor
-                    showColorPicker = true
-                }
-                Button("Cancel", role: .cancel) { }
-            }
+            .gesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .onEnded { _ in
+                        // Long press: open color picker
+                        tempColor = chipColor
+                        showColorPicker = true
+                    }
+                    .exclusively(before: TapGesture().onEnded {
+                        // Tap: toggle activate/deactivate
+                        if isSelected {
+                            selectedPitches.remove(pitch)
+                        } else {
+                            selectedPitches.insert(pitch)
+                        }
+                    })
+            )
             .sheet(isPresented: $showColorPicker) {
                 VStack(spacing: 12) {
                     Text("Choose a color for \(pitch)").font(.headline)
@@ -595,7 +601,7 @@ struct PitchTrackerView: View {
                 }
             }
             .frame(width: 60, height: 400)
-            .background(Color.gray.opacity(0.15))
+            .background(.ultraThinMaterial)
             .cornerRadius(10)
             .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
         }
@@ -1597,3 +1603,4 @@ struct PitchesFacedGridView: View {
     )
     .environmentObject(auth)
 }
+

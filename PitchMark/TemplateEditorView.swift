@@ -20,6 +20,7 @@ struct TemplateEditorView: View {
     @State private var customPitches: [String] = []
     @FocusState private var customPitchFieldFocused: Bool
     @FocusState private var nameFieldFocused: Bool
+    @State private var showAssignedLocations = false
     
     let allPitches: [String]
     let templateID: UUID
@@ -176,21 +177,20 @@ struct TemplateEditorView: View {
                             HStack(spacing: 8) {
                                 Text(title)
                                     .font(.subheadline)
-                                    .foregroundColor(.red)
+                                    .foregroundColor(.gray)
                                     .lineLimit(1)
                                 Image(systemName: "chevron.down")
                                     .font(.caption)
-                                    .foregroundColor(.red)
+                                    .foregroundColor(.gray)
                             }
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .background(Color.clear)
                             .overlay(
                                 Capsule()
-                                    .stroke(Color.red, lineWidth: 2)
+                                    .stroke(Color.gray, lineWidth: 1)
                             )
                             .clipShape(Capsule())
-                            .shadow(color: Color.black.opacity(0.2), radius: 3, x: 0, y: 2)
                             .padding(.leading, 8)
                         }
                         Spacer()
@@ -235,7 +235,7 @@ struct TemplateEditorView: View {
                         selectedPitch: $selectedPitch,
                         selectedLocation: $selectedLocation,
                         pitchCodeAssignments: $codeAssignments,
-                        allPitches: Array(selectedPitches),
+                        allPitches: availablePitches,
                         allLocations: allLocationsFromGrid(),
                         assignAction: {
                             for code in selectedCodes {
@@ -249,19 +249,39 @@ struct TemplateEditorView: View {
                     )
                     
                     if !(nameFieldFocused || customPitchFieldFocused) {
-                        Button("Save") {
-                            saveTemplate()
+                        HStack(spacing: 12) {
+                            Spacer()
+                            Button("Assigned locations") {
+                                showAssignedLocations = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .buttonBorderShape(.capsule)
+                            .tint(.white)
+                            .foregroundColor(.black)
+                            .shadow(color: .black.opacity(0.2),
+                                    radius: 3, x: 0, y: 2)
+                            .sheet(isPresented: $showAssignedLocations) {
+                                AssignedLocationsOverview(codeAssignments: codeAssignments)
+                                    .presentationDetents([.fraction(0.8), .large])
+                                    .presentationDragIndicator(.visible)
+                            }
+                        Spacer()
+                            Button("Save") {
+                                saveTemplate()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .buttonBorderShape(.capsule)
+                            .tint(.white)
+                            .foregroundColor(.black)
+                            .shadow(color: .black.opacity(0.2),
+                                    radius: 3, x: 0, y: 2)
+                            .disabled(
+                                name
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .isEmpty || selectedPitches.isEmpty
+                            )
+                            Spacer()
                         }
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.capsule)
-                        .tint(.white)
-                        .foregroundColor(.black)
-                        .shadow(color: .black.opacity(0.2),
-                                radius: 3, x: 0, y: 2)
-                        .disabled(
-                            name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                            selectedPitches.isEmpty
-                        )
                         .padding(.top)
                     }
                     
@@ -477,12 +497,11 @@ struct CodeAssignmentPanel: View {
                         }) {
                             Image(systemName: "xmark.circle.fill")
                                 .imageScale(.large)
-                                .foregroundColor(hasSelection ? .red : Color.gray.opacity(0.5))
-                                .opacity(hasSelection ? 1.0 : 0.6)
+                                .foregroundColor(.red)
+                                .opacity(1.0)
                                 //.padding(.horizontal, 4)
                         }
                         .accessibilityLabel("Cancel")
-                        .disabled(!hasSelection)
                     
                     Spacer()
                     
@@ -808,6 +827,129 @@ struct StrikeZoneLocationPicker: View {
     }
 }
 
+struct AssignedLocationsOverview: View {
+    let codeAssignments: [PitchCodeAssignment]
+    @Environment(\.dismiss) private var dismiss
+
+    private func count(for fullLabel: String) -> Int {
+        Set(codeAssignments
+            .filter { $0.location == fullLabel }
+            .map(\.code)).count
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Text("Assigned Locations")
+                    .font(.headline)
+                    .padding(.top, 8)
+
+                Spacer(minLength: 0)
+
+                GeometryReader { geo in
+                    let availableWidth = geo.size.width
+                    let availableHeight = geo.size.height
+                    let zoneWidth = availableWidth * 0.5
+                    let zoneHeight = availableHeight * 0.65
+                    let cellWidth = zoneWidth / 3
+                    let cellHeight = zoneHeight / 3
+                    let buttonSize = min(cellWidth, cellHeight) * 0.8
+                    let originX = (availableWidth - zoneWidth) / 2
+                    let originY: CGFloat = 40
+
+                    ZStack(alignment: .topLeading) {
+                        // Strike zone frame
+                        Rectangle()
+                            .stroke(Color.black, lineWidth: 2)
+                            .frame(width: zoneWidth, height: zoneHeight)
+                            .position(x: originX + zoneWidth / 2, y: originY + zoneHeight / 2)
+
+                        // Strike zone locations (3x3) with codes
+                        ForEach(strikeGrid) { loc in
+                            let x = originX + CGFloat(loc.col) * cellWidth + cellWidth / 2
+                            let y = originY + CGFloat(loc.row) * cellHeight + cellHeight / 2
+
+                            let fullStrikeLabel = "Strike \(loc.label)"
+                            let countHere = count(for: fullStrikeLabel)
+
+                            ZStack {
+                                Text(loc.label)
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                                    .frame(width: buttonSize, height: buttonSize)
+                                    .background(Color.green.opacity(0.8))
+                                    .clipShape(Circle())
+                            }
+                            .overlay(alignment: .topTrailing) {
+                                if countHere > 0 {
+                                    Text("\(countHere)")
+                                        .font(.caption2)
+                                        .foregroundColor(.white)
+                                        .padding(4)
+                                        .background(Color.black.opacity(0.75))
+                                        .clipShape(Circle())
+                                        .offset(x: 6, y: -6)
+                                }
+                            }
+                            .position(x: x, y: y)
+                        }
+
+                        // Ball locations around the zone with codes
+                        let ballLocations: [(String, CGFloat, CGFloat)] = [
+                            ("Up & Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
+                            ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
+                            ("Up & In", originX + zoneWidth + buttonSize * 0.6, originY - buttonSize * 0.6),
+                            ("Out", originX - buttonSize * 0.75, originY + zoneHeight / 2),
+                            ("In", originX + zoneWidth + buttonSize * 0.75, originY + zoneHeight / 2),
+                            ("↓ & Out", originX - buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6),
+                            ("↓", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
+                            ("↓ & In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
+                        ]
+
+                        ForEach(ballLocations, id: \.0) { label, x, y in
+                            let fullLabel = "Ball \(label)"
+                            let countHere = count(for: fullLabel)
+
+                            ZStack {
+                                Text(label)
+                                    .font(.caption2)
+                                    .multilineTextAlignment(.center)
+                                    .minimumScaleFactor(0.6)
+                                    .lineLimit(2)
+                                    .foregroundColor(.white)
+                                    .frame(width: buttonSize, height: buttonSize)
+                                    .background(Color.red.opacity(0.85))
+                                    .clipShape(Circle())
+                            }
+                            .overlay(alignment: .topTrailing) {
+                                if countHere > 0 {
+                                    Text("\(countHere)")
+                                        .font(.caption2)
+                                        .foregroundColor(.white)
+                                        .padding(4)
+                                        .background(Color.black.opacity(0.75))
+                                        .clipShape(Circle())
+                                        .offset(x: 6, y: -6)
+                                }
+                            }
+                            .position(x: x, y: y)
+                        }
+                    }
+                }
+                .frame(height: 420)
+                .padding(.horizontal)
+
+                Spacer(minLength: 0)
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
 @ViewBuilder
 func menuLabel(title: String, isActive: Bool, activeColor: Color = Color.gray.opacity(0.1)) -> some View {
     HStack {
@@ -890,5 +1032,4 @@ struct ColoredDivider: View {
         onSave: { _ in }
     )
 }
-
 
