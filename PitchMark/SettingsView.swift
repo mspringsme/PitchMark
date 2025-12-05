@@ -22,11 +22,12 @@ struct SettingsView: View {
     @State private var showDeleteAlert = false
     @Environment(\.dismiss) private var dismiss
     
-    @State private var showLaunchSheet = false
     @State private var templatePendingLaunch: PitchTemplate? = nil
-
+    @State private var showModeChoice = false
+    @State private var showGameChooser = false
+    @State private var showPracticeChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
-
+    
     private func showDeleteConfirmation(for template: PitchTemplate) {
         templatePendingDeletion = template
         showDeleteAlert = true
@@ -37,6 +38,18 @@ struct SettingsView: View {
         authManager.deleteTemplate(template)
         templates.removeAll { $0.id == template.id }
         templatePendingDeletion = nil
+    }
+    
+    private func savePracticeSessions(_ sessions: [PracticeSession]) {
+        let encoder = JSONEncoder()
+        if let data = try? encoder.encode(sessions) {
+            UserDefaults.standard.set(data, forKey: "storedPracticeSessions")
+        }
+    }
+    private func loadPracticeSessions() -> [PracticeSession] {
+        guard let data = UserDefaults.standard.data(forKey: "storedPracticeSessions") else { return [] }
+        let decoder = JSONDecoder()
+        return (try? decoder.decode([PracticeSession].self, from: data)) ?? []
     }
     
     var body: some View {
@@ -89,7 +102,7 @@ struct SettingsView: View {
                                     .buttonStyle(.bordered)
                                     Button("Launch") {
                                         templatePendingLaunch = template
-                                        showLaunchSheet = true
+                                        showModeChoice = true
                                     }
                                     .buttonStyle(.borderedProminent)
                                 }
@@ -162,6 +175,15 @@ struct SettingsView: View {
                     }
                 }
             }
+            .confirmationDialog("Launch as…", isPresented: $showModeChoice, titleVisibility: .visible) {
+                Button("Game") {
+                    showGameChooser = true
+                }
+                Button("Practice") {
+                    showPracticeChooser = true
+                }
+                Button("Cancel", role: .cancel) {}
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: { dismiss() }) {
@@ -187,44 +209,55 @@ struct SettingsView: View {
                     }
                 )
             }
-            .sheet(isPresented: $showLaunchSheet) {
+            .sheet(isPresented: $showGameChooser) {
                 GameSelectionSheet(
                     onCreate: { name, date in
-                        // Create and persist a new game
                         let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: [])
                         authManager.saveGame(newGame)
                     },
                     onChoose: { gameId in
-                        // Set the template in the parent (PitchTrackerView)
                         if let tmpl = templatePendingLaunch {
                             selectedTemplate = tmpl
                         }
-
-                        // Post notification so PitchTrackerView switches mode and loads game/practice
-                        if gameId == "Practice" {
-                            NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: ["type": "practice"]) 
-                        } else {
-                            // Try to fetch opponent for convenience
-                            var opponent: String? = nil
-                            authManager.loadGames { games in
-                                if let g = games.first(where: { $0.id == gameId }) {
-                                    opponent = g.opponent
-                                }
-                                NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: ["type": "game", "gameId": gameId, "opponent": opponent as Any])
+                        var opponent: String? = nil
+                        authManager.loadGames { games in
+                            if let g = games.first(where: { $0.id == gameId }) {
+                                opponent = g.opponent
                             }
+                            NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: ["type": "game", "gameId": gameId, "opponent": opponent as Any])
                         }
-
-                        // Dismiss Settings so PitchTrackerView becomes active
                         dismiss()
                     },
                     onCancel: {
-                        // Just close the chooser
-                        showLaunchSheet = false
+                        showGameChooser = false
                     }
                 )
                 .presentationDetents([.fraction(0.5)])
                 .presentationDragIndicator(.visible)
                 .environmentObject(authManager)
+            }
+            .sheet(isPresented: $showPracticeChooser) {
+                PracticeSelectionSheet(
+                    onCreate: { name, date in
+                        var sessions = loadPracticeSessions()
+                        let new = PracticeSession(id: UUID().uuidString, name: name, date: date)
+                        sessions.append(new)
+                        savePracticeSessions(sessions)
+                    },
+                    onChoose: { practiceId in
+                        if let tmpl = templatePendingLaunch {
+                            selectedTemplate = tmpl
+                        }
+                        NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: ["type": "practice", "practiceId": practiceId])
+                        showPracticeChooser = false
+                        dismiss()
+                    },
+                    onCancel: {
+                        showPracticeChooser = false
+                    }
+                )
+                .presentationDetents([.fraction(0.5)])
+                .presentationDragIndicator(.visible)
             }
         }
     }
