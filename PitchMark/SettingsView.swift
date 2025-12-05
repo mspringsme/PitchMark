@@ -8,6 +8,10 @@
 
 import SwiftUI
 
+private extension Notification.Name {
+    static let gameOrSessionChosen = Notification.Name("gameOrSessionChosen")
+}
+
 struct SettingsView: View {
     @Binding var templates: [PitchTemplate]
     let allPitches: [String]
@@ -17,6 +21,11 @@ struct SettingsView: View {
     @State private var templatePendingDeletion: PitchTemplate?
     @State private var showDeleteAlert = false
     @Environment(\.dismiss) private var dismiss
+    
+    @State private var showLaunchSheet = false
+    @State private var templatePendingLaunch: PitchTemplate? = nil
+
+    @State private var editorTemplate: PitchTemplate? = nil
 
     private func showDeleteConfirmation(for template: PitchTemplate) {
         templatePendingDeletion = template
@@ -44,7 +53,7 @@ struct SettingsView: View {
                             .padding(.horizontal)
                         Spacer()
                         Button("New Template") {
-                            selectedTemplate = PitchTemplate(
+                            editorTemplate = PitchTemplate(
                                 id: UUID(),
                                 name: "",
                                 pitches: [],
@@ -65,9 +74,7 @@ struct SettingsView: View {
                         // 🔹 Alphabetical Template List
                         List {
                             ForEach(templates.sorted(by: { $0.name.localizedCompare($1.name) == .orderedAscending })) { template in
-                                Button(action: {
-                                    selectedTemplate = template
-                                }) {
+                                HStack(alignment: .center, spacing: 12) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(template.name)
                                             .font(.headline)
@@ -75,8 +82,18 @@ struct SettingsView: View {
                                             .font(.caption)
                                             .foregroundColor(.secondary)
                                     }
-                                    .padding(.vertical, 4)
+                                    Spacer()
+                                    Button("Edit") {
+                                        editorTemplate = template
+                                    }
+                                    .buttonStyle(.bordered)
+                                    Button("Launch") {
+                                        templatePendingLaunch = template
+                                        showLaunchSheet = true
+                                    }
+                                    .buttonStyle(.borderedProminent)
                                 }
+                                .padding(.vertical, 4)
                                 .listRowBackground(
                                     selectedTemplate?.id == template.id
                                     ? Color.blue.opacity(0.2)
@@ -155,7 +172,7 @@ struct SettingsView: View {
                 }
             }
             //.navigationTitle("Settings")
-            .sheet(item: $selectedTemplate) { template in
+            .sheet(item: $editorTemplate) { template in
                 TemplateEditorView(
                     template: template,
                     allPitches: allPitches,
@@ -169,6 +186,45 @@ struct SettingsView: View {
                         authManager.saveTemplate(updatedTemplate) // ✅ persist to Firestore
                     }
                 )
+            }
+            .sheet(isPresented: $showLaunchSheet) {
+                GameSelectionSheet(
+                    onCreate: { name, date in
+                        // Create and persist a new game
+                        let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: [])
+                        authManager.saveGame(newGame)
+                    },
+                    onChoose: { gameId in
+                        // Set the template in the parent (PitchTrackerView)
+                        if let tmpl = templatePendingLaunch {
+                            selectedTemplate = tmpl
+                        }
+
+                        // Post notification so PitchTrackerView switches mode and loads game/practice
+                        if gameId == "Practice" {
+                            NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: ["type": "practice"]) 
+                        } else {
+                            // Try to fetch opponent for convenience
+                            var opponent: String? = nil
+                            authManager.loadGames { games in
+                                if let g = games.first(where: { $0.id == gameId }) {
+                                    opponent = g.opponent
+                                }
+                                NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: ["type": "game", "gameId": gameId, "opponent": opponent as Any])
+                            }
+                        }
+
+                        // Dismiss Settings so PitchTrackerView becomes active
+                        dismiss()
+                    },
+                    onCancel: {
+                        // Just close the chooser
+                        showLaunchSheet = false
+                    }
+                )
+                .presentationDetents([.fraction(0.5)])
+                .presentationDragIndicator(.visible)
+                .environmentObject(authManager)
             }
         }
     }
@@ -246,4 +302,3 @@ private struct SettingsPreviewContainer: View {
 #Preview("Settings – With Templates") {
     SettingsPreviewContainer()
 }
-

@@ -11,6 +11,10 @@ import FirebaseFirestore
 import UniformTypeIdentifiers
 import UIKit
 
+private extension Notification.Name {
+    static let gameOrSessionChosen = Notification.Name("gameOrSessionChosen")
+}
+
 // 🧩 Toggle Chip Component
 struct ToggleChip: View {
     let pitch: String
@@ -170,12 +174,18 @@ struct PitchTrackerView: View {
 
     @State private var isReorderingMode: Bool = false
     @State private var colorRefreshToken = UUID()
+    @State private var hasPresentedInitialSettings = false
+
+    @State private var suppressNextGameSheet = false
 
     private enum DefaultsKeys {
         static let lastTemplateId = "lastTemplateId"
         static let lastBatterSide = "lastBatterSide"
         static let lastMode = "lastMode"
         static let activePitchesPrefix = "activePitches."
+        static let lastView = "lastView"
+        static let activeGameId = "activeGameId"
+        static let activeIsPractice = "activeIsPractice"
     }
     
     // MARK: - Persistence
@@ -776,7 +786,13 @@ struct PitchTrackerView: View {
                     sessionManager.switchMode(to: newValue)
                     persistMode(newValue)
                     if newValue == .game {
-                        showGameSheet = true
+                        if suppressNextGameSheet {
+                            suppressNextGameSheet = false
+                            isGame = true
+                            // Do not present the game sheet because a selection was already made
+                        } else {
+                            showGameSheet = true
+                        }
                     } else {
                         opponentName = nil
                         isGame = false
@@ -887,7 +903,54 @@ struct PitchTrackerView: View {
                 persistActivePitches(for: template.id, active: newValue)
             }
         }
-        .sheet(isPresented: Binding(get: { showConfirmSheet && sessionManager.currentMode == .game }, set: { newValue in showConfirmSheet = newValue })) {
+        .sheet(isPresented: Binding(get: { showGameSheet && !suppressNextGameSheet }, set: { newValue in showGameSheet = newValue }), onDismiss: {
+            // If user canceled without creating/choosing, optionally revert to practice
+            if sessionManager.currentMode == .game && !isGame {
+                sessionManager.switchMode(to: .practice)
+            }
+        }) {
+            GameSelectionSheet(
+                onCreate: { name, date in
+                    let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: jerseyCells.map { $0.jerseyNumber }, batterIds: jerseyCells.map { $0.id.uuidString })
+                    authManager.saveGame(newGame)
+                },
+                onChoose: { gameId in
+                    if gameId == "Practice" { // quick pick
+                        opponentName = "Practice"
+                        selectedGameId = nil
+                        isGame = true
+                        selectedBatterId = nil
+                        showGameSheet = false
+                        return
+                    }
+                    authManager.loadGames { games in
+                        if let game = games.first(where: { $0.id == gameId }) {
+                            selectedGameId = game.id
+                            opponentName = game.opponent
+                            if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                                jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                                    JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                                }
+                            } else {
+                                jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                            }
+                            selectedBatterId = nil
+                        }
+                        isGame = true
+                        showGameSheet = false
+                    }
+                },
+                onCancel: {
+                    // User canceled: preserve any existing game state.
+                    // If no game was active, onDismiss will revert to practice.
+                    showGameSheet = false
+                }
+            )
+            .presentationDetents([.fraction(0.5)])
+            .presentationDragIndicator(.visible)
+            .environmentObject(authManager)
+        }
+        .sheet(isPresented: $showConfirmSheet) {
             PitchResultSheetView(
                 isPresented: $showConfirmSheet,
                 isStrikeSwinging: $isStrikeSwinging,
@@ -948,6 +1011,44 @@ struct PitchTrackerView: View {
             .padding()
         }
         .onAppear {
+            // Decide initial landing: Settings first unless an active game/session was in progress and tracker was last
+            let defaults = UserDefaults.standard
+            let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
+            let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
+            let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
+            if authManager.isSignedIn && !hasPresentedInitialSettings {
+                if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
+                    showSettings = true
+                    hasPresentedInitialSettings = true
+                    defaults.set("settings", forKey: DefaultsKeys.lastView)
+                } else {
+                    // Restore active session to tracker
+                    if persistedIsPractice {
+                        isGame = true
+                        sessionManager.switchMode(to: .game)
+                        opponentName = "Practice"
+                        selectedGameId = nil
+                    } else if let gid = persistedGameId {
+                        isGame = true
+                        sessionManager.switchMode(to: .game)
+                        selectedGameId = gid
+                        authManager.loadGames { games in
+                            if let game = games.first(where: { $0.id == gid }) {
+                                opponentName = game.opponent
+                                if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                                    jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                                        JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                                    }
+                                } else {
+                                    jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                                }
+                            }
+                        }
+                    }
+                    hasPresentedInitialSettings = true
+                }
+            }
+            
             if authManager.isSignedIn {
                 authManager.loadTemplates { loadedTemplates in
                     self.templates = loadedTemplates
@@ -978,55 +1079,60 @@ struct PitchTrackerView: View {
         .sheet(item: $menuSelectedStatsTemplate) { template in
             TemplateSuccessSheet(template: template)
         }
-        .sheet(isPresented: $showGameSheet, onDismiss: {
-            // If user canceled without creating/choosing, optionally revert to practice
-            if sessionManager.currentMode == .game && !isGame {
-                sessionManager.switchMode(to: .practice)
+        .onChange(of: selectedTemplate) { _, newValue in
+            // Persist and sync dependent state whenever template changes (from menu or Settings)
+            persistSelectedTemplate(newValue)
+            if let t = newValue {
+                selectedPitches = loadActivePitches(for: t.id, fallback: t.pitches)
+                pitchCodeAssignments = t.codeAssignments
+                // Reset strike zone and called pitch state
+                lastTappedPosition = nil
+                calledPitch = nil
+                // Force chips/strike zone to refresh colors and content
+                colorRefreshToken = UUID()
             }
-        }) {
-            GameSelectionSheet(
-                onCreate: { name, date in
-                    let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: jerseyCells.map { $0.jerseyNumber }, batterIds: jerseyCells.map { $0.id.uuidString })
-                    authManager.saveGame(newGame)
-                },
-                onChoose: { gameId in
-                    if gameId == "Practice" { // quick pick
+        }
+        .onChange(of: authManager.isSignedIn) { _, signedIn in
+            if signedIn && !hasPresentedInitialSettings {
+                let defaults = UserDefaults.standard
+                let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
+                let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
+                let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
+                if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
+                    showSettings = true
+                    hasPresentedInitialSettings = true
+                    defaults.set("settings", forKey: DefaultsKeys.lastView)
+                } else {
+                    if persistedIsPractice {
+                        isGame = true
+                        sessionManager.switchMode(to: .game)
                         opponentName = "Practice"
                         selectedGameId = nil
+                    } else if let gid = persistedGameId {
                         isGame = true
-                        selectedBatterId = nil
-                        showGameSheet = false
-                        return
-                    }
-                    authManager.loadGames { games in
-                        if let game = games.first(where: { $0.id == gameId }) {
-                            selectedGameId = game.id
-                            opponentName = game.opponent
-                            if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
-                                jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
-                                    JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                        sessionManager.switchMode(to: .game)
+                        selectedGameId = gid
+                        authManager.loadGames { games in
+                            if let game = games.first(where: { $0.id == gid }) {
+                                opponentName = game.opponent
+                                if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                                    jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                                        JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                                    }
+                                } else {
+                                    jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
                                 }
-                            } else {
-                                jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
                             }
-                            selectedBatterId = nil
                         }
-                        isGame = true
-                        showGameSheet = false
                     }
-                },
-                onCancel: {
-                    // User canceled: preserve any existing game state.
-                    // If no game was active, onDismiss will revert to practice.
-                    showGameSheet = false
+                    hasPresentedInitialSettings = true
                 }
-            )
-            .presentationDetents([.fraction(0.5)])
-            .presentationDragIndicator(.visible)
-            .environmentObject(authManager)
+            }
         }
-        .onChange(of: selectedTemplate) { _, newValue in
-            persistSelectedTemplate(newValue)
+        .onChange(of: showSettings) { _, showing in
+            if showing {
+                UserDefaults.standard.set("settings", forKey: DefaultsKeys.lastView)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { notification in
             guard let order = notification.object as? [String] else { return }
@@ -1037,6 +1143,42 @@ struct PitchTrackerView: View {
         .onReceive(NotificationCenter.default.publisher(for: .pitchColorDidChange)) { _ in
             // Force chips and strike zone to rebuild with updated colors
             colorRefreshToken = UUID()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { notification in
+            // Expecting userInfo: ["type": "practice"|"game", "gameId": String?, "opponent": String?]
+            guard let userInfo = notification.userInfo as? [String: Any], let type = userInfo["type"] as? String else { return }
+            self.suppressNextGameSheet = true
+            self.showGameSheet = false
+            if type == "practice" {
+                opponentName = "Practice"
+                selectedGameId = nil
+                isGame = true
+                sessionManager.switchMode(to: .game)
+                let defaults = UserDefaults.standard
+                defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
+                defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+                defaults.set("tracker", forKey: DefaultsKeys.lastView)
+            } else if type == "game" {
+                if let gid = userInfo["gameId"] as? String {
+                    selectedGameId = gid
+                    // Try to resolve opponent name if provided; otherwise load
+                    if let opp = userInfo["opponent"] as? String {
+                        opponentName = opp
+                    } else {
+                        authManager.loadGames { games in
+                            if let game = games.first(where: { $0.id == gid }) {
+                                opponentName = game.opponent
+                            }
+                        }
+                    }
+                    isGame = true
+                    sessionManager.switchMode(to: .game)
+                    let defaults = UserDefaults.standard
+                    defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+                    defaults.set(gid, forKey: DefaultsKeys.activeGameId)
+                    defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                }
+            }
         }
         .overlay(alignment: .top) {
             if let batterId = pitchesFacedBatterId {
@@ -1394,6 +1536,19 @@ struct GameSelectionSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button(action: {
+                        onChoose("Practice")
+                        dismiss()
+                    }) {
+                        HStack {
+                            Image(systemName: "figure.run")
+                                .foregroundColor(.green)
+                            Text("Start Practice Session")
+                            Spacer()
+                        }
+                    }
+                }
 
                 if games.isEmpty {
 //                    Section {
@@ -1423,7 +1578,7 @@ struct GameSelectionSheet: View {
                     }
                 }
             }
-            .navigationTitle("Games")
+            .navigationTitle("Games / Sessions")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
@@ -1434,6 +1589,8 @@ struct GameSelectionSheet: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: { showAddGamePopover = true }) {
                         Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.green)   // sets the symbol color
+                            .font(.system(size: 25))   // optional: controls size
                     }
                     .accessibilityLabel("Add Game")
                 }
