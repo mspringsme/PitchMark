@@ -782,7 +782,7 @@ struct PitchTrackerView: View {
                 .controlSize(.small)   // optional, makes it feel more compact
                 .frame(width: 180)     // <- adjust this to taste
                 .fixedSize(horizontal: true, vertical: false)
-                .onChange(of: sessionManager.currentMode) { newValue in
+                .onChange(of: sessionManager.currentMode) { _, newValue in
                     sessionManager.switchMode(to: newValue)
                     persistMode(newValue)
                     if newValue == .game {
@@ -895,7 +895,7 @@ struct PitchTrackerView: View {
         return base
             .frame(maxHeight: .infinity, alignment: .top)
         .erasedToAnyView()
-        .onChange(of: pendingResultLabel) { newValue in
+        .onChange(of: pendingResultLabel) { _, newValue in
             handlePendingResultChange(newValue)
         }
         .onChange(of: selectedPitches) { _, newValue in
@@ -903,7 +903,7 @@ struct PitchTrackerView: View {
                 persistActivePitches(for: template.id, active: newValue)
             }
         }
-        .sheet(isPresented: Binding(get: { showGameSheet && !suppressNextGameSheet }, set: { newValue in showGameSheet = newValue }), onDismiss: {
+        .sheet(isPresented: $showGameSheet, onDismiss: {
             // If user canceled without creating/choosing, optionally revert to practice
             if sessionManager.currentMode == .game && !isGame {
                 sessionManager.switchMode(to: .practice)
@@ -1152,6 +1152,7 @@ struct PitchTrackerView: View {
             if type == "practice" {
                 opponentName = "Practice"
                 selectedGameId = nil
+                selectedBatterId = nil
                 isGame = true
                 sessionManager.switchMode(to: .game)
                 let defaults = UserDefaults.standard
@@ -1161,13 +1162,27 @@ struct PitchTrackerView: View {
             } else if type == "game" {
                 if let gid = userInfo["gameId"] as? String {
                     selectedGameId = gid
-                    // Try to resolve opponent name if provided; otherwise load
-                    if let opp = userInfo["opponent"] as? String {
-                        opponentName = opp
-                    } else {
-                        authManager.loadGames { games in
-                            if let game = games.first(where: { $0.id == gid }) {
+                    // Always load the game to refresh lineup and opponent
+                    authManager.loadGames { games in
+                        if let game = games.first(where: { $0.id == gid }) {
+                            // Prefer provided opponent name, otherwise use stored
+                            if let opp = userInfo["opponent"] as? String {
+                                opponentName = opp
+                            } else {
                                 opponentName = game.opponent
+                            }
+                            if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                                jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                                    JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                                }
+                            } else {
+                                jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                            }
+                            selectedBatterId = nil
+                        } else {
+                            // Fallback: still set provided opponent if available
+                            if let opp = userInfo["opponent"] as? String {
+                                opponentName = opp
                             }
                         }
                     }
