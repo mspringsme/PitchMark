@@ -162,6 +162,11 @@ struct PitchTrackerView: View {
     @State private var showGameSheet = false
     @State private var opponentName: String? = nil
     @State private var selectedGameId: String? = nil
+    
+    @State private var showPracticeSheet = false
+    @State private var practiceName: String? = nil
+    @State private var selectedPracticeId: String? = nil
+    
     @State private var jerseyCells: [JerseyCell] = sampleJerseyCells
     @State private var draggingJersey: JerseyCell?
     @State private var showAddJerseyPopover = false
@@ -178,7 +183,7 @@ struct PitchTrackerView: View {
 
     @State private var suppressNextGameSheet = false
 
-    private enum DefaultsKeys {
+    fileprivate enum DefaultsKeys {
         static let lastTemplateId = "lastTemplateId"
         static let lastBatterSide = "lastBatterSide"
         static let lastMode = "lastMode"
@@ -186,6 +191,8 @@ struct PitchTrackerView: View {
         static let lastView = "lastView"
         static let activeGameId = "activeGameId"
         static let activeIsPractice = "activeIsPractice"
+        static let activePracticeId = "activePracticeId"
+        static let storedPracticeSessions = "storedPracticeSessions"
     }
     
     // MARK: - Persistence
@@ -248,6 +255,37 @@ struct PitchTrackerView: View {
             tmpl.pitches.filter { !pitchOrder.contains($0) }
         } ?? []
         return base + extras
+    }
+    
+    // MARK: - Practice Sessions Persistence (local)
+    private func savePracticeSessions(_ sessions: [PracticeSession]) {
+        let encoder = JSONEncoder()
+        if let data = try? encoder.encode(sessions) {
+            UserDefaults.standard.set(data, forKey: DefaultsKeys.storedPracticeSessions)
+        }
+    }
+
+    private func loadPracticeSessions() -> [PracticeSession] {
+        guard let data = UserDefaults.standard.data(forKey: DefaultsKeys.storedPracticeSessions) else { return [] }
+        let decoder = JSONDecoder()
+        return (try? decoder.decode([PracticeSession].self, from: data)) ?? []
+    }
+
+    private func persistActivePracticeId(_ id: String?) {
+        let defaults = UserDefaults.standard
+        if let id = id { defaults.set(id, forKey: DefaultsKeys.activePracticeId) }
+        else { defaults.removeObject(forKey: DefaultsKeys.activePracticeId) }
+    }
+
+    private func restoreActivePracticeSelection() {
+        let defaults = UserDefaults.standard
+        if let pid = defaults.string(forKey: DefaultsKeys.activePracticeId) {
+            let sessions = loadPracticeSessions()
+            if let session = sessions.first(where: { $0.id == pid }) {
+                selectedPracticeId = session.id
+                practiceName = session.name
+            }
+        }
     }
     
     // MARK: - Preview-friendly initializer
@@ -710,26 +748,28 @@ struct PitchTrackerView: View {
             )
             .overlay(
                 Group {
-                    if isGame {
-                        Button(action: {
+                    Button(action: {
+                        if isGame {
                             showGameSheet = true
-                        }) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "gearshape")
-                                Text(opponentName ?? "Game")
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: 160)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                        } else {
+                            showPracticeSheet = true
                         }
-                        .buttonStyle(.plain)
-                        .offset(y: 6)
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "gearshape")
+                            Text(isGame ? (opponentName ?? "Game") : (practiceName ?? "Practice"))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: 160)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
                     }
+                    .buttonStyle(.plain)
+                    .offset(y: 6)
                 },
                 alignment: .bottom
             )
@@ -789,13 +829,18 @@ struct PitchTrackerView: View {
                         if suppressNextGameSheet {
                             suppressNextGameSheet = false
                             isGame = true
-                            // Do not present the game sheet because a selection was already made
                         } else {
                             showGameSheet = true
                         }
                     } else {
-                        opponentName = nil
+                        // Practice mode
                         isGame = false
+                        if suppressNextGameSheet {
+                            suppressNextGameSheet = false
+                            // Do not present because a selection was already made
+                        } else {
+                            showPracticeSheet = true
+                        }
                     }
                 }
             }
@@ -942,6 +987,41 @@ struct PitchTrackerView: View {
             .presentationDragIndicator(.visible)
             .environmentObject(authManager)
         }
+        .sheet(isPresented: $showPracticeSheet, onDismiss: {
+            // If user canceled without creating/choosing, optionally revert to game
+            if sessionManager.currentMode == .practice && practiceName == nil && selectedPracticeId == nil {
+                // Stay in practice mode but no active session
+            }
+        }) {
+            PracticeSelectionSheet(
+                onCreate: { name, date in
+                    var sessions = loadPracticeSessions()
+                    let new = PracticeSession(id: UUID().uuidString, name: name, date: date)
+                    sessions.append(new)
+                    savePracticeSessions(sessions)
+                },
+                onChoose: { practiceId in
+                    let sessions = loadPracticeSessions()
+                    if let session = sessions.first(where: { $0.id == practiceId }) {
+                        selectedPracticeId = session.id
+                        practiceName = session.name
+                        isGame = false
+                        // persist selection
+                        let defaults = UserDefaults.standard
+                        defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
+                        defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+                        persistActivePracticeId(session.id)
+                        defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                    }
+                    showPracticeSheet = false
+                },
+                onCancel: {
+                    showPracticeSheet = false
+                }
+            )
+            .presentationDetents([.fraction(0.5)])
+            .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showConfirmSheet) {
             PitchResultSheetView(
                 isPresented: $showConfirmSheet,
@@ -1016,10 +1096,9 @@ struct PitchTrackerView: View {
                 } else {
                     // Restore active session to tracker
                     if persistedIsPractice {
-                        isGame = true
-                        sessionManager.switchMode(to: .game)
-                        opponentName = "Practice"
-                        selectedGameId = nil
+                        isGame = false
+                        sessionManager.switchMode(to: .practice)
+                        restoreActivePracticeSelection()
                     } else if let gid = persistedGameId {
                         isGame = true
                         sessionManager.switchMode(to: .game)
@@ -1096,10 +1175,9 @@ struct PitchTrackerView: View {
                     defaults.set("settings", forKey: DefaultsKeys.lastView)
                 } else {
                     if persistedIsPractice {
-                        isGame = true
-                        sessionManager.switchMode(to: .game)
-                        opponentName = "Practice"
-                        selectedGameId = nil
+                        isGame = false
+                        sessionManager.switchMode(to: .practice)
+                        restoreActivePracticeSelection()
                     } else if let gid = persistedGameId {
                         isGame = true
                         sessionManager.switchMode(to: .game)
@@ -1142,11 +1220,21 @@ struct PitchTrackerView: View {
             self.suppressNextGameSheet = true
             self.showGameSheet = false
             if type == "practice" {
-                opponentName = "Practice"
-                selectedGameId = nil
-                selectedBatterId = nil
-                isGame = true
-                sessionManager.switchMode(to: .game)
+                if let pid = userInfo["practiceId"] as? String {
+                    persistActivePracticeId(pid)
+                    let sessions = loadPracticeSessions()
+                    if let session = sessions.first(where: { $0.id == pid }) {
+                        practiceName = session.name
+                        selectedPracticeId = session.id
+                    }
+                } else if let pname = userInfo["practiceName"] as? String {
+                    practiceName = pname
+                } else {
+                    practiceName = nil
+                    selectedPracticeId = nil
+                }
+                isGame = false
+                sessionManager.switchMode(to: .practice)
                 let defaults = UserDefaults.standard
                 defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
                 defaults.removeObject(forKey: DefaultsKeys.activeGameId)
@@ -1209,7 +1297,7 @@ struct PitchTrackerView: View {
 
                     VStack(spacing: 0) {
                         HStack {
-                            Text("vs. \(opponentName ?? "Practice")")
+                            Text(isGame ? ("vs. \(opponentName ?? "Game")") : ("Practice – \(practiceName ?? "Session")"))
                                 .font(.headline)
                             Spacer()
                             Button {
@@ -1781,5 +1869,117 @@ private extension View {
         previewIsGame: false
     )
     .environmentObject(auth)
+}
+
+struct PracticeSession: Identifiable, Codable {
+    var id: String?
+    var name: String
+    var date: Date
+}
+
+struct PracticeSelectionSheet: View {
+    var onCreate: (String, Date) -> Void
+    var onChoose: (String) -> Void
+    var onCancel: () -> Void
+
+    @State private var sessions: [PracticeSession] = []
+    @State private var showAddPopover: Bool = false
+    @State private var newName: String = ""
+    @State private var newDate: Date = Date()
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if sessions.isEmpty {
+                    // Optional empty state
+                } else {
+                    Section() {
+                        ForEach(sessions) { session in
+                            Button(action: {
+                                onChoose(session.id ?? "")
+                                dismiss()
+                            }) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(session.name)
+                                            .font(.headline)
+                                        Text(Self.formatter.string(from: session.date))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Practice Sessions")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        onCancel()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: { showAddPopover = true }) {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.system(size: 25))
+                    }
+                    .accessibilityLabel("Add Practice Session")
+                }
+            }
+        }
+        .overlay(
+            Group {
+                if showAddPopover {
+                    ZStack {
+                        Color.black.opacity(0.35)
+                            .ignoresSafeArea()
+                            .onTapGesture { showAddPopover = false }
+
+                        AddGameCard(
+                            opponentName: $newName,
+                            gameDate: $newDate,
+                            onCancel: { showAddPopover = false },
+                            onSave: {
+                                let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !name.isEmpty else { return }
+                                let item = PracticeSession(id: UUID().uuidString, name: name, date: newDate)
+                                sessions.append(item)
+                                onCreate(name, newDate)
+                                showAddPopover = false
+                            }
+                        )
+                        .frame(maxWidth: 360)
+                        .padding()
+                    }
+                    .transition(.opacity.combined(with: .scale))
+                    .animation(.easeInOut(duration: 0.2), value: showAddPopover)
+                }
+            }
+        )
+        .onAppear {
+            // Load from UserDefaults via a helper in the host view by sending through Notification not available here; instead, mirror logic locally
+            if let data = UserDefaults.standard.data(forKey: PitchTrackerView.DefaultsKeys.storedPracticeSessions),
+               let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
+                self.sessions = decoded
+            } else {
+                self.sessions = []
+            }
+        }
+    }
+
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
 }
 
