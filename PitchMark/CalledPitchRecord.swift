@@ -58,6 +58,7 @@ func outcomeSummaryLines(for event: PitchEvent) -> [String] {
     if event.wildPitch { addUnique("Wild Pitch") }
     if event.passedBall { addUnique("Passed Ball") }
     if event.errorOnPlay { addUnique("Error on play") }
+    if event.isBall == true { addUnique("Ball") }
 
     // Outcome/descriptor first (sanitize these to remove labels like "field --")
     addUnique(event.outcome, sanitizeText: true)
@@ -799,6 +800,7 @@ struct PitchEvent: Codable, Identifiable {
     let location: String
     let codes: [String]
     let isStrike: Bool
+    var isBall: Bool?          // Changed from 'var isBall: Bool = false' to optional Bool
     let mode: PitchMode
     var calledPitch: PitchCall?
     var batterSide: BatterSide
@@ -870,6 +872,7 @@ extension PitchEvent {
             let location: String
             let codes: [String]
             let isStrike: Bool
+            let isBall: Bool?             // Changed from non-optional Bool to optional Bool
             let mode: PitchMode
             let calledPitch: PitchCall?
             let batterSide: BatterSide
@@ -896,6 +899,7 @@ extension PitchEvent {
             location: self.location,
             codes: self.codes,
             isStrike: self.isStrike,
+            isBall: self.isBall,
             mode: self.mode,
             calledPitch: self.calledPitch,
             batterSide: self.batterSide,

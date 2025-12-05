@@ -148,6 +148,7 @@ struct PitchTrackerView: View {
     @State private var isStrikeLooking = false
     @State private var isWildPitch = false
     @State private var isPassedBall = false
+    @State private var isBall = false
     @State private var isCalledPitchViewVisible = false
     @State private var shouldBlurBackground = false
     @State private var isGame = false
@@ -375,6 +376,15 @@ struct PitchTrackerView: View {
             chooseResultPrompt
             cardsAndOverlay
         }
+    }
+    
+    private var contentSectionDimmed: some View {
+        let isDimmed = (selectedTemplate == nil)
+        return contentSection
+            .opacity(isDimmed ? 0.6 : 1.0)
+            .blur(radius: isDimmed ? 4 : 0)
+            .allowsHitTesting(!isDimmed)
+            .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
     }
     
     // MARK: - Extracted subviews to help type-checker
@@ -779,87 +789,98 @@ struct PitchTrackerView: View {
         .padding(.horizontal)
         .padding(.bottom, 4)
     }
+
+    private var backgroundView: some View {
+        Color.appBrandBackground
+            .ignoresSafeArea()
+    }
+
+    private var mainStack: some View {
+        VStack(spacing: 4) {
+            headerContainer.erasedToAnyView()
+            contentSectionDimmed.erasedToAnyView()
+        }
+    }
+    
+    // MARK: - Change Handlers
+    private func handlePendingResultChange(_ newValue: String?) {
+        // Auto-save in Practice mode without presenting the PitchResultSheetView
+        guard newValue != nil else { return }
+        guard sessionManager.currentMode == .practice else { return }
+        guard let pitchCall = calledPitch, let label = pendingResultLabel else { return }
+
+        // Build minimal practice event
+        let event = PitchEvent(
+            id: UUID().uuidString,
+            timestamp: Date(),
+            pitch: pitchCall.pitch,
+            location: label,
+            codes: pitchCall.codes,
+            isStrike: pitchCall.isStrike,
+            isBall: false,
+            mode: sessionManager.currentMode,
+            calledPitch: pitchCall,
+            batterSide: batterSide,
+            templateId: selectedTemplate?.id.uuidString,
+            strikeSwinging: false,
+            wildPitch: false,
+            passedBall: false,
+            strikeLooking: false,
+            outcome: nil,
+            descriptor: nil,
+            errorOnPlay: false,
+            battedBallRegion: nil,
+            battedBallType: nil,
+            battedBallTapX: nil,
+            battedBallTapY: nil,
+            gameId: nil,
+            opponentJersey: nil,
+            opponentBatterId: nil
+        )
+        event.debugLog(prefix: "📤 Auto-saving Practice PitchEvent")
+
+        // Persist and update UI state
+        authManager.savePitchEvent(event)
+        sessionManager.incrementCount()
+        withAnimation(.easeInOut(duration: 0.3)) {
+            pitchEvents.append(event)
+        }
+        authManager.loadPitchEvents { events in
+            self.pitchEvents = events
+        }
+
+        // Prevent sheet from showing and reset UI state (mirror sheet save reset)
+        showConfirmSheet = false
+        resultVisualState = event.location
+        activeCalledPitchId = UUID().uuidString
+        isRecordingResult = false
+        selectedPitch = ""
+        selectedLocation = ""
+        lastTappedPosition = nil
+        calledPitch = nil
+        resultVisualState = nil
+        actualLocationRecorded = nil
+        pendingResultLabel = nil
+        isStrikeSwinging = false
+        isWildPitch = false
+        isPassedBall = false
+        isBall = false
+        selectedOutcome = nil
+        selectedDescriptor = nil
+    }
     
     var body: some View {
-        ZStack {
-            Color.appBrandBackground
-                .ignoresSafeArea()
-            VStack(spacing: 4) {
-                // 🧩 Header container (top bar + chips)
-                headerContainer
-
-                // everything below header
-                contentSection
-                    .opacity(selectedTemplate == nil ? 0.6 : 1.0)
-                    .blur(radius: selectedTemplate == nil ? 4 : 0)
-                    .allowsHitTesting(selectedTemplate != nil)
-                    .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
-                
-            }
+        let background = backgroundView.erasedToAnyView()
+        let content = mainStack.erasedToAnyView()
+        let base = ZStack {
+            background
+            content
         }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .onChange(of: pendingResultLabel) { _, newValue in
-            // Auto-save in Practice mode without presenting the PitchResultSheetView
-            guard newValue != nil else { return }
-            guard sessionManager.currentMode == .practice else { return }
-            guard let pitchCall = calledPitch, let label = pendingResultLabel else { return }
-
-            // Build minimal practice event
-            let event = PitchEvent(
-                id: UUID().uuidString,
-                timestamp: Date(),
-                pitch: pitchCall.pitch,
-                location: label,
-                codes: pitchCall.codes,
-                isStrike: pitchCall.isStrike,
-                mode: sessionManager.currentMode,
-                calledPitch: pitchCall,
-                batterSide: batterSide,
-                templateId: selectedTemplate?.id.uuidString,
-                strikeSwinging: false,
-                wildPitch: false,
-                passedBall: false,
-                strikeLooking: false,
-                outcome: nil,
-                descriptor: nil,
-                errorOnPlay: false,
-                battedBallRegion: nil,
-                battedBallType: nil,
-                battedBallTapX: nil,
-                battedBallTapY: nil,
-                gameId: nil,
-                opponentJersey: nil,
-                opponentBatterId: nil
-            )
-            event.debugLog(prefix: "📤 Auto-saving Practice PitchEvent")
-
-            // Persist and update UI state
-            authManager.savePitchEvent(event)
-            sessionManager.incrementCount()
-            withAnimation(.easeInOut(duration: 0.3)) {
-                pitchEvents.append(event)
-            }
-            authManager.loadPitchEvents { events in
-                self.pitchEvents = events
-            }
-
-            // Prevent sheet from showing and reset UI state (mirror sheet save reset)
-            showConfirmSheet = false
-            resultVisualState = event.location
-            activeCalledPitchId = UUID().uuidString
-            isRecordingResult = false
-            selectedPitch = ""
-            selectedLocation = ""
-            lastTappedPosition = nil
-            calledPitch = nil
-            resultVisualState = nil
-            actualLocationRecorded = nil
-            pendingResultLabel = nil
-            isStrikeSwinging = false
-            isWildPitch = false
-            isPassedBall = false
-            selectedOutcome = nil
-            selectedDescriptor = nil
+        return base
+            .frame(maxHeight: .infinity, alignment: .top)
+        .erasedToAnyView()
+        .onChange(of: pendingResultLabel) { newValue in
+            handlePendingResultChange(newValue)
         }
         .onChange(of: selectedPitches) { _, newValue in
             if let template = selectedTemplate {
@@ -873,6 +894,7 @@ struct PitchTrackerView: View {
                 isStrikeLooking: $isStrikeLooking,
                 isWildPitch: $isWildPitch,
                 isPassedBall: $isPassedBall,
+                isBall: $isBall,
                 selectedOutcome: $selectedOutcome,
                 selectedDescriptor: $selectedDescriptor,
                 isError: $isError,
@@ -908,6 +930,7 @@ struct PitchTrackerView: View {
                     isStrikeSwinging = false
                     isWildPitch = false
                     isPassedBall = false
+                    isBall = false
                     selectedOutcome = nil
                     selectedDescriptor = nil
                 },
@@ -1580,6 +1603,12 @@ struct PitchesFacedGridView: View {
         if let outcome = event.outcome, !outcome.isEmpty { return outcome }
         if let descriptor = event.descriptor, !descriptor.isEmpty { return descriptor }
         return "-"
+    }
+}
+
+private extension View {
+    func erasedToAnyView() -> AnyView {
+        AnyView(self)
     }
 }
 

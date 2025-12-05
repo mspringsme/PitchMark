@@ -88,6 +88,7 @@ private struct ToggleSection: View {
     @Binding var isStrikeLooking: Bool
     @Binding var isWildPitch: Bool
     @Binding var isPassedBall: Bool
+    @Binding var isBall: Bool
     @Binding var showOverlay: Bool
 
     var body: some View {
@@ -110,6 +111,7 @@ private struct ToggleSection: View {
                         .onChange(of: isPassedBall) { _, newValue in
                             if newValue { isWildPitch = false }
                         }
+                    Toggle("Ball", isOn: $isBall)
                 }
                 .padding(.horizontal)
                 Spacer()
@@ -131,6 +133,7 @@ struct PitchResultSheetView: View {
     @Binding var isStrikeLooking: Bool
     @Binding var isWildPitch: Bool
     @Binding var isPassedBall: Bool
+    @Binding var isBall: Bool
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
     @Binding var isError: Bool
@@ -187,6 +190,7 @@ struct PitchResultSheetView: View {
         isStrikeLooking = false
         isWildPitch = false
         isPassedBall = false
+        isBall = false
         selectedOutcome = nil
         selectedDescriptor = nil
         isError = false
@@ -203,7 +207,7 @@ struct PitchResultSheetView: View {
             return true
         }
         // Determine if any of the top toggles are selected
-        let anyTopToggle = isStrikeSwinging || isStrikeLooking || isWildPitch || isPassedBall
+        let anyTopToggle = isStrikeSwinging || isStrikeLooking || isWildPitch || isPassedBall || isBall
         // Determine if either strike toggle is selected
         let anyStrikeToggle = isStrikeSwinging || isStrikeLooking
         // Determine if either K or backwards K is selected
@@ -271,6 +275,7 @@ struct PitchResultSheetView: View {
             location: label,
             codes: pitchCall.codes,
             isStrike: pitchCall.isStrike,
+            isBall: isBall,
             mode: currentMode,
             calledPitch: pitchCall,
             batterSide: batterSide,
@@ -309,6 +314,7 @@ struct PitchResultSheetView: View {
         @Binding var isStrikeLooking: Bool
         @Binding var isWildPitch: Bool
         @Binding var isPassedBall: Bool
+        @Binding var isBall: Bool
         @Binding var selectedOutcome: String?
         @Binding var selectedDescriptor: String?
         @Binding var isError: Bool
@@ -325,6 +331,7 @@ struct PitchResultSheetView: View {
                 .onChange(of: isStrikeLooking) { _, _ in deselectIfDisabled() }
                 .onChange(of: isWildPitch) { _, _ in deselectIfDisabled() }
                 .onChange(of: isPassedBall) { _, _ in deselectIfDisabled() }
+                .onChange(of: isBall) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedOutcome) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedDescriptor) { _, _ in deselectIfDisabled() }
                 .onChange(of: isError) { _, _ in deselectIfDisabled() }
@@ -365,7 +372,7 @@ struct PitchResultSheetView: View {
 
                 Divider()
 
-                ToggleSection(isStrikeSwinging: $isStrikeSwinging, isStrikeLooking: $isStrikeLooking, isWildPitch: $isWildPitch, isPassedBall: $isPassedBall, showOverlay: $showFieldOverlay)
+                ToggleSection(isStrikeSwinging: $isStrikeSwinging, isStrikeLooking: $isStrikeLooking, isWildPitch: $isWildPitch, isPassedBall: $isPassedBall, isBall: $isBall, showOverlay: $showFieldOverlay)
 
                 Divider()
 
@@ -386,7 +393,8 @@ struct PitchResultSheetView: View {
                     isStrikeSwinging ||
                     isStrikeLooking ||
                     isWildPitch ||
-                    isPassedBall
+                    isPassedBall ||
+                    isBall
                 }()
 
                 Button("Save Pitch Event") {
@@ -431,6 +439,7 @@ struct PitchResultSheetView: View {
                     isStrikeLooking: $isStrikeLooking,
                     isWildPitch: $isWildPitch,
                     isPassedBall: $isPassedBall,
+                    isBall: $isBall,
                     selectedOutcome: $selectedOutcome,
                     selectedDescriptor: $selectedDescriptor,
                     isError: $isError,
@@ -693,6 +702,7 @@ private struct FieldOverlayView: View {
         isStrikeLooking: .constant(false),
         isWildPitch: .constant(false),
         isPassedBall: .constant(false),
+        isBall: .constant(false),
         selectedOutcome: .constant(nil),
         selectedDescriptor: .constant(nil),
         isError: .constant(false),
