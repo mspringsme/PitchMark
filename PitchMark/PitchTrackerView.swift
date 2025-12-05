@@ -915,14 +915,6 @@ struct PitchTrackerView: View {
                     authManager.saveGame(newGame)
                 },
                 onChoose: { gameId in
-                    if gameId == "Practice" { // quick pick
-                        opponentName = "Practice"
-                        selectedGameId = nil
-                        isGame = true
-                        selectedBatterId = nil
-                        showGameSheet = false
-                        return
-                    }
                     authManager.loadGames { games in
                         if let game = games.first(where: { $0.id == gameId }) {
                             selectedGameId = game.id
@@ -1551,20 +1543,6 @@ struct GameSelectionSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Button(action: {
-                        onChoose("Practice")
-                        dismiss()
-                    }) {
-                        HStack {
-                            Image(systemName: "figure.run")
-                                .foregroundColor(.green)
-                            Text("Start Practice Session")
-                            Spacer()
-                        }
-                    }
-                }
-
                 if games.isEmpty {
 //                    Section {
 //                        Text("No games yet. Tap + to add one.")
@@ -1593,7 +1571,7 @@ struct GameSelectionSheet: View {
                     }
                 }
             }
-            .navigationTitle("Games / Sessions")
+            .navigationTitle("Games")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
