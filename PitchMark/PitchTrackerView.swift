@@ -128,7 +128,6 @@ struct PitchTrackerView: View {
     @State private var showSettings = false
     @State private var showProfile = false
     @State private var templates: [PitchTemplate] = []
-    @State private var games: [Game] = []
     @EnvironmentObject var authManager: AuthManager
     @State private var showProfileSheet = false
     @State private var showSignOutConfirmation = false
@@ -144,6 +143,7 @@ struct PitchTrackerView: View {
     @StateObject var sessionManager = PitchSessionManager()
     @State private var modeSliderValue: Double = 0 // 0 = practice, 1 = game
     @State private var pitchEvents: [PitchEvent] = []
+    @State private var games: [Game] = []
     @State private var showPitchResults = false
     @State private var filterMode: PitchMode? = nil
     @State private var showTemplateStatsSheet = false
@@ -183,6 +183,9 @@ struct PitchTrackerView: View {
     @State private var hasPresentedInitialSettings = false
 
     @State private var suppressNextGameSheet = false
+
+    fileprivate enum OverlayTab { case cards, progress }
+    @State private var overlayTab: OverlayTab = .progress
 
     fileprivate enum DefaultsKeys {
         static let lastTemplateId = "lastTemplateId"
@@ -355,18 +358,73 @@ struct PitchTrackerView: View {
         }
     }
     
-    @ViewBuilder
+    
+    
     private var cardsAndOverlay: some View {
         ZStack {
-            VStack {
-                if selectedTemplate != nil {
-                    PitchResultSheet(
-                        allEvents: pitchEvents,
-                        games: games,
-                        templates: templates,
-                        filterMode: $filterMode
-                    )
-                    .environmentObject(authManager)
+            VStack(spacing: 8) {
+                // Top toggle buttons
+                HStack(spacing: 8) {
+                    Spacer()
+
+                    Button(action: { overlayTab = .progress }) {
+                        Text("Progress")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(overlayTab == .progress ? .white : .primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(overlayTab == .progress ? Color.accentColor : Color.clear)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: { overlayTab = .cards }) {
+                        Text("Cards")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(overlayTab == .cards ? .white : .primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(overlayTab == .cards ? Color.accentColor : Color.clear)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+
+                // Content switches with tab
+                Group {
+                    switch overlayTab {
+                    case .cards:
+                        VStack {
+                            if selectedTemplate != nil {
+                                PitchResultSheet(
+                                    allEvents: pitchEvents,
+                                    games: games,
+                                    templates: templates,
+                                    filterMode: $filterMode
+                                )
+                                .environmentObject(authManager)
+                            }
+                        }
+                    case .progress:
+                        VStack(spacing: 12) {
+                            // Placeholder progress content — replace with your real progress view as needed
+                            Image(systemName: "chart.bar.xaxis")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("Progress")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Text("Add your progress visualization here.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .padding(.top, 12)
+                    }
                 }
             }
             .blur(radius: shouldBlurBackground ? 6 : 0)
@@ -395,6 +453,8 @@ struct PitchTrackerView: View {
         // Make this layer fill the entire screen space and bleed off the edges
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.horizontal, .bottom])
+        //.background(Color.red.opacity(0.9))
+        .background(.regularMaterial)
     }
     
     
@@ -404,10 +464,6 @@ struct PitchTrackerView: View {
             pitchSelectionChips
         }
         .padding(.vertical, 8)
-//        .background(.regularMaterial)
-//        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-//        .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
-        
         .background(
             .thickMaterial,
             in: RoundedRectangle(cornerRadius: 12, style: .continuous) // proper clipping for the material
@@ -426,6 +482,7 @@ struct PitchTrackerView: View {
         Group {
             batterAndModeBar
             mainStrikeZoneSection
+            Spacer(minLength: 14)
             chooseResultPrompt
             cardsAndOverlay
         }
@@ -663,7 +720,7 @@ struct PitchTrackerView: View {
                     .padding(.horizontal, 0)
                 }
             }
-            .frame(width: 60, height: 400)
+            .frame(width: 60, height: 390)
             .background(.ultraThinMaterial)
             .cornerRadius(10)
             .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
@@ -699,7 +756,7 @@ struct PitchTrackerView: View {
                 )
                 .id(colorRefreshToken)
             }
-            .frame(width: SZwidth, height: 400)
+            .frame(width: SZwidth, height: 390)
             .background(
                 .thickMaterial,
                 in: RoundedRectangle(cornerRadius: 12, style: .continuous) // proper clipping for the material
@@ -812,7 +869,7 @@ struct PitchTrackerView: View {
             .padding(.top, 6)
             .offset(y: -20)
         }
-        .frame(width: SZwidth, height: 400)
+        .frame(width: SZwidth, height: 390)
     }
     
     private var batterAndModeBar: some View {
@@ -853,7 +910,8 @@ struct PitchTrackerView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal)
-        .padding(.bottom, 4)
+        .padding(.bottom, 6)
+        .padding(.top, 14)
     }
 
     private var backgroundView: some View {
@@ -1305,9 +1363,9 @@ struct PitchTrackerView: View {
                     // Clear active game selection and UI label
                     selectedGameId = nil
                     opponentName = nil
-                    let defaults = UserDefaults.standard
-                    defaults.removeObject(forKey: DefaultsKeys.activeGameId)
-                    defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+                    let defaults = DefaultsKeys.self
+                    UserDefaults.standard.removeObject(forKey: defaults.activeGameId)
+                    UserDefaults.standard.set(false, forKey: defaults.activeIsPractice)
                 }
             } else if type == "practice" {
                 if let pid = userInfo["practiceId"] as? String, selectedPracticeId == pid {

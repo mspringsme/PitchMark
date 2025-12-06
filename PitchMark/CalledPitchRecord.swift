@@ -799,18 +799,18 @@ struct PitchResultSheet: View {
                     .padding(.horizontal)
                 }
             }
-            .padding(.vertical, 8)
-            .background(
-                .thickMaterial,
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+//            .padding(.vertical, 8)
+//            .background(
+//                .thickMaterial,
+//                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+//            )
+//            .overlay(
+//                RoundedRectangle(cornerRadius: 12, style: .continuous)
+//                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+//            )
+//            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
             .padding(.horizontal)
-            .padding(.top)
+            //.padding(.top)
         }
     }
     
