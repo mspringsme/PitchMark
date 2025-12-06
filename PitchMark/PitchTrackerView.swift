@@ -482,7 +482,7 @@ struct PitchTrackerView: View {
         Group {
             batterAndModeBar
             mainStrikeZoneSection
-            Spacer(minLength: 14)
+            Spacer(minLength: 20)
             chooseResultPrompt
             cardsAndOverlay
         }
