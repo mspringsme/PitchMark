@@ -1241,6 +1241,11 @@ struct PitchTrackerView: View {
                     } else {
                         practiceName = nil
                     }
+                    // Clear any active game state when switching to practice
+                    selectedGameId = nil
+                    opponentName = nil
+                    jerseyCells = []
+                    selectedBatterId = nil
                 } else if let pname = userInfo["practiceName"] as? String {
                     practiceName = pname
                 } else {
@@ -2085,9 +2090,12 @@ struct PracticeSelectionSheet: View {
                             onSave: {
                                 let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !name.isEmpty else { return }
-                                let item = PracticeSession(id: UUID().uuidString, name: name, date: newDate)
-                                sessions.append(item)
                                 onCreate(name, newDate)
+                                // Reload sessions from UserDefaults so IDs match the persisted source
+                                if let data = UserDefaults.standard.data(forKey: PitchTrackerView.DefaultsKeys.storedPracticeSessions),
+                                   let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
+                                    self.sessions = decoded
+                                }
                                 showAddPopover = false
                             }
                         )

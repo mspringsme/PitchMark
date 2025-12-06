@@ -251,6 +251,14 @@ struct SettingsView: View {
                         // Look up the session name locally so receivers can update UI immediately
                         let sessions = loadPracticeSessions()
                         let name = sessions.first(where: { $0.id == practiceId })?.name
+                        
+                        // Persist active practice selection immediately to avoid races
+                        let defaults = UserDefaults.standard
+                        defaults.set(true, forKey: "activeIsPractice")
+                        defaults.removeObject(forKey: "activeGameId")
+                        defaults.set(practiceId, forKey: "activePracticeId")
+                        defaults.set("tracker", forKey: "lastView")
+                        
                         NotificationCenter.default.post(
                             name: .gameOrSessionChosen,
                             object: nil,
