@@ -13,6 +13,7 @@ import UIKit
 
 private extension Notification.Name {
     static let gameOrSessionChosen = Notification.Name("gameOrSessionChosen")
+    static let gameOrSessionDeleted = Notification.Name("gameOrSessionDeleted")
 }
 
 // 🧩 Toggle Chip Component
@@ -896,7 +897,8 @@ struct PitchTrackerView: View {
             battedBallTapY: nil,
             gameId: nil,
             opponentJersey: nil,
-            opponentBatterId: nil
+            opponentBatterId: nil,
+            practiceId: selectedPracticeId
         )
         event.debugLog(prefix: "📤 Auto-saving Practice PitchEvent")
 
@@ -974,6 +976,8 @@ struct PitchTrackerView: View {
                             selectedBatterId = nil
                         }
                         isGame = true
+                        // Ensure sessionManager mode sync for button label update
+                        sessionManager.switchMode(to: .game)
                         showGameSheet = false
                     }
                 },
@@ -999,6 +1003,7 @@ struct PitchTrackerView: View {
                     let new = PracticeSession(id: UUID().uuidString, name: name, date: date)
                     sessions.append(new)
                     savePracticeSessions(sessions)
+                    // No-op here; PracticeSelectionSheet reads from UserDefaults on appear. However, for immediate selection flow, nothing needed.
                 },
                 onChoose: { practiceId in
                     let sessions = loadPracticeSessions()
@@ -1012,6 +1017,8 @@ struct PitchTrackerView: View {
                         defaults.removeObject(forKey: DefaultsKeys.activeGameId)
                         persistActivePracticeId(session.id)
                         defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                        // Ensure sessionManager mode sync for button label update
+                        sessionManager.switchMode(to: .practice)
                     }
                     showPracticeSheet = false
                 },
@@ -1041,6 +1048,7 @@ struct PitchTrackerView: View {
                 selectedGameId: selectedGameId,
                 selectedOpponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
                 selectedOpponentBatterId: selectedBatterId?.uuidString,
+                selectedPracticeId: selectedPracticeId,
                 saveAction: { event in
                     authManager.savePitchEvent(event)
                     sessionManager.incrementCount()
@@ -1221,11 +1229,17 @@ struct PitchTrackerView: View {
             self.showGameSheet = false
             if type == "practice" {
                 if let pid = userInfo["practiceId"] as? String {
+                    // Immediately set selection and persist
+                    selectedPracticeId = pid
                     persistActivePracticeId(pid)
+
                     let sessions = loadPracticeSessions()
                     if let session = sessions.first(where: { $0.id == pid }) {
                         practiceName = session.name
-                        selectedPracticeId = session.id
+                    } else if let providedName = userInfo["practiceName"] as? String {
+                        practiceName = providedName
+                    } else {
+                        practiceName = nil
                     }
                 } else if let pname = userInfo["practiceName"] as? String {
                     practiceName = pname
@@ -1272,6 +1286,26 @@ struct PitchTrackerView: View {
                     defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
                     defaults.set(gid, forKey: DefaultsKeys.activeGameId)
                     defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionDeleted)) { notification in
+            guard let userInfo = notification.userInfo as? [String: Any], let type = userInfo["type"] as? String else { return }
+            if type == "game" {
+                if let gid = userInfo["gameId"] as? String, selectedGameId == gid {
+                    // Clear active game selection and UI label
+                    selectedGameId = nil
+                    opponentName = nil
+                    let defaults = UserDefaults.standard
+                    defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+                    defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+                }
+            } else if type == "practice" {
+                if let pid = userInfo["practiceId"] as? String, selectedPracticeId == pid {
+                    // Clear active practice selection and UI label
+                    selectedPracticeId = nil
+                    practiceName = nil
+                    persistActivePracticeId(nil)
                 }
             }
         }
@@ -1624,6 +1658,9 @@ struct GameSelectionSheet: View {
     @State private var showAddGamePopover: Bool = false
     @State private var newOpponentName: String = ""
     @State private var newGameDate: Date = Date()
+    
+    @State private var pendingDeleteGameId: String? = nil
+    @State private var showDeleteGameConfirm: Bool = false
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var authManager: AuthManager
@@ -1640,8 +1677,20 @@ struct GameSelectionSheet: View {
                     Section() {
                         ForEach(games) { game in
                             Button(action: {
-                                onChoose(game.id ?? "")
-                                dismiss()
+                                if let gid = game.id, !gid.isEmpty {
+                                    onChoose(gid)
+                                    dismiss()
+                                } else {
+                                    // Resolve freshly created game by reloading and matching on name/date
+                                    authManager.loadGames { loaded in
+                                        self.games = loaded
+                                        let calendar = Calendar.current
+                                        if let resolved = loaded.first(where: { $0.opponent == game.opponent && calendar.isDate($0.date, inSameDayAs: game.date) }) {
+                                            onChoose(resolved.id ?? "")
+                                        }
+                                        dismiss()
+                                    }
+                                }
                             }) {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 4) {
@@ -1655,6 +1704,16 @@ struct GameSelectionSheet: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    if let id = game.id {
+                                        pendingDeleteGameId = id
+                                        showDeleteGameConfirm = true
+                                    }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                 }
@@ -1676,6 +1735,27 @@ struct GameSelectionSheet: View {
                     .accessibilityLabel("Add Game")
                 }
             }
+        }
+        .confirmationDialog(
+            "Delete Game?",
+            isPresented: $showDeleteGameConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let id = pendingDeleteGameId {
+                    if let idx = games.firstIndex(where: { $0.id == id }) {
+                        games.remove(at: idx)
+                    }
+                    authManager.deleteGame(gameId: id)
+                    NotificationCenter.default.post(name: .gameOrSessionDeleted, object: nil, userInfo: ["type": "game", "gameId": id])
+                }
+                pendingDeleteGameId = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteGameId = nil
+            }
+        } message: {
+            Text("This will permanently remove the game and its lineup.")
         }
         .overlay(
             Group {
@@ -1886,6 +1966,9 @@ struct PracticeSelectionSheet: View {
     @State private var showAddPopover: Bool = false
     @State private var newName: String = ""
     @State private var newDate: Date = Date()
+    
+    @State private var pendingDeleteSessionId: String? = nil
+    @State private var showDeleteSessionConfirm: Bool = false
 
     @Environment(\.dismiss) private var dismiss
 
@@ -1898,8 +1981,21 @@ struct PracticeSelectionSheet: View {
                     Section() {
                         ForEach(sessions) { session in
                             Button(action: {
-                                onChoose(session.id ?? "")
-                                dismiss()
+                                if let pid = session.id, !pid.isEmpty {
+                                    onChoose(pid)
+                                    dismiss()
+                                } else {
+                                    // Resolve from UserDefaults by matching name/date (should be rare)
+                                    let key = PitchTrackerView.DefaultsKeys.storedPracticeSessions
+                                    if let data = UserDefaults.standard.data(forKey: key),
+                                       let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
+                                        let calendar = Calendar.current
+                                        if let resolved = decoded.first(where: { $0.name == session.name && calendar.isDate($0.date, inSameDayAs: session.date) }) {
+                                            onChoose(resolved.id ?? "")
+                                        }
+                                    }
+                                    dismiss()
+                                }
                             }) {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 4) {
@@ -1913,6 +2009,16 @@ struct PracticeSelectionSheet: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    if let id = session.id {
+                                        pendingDeleteSessionId = id
+                                        showDeleteSessionConfirm = true
+                                    }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                         }
                     }
                 }
@@ -1934,6 +2040,35 @@ struct PracticeSelectionSheet: View {
                     .accessibilityLabel("Add Practice Session")
                 }
             }
+        }
+        .confirmationDialog(
+            "Delete Practice Session?",
+            isPresented: $showDeleteSessionConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let id = pendingDeleteSessionId else { return }
+                // Remove from local list
+                if let idx = sessions.firstIndex(where: { $0.id == id }) {
+                    sessions.remove(at: idx)
+                }
+                // Persist removal to UserDefaults
+                let key = PitchTrackerView.DefaultsKeys.storedPracticeSessions
+                if let data = UserDefaults.standard.data(forKey: key),
+                   var decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
+                    decoded.removeAll { $0.id == id }
+                    if let newData = try? JSONEncoder().encode(decoded) {
+                        UserDefaults.standard.set(newData, forKey: key)
+                    }
+                }
+                NotificationCenter.default.post(name: .gameOrSessionDeleted, object: nil, userInfo: ["type": "practice", "practiceId": id])
+                pendingDeleteSessionId = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteSessionId = nil
+            }
+        } message: {
+            Text("This will remove the session from this device.")
         }
         .overlay(
             Group {

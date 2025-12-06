@@ -166,6 +166,7 @@ struct PitchCardView: View {
     let footerTextName: String
     let footerTextDate: String
     let gameTitle: String?
+    let practiceTitle: String?
     let pitchNumber: Int?
     let outcomeSummary: [String]?
     let jerseyNumber: String?
@@ -186,6 +187,7 @@ struct PitchCardView: View {
         outcomeSummary: [String]?,
         jerseyNumber: String?,
         gameTitle: String? = nil,
+        practiceTitle: String? = nil,
         onLongPress: @escaping (() -> Void) = {}
     ) {
         self.batterSide = batterSide
@@ -202,6 +204,7 @@ struct PitchCardView: View {
         self.outcomeSummary = outcomeSummary
         self.jerseyNumber = jerseyNumber
         self.gameTitle = gameTitle
+        self.practiceTitle = practiceTitle
         self.onLongPress = onLongPress
     }
     
@@ -210,7 +213,15 @@ struct PitchCardView: View {
             // 🧠 Header at top-left
             HStack(spacing: 4) {
                 
-                Text(gameTitle.map { "\(footerTextName) vs. \($0)" } ?? footerTextName)
+                Text({
+                    if let game = gameTitle, !game.isEmpty {
+                        return "\(footerTextName) vs. \(game)"
+                    } else if let practice = practiceTitle, !practice.isEmpty {
+                        return "\(footerTextName) — \(practice)"
+                    } else {
+                        return footerTextName
+                    }
+                }())
                     .font(.caption)
                     .fontWeight(.bold)
                     .foregroundColor(.secondary)
@@ -348,12 +359,22 @@ struct PitchResultCard: View {
     let templateName: String
     @State private var showDetails = false
 
+    private struct StoredPracticeSession: Codable { var id: String?; var name: String; var date: Date }
+
     private func derivedGameTitle(from event: PitchEvent) -> String? {
         guard let gid = event.gameId, !gid.isEmpty else { return nil }
         if let game = games.first(where: { $0.id == gid }) {
             return game.opponent
         }
         return nil
+    }
+    
+    private func practiceTitle(for event: PitchEvent) -> String? {
+        guard let pid = event.practiceId, !pid.isEmpty else { return nil }
+        let key = "storedPracticeSessions"
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let sessions = try? JSONDecoder().decode([StoredPracticeSession].self, from: data) else { return nil }
+        return sessions.first(where: { $0.id == pid })?.name
     }
     
     func formattedTimestamp(_ date: Date) -> String {
@@ -423,6 +444,7 @@ struct PitchResultCard: View {
             outcomeSummary: outcomeSummary,
             jerseyNumber: jerseyNumber,
             gameTitle: derivedGameTitle(from: event),
+            practiceTitle: practiceTitle(for: event),
             onLongPress: { showDetails = true }
         )
         .popover(isPresented: $showDetails) {
@@ -823,6 +845,7 @@ struct PitchEvent: Codable, Identifiable {
     var gameId: String?
     var opponentJersey: String?
     var opponentBatterId: String?
+    var practiceId: String?
 }
 
 enum PitchMode: String, Codable {
@@ -891,6 +914,7 @@ extension PitchEvent {
             let gameId: String?
             let opponentJersey: String?
             let opponentBatterId: String?
+            let practiceId: String?
         }
         let debug = DebugEvent(
             id: self.id,
@@ -917,7 +941,8 @@ extension PitchEvent {
             battedBallTapY: self.battedBallTapY,
             gameId: self.gameId,
             opponentJersey: self.opponentJersey,
-            opponentBatterId: self.opponentBatterId
+            opponentBatterId: self.opponentBatterId,
+            practiceId: self.practiceId
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

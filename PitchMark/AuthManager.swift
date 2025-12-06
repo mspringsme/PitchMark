@@ -315,5 +315,18 @@ extension AuthManager {
             if let error = error { print("Error updating lineup: \(error)") }
         }
     }
+    
+    func deleteGame(gameId: String) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.delete { error in
+            if let error = error {
+                print("Error deleting game: \(error)")
+            } else {
+                print("Game \(gameId) deleted successfully")
+            }
+        }
+    }
 }
-

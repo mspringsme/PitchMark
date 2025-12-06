@@ -182,6 +182,7 @@ struct PitchResultSheetView: View {
     let selectedGameId: String?
     let selectedOpponentJersey: String?
     let selectedOpponentBatterId: String?
+    let selectedPracticeId: String?
     let saveAction: (PitchEvent) -> Void
     let template: PitchTemplate?
 
@@ -300,7 +301,8 @@ struct PitchResultSheetView: View {
             battedBallTapY: battedBallTapNormalized.map { Double($0.y) },
             gameId: selectedGameId,
             opponentJersey: selectedOpponentJersey,
-            opponentBatterId: selectedOpponentBatterId
+            opponentBatterId: selectedOpponentBatterId,
+            practiceId: selectedPracticeId
         )
         event.debugLog()
         saveAction(event)
@@ -714,6 +716,7 @@ private struct FieldOverlayView: View {
         selectedGameId: nil,
         selectedOpponentJersey: nil,
         selectedOpponentBatterId: nil,
+        selectedPracticeId: nil,
         saveAction: { _ in },
         template: PitchTemplate(
             id: UUID(),

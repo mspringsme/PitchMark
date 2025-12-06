@@ -248,7 +248,18 @@ struct SettingsView: View {
                         if let tmpl = templatePendingLaunch {
                             selectedTemplate = tmpl
                         }
-                        NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: ["type": "practice", "practiceId": practiceId])
+                        // Look up the session name locally so receivers can update UI immediately
+                        let sessions = loadPracticeSessions()
+                        let name = sessions.first(where: { $0.id == practiceId })?.name
+                        NotificationCenter.default.post(
+                            name: .gameOrSessionChosen,
+                            object: nil,
+                            userInfo: [
+                                "type": "practice",
+                                "practiceId": practiceId,
+                                "practiceName": name as Any
+                            ]
+                        )
                         showPracticeChooser = false
                         dismiss()
                     },
@@ -335,3 +346,4 @@ private struct SettingsPreviewContainer: View {
 #Preview("Settings – With Templates") {
     SettingsPreviewContainer()
 }
+
