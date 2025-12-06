@@ -781,25 +781,37 @@ struct PitchResultSheet: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading) {
-            
-            modePicker
-            
-            ScrollView([.vertical]) {
-                VStack(spacing: 12) {
-                    ForEach(Array(filteredEvents.enumerated()), id: \.offset) { item in
-                        let event = item.element
-                        let templateName = templates.first(where: { $0.id.uuidString == event.templateId })?.name ?? "Unknown"
-                        
-                        PitchResultCard(event: event, allEvents: allEvents, games: games, templateName: templateName)
-                            .padding(.horizontal)
-                            .transition(.move(edge: .top).combined(with: .opacity))
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                modePicker
+
+                ScrollView([.vertical]) {
+                    VStack(spacing: 12) {
+                        ForEach(Array(filteredEvents.enumerated()), id: \.offset) { item in
+                            let event = item.element
+                            let templateName = templates.first(where: { $0.id.uuidString == event.templateId })?.name ?? "Unknown"
+
+                            PitchResultCard(event: event, allEvents: allEvents, games: games, templateName: templateName)
+                                .padding(.horizontal)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                     }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
             }
+            .padding(.vertical, 8)
+            .background(
+                .thickMaterial,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+            .padding(.horizontal)
+            .padding(.top)
         }
-        .padding(.top)
     }
     
     private var modePicker: some View {
