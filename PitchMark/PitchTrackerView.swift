@@ -392,7 +392,11 @@ struct PitchTrackerView: View {
                 }
             }
         }
+        // Make this layer fill the entire screen space and bleed off the edges
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .ignoresSafeArea(edges: [.horizontal, .bottom])
     }
+    
     
     private var headerContainer: some View {
         VStack(spacing: 8) {
