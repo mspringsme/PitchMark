@@ -1541,11 +1541,6 @@ struct JerseyRow: View {
                         NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
                     }
                 }
-                Button(isReordering ? "Done Reordering" : "Reorder Mode", systemImage: "arrow.up.arrow.down") {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
-                        isReordering.toggle()
-                    }
-                }
 
                 Button("Delete", systemImage: "trash", role: .destructive) {
                     if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
