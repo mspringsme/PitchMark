@@ -1501,14 +1501,6 @@ struct JerseyRow: View {
                     selectedBatterId = cell.id
                 }
             }
-            .onLongPressGesture {
-                selectedBatterId = cell.id
-                pitchesFacedBatterId = cell.id
-            }
-            .onDrag {
-                draggingJersey = cell
-                return NSItemProvider(object: NSString(string: cell.id.uuidString))
-            }
             .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
             .contextMenu {
                 Button("Pitches Faced", systemImage: "baseball") {
