@@ -1510,10 +1510,11 @@ struct JerseyRow: View {
             .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
             .sheet(isPresented: $showActionsSheet) {
                 VStack(alignment: .leading, spacing: 12) {
+                    
                     Text("Batter #\(cell.jerseyNumber)")
                         .font(.headline)
                         .padding(.bottom, 4)
-
+                        
                     Button {
                         // Pitches Faced
                         selectedBatterId = cell.id
@@ -1534,61 +1535,68 @@ struct JerseyRow: View {
                     }
 
                     Divider()
-
-                    Button {
-                        // Move Up
-                        if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx > 0 {
-                            withAnimation {
-                                let item = jerseyCells.remove(at: idx)
-                                jerseyCells.insert(item, at: idx - 1)
+                    
+                    Spacer()
+                    
+                    HStack{
+                        Spacer()
+                        Button {
+                            // Move Up
+                            if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx > 0 {
+                                withAnimation {
+                                    let item = jerseyCells.remove(at: idx)
+                                    jerseyCells.insert(item, at: idx - 1)
+                                }
+                                if let gameId = selectedGameId {
+                                    authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                                }
+                                NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
                             }
-                            if let gameId = selectedGameId {
-                                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                            }
-                            NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
+                        } label: {
+                            Label("Move Up", systemImage: "arrow.up")
                         }
-                    } label: {
-                        Label("Move Up", systemImage: "arrow.up")
-                    }
-
-                    Button {
-                        // Move Down
-                        if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx < jerseyCells.count - 1 {
-                            withAnimation {
-                                let item = jerseyCells.remove(at: idx)
-                                jerseyCells.insert(item, at: idx + 1)
+                        Spacer()
+                        Button {
+                            // Move Down
+                            if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx < jerseyCells.count - 1 {
+                                withAnimation {
+                                    let item = jerseyCells.remove(at: idx)
+                                    jerseyCells.insert(item, at: idx + 1)
+                                }
+                                if let gameId = selectedGameId {
+                                    authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                                }
+                                NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
                             }
-                            if let gameId = selectedGameId {
-                                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                            }
-                            NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
+                        } label: {
+                            Label("Move Down", systemImage: "arrow.down")
                         }
-                    } label: {
-                        Label("Move Down", systemImage: "arrow.down")
+                        Spacer()
                     }
+                    Spacer()
 
                     Divider()
-
-                    Button(role: .destructive) {
-                        // Delete
-                        if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
-                            jerseyCells.remove(at: idx)
-                            if let gameId = selectedGameId {
-                                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                            }
-                            if selectedBatterId == cell.id {
-                                selectedBatterId = nil
-                            }
-                        }
-                        showActionsSheet = false
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-
+                    
+                    Spacer()
+                    
                     HStack {
                         Spacer()
-                        Button("Close") { showActionsSheet = false }
-                            .buttonStyle(.bordered)
+                        Button(role: .destructive) {
+                            // Delete
+                            if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
+                                jerseyCells.remove(at: idx)
+                                if let gameId = selectedGameId {
+                                    authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                                }
+                                if selectedBatterId == cell.id {
+                                    selectedBatterId = nil
+                                }
+                            }
+                            showActionsSheet = false
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        Spacer()
                     }
                 }
                 .padding()
