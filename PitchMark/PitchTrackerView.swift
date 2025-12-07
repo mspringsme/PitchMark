@@ -1419,7 +1419,8 @@ struct PitchTrackerView: View {
                         ScrollView {
                             PitchesFacedGridView(
                                 title: jerseyNumber.isEmpty ? "Pitches Faced" : "Pitches Faced – #\(jerseyNumber)",
-                                events: events
+                                events: events,
+                                templates: templates
                             )
                             .padding(.horizontal)
                             .padding(.top, 8)
@@ -2004,8 +2005,10 @@ struct AddGameCard: View {
 struct PitchesFacedGridView: View {
     let title: String
     let events: [PitchEvent]
+    let templates: [PitchTemplate]
 
     private static let columns: [GridItem] = [
+        GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading),
         GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading),
         GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading),
         GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading)
@@ -2034,6 +2037,7 @@ struct PitchesFacedGridView: View {
                     Text("Pitch Called").font(.subheadline.bold())
                     Text("Result").font(.subheadline.bold())
                     Text("Batter Outcome").font(.subheadline.bold())
+                    Text("Pitcher").font(.subheadline.bold())
 
                     ForEach(events, id: \.id) { event in
                         // Column 1: Pitch Called
@@ -2048,6 +2052,11 @@ struct PitchesFacedGridView: View {
 
                         // Column 3: Batter Outcome
                         Text(outcomeText(for: event))
+                            .font(.body)
+                            .lineLimit(1)
+
+                        // Column 4: Pitcher (Template Name)
+                        Text(templateName(for: event))
                             .font(.body)
                             .lineLimit(1)
                     }
@@ -2072,6 +2081,13 @@ struct PitchesFacedGridView: View {
     private func outcomeText(for event: PitchEvent) -> String {
         if let outcome = event.outcome, !outcome.isEmpty { return outcome }
         if let descriptor = event.descriptor, !descriptor.isEmpty { return descriptor }
+        return "-"
+    }
+    
+    private func templateName(for event: PitchEvent) -> String {
+        if let tid = event.templateId, let t = templates.first(where: { $0.id.uuidString == tid }) {
+            return t.name
+        }
         return "-"
     }
 }
