@@ -1479,7 +1479,9 @@ struct JerseyRow: View {
     let selectedGameId: String?
     @Binding var pitchesFacedBatterId: UUID?
     @Binding var isReordering: Bool
-    
+
+    @State private var showActionsSheet: Bool = false
+
     @EnvironmentObject var authManager: AuthManager
     
     var body: some View {
@@ -1501,58 +1503,96 @@ struct JerseyRow: View {
                     selectedBatterId = cell.id
                 }
             }
+            .onLongPressGesture {
+                selectedBatterId = cell.id
+                showActionsSheet = true
+            }
             .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
-            .contextMenu {
-                Button("Pitches Faced", systemImage: "baseball") {
-                    // Select this batter and drive popover via item binding
-                    selectedBatterId = cell.id
-                    pitchesFacedBatterId = cell.id
-                }
-                Button("Edit", systemImage: "pencil") {
-                    editingCell = cell
-                    newJerseyNumber = cell.jerseyNumber
-                    showAddJerseyPopover = true
-                }
+            .sheet(isPresented: $showActionsSheet) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Batter #\(cell.jerseyNumber)")
+                        .font(.headline)
+                        .padding(.bottom, 4)
 
-                Divider()
-                Button("Move Up", systemImage: "arrow.up") {
-                    if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx > 0 {
-                        withAnimation {
-                            let item = jerseyCells.remove(at: idx)
-                            jerseyCells.insert(item, at: idx - 1)
-                        }
-                        if let gameId = selectedGameId {
-                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                        }
-                        // Also notify any listeners of order change
-                        NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
+                    Button {
+                        // Pitches Faced
+                        selectedBatterId = cell.id
+                        pitchesFacedBatterId = cell.id
+                        showActionsSheet = false
+                    } label: {
+                        Label("Pitches Faced", systemImage: "baseball")
                     }
-                }
-                Button("Move Down", systemImage: "arrow.down") {
-                    if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx < jerseyCells.count - 1 {
-                        withAnimation {
-                            let item = jerseyCells.remove(at: idx)
-                            jerseyCells.insert(item, at: idx + 1)
-                        }
-                        if let gameId = selectedGameId {
-                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                        }
-                        // Also notify any listeners of order change
-                        NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
-                    }
-                }
 
-                Button("Delete", systemImage: "trash", role: .destructive) {
-                    if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
-                        jerseyCells.remove(at: idx)
-                        if let gameId = selectedGameId {
-                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                    Button {
+                        // Edit
+                        editingCell = cell
+                        newJerseyNumber = cell.jerseyNumber
+                        showAddJerseyPopover = true
+                        showActionsSheet = false
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+
+                    Divider()
+
+                    Button {
+                        // Move Up
+                        if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx > 0 {
+                            withAnimation {
+                                let item = jerseyCells.remove(at: idx)
+                                jerseyCells.insert(item, at: idx - 1)
+                            }
+                            if let gameId = selectedGameId {
+                                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                            }
+                            NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
                         }
-                        if selectedBatterId == cell.id {
-                            selectedBatterId = nil
+                    } label: {
+                        Label("Move Up", systemImage: "arrow.up")
+                    }
+
+                    Button {
+                        // Move Down
+                        if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }), idx < jerseyCells.count - 1 {
+                            withAnimation {
+                                let item = jerseyCells.remove(at: idx)
+                                jerseyCells.insert(item, at: idx + 1)
+                            }
+                            if let gameId = selectedGameId {
+                                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                            }
+                            NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
                         }
+                    } label: {
+                        Label("Move Down", systemImage: "arrow.down")
+                    }
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        // Delete
+                        if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
+                            jerseyCells.remove(at: idx)
+                            if let gameId = selectedGameId {
+                                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                            }
+                            if selectedBatterId == cell.id {
+                                selectedBatterId = nil
+                            }
+                        }
+                        showActionsSheet = false
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+
+                    HStack {
+                        Spacer()
+                        Button("Close") { showActionsSheet = false }
+                            .buttonStyle(.bordered)
                     }
                 }
+                .padding()
+                .presentationDetents([.fraction(0.35), .medium])
             }
     }
 }
