@@ -1481,6 +1481,7 @@ struct JerseyRow: View {
     @Binding var isReordering: Bool
 
     @State private var showActionsSheet: Bool = false
+    @State private var showDeleteConfirm: Bool = false
 
     @EnvironmentObject var authManager: AuthManager
     
@@ -1515,28 +1516,50 @@ struct JerseyRow: View {
                         .font(.headline)
                         .padding(.bottom, 4)
                         
-                    Button {
-                        // Pitches Faced
-                        selectedBatterId = cell.id
-                        pitchesFacedBatterId = cell.id
-                        showActionsSheet = false
-                    } label: {
-                        Label("Pitches Faced", systemImage: "baseball")
-                    }
+                    HStack {
+                        Button {
+                            // Pitches Faced
+                            selectedBatterId = cell.id
+                            pitchesFacedBatterId = cell.id
+                            showActionsSheet = false
+                        } label: {
+                            Label("Pitches Faced", systemImage: "baseball")
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
 
-                    Button {
-                        // Edit
-                        editingCell = cell
-                        newJerseyNumber = cell.jerseyNumber
-                        showAddJerseyPopover = true
-                        showActionsSheet = false
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
+                        Spacer()
+
+                        Button {
+                            // Edit Number
+                            editingCell = cell
+                            newJerseyNumber = cell.jerseyNumber
+                            showAddJerseyPopover = true
+                            showActionsSheet = false
+                        } label: {
+                            Label("Edit Number", systemImage: "pencil")
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
                     }
 
                     Divider()
                     
-                    Spacer()
+                    Color.clear.frame(height: 8)
                     
                     HStack{
                         Spacer()
@@ -1555,6 +1578,15 @@ struct JerseyRow: View {
                         } label: {
                             Label("Move Up", systemImage: "arrow.up")
                         }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
                         Spacer()
                         Button {
                             // Move Down
@@ -1571,36 +1603,53 @@ struct JerseyRow: View {
                         } label: {
                             Label("Move Down", systemImage: "arrow.down")
                         }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
                         Spacer()
                     }
-                    Spacer()
+                    
+                    Color.clear.frame(height: 8)
 
                     Divider()
                     
-                    Spacer()
+                    Color.clear.frame(height: 8)
                     
-                    HStack {
-                        Spacer()
-                        Button(role: .destructive) {
-                            // Delete
-                            if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
-                                jerseyCells.remove(at: idx)
-                                if let gameId = selectedGameId {
-                                    authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                                }
-                                if selectedBatterId == cell.id {
-                                    selectedBatterId = nil
-                                }
-                            }
-                            showActionsSheet = false
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                        Spacer()
+                    Button(role: .destructive) {
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Delete", systemImage: "trash")
                     }
                 }
                 .padding()
                 .presentationDetents([.fraction(0.35), .medium])
+                .confirmationDialog(
+                    "Delete Batter?",
+                    isPresented: $showDeleteConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete", role: .destructive) {
+                        if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
+                            jerseyCells.remove(at: idx)
+                            if let gameId = selectedGameId {
+                                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                            }
+                            if selectedBatterId == cell.id {
+                                selectedBatterId = nil
+                            }
+                        }
+                        showActionsSheet = false
+                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    Text("This will remove this batter from the lineup.")
+                }
             }
     }
 }
