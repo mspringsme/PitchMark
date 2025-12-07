@@ -530,12 +530,12 @@ struct PitchEventDetailPopover: View {
                                 let resultLabel = "\(evt.isStrike ? "Strike" : "Ball") \(evt.location)"
                                 VStack(alignment: .leading, spacing: 2) {
                                     if let calledLabel {
-                                        Text("Called: \(calledLabel)")
+                                        Text("(Coach): \(calledLabel)")
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
                                     }
-                                    Text("Result: \(resultLabel)")
+                                    Text("(Result): \(resultLabel)")
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
