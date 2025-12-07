@@ -1376,9 +1376,9 @@ struct PitchTrackerView: View {
                 }
             }
         }
-        .overlay(alignment: .top) {
+        .overlay(alignment: .bottom) {
             if let batterId = pitchesFacedBatterId {
-                ZStack(alignment: .top) {
+                ZStack(alignment: .bottom) {
                     // Backdrop to allow tap-to-dismiss
                     Color.black.opacity(0.25)
                         .ignoresSafeArea()
@@ -1428,11 +1428,12 @@ struct PitchTrackerView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .frame(height: UIScreen.main.bounds.height * 0.33)
-                    .background(.ultraThinMaterial)
+                    .background(.regularMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                     .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
                 }
                 .animation(.easeInOut(duration: 0.25), value: pitchesFacedBatterId)
             }
