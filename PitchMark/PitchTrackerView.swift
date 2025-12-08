@@ -440,9 +440,6 @@ struct PitchTrackerView: View {
                         pitchCodeAssignments: pitchCodeAssignments,
                         batterSide: batterSide
                     )
-                    .background(Color.white.opacity(0.9))
-                    .cornerRadius(8)
-                    .shadow(radius: 4)
                     .transition(.opacity)
                     .padding(.top, 4)
                     .onAppear { shouldBlurBackground = true }
@@ -483,7 +480,7 @@ struct PitchTrackerView: View {
             batterAndModeBar
             mainStrikeZoneSection
             Spacer(minLength: 20)
-            chooseResultPrompt
+//            chooseResultPrompt // Removed as per instructions
             cardsAndOverlay
         }
     }
@@ -1745,60 +1742,137 @@ struct CalledPitchView: View {
     let batterSide: BatterSide
     
     var body: some View {
-        let displayLocation = call.location.trimmingCharacters(in: .whitespaces)
+        let displayLocation = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
         let assignedCodes = pitchCodeAssignments
             .filter {
                 $0.pitch == call.pitch &&
-                $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == displayLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+                $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == displayLocation
             }
             .map(\.code)
-        
-        print("Looking for: \(call.pitch) @ \(displayLocation)")
-        print("Available: \(pitchCodeAssignments.map { "\($0.pitch) @ \($0.location)" })")
-        
-        return HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Called Pitch:")
-                    Text(call.type)
-                        .bold()
-                        .foregroundColor(call.type == "Strike" ? .green : .red)
+
+        let isStrike = call.type == "Strike"
+        let callColor: Color = isStrike ? .green : .red
+
+        return HStack(spacing: 12) {
+            // Left: Details
+            VStack(alignment: .leading, spacing: 8) {
+                // Header row: title + call badge
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Called Pitch")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+//                    Text(call.type)
+//                        .font(.caption.weight(.bold))
+//                        .foregroundColor(.white)
+//                        .padding(.horizontal, 8)
+//                        .padding(.vertical, 4)
+//                        .background(callColor)
+//                        .clipShape(Capsule())
+//                        .accessibilityLabel("Call type \(call.type)")
+                }
+
+                // Big pitch name
+                Text(call.pitch)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                // Location
+//                HStack(spacing: 6) {
+//                    Image(systemName: "mappin.and.ellipse")
+//                        .foregroundStyle(.secondary)
+//                    Text(displayLocation.isEmpty ? "-" : displayLocation)
+//                        .font(.subheadline)
+//                        .foregroundStyle(.secondary)
+//                }
+
+                // Assigned codes as chips
+                if !assignedCodes.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(assignedCodes, id: \.self) { code in
+                                Text(code)
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(callColor.opacity(0.85))
+                                    .clipShape(Capsule())
+                                    .accessibilityLabel("Assigned code \(code)")
+                            }
+                        }
+                    }
+                    .padding(.top, 2)
+                } else {
+                    Text("No assigned calls for this pitch/location")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
                 }
                 
-                Text("\(call.pitch) (\(displayLocation))")
-                    .foregroundColor(.primary)
-                
-                if !assignedCodes.isEmpty {
-                    Text("Calls: \(assignedCodes.joined(separator: ", "))")
-                        .font(.subheadline)
-                        .foregroundColor(.red)
-                } else {
-                    Text("No assigned Calls for pitch/location")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
+                if isRecordingResult {
+                    HStack(spacing: 8) {
+                        Image(systemName: "hand.tap.fill")
+                            .font(.caption.bold())
+                        Text("Choose a pitch result")
+                            .font(.footnote.weight(.semibold))
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        .ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(callColor.opacity(0.35), lineWidth: 1)
+                    )
+                    .shadow(color: callColor.opacity(0.15), radius: 3, x: 0, y: 2)
+                    .padding(.top, 6)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .animation(.easeInOut(duration: 0.25), value: isRecordingResult)
+                    .accessibilityLabel("Choose a pitch result")
                 }
             }
-            
-            Spacer()
-            
-            Button(action: {
+
+            Spacer(minLength: 12)
+
+            // Right: Record button
+            Button {
+                // Light haptic to make it feel “real”
+                let generator = UIImpactFeedbackGenerator(style: .medium)
+                generator.impactOccurred()
                 isRecordingResult = true
-            }) {
-                HStack(spacing: 6) {
+            } label: {
+                VStack(spacing: 6) {
                     Image(systemName: "play.circle.fill")
-                        .font(.title)
-                    Text("🥎")
-                        .font(.title)
+                        .font(.system(size: 28, weight: .semibold))
+                    Text("Record")
+                        .font(.footnote.weight(.semibold))
                 }
-                .padding(10)
-                .background(Color.blue.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .foregroundStyle(.white)
+                .frame(width: 84, height: 84)
+                .background(callColor.gradient)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: callColor.opacity(0.25), radius: 6, x: 0, y: 4)
+                .accessibilityLabel("Record pitch result")
             }
             .buttonStyle(.plain)
         }
-        .font(.headline)
+        .padding(14)
+        .background(
+            .thickMaterial,
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 6, x: 0, y: 4)
         .padding(.horizontal)
         .transition(.opacity)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -2140,6 +2214,37 @@ struct PracticeSelectionSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    // Extracted to help the compiler type-check faster
+    private func chooseSession(_ session: PracticeSession) {
+        if let pid = session.id, !pid.isEmpty {
+            onChoose(pid)
+            dismiss()
+        } else {
+            // Resolve from UserDefaults by matching name/date (should be rare)
+            let key = PitchTrackerView.DefaultsKeys.storedPracticeSessions
+            if let data = UserDefaults.standard.data(forKey: key),
+               let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
+                let calendar = Calendar.current
+                if let resolved = decoded.first(where: { $0.name == session.name && calendar.isDate($0.date, inSameDayAs: session.date) }) {
+                    onChoose(resolved.id ?? "")
+                }
+            }
+            dismiss()
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRow(session: PracticeSession) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(session.name)
+                .font(.headline)
+            Text(Self.formatter.string(from: session.date))
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        Spacer()
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -2148,33 +2253,8 @@ struct PracticeSelectionSheet: View {
                 } else {
                     Section() {
                         ForEach(sessions) { session in
-                            Button(action: {
-                                if let pid = session.id, !pid.isEmpty {
-                                    onChoose(pid)
-                                    dismiss()
-                                } else {
-                                    // Resolve from UserDefaults by matching name/date (should be rare)
-                                    let key = PitchTrackerView.DefaultsKeys.storedPracticeSessions
-                                    if let data = UserDefaults.standard.data(forKey: key),
-                                       let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
-                                        let calendar = Calendar.current
-                                        if let resolved = decoded.first(where: { $0.name == session.name && calendar.isDate($0.date, inSameDayAs: session.date) }) {
-                                            onChoose(resolved.id ?? "")
-                                        }
-                                    }
-                                    dismiss()
-                                }
-                            }) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(session.name)
-                                            .font(.headline)
-                                        Text(Self.formatter.string(from: session.date))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                }
+                            Button(action: { chooseSession(session) }) {
+                                sessionRow(session: session)
                             }
                             .buttonStyle(.plain)
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
