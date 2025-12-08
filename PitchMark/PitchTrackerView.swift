@@ -370,7 +370,7 @@ struct PitchTrackerView: View {
                     Button(action: { overlayTab = .progress }) {
                         HStack(spacing: 6) {
                             Image(systemName: "chart.bar.xaxis")
-                                .font(.title2)
+                                .font(.callout)
                                 .foregroundStyle(.secondary)
                             Text("Progress")
                                 .font(.subheadline.weight(.semibold))
@@ -386,7 +386,7 @@ struct PitchTrackerView: View {
                     Button(action: { overlayTab = .cards }) {
                         HStack(spacing: 6) {
                             Image(systemName: "square.grid.2x2")
-                                .font(.title2)
+                                .font(.callout)
                                 .foregroundStyle(.secondary)
                             Text("Cards")
                                 .font(.subheadline.weight(.semibold))
@@ -417,6 +417,7 @@ struct PitchTrackerView: View {
                                     filterMode: $filterMode
                                 )
                                 .environmentObject(authManager)
+                                .environmentObject(sessionManager)
                             }
                         }
                     case .progress:
@@ -472,7 +473,7 @@ struct PitchTrackerView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.08), lineWidth: 1) // optional: edge definition
         )
-        .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         
         .padding(.horizontal)
         .padding(.top, 8)
@@ -482,7 +483,7 @@ struct PitchTrackerView: View {
         Group {
             batterAndModeBar
             mainStrikeZoneSection
-            Spacer(minLength: 20)
+            Spacer(minLength: 40)
 //            chooseResultPrompt // Removed as per instructions
             cardsAndOverlay
         }
@@ -765,7 +766,7 @@ struct PitchTrackerView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.08), lineWidth: 1) // optional: edge definition
             )
-            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+            .shadow(color: .black.opacity(0.7), radius: 6, x: 0, y: 6)
             
 //            .background(.regularMaterial)
 //            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -922,6 +923,7 @@ struct PitchTrackerView: View {
     private var mainStack: some View {
         VStack(spacing: 4) {
             headerContainer.erasedToAnyView()
+            Spacer(minLength: 20)
             contentSectionDimmed.erasedToAnyView()
         }
     }
@@ -2268,10 +2270,13 @@ private struct ProgressSummaryView: View {
             HStack(alignment: .top, spacing: 16) {
                 // Left metrics (vertical)
                 VStack(spacing: 10) {
+                    Text("Total")
+                        .font(Font.caption.italic())
+                        .padding(.bottom, -4)
                     metricCard(title: "# Pitches", value: "\(totalCount)")
                     metricCard(title: "% Hit Spot", value: percent(hitSpotCount, of: max(totalCount, 1)))
                 }
-                .frame(minWidth: 140)
+                .frame(maxWidth: 80)
                 
                 // Center: Header + Table (constrained and centered)
                 VStack(spacing: 8) {
@@ -2293,7 +2298,7 @@ private struct ProgressSummaryView: View {
                                     let percentString = percent(item.hits, of: max(item.attempts, 1))
                                     HStack(alignment: .firstTextBaseline) {
                                         Text("\(idx + 1). \(item.name) — \(item.hits)/\(item.attempts) (\(percentString))")
-                                            .font(.footnote)
+                                            .font(.subheadline)
                                         Spacer()
                                     }
                                     .padding(.vertical, 3)
@@ -2318,10 +2323,13 @@ private struct ProgressSummaryView: View {
                 
                 // Right metrics (vertical)
                 VStack(spacing: 10) {
+                    Text("Spot")
+                        .font(Font.caption.italic())
+                        .padding(.bottom, -4)
                     metricCard(title: "% Strikes", value: percent(strikeCount, of: max(totalCount, 1)))
                     metricCard(title: "% Balls", value: percent(ballCount, of: max(totalCount, 1)))
                 }
-                .frame(minWidth: 140)
+                .frame(maxWidth: 80)
             }
             .frame(maxWidth: .infinity, alignment: .center)
         }

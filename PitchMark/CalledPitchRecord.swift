@@ -774,7 +774,8 @@ struct PitchResultSheet: View {
     let templates: [PitchTemplate]
     @Binding var filterMode: PitchMode?
     @Environment(\.dismiss) private var dismiss
-    
+    @EnvironmentObject var sessionManager: PitchSessionManager
+
     private var filteredEvents: [PitchEvent] {
         guard let mode = filterMode else { return allEvents.reversed() }
         return allEvents.filter { $0.mode == mode }.reversed()
@@ -799,18 +800,13 @@ struct PitchResultSheet: View {
                     .padding(.horizontal)
                 }
             }
-//            .padding(.vertical, 8)
-//            .background(
-//                .thickMaterial,
-//                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-//            )
-//            .overlay(
-//                RoundedRectangle(cornerRadius: 12, style: .continuous)
-//                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-//            )
-//            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
             .padding(.horizontal)
-            //.padding(.top)
+        }
+        .onAppear {
+            filterMode = sessionManager.currentMode
+        }
+        .onChange(of: sessionManager.currentMode) { _, newValue in
+            filterMode = newValue
         }
     }
     
