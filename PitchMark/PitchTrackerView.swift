@@ -368,24 +368,34 @@ struct PitchTrackerView: View {
                     Spacer()
 
                     Button(action: { overlayTab = .progress }) {
-                        Text("Progress")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(overlayTab == .progress ? .white : .primary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(overlayTab == .progress ? Color.accentColor : Color.clear)
-                            .clipShape(Capsule())
+                        HStack(spacing: 6) {
+                            Image(systemName: "chart.bar.xaxis")
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                            Text("Progress")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundColor(overlayTab == .progress ? .white : .primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(overlayTab == .progress ? Color.accentColor : Color.clear)
+                        .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
 
                     Button(action: { overlayTab = .cards }) {
-                        Text("Cards")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(overlayTab == .cards ? .white : .primary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(overlayTab == .cards ? Color.accentColor : Color.clear)
-                            .clipShape(Capsule())
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.grid.2x2")
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                            Text("Cards")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundColor(overlayTab == .cards ? .white : .primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(overlayTab == .cards ? Color.accentColor : Color.clear)
+                        .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
 
@@ -410,18 +420,11 @@ struct PitchTrackerView: View {
                             }
                         }
                     case .progress:
-                        VStack(spacing: 12) {
-                            // Placeholder progress content — replace with your real progress view as needed
-                            Image(systemName: "chart.bar.xaxis")
-                                .font(.largeTitle)
-                                .foregroundStyle(.secondary)
-                            Text("Progress")
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                            Text("Add your progress visualization here.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
+                        ProgressSummaryView(
+                            events: pitchEvents,
+                            currentMode: sessionManager.currentMode,
+                            selectedPracticeId: selectedPracticeId
+                        )
                         .frame(maxWidth: .infinity, alignment: .top)
                         .padding(.top, 12)
                     }
@@ -2169,6 +2172,182 @@ struct PitchesFacedGridView: View {
 private extension View {
     func erasedToAnyView() -> AnyView {
         AnyView(self)
+    }
+}
+
+private struct ProgressSummaryView: View {
+    let events: [PitchEvent]
+    let currentMode: PitchMode
+    let selectedPracticeId: String?
+    
+    private var practiceEvents: [PitchEvent] {
+        events.filter { ev in
+            guard ev.mode == .practice else { return false }
+            if let pid = selectedPracticeId {
+                return ev.practiceId == pid
+            }
+            return true
+        }
+    }
+    
+    private var totalCount: Int { practiceEvents.count }
+    private var strikeCount: Int { practiceEvents.filter { $0.isStrike == true }.count }
+    private var ballCount: Int { practiceEvents.filter { $0.isStrike == false }.count }
+    private var hitSpotCount: Int {
+        practiceEvents.filter { ev in
+            guard let calledPitch = ev.calledPitch else { return false }
+            let called = calledPitch.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !called.isEmpty else { return false }
+            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !actual.isEmpty && actual == called
+        }.count
+    }
+    
+    private func percent(_ part: Int, of total: Int) -> String {
+        guard total > 0 else { return "0%" }
+        let p = (Double(part) / Double(total)) * 100.0
+        return String(format: "%.0f%%", p.rounded())
+    }
+
+    private var pitchStats: [(name: String, hits: Int, attempts: Int, percent: Double)] {
+        // Aggregate attempts and hits per pitch based on matching actual == called location
+        var dict: [String: (hits: Int, attempts: Int)] = [:]
+        for ev in practiceEvents {
+            // Require a called pitch target
+            guard let call = ev.calledPitch else { continue }
+            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !target.isEmpty else { continue }
+
+            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = ev.pitch
+
+            var current = dict[name] ?? (hits: 0, attempts: 0)
+            current.attempts += 1
+            if !actual.isEmpty && actual == target {
+                current.hits += 1
+            }
+            dict[name] = current
+        }
+
+        // Convert to array and sort by highest success rate, then by attempts
+        let array = dict.map { (key, value) in
+            let pct = value.attempts > 0 ? Double(value.hits) / Double(value.attempts) : 0.0
+            return (name: key, hits: value.hits, attempts: value.attempts, percent: pct)
+        }
+        return array.sorted { lhs, rhs in
+            if lhs.percent == rhs.percent { return lhs.attempts > rhs.attempts }
+            return lhs.percent > rhs.percent
+        }
+    }
+    
+    private var pitchRanking: [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for ev in practiceEvents {
+            // Require a called pitch
+            guard let call = ev.calledPitch else { continue }
+            // Normalize and compare locations
+            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !target.isEmpty, !actual.isEmpty, target == actual else { continue }
+            // Tally by pitch name
+            let name = ev.pitch
+            if !name.isEmpty {
+                counts[name, default: 0] += 1
+            }
+        }
+        return counts.map { ($0.key, $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count { return lhs.name < rhs.name }
+                return lhs.count > rhs.count
+            }
+    }
+    
+    var body: some View {
+        VStack(alignment: .center, spacing: 8) {
+            // Centered table with flanking metric stacks
+            HStack(alignment: .top, spacing: 16) {
+                // Left metrics (vertical)
+                VStack(spacing: 10) {
+                    metricCard(title: "# Pitches", value: "\(totalCount)")
+                    metricCard(title: "% Hit Spot", value: percent(hitSpotCount, of: max(totalCount, 1)))
+                }
+                .frame(minWidth: 140)
+                
+                // Center: Header + Table (constrained and centered)
+                VStack(spacing: 8) {
+                    Text("Hit Spot Performance")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            if pitchStats.isEmpty {
+                                Text("No data yet.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            } else {
+                                ForEach(Array(pitchStats.enumerated()), id: \.offset) { idx, item in
+                                    let percentString = percent(item.hits, of: max(item.attempts, 1))
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text("\(idx + 1). \(item.name) — \(item.hits)/\(item.attempts) (\(percentString))")
+                                            .font(.footnote)
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 3)
+                                    .padding(.horizontal, 8)
+                                    .background(
+                                        .ultraThinMaterial,
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                                    )
+                                }
+                            }
+                        }
+                        .frame(maxWidth: 480)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .scrollIndicators(.never)
+                }
+                .frame(maxWidth: .infinity)
+                
+                // Right metrics (vertical)
+                VStack(spacing: 10) {
+                    metricCard(title: "% Strikes", value: percent(strikeCount, of: max(totalCount, 1)))
+                    metricCard(title: "% Balls", value: percent(ballCount, of: max(totalCount, 1)))
+                }
+                .frame(minWidth: 140)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .padding(.horizontal)
+    }
+    
+    @ViewBuilder
+    private func metricCard(title: String, value: String) -> some View {
+        VStack(spacing: 6) {
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
     }
 }
 
