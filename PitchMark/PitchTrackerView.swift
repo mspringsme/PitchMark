@@ -2419,6 +2419,32 @@ struct PracticeSelectionSheet: View {
             dismiss()
         }
     }
+    
+    // Added method as per instructions
+    private func deleteSession(withId id: String) {
+        // 1) Remove from local list
+        if let idx = sessions.firstIndex(where: { $0.id == id }) {
+            sessions.remove(at: idx)
+        }
+        // 2) Remove from UserDefaults persistence
+        let key = PitchTrackerView.DefaultsKeys.storedPracticeSessions
+        if let data = UserDefaults.standard.data(forKey: key),
+           var decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
+            decoded.removeAll { $0.id == id }
+            if let newData = try? JSONEncoder().encode(decoded) {
+                UserDefaults.standard.set(newData, forKey: key)
+            }
+        }
+        // 3) Clear active selection if it matches the deleted id
+        let activeKey = PitchTrackerView.DefaultsKeys.activePracticeId
+        if let activeId = UserDefaults.standard.string(forKey: activeKey), activeId == id {
+            UserDefaults.standard.removeObject(forKey: activeKey)
+        }
+        // 4) Notify host view to clear UI if needed
+        NotificationCenter.default.post(name: .gameOrSessionDeleted, object: nil, userInfo: ["type": "practice", "practiceId": id])
+        // 5) Reset pending state
+        pendingDeleteSessionId = nil
+    }
 
     @ViewBuilder
     private func sessionRow(session: PracticeSession) -> some View {
@@ -2483,21 +2509,7 @@ struct PracticeSelectionSheet: View {
         ) {
             Button("Delete", role: .destructive) {
                 guard let id = pendingDeleteSessionId else { return }
-                // Remove from local list
-                if let idx = sessions.firstIndex(where: { $0.id == id }) {
-                    sessions.remove(at: idx)
-                }
-                // Persist removal to UserDefaults
-                let key = PitchTrackerView.DefaultsKeys.storedPracticeSessions
-                if let data = UserDefaults.standard.data(forKey: key),
-                   var decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
-                    decoded.removeAll { $0.id == id }
-                    if let newData = try? JSONEncoder().encode(decoded) {
-                        UserDefaults.standard.set(newData, forKey: key)
-                    }
-                }
-                NotificationCenter.default.post(name: .gameOrSessionDeleted, object: nil, userInfo: ["type": "practice", "practiceId": id])
-                pendingDeleteSessionId = nil
+                deleteSession(withId: id)
             }
             Button("Cancel", role: .cancel) {
                 pendingDeleteSessionId = nil
