@@ -28,6 +28,10 @@ struct SettingsView: View {
     @State private var showPracticeChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
     
+    private var sortedTemplates: [PitchTemplate] {
+        templates.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+    
     private func showDeleteConfirmation(for template: PitchTemplate) {
         templatePendingDeletion = template
         showDeleteAlert = true
@@ -47,9 +51,94 @@ struct SettingsView: View {
         }
     }
     private func loadPracticeSessions() -> [PracticeSession] {
-        guard let data = UserDefaults.standard.data(forKey: "storedPracticeSessions") else { return [] }
+        guard let data = UserDefaults.standard.data(forKey: "storedPracticeSessions") else {
+            return []
+        }
         let decoder = JSONDecoder()
-        return (try? decoder.decode([PracticeSession].self, from: data)) ?? []
+        do {
+            let sessions = try decoder.decode([PracticeSession].self, from: data)
+            return sessions
+        } catch {
+            // Optionally log the error in debug builds
+            // print("Failed to decode PracticeSession array: \(error)")
+            return []
+        }
+    }
+    
+    @ViewBuilder
+    private var templatesHeader: some View {
+        HStack{
+            Text("Templates")
+                .font(.title2)
+                .bold()
+                .padding(.horizontal)
+            Spacer()
+            Button("New Template") {
+                editorTemplate = PitchTemplate(
+                    id: UUID(),
+                    name: "",
+                    pitches: [],
+                    codeAssignments: []
+                )
+            }
+            .padding(.horizontal)
+        }
+    }
+    
+    @ViewBuilder
+    private var templatesListView: some View {
+        if templates.isEmpty {
+            Text("No templates saved")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 12)
+        } else {
+            List {
+                ForEach(sortedTemplates) { template in
+                    TemplateRowView(
+                        template: template,
+                        isSelected: selectedTemplate?.id == template.id,
+                        editAction: { editorTemplate = template },
+                        launchAction: {
+                            templatePendingLaunch = template
+                            showModeChoice = true
+                        }
+                    )
+                }
+                .onDelete { indexSet in
+                    let itemsToDelete = indexSet.map { sortedTemplates[$0] }
+                    for templateToDelete in itemsToDelete {
+                        showDeleteConfirmation(for: templateToDelete)
+                    }
+                }
+            }
+            .frame(maxHeight: 360)
+            .listStyle(.plain)
+            .padding(.horizontal)
+        }
+    }
+    
+    @ViewBuilder
+    private var accountSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Account")
+                .font(.title2)
+                .bold()
+                .padding(.horizontal)
+
+            NavigationLink("Profile") {
+                Text("Coach profile settings go here")
+                    .padding()
+            }
+            .padding(.horizontal)
+
+            NavigationLink("Sign-In Options") {
+                Text("Google / Firebase settings")
+                    .padding()
+            }
+            .padding(.horizontal)
+        }
     }
     
     var body: some View {
@@ -59,95 +148,16 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     Color.clear.frame(height: 24)
                     // 🔹 Templates Header
-                    HStack{
-                        Text("Templates")
-                            .font(.title2)
-                            .bold()
-                            .padding(.horizontal)
-                        Spacer()
-                        Button("New Template") {
-                            editorTemplate = PitchTemplate(
-                                id: UUID(),
-                                name: "",
-                                pitches: [],
-                                codeAssignments: []
-                            )
-                        }
-                        .padding(.horizontal)
-                    }
-                    // 🔹 Empty State
-                    if templates.isEmpty {
-                        Text("No templates saved")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 12)
-                        
-                    } else {
-                        // 🔹 Alphabetical Template List
-                        List {
-                            ForEach(templates.sorted(by: { $0.name.localizedCompare($1.name) == .orderedAscending })) { template in
-                                HStack(alignment: .center, spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(template.name)
-                                            .font(.headline)
-                                        Text(template.pitches.joined(separator: ", "))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    Button("Edit") {
-                                        editorTemplate = template
-                                    }
-                                    .buttonStyle(.bordered)
-                                    Button("Launch") {
-                                        templatePendingLaunch = template
-                                        showModeChoice = true
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                }
-                                .padding(.vertical, 4)
-                                .listRowBackground(
-                                    selectedTemplate?.id == template.id
-                                    ? Color.blue.opacity(0.2)
-                                    : Color.clear
-                                )
-                            }
-                            .onDelete { indexSet in
-                                    for index in indexSet {
-                                        let templateToDelete = templates.sorted(by: { $0.name.localizedCompare($1.name) == .orderedAscending })[index]
-                                        showDeleteConfirmation(for: templateToDelete)
-                                    }
-                                }
-                        }
-                        .frame(maxHeight: 360) // Optional: constrain height
-                        .listStyle(.plain)
-                        .padding(.horizontal)
-                        
-                    }
-                    
+                    templatesHeader
+
+                    // 🔹 Templates List / Empty State
+                    templatesListView
+
                     Divider()
                         .padding(.horizontal)
-                    
+
                     // 🔹 Account Section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Account")
-                            .font(.title2)
-                            .bold()
-                            .padding(.horizontal)
-                        
-                        NavigationLink("Profile") {
-                            Text("Coach profile settings go here")
-                                .padding()
-                        }
-                        .padding(.horizontal)
-                        
-                        NavigationLink("Sign-In Options") {
-                            Text("Google / Firebase settings")
-                                .padding()
-                        }
-                        .padding(.horizontal)
-                    }
+                    accountSection
                     
                     Spacer(minLength: 80) // 👈 Leaves room for footer
                 }
@@ -238,7 +248,7 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showPracticeChooser) {
                 PracticeSelectionSheet(
-                    onCreate: { name, date in
+                    onCreate: { name, date, _, _ in
                         var sessions = loadPracticeSessions()
                         let new = PracticeSession(id: UUID().uuidString, name: name, date: date)
                         sessions.append(new)
@@ -279,6 +289,34 @@ struct SettingsView: View {
                 .presentationDragIndicator(.visible)
             }
         }
+    }
+}
+
+private struct TemplateRowView: View {
+    let template: PitchTemplate
+    let isSelected: Bool
+    let editAction: () -> Void
+    let launchAction: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(template.name)
+                    .font(.headline)
+                Text(template.pitches.joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button("Edit", action: editAction)
+                .buttonStyle(.bordered)
+            Button("Launch", action: launchAction)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(.vertical, 4)
+        .listRowBackground(
+            isSelected ? Color.blue.opacity(0.2) : Color.clear
+        )
     }
 }
 

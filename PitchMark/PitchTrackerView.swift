@@ -14,6 +14,7 @@ import UIKit
 private extension Notification.Name {
     static let gameOrSessionChosen = Notification.Name("gameOrSessionChosen")
     static let gameOrSessionDeleted = Notification.Name("gameOrSessionDeleted")
+    static let practiceProgressReset = Notification.Name("practiceProgressReset")
 }
 
 // 🧩 Toggle Chip Component
@@ -177,12 +178,18 @@ struct PitchTrackerView: View {
     
     @State private var editingCell: JerseyCell?
     @State private var pitchesFacedBatterId: UUID? = nil
+    @State private var showResetConfirm = false
+    @State private var isReset = false
 
     @State private var isReorderingMode: Bool = false
     @State private var colorRefreshToken = UUID()
     @State private var hasPresentedInitialSettings = false
 
     @State private var suppressNextGameSheet = false
+
+    // Added according to instructions
+    @State private var showTemplateChangeWarning = false
+    @State private var pendingTemplateSelection: PitchTemplate? = nil
 
     fileprivate enum OverlayTab { case cards, progress }
     @State private var overlayTab: OverlayTab = .progress
@@ -291,6 +298,20 @@ struct PitchTrackerView: View {
             }
         }
     }
+
+    // MARK: - Template Apply Helper
+    private func applyTemplate(_ template: PitchTemplate) {
+        selectedTemplate = template
+        selectedPitches = loadActivePitches(for: template.id, fallback: template.pitches)
+        pitchCodeAssignments = template.codeAssignments
+        // 🧹 Reset strike zone and called pitch state
+        lastTappedPosition = nil
+        calledPitch = nil
+        // 💾 Persist last used template
+        persistSelectedTemplate(template)
+        // Force chips/strike zone to refresh colors and content
+        colorRefreshToken = UUID()
+    }
     
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
@@ -365,6 +386,7 @@ struct PitchTrackerView: View {
             VStack(spacing: 8) {
                 // Top toggle buttons
                 HStack(spacing: 8) {
+                    
                     Spacer()
 
                     Button(action: { overlayTab = .progress }) {
@@ -424,7 +446,8 @@ struct PitchTrackerView: View {
                         ProgressSummaryView(
                             events: pitchEvents,
                             currentMode: sessionManager.currentMode,
-                            selectedPracticeId: selectedPracticeId
+                            selectedPracticeId: selectedPracticeId,
+                            templates: templates
                         )
                         .frame(maxWidth: .infinity, alignment: .top)
                         .padding(.top, 12)
@@ -504,14 +527,12 @@ struct PitchTrackerView: View {
             Menu {
                 ForEach(templates, id: \.id) { template in
                     Button(template.name) {
-                        selectedTemplate = template
-                        selectedPitches = loadActivePitches(for: template.id, fallback: template.pitches)
-                        pitchCodeAssignments = template.codeAssignments
-                        // 🧹 Reset strike zone and called pitch state
-                        lastTappedPosition = nil
-                        calledPitch = nil
-                        // 💾 Persist last used template
-                        persistSelectedTemplate(template)
+                        if sessionManager.currentMode == .practice && selectedPracticeId != nil {
+                            pendingTemplateSelection = template
+                            showTemplateChangeWarning = true
+                        } else {
+                            applyTemplate(template)
+                        }
                     }
                 }
             } label: {
@@ -585,6 +606,22 @@ struct PitchTrackerView: View {
         .padding(.horizontal)
         .padding(.top, 6)
         .padding(.bottom, 12)
+        .confirmationDialog(
+            "Practice session in progress",
+            isPresented: $showTemplateChangeWarning,
+            titleVisibility: .visible
+        ) {
+            Button("Change / Add Session") {
+                // Open the practice session picker; do not change the template yet
+                showPracticeSheet = true
+                pendingTemplateSelection = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingTemplateSelection = nil
+            }
+        } message: {
+            Text("You're currently in a practice session:")
+        }
     }
     
     private var pitchSelectionChips: some View {
@@ -997,14 +1034,11 @@ struct PitchTrackerView: View {
     }
     
     var body: some View {
-        let background = backgroundView.erasedToAnyView()
-        let content = mainStack.erasedToAnyView()
-        let base = ZStack {
-            background
-            content
+        ZStack {
+            backgroundView
+            mainStack
         }
-        return base
-            .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxHeight: .infinity, alignment: .top)
         .erasedToAnyView()
         .onChange(of: pendingResultLabel) { _, newValue in
             handlePendingResultChange(newValue)
@@ -1062,14 +1096,26 @@ struct PitchTrackerView: View {
             }
         }) {
             PracticeSelectionSheet(
-                onCreate: { name, date in
+                onCreate: { name, date, templateId, templateName in
                     var sessions = loadPracticeSessions()
-                    let new = PracticeSession(id: UUID().uuidString, name: name, date: date)
+                    let new = PracticeSession(id: UUID().uuidString, name: name, date: date, templateId: templateId, templateName: templateName)
                     sessions.append(new)
                     savePracticeSessions(sessions)
-                    // No-op here; PracticeSelectionSheet reads from UserDefaults on appear. However, for immediate selection flow, nothing needed.
                 },
                 onChoose: { practiceId in
+                    if practiceId == "__GENERAL__" {
+                        selectedPracticeId = nil
+                        practiceName = nil
+                        isGame = false
+                        let defaults = UserDefaults.standard
+                        defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
+                        defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+                        persistActivePracticeId(nil)
+                        defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                        sessionManager.switchMode(to: .practice)
+                        showPracticeSheet = false
+                        return
+                    }
                     let sessions = loadPracticeSessions()
                     if let session = sessions.first(where: { $0.id == practiceId }) {
                         selectedPracticeId = session.id
@@ -1088,7 +1134,9 @@ struct PitchTrackerView: View {
                 },
                 onCancel: {
                     showPracticeSheet = false
-                }
+                },
+                currentTemplateId: selectedTemplate?.id.uuidString,
+                currentTemplateName: selectedTemplate?.name
             )
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
@@ -1444,6 +1492,214 @@ struct PitchTrackerView: View {
     }
 
 }
+
+// Remove @State private var isReset and @State private var showResetConfirm from here 
+private struct ProgressSummaryView: View {
+    let events: [PitchEvent]
+    let currentMode: PitchMode
+    let selectedPracticeId: String?
+    let templates: [PitchTemplate]
+    
+    @State private var isReset: Bool = false
+    
+    private var practiceEvents: [PitchEvent] {
+        if isReset { return [] }
+        return events.filter { ev in
+            guard ev.mode == .practice else { return false }
+            if let pid = selectedPracticeId {
+                return ev.practiceId == pid
+            }
+            return true
+        }
+    }
+    
+    private var totalCount: Int { practiceEvents.count }
+    private var strikeCount: Int { practiceEvents.filter { $0.isStrike == true }.count }
+    private var ballCount: Int { practiceEvents.filter { $0.isStrike == false }.count }
+    private var hitSpotCount: Int {
+        practiceEvents.filter { ev in
+            guard let calledPitch = ev.calledPitch else { return false }
+            let called = calledPitch.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !called.isEmpty else { return false }
+            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !actual.isEmpty && actual == called
+        }.count
+    }
+    
+    private func percent(_ part: Int, of total: Int) -> String {
+        guard total > 0 else { return "0%" }
+        let p = (Double(part) / Double(total)) * 100.0
+        return String(format: "%.0f%%", p.rounded())
+    }
+    
+    private func templateName(for id: String?) -> String {
+        if let tid = id, let t = templates.first(where: { $0.id.uuidString == tid }) {
+            return t.name
+        }
+        return "-"
+    }
+
+    private var pitchStats: [(pitch: String, templateId: String?, templateName: String, hits: Int, attempts: Int, percent: Double)] {
+        // Aggregate attempts and hits per (pitch, template) based on matching actual == called location
+        var dict: [String: (hits: Int, attempts: Int, templateId: String?)] = [:]
+        for ev in practiceEvents {
+            // Require a called pitch target
+            guard let call = ev.calledPitch else { continue }
+            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !target.isEmpty else { continue }
+
+            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = ev.pitch
+            let tid = ev.templateId
+            let key = name + "|" + (tid ?? "-")
+
+            var current = dict[key] ?? (hits: 0, attempts: 0, templateId: tid)
+            current.attempts += 1
+            if !actual.isEmpty && actual == target {
+                current.hits += 1
+            }
+            dict[key] = current
+        }
+
+        // Convert to array and sort by highest success rate, then by attempts
+        let array: [(pitch: String, templateId: String?, templateName: String, hits: Int, attempts: Int, percent: Double)] = dict.map { (key, value) in
+            let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+            let pitchName = parts.first ?? "-"
+            let tid = value.templateId
+            let tname = templateName(for: tid)
+            let pct = value.attempts > 0 ? Double(value.hits) / Double(value.attempts) : 0.0
+            return (pitch: pitchName, templateId: tid, templateName: tname, hits: value.hits, attempts: value.attempts, percent: pct)
+        }
+        return array.sorted { lhs, rhs in
+            if lhs.percent == rhs.percent { return lhs.attempts > rhs.attempts }
+            return lhs.percent > rhs.percent
+        }
+    }
+    
+    private var pitchRanking: [(name: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for ev in practiceEvents {
+            // Require a called pitch
+            guard let call = ev.calledPitch else { continue }
+            // Normalize and compare locations
+            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !target.isEmpty, !actual.isEmpty, target == actual else { continue }
+            // Tally by pitch name
+            let name = ev.pitch
+            if !name.isEmpty {
+                counts[name, default: 0] += 1
+            }
+        }
+        return counts.map { ($0.key, $0.value) }
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count { return lhs.name < rhs.name }
+                return lhs.count > rhs.count
+            }
+    }
+    
+    var body: some View {
+        VStack(alignment: .center, spacing: 8) {
+            // Centered table with flanking metric stacks
+            HStack(alignment: .top, spacing: 16) {
+                // Left metrics (vertical)
+                VStack(spacing: 10) {
+                    Text("Total")
+                        .font(Font.caption.italic())
+                        .padding(.bottom, -4)
+                    metricCard(title: "# Pitches", value: "\(totalCount)")
+                    metricCard(title: "% Hit Spot", value: percent(hitSpotCount, of: max(totalCount, 1)))
+                }
+                .frame(maxWidth: 80)
+                
+                // Center: Header + Table (constrained and centered)
+                VStack(spacing: 8) {
+                    Text("Hit Spot Performance")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            if pitchStats.isEmpty {
+                                Text("No data yet.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            } else {
+                                ForEach(Array(pitchStats.enumerated()), id: \.offset) { idx, item in
+                                    let percentString = percent(item.hits, of: max(item.attempts, 1))
+                                    HStack(alignment: .firstTextBaseline) {
+                                        Text("\(idx + 1). \(item.pitch) — \(item.hits)/\(item.attempts) (\(percentString)) • \(item.templateName)")
+                                            .font(.subheadline)
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 3)
+                                    .padding(.horizontal, 8)
+                                    .background(
+                                        .ultraThinMaterial,
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                                    )
+                                }
+                            }
+                        }
+                        .frame(maxWidth: 480)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .scrollIndicators(.never)
+                }
+                .frame(maxWidth: .infinity)
+                
+                // Right metrics (vertical)
+                VStack(spacing: 10) {
+                    Text("Spot")
+                        .font(Font.caption.italic())
+                        .padding(.bottom, -4)
+                    metricCard(title: "% Strikes", value: percent(strikeCount, of: max(totalCount, 1)))
+                    metricCard(title: "% Balls", value: percent(ballCount, of: max(totalCount, 1)))
+                }
+                .frame(maxWidth: 80)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .padding(.horizontal)
+        .onReceive(NotificationCenter.default.publisher(for: .practiceProgressReset)) { notification in
+            guard let userInfo = notification.userInfo as? [String: Any], let pid = userInfo["practiceId"] as? String? else { return }
+            // If current view is showing the same practice session (or general when nil), reset displayed stats
+            if pid == selectedPracticeId {
+                isReset = true
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func metricCard(title: String, value: String) -> some View {
+        VStack(spacing: 6) {
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
 
 private struct JerseyDropDelegate: DropDelegate {
     let current: JerseyCell
@@ -2081,6 +2337,65 @@ struct AddGameCard: View {
     }
 }
 
+struct AddPracticeCard: View {
+    @Binding var practiceName: String
+    @Binding var practiceDate: Date
+    var templateName: String?
+    var onCancel: () -> Void
+    var onSave: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Practice Session")
+                    .font(.headline)
+                Spacer()
+                Button(action: onCancel) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            
+            if let templateName, !templateName.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.grid.2x2")
+                        .foregroundColor(.secondary)
+                    Text("Template: \(templateName)")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(.orange)
+                    Text("No template selected")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            TextField("Session name", text: $practiceName)
+                .textFieldStyle(.roundedBorder)
+
+            DatePicker("Date & Time", selection: $practiceDate, displayedComponents: [.date, .hourAndMinute])
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                Button("Save", action: onSave)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(practiceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(radius: 10)
+    }
+}
+
 struct PitchesFacedGridView: View {
     let title: String
     let events: [PitchEvent]
@@ -2177,219 +2492,21 @@ private extension View {
     }
 }
 
-private struct ProgressSummaryView: View {
-    let events: [PitchEvent]
-    let currentMode: PitchMode
-    let selectedPracticeId: String?
-    
-    private var practiceEvents: [PitchEvent] {
-        events.filter { ev in
-            guard ev.mode == .practice else { return false }
-            if let pid = selectedPracticeId {
-                return ev.practiceId == pid
-            }
-            return true
-        }
-    }
-    
-    private var totalCount: Int { practiceEvents.count }
-    private var strikeCount: Int { practiceEvents.filter { $0.isStrike == true }.count }
-    private var ballCount: Int { practiceEvents.filter { $0.isStrike == false }.count }
-    private var hitSpotCount: Int {
-        practiceEvents.filter { ev in
-            guard let calledPitch = ev.calledPitch else { return false }
-            let called = calledPitch.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !called.isEmpty else { return false }
-            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !actual.isEmpty && actual == called
-        }.count
-    }
-    
-    private func percent(_ part: Int, of total: Int) -> String {
-        guard total > 0 else { return "0%" }
-        let p = (Double(part) / Double(total)) * 100.0
-        return String(format: "%.0f%%", p.rounded())
-    }
-
-    private var pitchStats: [(name: String, hits: Int, attempts: Int, percent: Double)] {
-        // Aggregate attempts and hits per pitch based on matching actual == called location
-        var dict: [String: (hits: Int, attempts: Int)] = [:]
-        for ev in practiceEvents {
-            // Require a called pitch target
-            guard let call = ev.calledPitch else { continue }
-            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !target.isEmpty else { continue }
-
-            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = ev.pitch
-
-            var current = dict[name] ?? (hits: 0, attempts: 0)
-            current.attempts += 1
-            if !actual.isEmpty && actual == target {
-                current.hits += 1
-            }
-            dict[name] = current
-        }
-
-        // Convert to array and sort by highest success rate, then by attempts
-        let array = dict.map { (key, value) in
-            let pct = value.attempts > 0 ? Double(value.hits) / Double(value.attempts) : 0.0
-            return (name: key, hits: value.hits, attempts: value.attempts, percent: pct)
-        }
-        return array.sorted { lhs, rhs in
-            if lhs.percent == rhs.percent { return lhs.attempts > rhs.attempts }
-            return lhs.percent > rhs.percent
-        }
-    }
-    
-    private var pitchRanking: [(name: String, count: Int)] {
-        var counts: [String: Int] = [:]
-        for ev in practiceEvents {
-            // Require a called pitch
-            guard let call = ev.calledPitch else { continue }
-            // Normalize and compare locations
-            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !target.isEmpty, !actual.isEmpty, target == actual else { continue }
-            // Tally by pitch name
-            let name = ev.pitch
-            if !name.isEmpty {
-                counts[name, default: 0] += 1
-            }
-        }
-        return counts.map { ($0.key, $0.value) }
-            .sorted { lhs, rhs in
-                if lhs.count == rhs.count { return lhs.name < rhs.name }
-                return lhs.count > rhs.count
-            }
-    }
-    
-    var body: some View {
-        VStack(alignment: .center, spacing: 8) {
-            // Centered table with flanking metric stacks
-            HStack(alignment: .top, spacing: 16) {
-                // Left metrics (vertical)
-                VStack(spacing: 10) {
-                    Text("Total")
-                        .font(Font.caption.italic())
-                        .padding(.bottom, -4)
-                    metricCard(title: "# Pitches", value: "\(totalCount)")
-                    metricCard(title: "% Hit Spot", value: percent(hitSpotCount, of: max(totalCount, 1)))
-                }
-                .frame(maxWidth: 80)
-                
-                // Center: Header + Table (constrained and centered)
-                VStack(spacing: 8) {
-                    Text("Hit Spot Performance")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: .infinity)
-
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if pitchStats.isEmpty {
-                                Text("No data yet.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .center)
-                            } else {
-                                ForEach(Array(pitchStats.enumerated()), id: \.offset) { idx, item in
-                                    let percentString = percent(item.hits, of: max(item.attempts, 1))
-                                    HStack(alignment: .firstTextBaseline) {
-                                        Text("\(idx + 1). \(item.name) — \(item.hits)/\(item.attempts) (\(percentString))")
-                                            .font(.subheadline)
-                                        Spacer()
-                                    }
-                                    .padding(.vertical, 3)
-                                    .padding(.horizontal, 8)
-                                    .background(
-                                        .ultraThinMaterial,
-                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .stroke(Color.white.opacity(0.06), lineWidth: 1)
-                                    )
-                                }
-                            }
-                        }
-                        .frame(maxWidth: 480)
-                        .frame(maxWidth: .infinity)
-                    }
-                    .scrollIndicators(.never)
-                }
-                .frame(maxWidth: .infinity)
-                
-                // Right metrics (vertical)
-                VStack(spacing: 10) {
-                    Text("Spot")
-                        .font(Font.caption.italic())
-                        .padding(.bottom, -4)
-                    metricCard(title: "% Strikes", value: percent(strikeCount, of: max(totalCount, 1)))
-                    metricCard(title: "% Balls", value: percent(ballCount, of: max(totalCount, 1)))
-                }
-                .frame(maxWidth: 80)
-            }
-            .frame(maxWidth: .infinity, alignment: .center)
-        }
-        .padding(.horizontal)
-    }
-    
-    @ViewBuilder
-    private func metricCard(title: String, value: String) -> some View {
-        VStack(spacing: 6) {
-            Text(value)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.primary)
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(
-            .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-}
-
-#Preview("PitchTracker — Dataless") {
-    // Provide a lightweight AuthManager and keep it signed-out to avoid network calls in previews
-    let auth = AuthManager()
-    auth.isSignedIn = false
-
-    // Seed a simple template so the UI has chips and structure without hitting any backend
-    let sampleTemplate = PitchTemplate(
-        id: UUID(),
-        name: "Preview Template",
-        pitches: ["4 Seam", "Curve", "Change"],
-        codeAssignments: []
-    )
-
-    return PitchTrackerView(
-        previewTemplate: sampleTemplate,
-        previewTemplates: [sampleTemplate],
-        previewIsGame: false
-    )
-    .environmentObject(auth)
-}
-
 struct PracticeSession: Identifiable, Codable {
     var id: String?
     var name: String
     var date: Date
+    var templateId: String?
+    var templateName: String?
 }
 
 struct PracticeSelectionSheet: View {
-    var onCreate: (String, Date) -> Void
+    var onCreate: (String, Date, String?, String?) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
+    
+    var currentTemplateId: String?
+    var currentTemplateName: String?
 
     @State private var sessions: [PracticeSession] = []
     @State private var showAddPopover: Bool = false
@@ -2398,6 +2515,10 @@ struct PracticeSelectionSheet: View {
     
     @State private var pendingDeleteSessionId: String? = nil
     @State private var showDeleteSessionConfirm: Bool = false
+    
+    // Added for reset progress
+    @State private var showResetConfirm: Bool = false
+    @State private var pendingResetPracticeId: String? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -2461,15 +2582,50 @@ struct PracticeSelectionSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button(action: {
+                        onChoose("__GENERAL__")
+                        dismiss()
+                    }) {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text("General Practice")
+                                .font(.headline)
+                            Text("All sessions")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .buttonStyle(.plain)
+                }
                 if sessions.isEmpty {
                     // Optional empty state
                 } else {
                     Section() {
                         ForEach(sessions) { session in
-                            Button(action: { chooseSession(session) }) {
-                                sessionRow(session: session)
+                            HStack {
+                                Button(action: { chooseSession(session) }) {
+                                    sessionRow(session: session)
+                                }
+                                .buttonStyle(.plain)
+
+                                Spacer(minLength: 8)
+
+                                // Inline reset icon
+                                Button {
+                                    if let id = session.id {
+                                        pendingResetPracticeId = id
+                                        showResetConfirm = true
+                                    }
+                                } label: {
+                                    Image(systemName: "arrow.counterclockwise")
+                                        .foregroundColor(.secondary)
+                                        .imageScale(.medium)
+                                        .padding(6)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Reset progress for session")
                             }
-                            .buttonStyle(.plain)
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     if let id = session.id {
@@ -2517,6 +2673,22 @@ struct PracticeSelectionSheet: View {
         } message: {
             Text("This will remove the session from this device.")
         }
+        .confirmationDialog(
+            "Reset Progress?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Reset", role: .destructive) {
+                let id = pendingResetPracticeId
+                NotificationCenter.default.post(name: .practiceProgressReset, object: nil, userInfo: ["practiceId": id as Any])
+                pendingResetPracticeId = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingResetPracticeId = nil
+            }
+        } message: {
+            Text("This will clear the displayed progress for this session.")
+        }
         .overlay(
             Group {
                 if showAddPopover {
@@ -2525,14 +2697,15 @@ struct PracticeSelectionSheet: View {
                             .ignoresSafeArea()
                             .onTapGesture { showAddPopover = false }
 
-                        AddGameCard(
-                            opponentName: $newName,
-                            gameDate: $newDate,
+                        AddPracticeCard(
+                            practiceName: $newName,
+                            practiceDate: $newDate,
+                            templateName: currentTemplateName,
                             onCancel: { showAddPopover = false },
                             onSave: {
                                 let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !name.isEmpty else { return }
-                                onCreate(name, newDate)
+                                onCreate(name, newDate, currentTemplateId, currentTemplateName)
                                 // Reload sessions from UserDefaults so IDs match the persisted source
                                 if let data = UserDefaults.standard.data(forKey: PitchTrackerView.DefaultsKeys.storedPracticeSessions),
                                    let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
