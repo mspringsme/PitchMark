@@ -5,12 +5,7 @@
 //  Created by Mark Springer on 9/25/25.
 //
 
-
 import SwiftUI
-
-private extension Notification.Name {
-    static let gameOrSessionChosen = Notification.Name("gameOrSessionChosen")
-}
 
 struct SettingsView: View {
     @Binding var templates: [PitchTemplate]

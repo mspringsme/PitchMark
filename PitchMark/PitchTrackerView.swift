@@ -11,12 +11,6 @@ import FirebaseFirestore
 import UniformTypeIdentifiers
 import UIKit
 
-private extension Notification.Name {
-    static let gameOrSessionChosen = Notification.Name("gameOrSessionChosen")
-    static let gameOrSessionDeleted = Notification.Name("gameOrSessionDeleted")
-    static let practiceProgressReset = Notification.Name("practiceProgressReset")
-}
-
 // 🧩 Toggle Chip Component
 struct ToggleChip: View {
     let pitch: String
@@ -179,7 +173,7 @@ struct PitchTrackerView: View {
     @State private var editingCell: JerseyCell?
     @State private var pitchesFacedBatterId: UUID? = nil
     @State private var showResetConfirm = false
-    @State private var isReset = false
+    // Removed @State private var isReset = false here as per instructions
 
     @State private var isReorderingMode: Bool = false
     @State private var colorRefreshToken = UUID()
@@ -386,8 +380,11 @@ struct PitchTrackerView: View {
             VStack(spacing: 8) {
                 // Top toggle buttons
                 HStack(spacing: 8) {
-                    
-                    Spacer()
+                    Text(selectedTemplate?.name ?? "")
+                        .font(.title3)
+                        .foregroundStyle(.purple)
+                        .padding(.trailing, 8)
+                    //Spacer()
 
                     Button(action: { overlayTab = .progress }) {
                         HStack(spacing: 6) {
@@ -421,7 +418,7 @@ struct PitchTrackerView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Spacer()
+                    //Spacer()
                 }
                 .padding(.horizontal)
                 .padding(.top, 4)
@@ -430,17 +427,17 @@ struct PitchTrackerView: View {
                 Group {
                     switch overlayTab {
                     case .cards:
-                        VStack {
-                            if selectedTemplate != nil {
-                                PitchResultSheet(
-                                    allEvents: pitchEvents,
-                                    games: games,
-                                    templates: templates,
-                                    filterMode: $filterMode
-                                )
-                                .environmentObject(authManager)
-                                .environmentObject(sessionManager)
-                            }
+                        if selectedTemplate != nil {
+                            PitchResultSheet(
+                                allEvents: pitchEvents,
+                                games: games,
+                                templates: templates,
+                                filterMode: $filterMode
+                            )
+                            .environmentObject(authManager)
+                            .environmentObject(sessionManager)
+                            .frame(maxWidth: .infinity, minHeight: 170)
+                            .padding(.top, 12)
                         }
                     case .progress:
                         ProgressSummaryView(
@@ -449,7 +446,7 @@ struct PitchTrackerView: View {
                             selectedPracticeId: selectedPracticeId,
                             templates: templates
                         )
-                        .frame(maxWidth: .infinity, alignment: .top)
+                        .frame(maxWidth: .infinity, minHeight: 170)
                         .padding(.top, 12)
                     }
                 }
@@ -482,22 +479,45 @@ struct PitchTrackerView: View {
     }
     
     
+//    private var headerContainer: some View {
+//        VStack(spacing: 8) {
+//            topBar
+//            pitchSelectionChips
+//        }
+//        .padding(.vertical, 8)
+//        .background(
+//            .thickMaterial,
+//            in: RoundedRectangle(cornerRadius: 12, style: .continuous) // proper clipping for the material
+//        )
+//        .overlay(
+//            RoundedRectangle(cornerRadius: 12, style: .continuous)
+//                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1) // optional: edge definition
+//        )
+//        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+//        
+//        .padding(.horizontal)
+//        .padding(.top, 8)
+//    }
     private var headerContainer: some View {
-        VStack(spacing: 8) {
+        let screen = UIScreen.main.bounds
+        
+        return VStack(spacing: 8) {
             topBar
             pitchSelectionChips
         }
-        .padding(.vertical, 8)
+        .frame(
+            width: screen.width * 0.9,   // 90% of screen width
+            height: screen.height * 0.15 // 15% of screen height
+        )
         .background(
             .thickMaterial,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous) // proper clipping for the material
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1) // optional: edge definition
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-        
         .padding(.horizontal)
         .padding(.top, 8)
     }
@@ -959,9 +979,9 @@ struct PitchTrackerView: View {
 
     private var mainStack: some View {
         VStack(spacing: 4) {
-            headerContainer.erasedToAnyView()
+            headerContainer
             Spacer(minLength: 20)
-            contentSectionDimmed.erasedToAnyView()
+            contentSectionDimmed
         }
     }
     
@@ -1033,13 +1053,74 @@ struct PitchTrackerView: View {
         selectedDescriptor = nil
     }
     
-    var body: some View {
+    private var baseBody: some View {
         ZStack {
             backgroundView
             mainStack
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .erasedToAnyView()
+    }
+    
+    private func handleInitialAppear() {
+        // Decide initial landing: Settings first unless an active game/session was in progress and tracker was last
+        let defaults = UserDefaults.standard
+        let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
+        let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
+        let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
+        if authManager.isSignedIn && !hasPresentedInitialSettings {
+            if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
+                showSettings = true
+                hasPresentedInitialSettings = true
+                defaults.set("settings", forKey: DefaultsKeys.lastView)
+            } else {
+                // Restore active session to tracker
+                if persistedIsPractice {
+                    isGame = false
+                    sessionManager.switchMode(to: .practice)
+                    restoreActivePracticeSelection()
+                } else if let gid = persistedGameId {
+                    isGame = true
+                    sessionManager.switchMode(to: .game)
+                    selectedGameId = gid
+                    authManager.loadGames { games in
+                        if let game = games.first(where: { $0.id == gid }) {
+                            opponentName = game.opponent
+                            if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                                jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                                    JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                                }
+                            } else {
+                                jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                            }
+                        }
+                    }
+                }
+                hasPresentedInitialSettings = true
+            }
+        }
+        
+        if authManager.isSignedIn {
+            authManager.loadTemplates { loadedTemplates in
+                self.templates = loadedTemplates
+                // 💾 Restore last used template and settings
+                restorePersistedState(loadedTemplates: loadedTemplates)
+            }
+            
+            authManager.loadPitchEvents { events in
+                self.pitchEvents = events
+                if !events.isEmpty {
+                }
+                self.showPitchResults = true
+            }
+            
+            authManager.loadGames { loadedGames in
+                self.games = loadedGames
+            }
+        }
+    }
+    
+    var body: some View {
+        baseBody.erasedToAnyView()
         .onChange(of: pendingResultLabel) { _, newValue in
             handlePendingResultChange(newValue)
         }
@@ -1202,63 +1283,7 @@ struct PitchTrackerView: View {
             )
             .padding()
         }
-        .onAppear {
-            // Decide initial landing: Settings first unless an active game/session was in progress and tracker was last
-            let defaults = UserDefaults.standard
-            let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
-            let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
-            let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
-            if authManager.isSignedIn && !hasPresentedInitialSettings {
-                if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
-                    showSettings = true
-                    hasPresentedInitialSettings = true
-                    defaults.set("settings", forKey: DefaultsKeys.lastView)
-                } else {
-                    // Restore active session to tracker
-                    if persistedIsPractice {
-                        isGame = false
-                        sessionManager.switchMode(to: .practice)
-                        restoreActivePracticeSelection()
-                    } else if let gid = persistedGameId {
-                        isGame = true
-                        sessionManager.switchMode(to: .game)
-                        selectedGameId = gid
-                        authManager.loadGames { games in
-                            if let game = games.first(where: { $0.id == gid }) {
-                                opponentName = game.opponent
-                                if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
-                                    jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
-                                        JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
-                                    }
-                                } else {
-                                    jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
-                                }
-                            }
-                        }
-                    }
-                    hasPresentedInitialSettings = true
-                }
-            }
-            
-            if authManager.isSignedIn {
-                authManager.loadTemplates { loadedTemplates in
-                    self.templates = loadedTemplates
-                    // 💾 Restore last used template and settings
-                    restorePersistedState(loadedTemplates: loadedTemplates)
-                }
-                
-                authManager.loadPitchEvents { events in
-                    self.pitchEvents = events
-                    if !events.isEmpty {
-                    }
-                    self.showPitchResults = true
-                }
-                
-                authManager.loadGames { loadedGames in
-                    self.games = loadedGames
-                }
-            }
-        }
+        .onAppear(perform: handleInitialAppear)
         .sheet(isPresented: $showSettings) {
             SettingsView(
                 templates: $templates,
@@ -1427,6 +1452,12 @@ struct PitchTrackerView: View {
             }
         }
         .overlay(alignment: .bottom) {
+            pitchesFacedOverlay
+        }
+    }
+    
+    private var pitchesFacedOverlay: some View {
+        Group {
             if let batterId = pitchesFacedBatterId {
                 ZStack(alignment: .bottom) {
                     // Backdrop to allow tap-to-dismiss
@@ -1631,7 +1662,7 @@ private struct ProgressSummaryView: View {
                                 ForEach(Array(pitchStats.enumerated()), id: \.offset) { idx, item in
                                     let percentString = percent(item.hits, of: max(item.attempts, 1))
                                     HStack(alignment: .firstTextBaseline) {
-                                        Text("\(idx + 1). \(item.pitch) — \(item.hits)/\(item.attempts) (\(percentString)) • \(item.templateName)")
+                                        Text("\(idx + 1). \(item.pitch) — \(item.hits)/\(item.attempts) (\(percentString))")
                                             .font(.subheadline)
                                         Spacer()
                                     }
@@ -2582,22 +2613,6 @@ struct PracticeSelectionSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    Button(action: {
-                        onChoose("__GENERAL__")
-                        dismiss()
-                    }) {
-                        HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text("General Practice")
-                                .font(.headline)
-                            Text("All sessions")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .buttonStyle(.plain)
-                }
                 if sessions.isEmpty {
                     // Optional empty state
                 } else {
