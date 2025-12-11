@@ -449,6 +449,8 @@ struct PitchTrackerView: View {
                             )
                             .frame(maxWidth: .infinity, minHeight: 170)
                             .padding(.top, 12)
+                        } else if sessionManager.currentMode == .game {
+                            EmptyView()
                         }
                     }
                 }
