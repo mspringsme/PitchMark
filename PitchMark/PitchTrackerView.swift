@@ -450,7 +450,9 @@ struct PitchTrackerView: View {
                             .frame(maxWidth: .infinity, minHeight: 170)
                             .padding(.top, 12)
                         } else if sessionManager.currentMode == .game {
-                            EmptyView()
+                            ProgressGameView()
+                                .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
+                                .padding(.top, 12)
                         }
                     }
                 }
@@ -1528,7 +1530,275 @@ struct PitchTrackerView: View {
 
 }
 
-// Remove @State private var isReset and @State private var showResetConfirm from here 
+private struct ProgressGameView: View {
+    @State private var ballToggles: [Bool] = [false, false, false]
+    @State private var strikeToggles: [Bool] = [false, false]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Spacer()
+                InningCounterCompact()
+            }
+            HStack {
+                Spacer()
+                ScoreTrackerCompact()
+            }
+            // Balls (3 toggles)
+            HStack(spacing: 10) {
+                Text("Balls")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                ForEach(ballToggles.indices, id: \.self) { idx in
+                    toggleChip(isOn: ballBinding(index: idx), activeColor: .red)
+                }
+                
+                Text("Strikes")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                ForEach(strikeToggles.indices, id: \.self) { idx in
+                    toggleChip(isOn: strikeBinding(index: idx), activeColor: .green)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+
+        }
+        .padding(.horizontal)
+    }
+
+    // MARK: - Helpers
+
+    private func ballBinding(index: Int) -> Binding<Bool> {
+        Binding(
+            get: { ballToggles[index] },
+            set: { ballToggles[index] = $0 }
+        )
+    }
+
+    private func strikeBinding(index: Int) -> Binding<Bool> {
+        Binding(
+            get: { strikeToggles[index] },
+            set: { strikeToggles[index] = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private func toggleChip(isOn: Binding<Bool>, activeColor: Color) -> some View {
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                isOn.wrappedValue.toggle()
+            }
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: isOn.wrappedValue ? "checkmark.circle.fill" : "circle")
+                    .imageScale(.medium)
+            }
+            .foregroundStyle(isOn.wrappedValue ? Color.white : .primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Group {
+                    if isOn.wrappedValue {
+                        activeColor
+                    } else {
+                        Color.clear
+                    }
+                }
+            )
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Toggle")
+    }
+}
+
+struct InningCounterCompact: View {
+    @State private var inning: Int = 1
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Inning")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            
+            HStack(spacing: 6) {
+                // Decrement
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    if inning > 1 { inning -= 1 }
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(.primary)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                // Current inning
+                Text("\(inning)")
+                    .font(.headline.weight(.semibold))
+                    .monospacedDigit()
+                    .frame(minWidth: 28)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .background(
+                        .ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                
+                // Increment
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    inning += 1
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(.primary)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(
+            .ultraThinMaterial,
+            in: Capsule()
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+    }
+}
+
+struct ScoreTrackerCompact: View {
+    @State private var usScore: Int = 0
+    @State private var themScore: Int = 0
+    
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Score")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            
+            scoreRow(label: "Us", score: $usScore)
+            scoreRow(label: "Them", score: $themScore)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+    }
+    
+    // MARK: - Row
+    private func scoreRow(label: String, score: Binding<Int>) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.subheadline.weight(.semibold))
+            
+            //Spacer()
+            
+            // Decrement
+            Button {
+                let generator = UIImpactFeedbackGenerator(style: .light)
+                generator.impactOccurred()
+                if score.wrappedValue > 0 { score.wrappedValue -= 1 }
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(.primary)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            
+            // Score Display
+            Text("\(score.wrappedValue)")
+                .font(.headline.weight(.semibold))
+                .monospacedDigit()
+                .frame(minWidth: 32)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+            
+            // Increment
+            Button {
+                let generator = UIImpactFeedbackGenerator(style: .light)
+                generator.impactOccurred()
+                score.wrappedValue += 1
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(.primary)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+    }
+}
+
 private struct ProgressSummaryView: View {
     let events: [PitchEvent]
     let currentMode: PitchMode
@@ -2780,5 +3050,65 @@ struct PracticeSelectionSheet: View {
         f.timeStyle = .short
         return f
     }()
+}
+
+struct BallStrikeToggle: View {
+    @State private var isBall: Bool = false
+    @State private var isStrike: Bool = false
+    var mutualExclusion: Bool = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            toggleButton(title: "Ball", isOn: isBall, onTap: {
+                if mutualExclusion {
+                    if !isBall { isStrike = false }
+                }
+                isBall.toggle()
+            }, activeColor: .red)
+
+            toggleButton(title: "Strike", isOn: isStrike, onTap: {
+                if mutualExclusion {
+                    if !isStrike { isBall = false }
+                }
+                isStrike.toggle()
+            }, activeColor: .green)
+        }
+    }
+
+    @ViewBuilder
+    private func toggleButton(title: String, isOn: Bool, onTap: @escaping () -> Void, activeColor: Color) -> some View {
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.15)) { onTap() }
+        }) {
+            HStack(spacing: 6) {
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                    .imageScale(.medium)
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+            }
+            .foregroundStyle(isOn ? Color.white : .primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                Group {
+                    if isOn {
+                        activeColor
+                    } else {
+                        Color.clear
+                    }
+                }
+            )
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Toggle \(title)")
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
 }
 
