@@ -1556,6 +1556,28 @@ private struct ProgressSummaryView: View {
             return !actual.isEmpty && actual == called
         }.count
     }
+
+    private var strikeHitSpotCount: Int {
+        practiceEvents.filter { ev in
+            guard ev.isStrike == true else { return false }
+            guard let call = ev.calledPitch else { return false }
+            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !target.isEmpty else { return false }
+            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !actual.isEmpty && actual == target
+        }.count
+    }
+
+    private var ballHitSpotCount: Int {
+        practiceEvents.filter { ev in
+            guard ev.isStrike == false else { return false }
+            guard let call = ev.calledPitch else { return false }
+            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !target.isEmpty else { return false }
+            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !actual.isEmpty && actual == target
+        }.count
+    }
     
     private func percent(_ part: Int, of total: Int) -> String {
         guard total > 0 else { return "0%" }
@@ -1688,11 +1710,11 @@ private struct ProgressSummaryView: View {
                 
                 // Right metrics (vertical)
                 VStack(spacing: 10) {
-                    Text("Spot")
+                    Text("Hit Spot")
                         .font(Font.caption.italic())
                         .padding(.bottom, -4)
-                    metricCard(title: "% Strikes", value: percent(strikeCount, of: max(totalCount, 1)))
-                    metricCard(title: "% Balls", value: percent(ballCount, of: max(totalCount, 1)))
+                    metricCard(title: "Strike %", value: percent(strikeHitSpotCount, of: max(strikeCount, 1)))
+                    metricCard(title: "Ball %", value: percent(ballHitSpotCount, of: max(ballCount, 1)))
                 }
                 .frame(maxWidth: 80)
             }
