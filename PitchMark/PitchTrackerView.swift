@@ -440,14 +440,16 @@ struct PitchTrackerView: View {
                             .padding(.top, 12)
                         }
                     case .progress:
-                        ProgressSummaryView(
-                            events: pitchEvents,
-                            currentMode: sessionManager.currentMode,
-                            selectedPracticeId: selectedPracticeId,
-                            templates: templates
-                        )
-                        .frame(maxWidth: .infinity, minHeight: 170)
-                        .padding(.top, 12)
+                        if sessionManager.currentMode == .practice {
+                            ProgressSummaryView(
+                                events: pitchEvents,
+                                currentMode: sessionManager.currentMode,
+                                selectedPracticeId: selectedPracticeId,
+                                templates: templates
+                            )
+                            .frame(maxWidth: .infinity, minHeight: 170)
+                            .padding(.top, 12)
+                        }
                     }
                 }
             }
