@@ -380,12 +380,12 @@ struct PitchTrackerView: View {
             VStack(spacing: 8) {
                 // Top toggle buttons
                 HStack(spacing: 8) {
-                    Text(selectedTemplate?.name ?? "")
-                        .font(.title3)
-                        .foregroundStyle(.purple)
-                        .padding(.trailing, 8)
-                    //Spacer()
-
+                    if sessionManager.currentMode == .practice {
+                        Text(selectedTemplate?.name ?? "")
+                            .font(.title3)
+                            .foregroundStyle(.purple)
+                            .padding(.trailing, 8)
+                    }
                     Button(action: { overlayTab = .progress }) {
                         HStack(spacing: 6) {
                             Image(systemName: "chart.bar.xaxis")
@@ -423,6 +423,8 @@ struct PitchTrackerView: View {
                 .padding(.horizontal)
                 .padding(.top, 4)
 
+                Divider()
+                
                 // Content switches with tab
                 Group {
                     switch overlayTab {
@@ -437,7 +439,7 @@ struct PitchTrackerView: View {
                             .environmentObject(authManager)
                             .environmentObject(sessionManager)
                             .frame(maxWidth: .infinity, minHeight: 170)
-                            .padding(.top, 12)
+                            .padding(.top, 6)
                         }
                     case .progress:
                         if sessionManager.currentMode == .practice {
@@ -448,11 +450,9 @@ struct PitchTrackerView: View {
                                 templates: templates
                             )
                             .frame(maxWidth: .infinity, minHeight: 170)
-                            .padding(.top, 12)
                         } else if sessionManager.currentMode == .game {
                             ProgressGameView()
                                 .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
-                                .padding(.top, 12)
                         }
                     }
                 }
@@ -1536,43 +1536,38 @@ private struct ProgressGameView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Spacer()
-                InningCounterCompact()
-            }
-            HStack {
-                Spacer()
+            HStack(alignment: .top, spacing: 10) {
                 ScoreTrackerCompact()
-            }
-            // Balls (3 toggles)
-            HStack(spacing: 10) {
-                Text("Balls")
-                    .font(.subheadline.weight(.semibold))
                 Spacer()
+                VStack(alignment: .leading, spacing: 2){
+                    InningCounterCompact()
+                    HitsCounterCompact()
+                    WalksCounterCompact()
+                }
+            }
+            Divider()
+            // Balls (3 toggles)
+            HStack(alignment: .center, spacing: 10) {
+                Spacer()
+                Text("Balls")
+                    .font(.caption2)
+                    .foregroundStyle(.primary)
+                
                 ForEach(ballToggles.indices, id: \.self) { idx in
                     toggleChip(isOn: ballBinding(index: idx), activeColor: .red)
                 }
                 
                 Text("Strikes")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
+                    .font(.caption2)
+                    .foregroundStyle(.primary)
                 ForEach(strikeToggles.indices, id: \.self) { idx in
                     toggleChip(isOn: strikeBinding(index: idx), activeColor: .green)
                 }
+                Spacer()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
-            .background(
-                .ultraThinMaterial,
-                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-
+            
         }
-        .padding(.horizontal)
+        .padding(.vertical, -6)
     }
 
     // MARK: - Helpers
@@ -1603,8 +1598,7 @@ private struct ProgressGameView: View {
                     .imageScale(.medium)
             }
             .foregroundStyle(isOn.wrappedValue ? Color.white : .primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .frame(width: 28, height: 28)
             .background(
                 Group {
                     if isOn.wrappedValue {
@@ -1614,13 +1608,7 @@ private struct ProgressGameView: View {
                     }
                 }
             )
-            .background(.ultraThinMaterial)
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+            .clipShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Toggle")
@@ -1631,10 +1619,8 @@ struct InningCounterCompact: View {
     @State private var inning: Int = 1
     
     var body: some View {
-        HStack(spacing: 8) {
-            Text("Inning")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+        
+        HStack(alignment: .center, spacing: 6) {
             
             HStack(spacing: 6) {
                 // Decrement
@@ -1655,7 +1641,7 @@ struct InningCounterCompact: View {
                         )
                 }
                 .buttonStyle(.plain)
-
+                
                 // Current inning
                 Text("\(inning)")
                     .font(.headline.weight(.semibold))
@@ -1690,56 +1676,242 @@ struct InningCounterCompact: View {
                         )
                 }
                 .buttonStyle(.plain)
+                
+                
             }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .background(
+                .ultraThinMaterial,
+                in: Capsule()
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+            
+            Text("Inning")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 10)
-        .background(
-            .ultraThinMaterial,
-            in: Capsule()
-        )
-        .overlay(
-            Capsule()
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+        .padding(.trailing, 12)
+        //.padding(.vertical, 12)
     }
 }
-
+struct HitsCounterCompact: View {
+    @State private var hits: Int = 1
+    
+    var body: some View {
+        
+        HStack(alignment: .center, spacing: 6) {
+            
+            HStack(spacing: 6) {
+                // Decrement
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    if hits > 0 { hits -= 1 }
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(.primary)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                
+                // Current inning
+                Text("\(hits)")
+                    .font(.headline.weight(.semibold))
+                    .monospacedDigit()
+                    .frame(minWidth: 28)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .background(
+                        .ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                
+                // Increment
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    hits += 1
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(.primary)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                
+                
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .background(
+                .ultraThinMaterial,
+                in: Capsule()
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+            
+            Text("Hits")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.trailing, 12)
+    }
+}
+struct WalksCounterCompact: View {
+    @State private var walks: Int = 1
+    
+    var body: some View {
+        
+        HStack(alignment: .center, spacing: 6) {
+            
+            HStack(spacing: 6) {
+                // Decrement
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    if walks > 0 { walks -= 1 }
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(.primary)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                
+                // Current inning
+                Text("\(walks)")
+                    .font(.headline.weight(.semibold))
+                    .monospacedDigit()
+                    .frame(minWidth: 28)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 8)
+                    .background(
+                        .ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                
+                // Increment
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    walks += 1
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .foregroundStyle(.primary)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                
+                
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 10)
+            .background(
+                .ultraThinMaterial,
+                in: Capsule()
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+            
+            Text("Walks")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.trailing, 12)
+    }
+}
 struct ScoreTrackerCompact: View {
     @State private var usScore: Int = 0
     @State private var themScore: Int = 0
     
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(alignment: .center) {
             Text("Score")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             
-            scoreRow(label: "Us", score: $usScore)
-            scoreRow(label: "Them", score: $themScore)
+            VStack(spacing: 0) {
+                // Us row with label above
+                VStack(spacing: 0) {   // no extra spacing
+                    Text("us")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2) // optional, keep horizontal only
+                    scoreRow(score: $usScore)
+                }
+                Divider()
+                // Them row with label below
+                VStack(spacing: 0) {   // no extra spacing
+                    scoreRow(score: $themScore)
+                    Text("them")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 2) // optional, keep horizontal only
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
+            .fixedSize()
         }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background(
-            .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
     }
     
-    // MARK: - Row
-    private func scoreRow(label: String, score: Binding<Int>) -> some View {
+    // MARK: - Row (no leading label)
+    private func scoreRow(score: Binding<Int>) -> some View {
         HStack(spacing: 8) {
-            Text(label)
-                .font(.subheadline.weight(.semibold))
-            
-            //Spacer()
-            
             // Decrement
             Button {
                 let generator = UIImpactFeedbackGenerator(style: .light)
@@ -1794,7 +1966,6 @@ struct ScoreTrackerCompact: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.vertical, 6)
         .padding(.horizontal, 8)
     }
 }
@@ -3112,3 +3283,16 @@ struct BallStrikeToggle: View {
     }
 }
 
+#Preview("ProgressGameView") {
+    ProgressGameView()
+        .padding()
+}
+#Preview("InningCounterCompact") {
+    InningCounterCompact()
+        .padding()
+}
+
+#Preview("ScoreTrackerCompact") {
+    ScoreTrackerCompact()
+        .padding()
+}
