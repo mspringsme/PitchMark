@@ -379,7 +379,7 @@ struct PitchTrackerView: View {
         ZStack {
             VStack(spacing: 8) {
                 // Top toggle buttons
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     if sessionManager.currentMode == .practice {
                         Text(selectedTemplate?.name ?? "")
                             .font(.title3)
@@ -395,7 +395,7 @@ struct PitchTrackerView: View {
                                 .font(.subheadline.weight(.semibold))
                         }
                         .foregroundColor(overlayTab == .progress ? .white : .primary)
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 8)
                         .background(overlayTab == .progress ? Color.accentColor : Color.clear)
                         .clipShape(Capsule())
@@ -411,19 +411,18 @@ struct PitchTrackerView: View {
                                 .font(.subheadline.weight(.semibold))
                         }
                         .foregroundColor(overlayTab == .cards ? .white : .primary)
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 8)
                         .background(overlayTab == .cards ? Color.accentColor : Color.clear)
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
-
-                    //Spacer()
                 }
                 .padding(.horizontal)
                 .padding(.top, 4)
 
                 Divider()
+                .padding(.top, 10)
                 
                 // Content switches with tab
                 Group {
@@ -483,27 +482,7 @@ struct PitchTrackerView: View {
         //.background(Color.red.opacity(0.9))
         .background(.regularMaterial)
     }
-    
-    
-//    private var headerContainer: some View {
-//        VStack(spacing: 8) {
-//            topBar
-//            pitchSelectionChips
-//        }
-//        .padding(.vertical, 8)
-//        .background(
-//            .thickMaterial,
-//            in: RoundedRectangle(cornerRadius: 12, style: .continuous) // proper clipping for the material
-//        )
-//        .overlay(
-//            RoundedRectangle(cornerRadius: 12, style: .continuous)
-//                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1) // optional: edge definition
-//        )
-//        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-//        
-//        .padding(.horizontal)
-//        .padding(.top, 8)
-//    }
+
     private var headerContainer: some View {
         let screen = UIScreen.main.bounds
         
@@ -533,7 +512,6 @@ struct PitchTrackerView: View {
             batterAndModeBar
             mainStrikeZoneSection
             Spacer(minLength: 40)
-//            chooseResultPrompt // Removed as per instructions
             cardsAndOverlay
         }
     }
@@ -830,11 +808,6 @@ struct PitchTrackerView: View {
                     .strokeBorder(Color.white.opacity(0.08), lineWidth: 1) // optional: edge definition
             )
             .shadow(color: .black.opacity(0.7), radius: 6, x: 0, y: 6)
-            
-//            .background(.regularMaterial)
-//            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-//            .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
-            
             .overlay(
                 Group {
                     ResetPitchButton() {
@@ -1546,26 +1519,35 @@ private struct ProgressGameView: View {
                 }
             }
             Divider()
-            // Balls (3 toggles)
-            HStack(alignment: .center, spacing: 10) {
-                Spacer()
-                Text("Balls")
-                    .font(.caption2)
-                    .foregroundStyle(.primary)
-                
-                ForEach(ballToggles.indices, id: \.self) { idx in
-                    toggleChip(isOn: ballBinding(index: idx), activeColor: .red)
-                }
-                
-                Text("Strikes")
-                    .font(.caption2)
-                    .foregroundStyle(.primary)
-                ForEach(strikeToggles.indices, id: \.self) { idx in
-                    toggleChip(isOn: strikeBinding(index: idx), activeColor: .green)
-                }
-                Spacer()
-            }
             
+            HStack(alignment: .center, spacing: 0) {
+                VStack{
+                    Text("Balls")
+                        .font(.caption2)
+                        .foregroundStyle(.primary)
+                    HStack(spacing: 0){
+                        ForEach(ballToggles.indices, id: \.self) { idx in
+                            toggleChip(isOn: ballBinding(index: idx), activeColor: .red)
+                        }
+                    }
+                }
+                .padding(.horizontal, 0)
+                .padding(.leading, 10)
+                Spacer()
+                VStack{
+                    Text("Strikes")
+                        .font(.caption2)
+                        .foregroundStyle(.primary)
+                    HStack(spacing: 0){
+                        ForEach(strikeToggles.indices, id: \.self) { idx in
+                            toggleChip(isOn: strikeBinding(index: idx), activeColor: .green)
+                        }
+                    }
+                }
+                .padding(.horizontal, 0)
+                .padding(.trailing, 10)
+            }
+            .padding(.vertical, -200)
         }
         .padding(.vertical, -6)
     }
