@@ -394,10 +394,10 @@ struct PitchTrackerView: View {
                             Text("Progress")
                                 .font(.subheadline.weight(.semibold))
                         }
-                        .foregroundColor(overlayTab == .progress ? .white : .primary)
+                        .foregroundColor(overlayTab == .progress ? .black : .black.opacity(0.2))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 8)
-                        .background(overlayTab == .progress ? Color.accentColor : Color.clear)
+                        .background(overlayTab == .progress ? .ultraThickMaterial : .ultraThinMaterial)
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -410,10 +410,10 @@ struct PitchTrackerView: View {
                             Text("Cards")
                                 .font(.subheadline.weight(.semibold))
                         }
-                        .foregroundColor(overlayTab == .cards ? .white : .primary)
+                        .foregroundColor(overlayTab == .cards ? .black : .black.opacity(0.2))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 8)
-                        .background(overlayTab == .cards ? Color.accentColor : Color.clear)
+                        .background(overlayTab == .cards ? .ultraThickMaterial : .ultraThinMaterial)
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -1511,20 +1511,26 @@ private struct ProgressGameView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
                 ScoreTrackerCompact()
+                    .padding(.top, 8)
+                    .padding(.leading, 12)
                 Spacer()
                 VStack(alignment: .leading, spacing: 2){
                     InningCounterCompact()
+                        .padding(.top, 9)
+                        .padding(.trailing, 8)
                     HitsCounterCompact()
+                        .padding(.trailing, 8)
                     WalksCounterCompact()
+                        .padding(.trailing, 8)
                 }
             }
             Divider()
             
             HStack(alignment: .center, spacing: 0) {
-                VStack{
-                    Text("Balls")
-                        .font(.caption2)
-                        .foregroundStyle(.primary)
+                VStack(alignment: .leading){
+                    Text("  Balls")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     HStack(spacing: 0){
                         ForEach(ballToggles.indices, id: \.self) { idx in
                             toggleChip(isOn: ballBinding(index: idx), activeColor: .red)
@@ -1534,10 +1540,10 @@ private struct ProgressGameView: View {
                 .padding(.horizontal, 0)
                 .padding(.leading, 10)
                 Spacer()
-                VStack{
-                    Text("Strikes")
-                        .font(.caption2)
-                        .foregroundStyle(.primary)
+                VStack(alignment: .trailing){
+                    Text("Strikes  ")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     HStack(spacing: 0){
                         ForEach(strikeToggles.indices, id: \.self) { idx in
                             toggleChip(isOn: strikeBinding(index: idx), activeColor: .green)
@@ -1547,7 +1553,7 @@ private struct ProgressGameView: View {
                 .padding(.horizontal, 0)
                 .padding(.trailing, 10)
             }
-            .padding(.vertical, -200)
+            .padding(.vertical, -210)
         }
         .padding(.vertical, -6)
     }
@@ -1682,7 +1688,7 @@ struct InningCounterCompact: View {
     }
 }
 struct HitsCounterCompact: View {
-    @State private var hits: Int = 1
+    @State private var hits: Int = 0
     
     var body: some View {
         
@@ -1765,7 +1771,7 @@ struct HitsCounterCompact: View {
     }
 }
 struct WalksCounterCompact: View {
-    @State private var walks: Int = 1
+    @State private var walks: Int = 0
     
     var body: some View {
         
