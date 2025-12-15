@@ -1566,14 +1566,12 @@ private struct ProgressGameView: View {
             set: { ballToggles[index] = $0 }
         )
     }
-
     private func strikeBinding(index: Int) -> Binding<Bool> {
         Binding(
             get: { strikeToggles[index] },
             set: { strikeToggles[index] = $0 }
         )
     }
-
     @ViewBuilder
     private func toggleChip(isOn: Binding<Bool>, activeColor: Color) -> some View {
         Button(action: {
@@ -1602,7 +1600,6 @@ private struct ProgressGameView: View {
         .accessibilityLabel("Toggle")
     }
 }
-
 struct InningCounterCompact: View {
     @State private var inning: Int = 1
     

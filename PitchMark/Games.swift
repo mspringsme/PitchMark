@@ -45,5 +45,43 @@ struct Game: Identifiable, Codable {
     var jerseyNumbers: [String]
     var batterIds: [String]? = nil
     var createdAt: Date = Date()
+    
+    var balls: Int
+    var strikes: Int
+    var hits: Int
+    var walks: Int
+    var inning: Int
+    var us: Int
+    var them: Int
+
+    init(
+        id: String? = nil,
+        opponent: String,
+        date: Date,
+        jerseyNumbers: [String],
+        batterIds: [String]? = nil,
+        createdAt: Date = Date(),
+        balls: Int = 0,
+        strikes: Int = 0,
+        hits: Int = 0,
+        walks: Int = 0,
+        inning: Int = 1,
+        us: Int = 0,
+        them: Int = 0
+    ) {
+        self.id = id
+        self.opponent = opponent
+        self.date = date
+        self.jerseyNumbers = jerseyNumbers
+        self.batterIds = batterIds
+        self.createdAt = createdAt
+        self.balls = balls
+        self.strikes = strikes
+        self.hits = hits
+        self.walks = walks
+        self.inning = inning
+        self.us = us
+        self.them = them
+    }
 }
 
