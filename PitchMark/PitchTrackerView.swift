@@ -324,6 +324,113 @@ struct PitchTrackerView: View {
     }
     
     // MARK: - Helpers for Pitches Faced Popover
+    // MARK: - Current Game Helper
+    private var currentGame: Game? {
+        guard let gid = selectedGameId else { return nil }
+        return games.first(where: { $0.id == gid })
+    }
+    
+    // MARK: - Game Field Bindings
+
+    // Tiny factory to reduce type-checker work when creating bindings
+    private func intBinding(
+        get: @escaping () -> Int,
+        set: @escaping (Int) -> Void
+    ) -> Binding<Int> {
+        Binding(get: get, set: set)
+    }
+
+    private var inningBinding: Binding<Int> {
+        intBinding(
+            get: { currentGame?.inning ?? 1 },
+            set: { newValue in
+                guard let gid = selectedGameId else { return }
+                authManager.updateGameInning(gameId: gid, inning: newValue)
+                if let idx = games.firstIndex(where: { $0.id == gid }) {
+                    games[idx].inning = newValue
+                }
+            }
+        )
+    }
+
+    private var hitsBinding: Binding<Int> {
+        intBinding(
+            get: { currentGame?.hits ?? 0 },
+            set: { newValue in
+                guard let gid = selectedGameId else { return }
+                authManager.updateGameHits(gameId: gid, hits: newValue)
+                if let idx = games.firstIndex(where: { $0.id == gid }) {
+                    games[idx].hits = newValue
+                }
+            }
+        )
+    }
+
+    private var walksBinding: Binding<Int> {
+        intBinding(
+            get: { currentGame?.walks ?? 0 },
+            set: { newValue in
+                guard let gid = selectedGameId else { return }
+                authManager.updateGameWalks(gameId: gid, walks: newValue)
+                if let idx = games.firstIndex(where: { $0.id == gid }) {
+                    games[idx].walks = newValue
+                }
+            }
+        )
+    }
+
+    private var ballsBinding: Binding<Int> {
+        intBinding(
+            get: { currentGame?.balls ?? 0 },
+            set: { newValue in
+                guard let gid = selectedGameId else { return }
+                authManager.updateGameBalls(gameId: gid, balls: newValue)
+                if let idx = games.firstIndex(where: { $0.id == gid }) {
+                    games[idx].balls = newValue
+                }
+            }
+        )
+    }
+
+    private var strikesBinding: Binding<Int> {
+        intBinding(
+            get: { currentGame?.strikes ?? 0 },
+            set: { newValue in
+                guard let gid = selectedGameId else { return }
+                authManager.updateGameStrikes(gameId: gid, strikes: newValue)
+                if let idx = games.firstIndex(where: { $0.id == gid }) {
+                    games[idx].strikes = newValue
+                }
+            }
+        )
+    }
+
+    private var usBinding: Binding<Int> {
+        intBinding(
+            get: { currentGame?.us ?? 0 },
+            set: { newValue in
+                guard let gid = selectedGameId else { return }
+                authManager.updateGameUs(gameId: gid, us: newValue)
+                if let idx = games.firstIndex(where: { $0.id == gid }) {
+                    games[idx].us = newValue
+                }
+            }
+        )
+    }
+
+    private var themBinding: Binding<Int> {
+        intBinding(
+            get: { currentGame?.them ?? 0 },
+            set: { newValue in
+                guard let gid = selectedGameId else { return }
+                authManager.updateGameThem(gameId: gid, them: newValue)
+                if let idx = games.firstIndex(where: { $0.id == gid }) {
+                    games[idx].them = newValue
+                }
+            }
+        )
+    }
+    
     private func normalizeJersey(_ s: String?) -> String? {
         guard let s = s else { return nil }
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -450,8 +557,16 @@ struct PitchTrackerView: View {
                             )
                             .frame(maxWidth: .infinity, minHeight: 170)
                         } else if sessionManager.currentMode == .game {
-                            ProgressGameView()
-                                .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
+                            ProgressGameView(
+                                balls: ballsBinding,
+                                strikes: strikesBinding,
+                                inning: inningBinding,
+                                hits: hitsBinding,
+                                walks: walksBinding,
+                                us: usBinding,
+                                them: themBinding
+                            )
+                            .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
                         }
                     }
                 }
@@ -1504,23 +1619,31 @@ struct PitchTrackerView: View {
 }
 
 private struct ProgressGameView: View {
+    @Binding var balls: Int
+    @Binding var strikes: Int
+    @Binding var inning: Int
+    @Binding var hits: Int
+    @Binding var walks: Int
+    @Binding var us: Int
+    @Binding var them: Int
+
     @State private var ballToggles: [Bool] = [false, false, false]
     @State private var strikeToggles: [Bool] = [false, false]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
-                ScoreTrackerCompact()
+                ScoreTrackerCompact(usScore: $us, themScore: $them)
                     .padding(.top, 8)
                     .padding(.leading, 12)
                 Spacer()
                 VStack(alignment: .leading, spacing: 2){
-                    InningCounterCompact()
+                    InningCounterCompact(inning: $inning)
                         .padding(.top, 9)
                         .padding(.trailing, 8)
-                    HitsCounterCompact()
+                    HitsCounterCompact(hits: $hits)
                         .padding(.trailing, 8)
-                    WalksCounterCompact()
+                    WalksCounterCompact(walks: $walks)
                         .padding(.trailing, 8)
                 }
             }
@@ -1601,7 +1724,7 @@ private struct ProgressGameView: View {
     }
 }
 struct InningCounterCompact: View {
-    @State private var inning: Int = 1
+    @Binding var inning: Int
     
     var body: some View {
         
@@ -1685,7 +1808,7 @@ struct InningCounterCompact: View {
     }
 }
 struct HitsCounterCompact: View {
-    @State private var hits: Int = 0
+    @Binding var hits: Int
     
     var body: some View {
         
@@ -1768,7 +1891,7 @@ struct HitsCounterCompact: View {
     }
 }
 struct WalksCounterCompact: View {
-    @State private var walks: Int = 0
+    @Binding var walks: Int
     
     var body: some View {
         
@@ -1851,8 +1974,8 @@ struct WalksCounterCompact: View {
     }
 }
 struct ScoreTrackerCompact: View {
-    @State private var usScore: Int = 0
-    @State private var themScore: Int = 0
+    @Binding var usScore: Int
+    @Binding var themScore: Int
     
     var body: some View {
         VStack(alignment: .center) {
@@ -3268,16 +3391,3 @@ struct BallStrikeToggle: View {
     }
 }
 
-#Preview("ProgressGameView") {
-    ProgressGameView()
-        .padding()
-}
-#Preview("InningCounterCompact") {
-    InningCounterCompact()
-        .padding()
-}
-
-#Preview("ScoreTrackerCompact") {
-    ScoreTrackerCompact()
-        .padding()
-}

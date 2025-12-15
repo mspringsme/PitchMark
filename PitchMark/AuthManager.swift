@@ -329,4 +329,105 @@ extension AuthManager {
             }
         }
     }
+    
+    // MARK: - Game field updates
+    func updateGameInning(gameId: String, inning: Int) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.updateData(["inning": inning]) { error in
+            if let error = error { print("Error updating inning: \(error)") }
+        }
+    }
+
+    func updateGameHits(gameId: String, hits: Int) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.updateData(["hits": hits]) { error in
+            if let error = error { print("Error updating hits: \(error)") }
+        }
+    }
+
+    func updateGameWalks(gameId: String, walks: Int) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.updateData(["walks": walks]) { error in
+            if let error = error { print("Error updating walks: \(error)") }
+        }
+    }
+
+    func updateGameBalls(gameId: String, balls: Int) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.updateData(["balls": balls]) { error in
+            if let error = error { print("Error updating balls: \(error)") }
+        }
+    }
+
+    func updateGameStrikes(gameId: String, strikes: Int) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.updateData(["strikes": strikes]) { error in
+            if let error = error { print("Error updating strikes: \(error)") }
+        }
+    }
+
+    func updateGameUs(gameId: String, us: Int) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.updateData(["us": us]) { error in
+            if let error = error { print("Error updating us score: \(error)") }
+        }
+    }
+
+    func updateGameThem(gameId: String, them: Int) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+        ref.updateData(["them": them]) { error in
+            if let error = error { print("Error updating them score: \(error)") }
+        }
+    }
+    
+    func updateGameCounts(
+        gameId: String,
+        inning: Int? = nil,
+        hits: Int? = nil,
+        walks: Int? = nil,
+        balls: Int? = nil,
+        strikes: Int? = nil,
+        us: Int? = nil,
+        them: Int? = nil
+    ) {
+        guard let user = user else { return }
+        var data: [String: Any] = [:]
+        if let inning = inning { data["inning"] = inning }
+        if let hits = hits { data["hits"] = hits }
+        if let walks = walks { data["walks"] = walks }
+        if let balls = balls { data["balls"] = balls }
+        if let strikes = strikes { data["strikes"] = strikes }
+        if let us = us { data["us"] = us }
+        if let them = them { data["them"] = them }
+        guard !data.isEmpty else { return }
+
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+
+        ref.updateData(data) { error in
+            if let error = error { print("Error updating game counts: \(error)") }
+        }
+    }
 }
