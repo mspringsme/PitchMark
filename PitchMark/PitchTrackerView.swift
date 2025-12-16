@@ -564,8 +564,10 @@ struct PitchTrackerView: View {
                                 hits: hitsBinding,
                                 walks: walksBinding,
                                 us: usBinding,
-                                them: themBinding
+                                them: themBinding,
+                                selectedGameId: $selectedGameId
                             )
+                            .environmentObject(authManager)
                             .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
                         }
                     }
@@ -1626,10 +1628,12 @@ private struct ProgressGameView: View {
     @Binding var walks: Int
     @Binding var us: Int
     @Binding var them: Int
+    @Binding var selectedGameId: String?
+
+    @EnvironmentObject var authManager: AuthManager
 
     @State private var ballToggles: [Bool] = [false, false, false]
     @State private var strikeToggles: [Bool] = [false, false]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
@@ -1679,6 +1683,51 @@ private struct ProgressGameView: View {
             .padding(.vertical, -210)
         }
         .padding(.vertical, -6)
+        .onAppear {
+            let clampedBalls = max(0, min(3, balls))
+            let clampedStrikes = max(0, min(2, strikes))
+            ballToggles = (0..<3).map { $0 < clampedBalls }
+            strikeToggles = (0..<2).map { $0 < clampedStrikes }
+        }
+        .onChange(of: ballToggles) { _, newValue in
+            let newCount = newValue.filter { $0 }.count
+            if balls != newCount {
+                balls = newCount
+                if let gid = selectedGameId {
+                    authManager.updateGameBalls(gameId: gid, balls: newCount)
+                }
+            }
+        }
+        .onChange(of: strikeToggles) { _, newValue in
+            let newCount = newValue.filter { $0 }.count
+            if strikes != newCount {
+                strikes = newCount
+                if let gid = selectedGameId {
+                    authManager.updateGameStrikes(gameId: gid, strikes: newCount)
+                }
+            }
+        }
+        .onChange(of: balls) { _, newValue in
+            let clamped = max(0, min(3, newValue))
+            ballToggles = (0..<3).map { $0 < clamped }
+        }
+        .onChange(of: strikes) { _, newValue in
+            let clamped = max(0, min(2, newValue))
+            strikeToggles = (0..<2).map { $0 < clamped }
+        }
+        .onChange(of: selectedGameId) { _, newGameId in
+            guard let gid = newGameId else { return }
+            authManager.loadGames { games in
+                if let game = games.first(where: { $0.id == gid }) {
+                    let newBalls = max(0, min(3, game.balls ?? 0))
+                    let newStrikes = max(0, min(2, game.strikes ?? 0))
+                    balls = newBalls
+                    strikes = newStrikes
+                    ballToggles = (0..<3).map { $0 < newBalls }
+                    strikeToggles = (0..<2).map { $0 < newStrikes }
+                }
+            }
+        }
     }
 
     // MARK: - Helpers
