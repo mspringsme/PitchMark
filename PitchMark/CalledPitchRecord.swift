@@ -358,38 +358,37 @@ struct PitchResultCard: View {
     let games: [Game]
     let templateName: String
     @State private var showDetails = false
+    
+    @Binding var isSelecting: Bool
+    @Binding var isSelected: Bool
 
-    private struct StoredPracticeSession: Codable { var id: String?; var name: String; var date: Date }
+    init(
+        event: PitchEvent,
+        allEvents: [PitchEvent],
+        games: [Game],
+        templateName: String,
+        isSelecting: Binding<Bool> = .constant(false),
+        isSelected: Binding<Bool> = .constant(false)
+    ) {
+        self.event = event
+        self.allEvents = allEvents
+        self.games = games
+        self.templateName = templateName
+        self._isSelecting = isSelecting
+        self._isSelected = isSelected
+    }
 
-    private func derivedGameTitle(from event: PitchEvent) -> String? {
-        guard let gid = event.gameId, !gid.isEmpty else { return nil }
-        if let game = games.first(where: { $0.id == gid }) {
-            return game.opponent
-        }
-        return nil
+    private func isLocationMatch(_ event: PitchEvent) -> Bool {
+        // Provide a simple heuristic for location match (stub)
+        guard let called = event.calledPitch else { return false }
+        return called.location == event.location && called.pitch == event.pitch
     }
     
-    private func practiceTitle(for event: PitchEvent) -> String? {
-        guard let pid = event.practiceId, !pid.isEmpty else { return nil }
-        let key = "storedPracticeSessions"
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let sessions = try? JSONDecoder().decode([StoredPracticeSession].self, from: data) else { return nil }
-        return sessions.first(where: { $0.id == pid })?.name
+    private func isFullySuccessful(_ event: PitchEvent) -> Bool {
+        // Provide a simple heuristic for success (stub)
+        return isLocationMatch(event)
     }
-    
-    func formattedTimestamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        let calendar = Calendar.current
-        
-        if calendar.isDateInToday(date) {
-            formatter.dateFormat = "'Today,' h:mm a"
-        } else {
-            formatter.dateFormat = "MM/dd/yy h:mm a"
-        }
-        
-        return formatter.string(from: date)
-    }
-    
+
     var body: some View {
         let leftImageName = PitchImageDictionary.imageName(
             for: event.calledPitch?.location ?? "-",
@@ -428,31 +427,76 @@ struct PitchResultCard: View {
         let timestampText = formattedTimestamp(event.timestamp)
         let outcomeSummary = outcomeSummaryLines(for: event)
         let jerseyNumber = event.opponentJersey
-        
-        return PitchCardView(
-            batterSide: event.batterSide,
-            leftImage: Image(leftImageName),
-            topText: event.calledPitch?.pitch ?? "-",
-            middleText: "\(overallSuccessRate)% overall",
-            bottomText: "\(locationSuccessRate)% @ location",
-            verticalTopImage: Image(verticalTopImageName),
-            rightImage: Image(rightImageName),
-            rightImageShouldHighlight: didHitLocation,
-            footerTextName: "\(templateName)",
-            footerTextDate: "\(timestampText)",
-            pitchNumber: pitchNumber(for: event, in: allEvents),
-            outcomeSummary: outcomeSummary,
-            jerseyNumber: jerseyNumber,
-            gameTitle: derivedGameTitle(from: event),
-            practiceTitle: practiceTitle(for: event),
-            onLongPress: { showDetails = true }
-        )
+
+        HStack(alignment: .center, spacing: 8) {
+            if isSelecting {
+                VStack {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(isSelected ? .blue : .secondary)
+                        .font(.title3)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            isSelected.toggle()
+                        }
+                }
+                .padding(.leading, 8)
+            }
+
+            PitchCardView(
+                batterSide: event.batterSide,
+                leftImage: Image(leftImageName),
+                topText: event.calledPitch?.pitch ?? "-",
+                middleText: "\(overallSuccessRate)% overall",
+                bottomText: "\(locationSuccessRate)% @ location",
+                verticalTopImage: Image(verticalTopImageName),
+                rightImage: Image(rightImageName),
+                rightImageShouldHighlight: didHitLocation,
+                footerTextName: "\(templateName)",
+                footerTextDate: "\(timestampText)",
+                pitchNumber: pitchNumber(for: event, in: allEvents),
+                outcomeSummary: outcomeSummary,
+                jerseyNumber: jerseyNumber,
+                gameTitle: derivedGameTitle(from: event),
+                practiceTitle: practiceTitle(for: event),
+                onLongPress: { showDetails = true }
+            )
+        }
         .popover(isPresented: $showDetails) {
             PitchEventDetailPopover(event: event, allEvents: allEvents, templateName: templateName)
                 .padding()
                 .presentationDetents([.fraction(0.70), .large])
                 .presentationDragIndicator(.visible)
         }
+    }
+    
+    private func derivedGameTitle(from event: PitchEvent) -> String? {
+        guard let gid = event.gameId, !gid.isEmpty else { return nil }
+        if let game = games.first(where: { $0.id == gid }) {
+            return game.opponent
+        }
+        return nil
+    }
+    
+    private func practiceTitle(for event: PitchEvent) -> String? {
+        struct StoredPracticeSession: Codable { var id: String?; var name: String; var date: Date }
+        guard let pid = event.practiceId, !pid.isEmpty else { return nil }
+        let key = "storedPracticeSessions"
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let sessions = try? JSONDecoder().decode([StoredPracticeSession].self, from: data) else { return nil }
+        return sessions.first(where: { $0.id == pid })?.name
+    }
+    
+    private func formattedTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        let calendar = Calendar.current
+        
+        if calendar.isDateInToday(date) {
+            formatter.dateFormat = "'Today,' h:mm a"
+        } else {
+            formatter.dateFormat = "MM/dd/yy h:mm a"
+        }
+        
+        return formatter.string(from: date)
     }
 }
 
@@ -772,29 +816,67 @@ struct PitchResultSheet: View {
     let allEvents: [PitchEvent]
     let games: [Game]
     let templates: [PitchTemplate]
-    @Binding var filterMode: PitchMode?
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var sessionManager: PitchSessionManager
 
+    @State private var isSelecting = false
+    @State private var selectedEventIDs: Set<String> = Set<String>()
+    @State private var showTemplatePicker = false
+    @State private var localTemplateOverrides: [String: String] = [:]
+
+    // Basic default filter: show all events, newest first. Adjust as needed.
     private var filteredEvents: [PitchEvent] {
-        guard let mode = filterMode else { return allEvents.reversed() }
-        return allEvents.filter { $0.mode == mode }.reversed()
+        allEvents.sorted { $0.timestamp > $1.timestamp }
     }
     
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                modePicker
+                
+                HStack {
+                    Button(isSelecting ? "Done" : "Select") {
+                        if isSelecting { selectedEventIDs.removeAll() }
+                        isSelecting.toggle()
+                    }
+                    .buttonStyle(.bordered)
 
-                ScrollView([.vertical]) {
+                    Spacer()
+
+                    Button("Change Template") {
+                        showTemplatePicker = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selectedEventIDs.isEmpty || !isSelecting)
+                }
+
+                ScrollView(.vertical) {
                     VStack(spacing: 12) {
-                        ForEach(Array(filteredEvents.enumerated()), id: \.offset) { item in
-                            let event = item.element
-                            let templateName = templates.first(where: { $0.id.uuidString == event.templateId })?.name ?? "Unknown"
+                        ForEach(Array(filteredEvents.enumerated()), id: \.offset) { pair in
+                            let (idx, event) = pair
+                            let effectiveTemplateId = localTemplateOverrides[event.id ?? ""] ?? event.templateId
+                            let templateName = templates.first(where: { $0.id.uuidString == effectiveTemplateId })?.name ?? "Unknown"
+                            let isSelectedBinding = Binding<Bool>(
+                                get: { selectedEventIDs.contains(event.id ?? "") },
+                                set: { newValue in
+                                    guard let eid = event.id else { return }
+                                    if newValue {
+                                        selectedEventIDs.insert(eid)
+                                    } else {
+                                        selectedEventIDs.remove(eid)
+                                    }
+                                }
+                            )
 
-                            PitchResultCard(event: event, allEvents: allEvents, games: games, templateName: templateName)
-                                .padding(.horizontal)
-                                .transition(.move(edge: .top).combined(with: .opacity))
+                            PitchResultCard(
+                                event: event,
+                                allEvents: allEvents,
+                                games: games,
+                                templateName: templateName,
+                                isSelecting: $isSelecting,
+                                isSelected: isSelectedBinding
+                            )
+                            .padding(.horizontal)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
                     .padding(.horizontal)
@@ -802,24 +884,57 @@ struct PitchResultSheet: View {
             }
             .padding(.horizontal)
         }
-        .onAppear {
-            filterMode = sessionManager.currentMode
-        }
-        .onChange(of: sessionManager.currentMode) { _, newValue in
-            filterMode = newValue
+        .sheet(isPresented: $showTemplatePicker) {
+            NavigationView {
+                List(templates) { template in
+                    Button(template.name) {
+                        reassignSelectedEvents(to: template)
+                        showTemplatePicker = false
+                    }
+                }
+                .navigationTitle("Select Template")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            showTemplatePicker = false
+                        }
+                    }
+                }
+            }
         }
     }
     
-    private var modePicker: some View {
-        HStack {
-            Picker("Filter", selection: $filterMode) {
-                Text("All").tag(nil as PitchMode?)
-                Text("Game").tag(PitchMode.game as PitchMode?)
-                Text("Practice").tag(PitchMode.practice as PitchMode?)
-            }
-            .pickerStyle(.segmented)
+    private func reassignSelectedEvents(to template: PitchTemplate) {
+        let db = Firestore.firestore()
+        let batch = db.batch()
+
+        let selectedEvents = allEvents.filter { event in
+            guard let eid = event.id else { return false }
+            return selectedEventIDs.contains(eid)
         }
-        .padding(.horizontal)
+
+        for event in selectedEvents {
+            guard let eid = event.id else { continue }
+            let ref = db.collection("pitchEvents").document(eid)
+            batch.updateData(["templateId": template.id.uuidString], forDocument: ref)
+        }
+
+        batch.commit { error in
+            if let error = error {
+                print("Error updating templateId in batch: \(error)")
+            } else {
+                // Update local UI state for immediate feedback
+                for event in selectedEvents {
+                    if let eid = event.id {
+                        localTemplateOverrides[eid] = template.id.uuidString
+                    }
+                }
+                // Clear selection and exit selection mode
+                selectedEventIDs.removeAll()
+                isSelecting = false
+            }
+        }
     }
 }
 

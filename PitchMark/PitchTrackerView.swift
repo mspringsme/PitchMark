@@ -1,5 +1,5 @@
 //
-//  ContentView.swift
+//  PitchTrackerView.swift
 //  PitchMark
 //
 //  Created by Mark Springer on 9/16/25.
@@ -140,7 +140,6 @@ struct PitchTrackerView: View {
     @State private var pitchEvents: [PitchEvent] = []
     @State private var games: [Game] = []
     @State private var showPitchResults = false
-    @State private var filterMode: PitchMode? = nil
     @State private var showTemplateStatsSheet = false
     @State private var menuSelectedStatsTemplate: PitchTemplate?
     @State private var showConfirmSheet = false
@@ -198,6 +197,25 @@ struct PitchTrackerView: View {
         static let activeIsPractice = "activeIsPractice"
         static let activePracticeId = "activePracticeId"
         static let storedPracticeSessions = "storedPracticeSessions"
+    }
+    @State private var isSelecting: Bool = false
+    @State private var selectedEventIDs: Set<String> = []
+    @State private var localTemplateOverrides: [String: String] = [:]
+
+    private var filteredEvents: [PitchEvent] {
+        if isGame, let gid = selectedGameId {
+            return pitchEvents.filter { $0.gameId == gid }
+                .sorted { $0.timestamp > $1.timestamp }
+        } else if !isGame {
+            if let pid = selectedPracticeId {
+                return pitchEvents.filter { $0.practiceId == pid }
+                    .sorted { $0.timestamp > $1.timestamp }
+            } else {
+                return pitchEvents.filter { $0.mode == .practice }
+                    .sorted { $0.timestamp > $1.timestamp }
+            }
+        }
+        return []
     }
     
     // MARK: - Persistence
@@ -537,10 +555,9 @@ struct PitchTrackerView: View {
                     case .cards:
                         if selectedTemplate != nil {
                             PitchResultSheet(
-                                allEvents: pitchEvents,
+                                allEvents: filteredEvents,
                                 games: games,
-                                templates: templates,
-                                filterMode: $filterMode
+                                templates: templates
                             )
                             .environmentObject(authManager)
                             .environmentObject(sessionManager)

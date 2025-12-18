@@ -46,8 +46,8 @@
             filePath = "PitchMark/CalledPitchRecord.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "568"
-            endingLineNumber = "568"
+            startingLineNumber = "612"
+            endingLineNumber = "612"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
@@ -78,8 +78,8 @@
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "1823"
-            endingLineNumber = "1823"
+            startingLineNumber = "1840"
+            endingLineNumber = "1840"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
@@ -94,25 +94,9 @@
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2178"
-            endingLineNumber = "2178"
+            startingLineNumber = "2195"
+            endingLineNumber = "2195"
             landmarkName = "ballHitSpotCount"
-            landmarkType = "24">
-         </BreakpointContent>
-      </BreakpointProxy>
-      <BreakpointProxy
-         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
-         <BreakpointContent
-            uuid = "B3C52264-CAED-4F80-99C0-B8327AC9E2FF"
-            shouldBeEnabled = "No"
-            ignoreCount = "0"
-            continueAfterRunningActions = "No"
-            filePath = "PitchMark/PitchTrackerView.swift"
-            startingColumnNumber = "9223372036854775807"
-            endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "543"
-            endingLineNumber = "543"
-            landmarkName = "cardsAndOverlay"
             landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>
@@ -126,8 +110,8 @@
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "323"
-            endingLineNumber = "323"
+            startingLineNumber = "341"
+            endingLineNumber = "341"
             landmarkName = "init(previewTemplate:previewTemplates:previewIsGame:)"
             landmarkType = "7">
          </BreakpointContent>
