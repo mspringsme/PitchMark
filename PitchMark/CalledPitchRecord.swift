@@ -7,6 +7,7 @@
 
 import Foundation
 import FirebaseFirestore
+import FirebaseAuth
 import SwiftUI
 import UIKit
 
@@ -130,10 +131,10 @@ struct OutcomeSummaryView: View {
                 .padding(.bottom, 6)
             }
             ForEach(lines, id: \.self) { line in
+                let showRunner: Bool = ["1B", "2B", "3B", "HR"].contains { prefix in
+                    line.uppercased().hasPrefix(prefix)
+                }
                 HStack(spacing: 4) {
-                    let showRunner = ["1B", "2B", "3B", "HR"].contains { prefix in
-                        line.uppercased().hasPrefix(prefix)
-                    }
                     if showRunner {
                         Image(systemName: "figure.run")
                             .foregroundColor(.secondary)
@@ -390,20 +391,20 @@ struct PitchResultCard: View {
     }
 
     var body: some View {
-        let leftImageName = PitchImageDictionary.imageName(
+        let leftImageName: String = PitchImageDictionary.imageName(
             for: event.calledPitch?.location ?? "-",
             isStrike: event.calledPitch?.isStrike ?? false,
             batterSide: event.batterSide
         )
         
-        let rightImageName = PitchImageDictionary.imageName(
+        let rightImageName: String = PitchImageDictionary.imageName(
             for: event.location,
             isStrike: event.isStrike,
             batterSide: event.batterSide
         )
         
-        let didHitLocation = isLocationMatch(event)
-        let verticalTopImageName = didHitLocation ? "hitCircle" : "missedCircle"
+        let didHitLocation: Bool = isLocationMatch(event)
+        let verticalTopImageName: String = didHitLocation ? "hitCircle" : "missedCircle"
         
         let overallSuccessRate: Int = {
             let matchingCalls = allEvents.filter {
@@ -424,9 +425,9 @@ struct PitchResultCard: View {
             return total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
         }()
         
-        let timestampText = formattedTimestamp(event.timestamp)
-        let outcomeSummary = outcomeSummaryLines(for: event)
-        let jerseyNumber = event.opponentJersey
+        let timestampText: String = formattedTimestamp(event.timestamp)
+        let outcomeSummary: [String] = outcomeSummaryLines(for: event)
+        let jerseyNumber: String? = event.opponentJersey
 
         HStack(alignment: .center, spacing: 8) {
             if isSelecting {
@@ -649,6 +650,7 @@ struct FieldSprayOverlay: View {
     let events: [PitchEvent]
     // Normalized (0..1) position of home plate within the field image
     let homePlateNormalized: CGPoint
+
     let focalNormalized: CGPoint
 
     init(fieldImageName: String, events: [PitchEvent], homePlateNormalized: CGPoint = CGPoint(x: 0.5, y: 0.88), focalNormalized: CGPoint = CGPoint(x: 0.5, y: 0.60)) {
@@ -823,10 +825,13 @@ struct PitchResultSheet: View {
     @State private var selectedEventIDs: Set<String> = Set<String>()
     @State private var showTemplatePicker = false
     @State private var localTemplateOverrides: [String: String] = [:]
+    @State private var pendingTemplateSelection: PitchTemplate? = nil
 
     // Basic default filter: show all events, newest first. Adjust as needed.
     private var filteredEvents: [PitchEvent] {
-        allEvents.sorted { $0.timestamp > $1.timestamp }
+        allEvents.sorted { (lhs: PitchEvent, rhs: PitchEvent) -> Bool in
+            return lhs.timestamp > rhs.timestamp
+        }
     }
     
     var body: some View {
@@ -835,8 +840,21 @@ struct PitchResultSheet: View {
                 
                 HStack {
                     Button(isSelecting ? "Done" : "Select") {
-                        if isSelecting { selectedEventIDs.removeAll() }
-                        isSelecting.toggle()
+                        if isSelecting {
+                            print("UI: Done tapped. selectedEventIDs=\(Array(selectedEventIDs)), pendingTemplateSelection=\(String(describing: pendingTemplateSelection?.id))")
+                            if let template = pendingTemplateSelection {
+                                print("UI: Committing template change on Done. Template id=\(template.id) name=\(template.name)")
+                                reassignSelectedEvents(to: template)
+                                pendingTemplateSelection = nil
+                            } else {
+                                print("UI: No pending template. Clearing selection and exiting selection mode.")
+                                selectedEventIDs.removeAll()
+                                isSelecting = false
+                            }
+                        } else {
+                            print("UI: Entering selection mode.")
+                            isSelecting = true
+                        }
                     }
                     .buttonStyle(.bordered)
 
@@ -851,29 +869,15 @@ struct PitchResultSheet: View {
 
                 ScrollView(.vertical) {
                     VStack(spacing: 12) {
-                        ForEach(Array(filteredEvents.enumerated()), id: \.offset) { pair in
-                            let (idx, event) = pair
-                            let effectiveTemplateId = localTemplateOverrides[event.id ?? ""] ?? event.templateId
-                            let templateName = templates.first(where: { $0.id.uuidString == effectiveTemplateId })?.name ?? "Unknown"
-                            let isSelectedBinding = Binding<Bool>(
-                                get: { selectedEventIDs.contains(event.id ?? "") },
-                                set: { newValue in
-                                    guard let eid = event.id else { return }
-                                    if newValue {
-                                        selectedEventIDs.insert(eid)
-                                    } else {
-                                        selectedEventIDs.remove(eid)
-                                    }
-                                }
-                            )
-
-                            PitchResultCard(
+                        ForEach(filteredEvents, id: \.identity) { event in
+                            EventRowView(
                                 event: event,
                                 allEvents: allEvents,
                                 games: games,
-                                templateName: templateName,
+                                templates: templates,
                                 isSelecting: $isSelecting,
-                                isSelected: isSelectedBinding
+                                selectedEventIDs: $selectedEventIDs,
+                                localTemplateOverrides: localTemplateOverrides
                             )
                             .padding(.horizontal)
                             .transition(.move(edge: .top).combined(with: .opacity))
@@ -888,7 +892,8 @@ struct PitchResultSheet: View {
             NavigationView {
                 List(templates) { template in
                     Button(template.name) {
-                        reassignSelectedEvents(to: template)
+                        print("Picker: Chosen template id=\(template.id) name=\(template.name)")
+                        pendingTemplateSelection = template
                         showTemplatePicker = false
                     }
                 }
@@ -897,6 +902,7 @@ struct PitchResultSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
+                            print("Picker: Cancel tapped")
                             showTemplatePicker = false
                         }
                     }
@@ -906,6 +912,13 @@ struct PitchResultSheet: View {
     }
     
     private func reassignSelectedEvents(to template: PitchTemplate) {
+        print("Batch: Starting reassignSelectedEvents. templateId=\(template.id.uuidString) name=\(template.name)")
+        print("Batch: Current selectedEventIDs=\(Array(selectedEventIDs))")
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("Batch: No authenticated user; aborting reassignment.")
+            return
+        }
+        
         let db = Firestore.firestore()
         let batch = db.batch()
 
@@ -913,27 +926,87 @@ struct PitchResultSheet: View {
             guard let eid = event.id else { return false }
             return selectedEventIDs.contains(eid)
         }
+        print("Batch: selectedEvents count=\(selectedEvents.count)")
 
         for event in selectedEvents {
-            guard let eid = event.id else { continue }
-            let ref = db.collection("pitchEvents").document(eid)
+            guard let eid = event.id else {
+                print("Batch: Skipping event with nil id")
+                continue
+            }
+            print("Batch: Updating eventId=\(eid) -> templateId=\(template.id.uuidString)")
+            let ref = db.collection("users").document(uid).collection("pitchEvents").document(eid)
             batch.updateData(["templateId": template.id.uuidString], forDocument: ref)
         }
 
         batch.commit { error in
             if let error = error {
-                print("Error updating templateId in batch: \(error)")
+                print("Batch: Commit failed with error: \(error)")
             } else {
+                print("Batch: Commit succeeded. Updating localTemplateOverrides and clearing selection.")
                 // Update local UI state for immediate feedback
                 for event in selectedEvents {
                     if let eid = event.id {
                         localTemplateOverrides[eid] = template.id.uuidString
+                        print("Batch: localTemplateOverrides[\(eid)] = \(template.id.uuidString)")
                     }
                 }
                 // Clear selection and exit selection mode
                 selectedEventIDs.removeAll()
                 isSelecting = false
+                print("Batch: isSelecting set to false, selection cleared.")
             }
+        }
+    }
+    
+    private struct EventRowView: View {
+        let event: PitchEvent
+        let allEvents: [PitchEvent]
+        let games: [Game]
+        let templates: [PitchTemplate]
+
+        @Binding var isSelecting: Bool
+        @Binding var selectedEventIDs: Set<String>
+
+        let localTemplateOverrides: [String: String]
+
+        var body: some View {
+            // Compute ids and effective template id outside of ViewBuilder statements that produce views
+            let eventId: String = event.id ?? "<nil>"
+            let effectiveTemplateId: String? = (event.id.flatMap { localTemplateOverrides[$0] }) ?? event.templateId
+
+            // Log rendering for debugging
+            let templateName: String = templates.first(where: { $0.id.uuidString == effectiveTemplateId })?.name ?? "Unknown"
+            print("UI: Rendering card for eventId=\(eventId), effectiveTemplateId=\(effectiveTemplateId ?? "<nil>"), templateName=\(templateName)")
+
+            // Create a simple Binding for selection state
+            let isSelectedBinding: Binding<Bool> = Binding<Bool>(
+                get: {
+                    if event.id == nil { return false }
+                    return selectedEventIDs.contains(eventId)
+                },
+                set: { newValue in
+                    if event.id == nil {
+                        print("UI: Attempted to toggle selection for event with nil id")
+                        return
+                    }
+                    if newValue {
+                        selectedEventIDs.insert(eventId)
+                        print("UI: Selected eventId=\(eventId). Now selectedEventIDs=\(Array(selectedEventIDs))")
+                    } else {
+                        selectedEventIDs.remove(eventId)
+                        print("UI: Deselected eventId=\(eventId). Now selectedEventIDs=\(Array(selectedEventIDs))")
+                    }
+                }
+            )
+
+            return PitchResultCard(
+                event: event,
+                allEvents: allEvents,
+                games: games,
+                templateName: templateName,
+                isSelecting: $isSelecting,
+                isSelected: isSelectedBinding
+            )
         }
     }
 }
@@ -969,6 +1042,31 @@ struct PitchEvent: Codable, Identifiable {
     var opponentJersey: String?
     var opponentBatterId: String?
     var practiceId: String?
+}
+
+extension PitchEvent: Hashable {
+    static func == (lhs: PitchEvent, rhs: PitchEvent) -> Bool {
+        // Prefer Firestore id when available; else fall back to timestamp and pitch/location for stability
+        if let l = lhs.id, let r = rhs.id { return l == r }
+        return lhs.timestamp == rhs.timestamp && lhs.pitch == rhs.pitch && lhs.location == rhs.location
+    }
+    func hash(into hasher: inout Hasher) {
+        if let id = id {
+            hasher.combine(id)
+        } else {
+            hasher.combine(timestamp.timeIntervalSince1970)
+            hasher.combine(pitch)
+            hasher.combine(location)
+        }
+    }
+}
+
+extension PitchEvent {
+    // Stable identity for UI lists even when Firestore id is nil
+    var identity: String {
+        if let id = self.id, !id.isEmpty { return id }
+        return "\(timestamp.timeIntervalSince1970)-\(pitch)-\(location)"
+    }
 }
 
 enum PitchMode: String, Codable {
