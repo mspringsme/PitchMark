@@ -658,6 +658,25 @@ struct PitchTrackerView: View {
             .allowsHitTesting(!isDimmed)
             .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
     }
+
+    // Added binding that prevents the confirm sheet from ever appearing in Practice mode
+    // Inserted here exactly after contentSectionDimmed per instructions
+    // -------------------------------------------------------------
+    // Binding that prevents the confirm sheet from ever appearing in Practice mode
+    private var confirmSheetBinding: Binding<Bool> {
+        Binding<Bool>(
+            get: { sessionManager.currentMode == .game && showConfirmSheet },
+            set: { newValue in
+                if sessionManager.currentMode == .game {
+                    showConfirmSheet = newValue
+                } else {
+                    // In practice, never allow the sheet to appear
+                    showConfirmSheet = false
+                }
+            }
+        )
+    }
+    // -------------------------------------------------------------
     
     // MARK: - Extracted subviews to help type-checker
     private var topBar: some View {
@@ -931,7 +950,7 @@ struct PitchTrackerView: View {
                     setResultVisualState: { resultVisualState = $0 },
                     pendingResultLabel: $pendingResultLabel,
                     showResultConfirmation: $showResultConfirmation,
-                    showConfirmSheet: $showConfirmSheet
+                    showConfirmSheet: confirmSheetBinding
                 )
                 .id(colorRefreshToken)
             }
@@ -1338,7 +1357,7 @@ struct PitchTrackerView: View {
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showConfirmSheet) {
+        .sheet(isPresented: confirmSheetBinding) {
             PitchResultSheetView(
                 isPresented: $showConfirmSheet,
                 isStrikeSwinging: $isStrikeSwinging,
