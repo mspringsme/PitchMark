@@ -696,34 +696,3 @@ private struct FieldOverlayView: View {
         }
     }
 }
-
-#Preview {
-    PitchResultSheetView(
-        isPresented: .constant(true),
-        isStrikeSwinging: .constant(false),
-        isStrikeLooking: .constant(false),
-        isWildPitch: .constant(false),
-        isPassedBall: .constant(false),
-        isBall: .constant(false),
-        selectedOutcome: .constant(nil),
-        selectedDescriptor: .constant(nil),
-        isError: .constant(false),
-        pendingResultLabel: "A2",
-        pitchCall: PitchCall(pitch: "Fastball", location: "A2", isStrike: true, codes: ["S", "C"]),
-        batterSide: .left,
-        selectedTemplateId: nil,
-        currentMode: .practice, // Use a valid case for PitchMode
-        selectedGameId: nil,
-        selectedOpponentJersey: nil,
-        selectedOpponentBatterId: nil,
-        selectedPracticeId: nil,
-        saveAction: { _ in },
-        template: PitchTemplate(
-            id: UUID(),
-            name: "Sample Template",
-            pitches: ["Fastball", "Curveball"],
-            codeAssignments: []
-        )
-    )
-}
-

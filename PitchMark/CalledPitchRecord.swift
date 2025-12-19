@@ -838,34 +838,67 @@ struct PitchResultSheet: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 
-                HStack {
-                    Button(isSelecting ? "Done" : "Select") {
+                ZStack {
+                    if isSelecting {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.ultraThinMaterial)
+                            .transition(.opacity) // fade in/out background
+                    }
+
+                    HStack {
                         if isSelecting {
-                            print("UI: Done tapped. selectedEventIDs=\(Array(selectedEventIDs)), pendingTemplateSelection=\(String(describing: pendingTemplateSelection?.id))")
-                            if let template = pendingTemplateSelection {
-                                print("UI: Committing template change on Done. Template id=\(template.id) name=\(template.name)")
-                                reassignSelectedEvents(to: template)
-                                pendingTemplateSelection = nil
-                            } else {
-                                print("UI: No pending template. Clearing selection and exiting selection mode.")
-                                selectedEventIDs.removeAll()
-                                isSelecting = false
+                            Spacer()
+                            
+                            Button("Done") {
+                                withAnimation(.easeInOut) {
+                                    if let template = pendingTemplateSelection {
+                                        reassignSelectedEvents(to: template)
+                                        pendingTemplateSelection = nil
+                                    } else {
+                                        selectedEventIDs.removeAll()
+                                        isSelecting = false
+                                    }
+                                }
                             }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color(.black))
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                            
+                            Spacer()
+                                .frame(width: 50)
+                            
+                            Button("Change Template") {
+                                withAnimation(.easeInOut) {
+                                    showTemplatePicker = true
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color(.blue))
+                            .disabled(selectedEventIDs.isEmpty || !isSelecting)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                            
+                            Spacer()
                         } else {
-                            print("UI: Entering selection mode.")
-                            isSelecting = true
+                            Button {
+                                withAnimation(.easeInOut) {
+                                    isSelecting = true
+                                }
+                            } label: {
+                                Image(systemName: "gearshape")
+                                    .imageScale(.medium)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color(.gray))
+                            .transition(.scale.combined(with: .opacity)) // gear fades/scales in
+                            
+                            Spacer()
                         }
                     }
-                    .buttonStyle(.bordered)
-
-                    Spacer()
-
-                    Button("Change Template") {
-                        showTemplatePicker = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(selectedEventIDs.isEmpty || !isSelecting)
+                    .padding(.horizontal, 20)
                 }
+                .frame(maxWidth: .infinity)
+                .frame(height: 44) // 🔑 fixes the bar height
+                .padding(.vertical, -66)
 
                 ScrollView(.vertical) {
                     VStack(spacing: 12) {
