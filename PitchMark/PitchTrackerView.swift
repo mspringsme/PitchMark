@@ -1581,6 +1581,17 @@ struct PitchTrackerView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .templateSelectionDidChange)) { note in
+              // If SettingsView sent an explicit templateId, try to resolve it; otherwise just use the current selectedTemplate.
+              if let userInfo = note.userInfo as? [String: Any],
+                 let tid = userInfo["templateId"] as? String,
+                 let resolved = templates.first(where: { $0.id.uuidString == tid }) {
+                  applyTemplate(resolved)
+              } else if let current = selectedTemplate {
+                  // Re-apply to pull in any edits made in the editor and refresh derived state/UI
+                  applyTemplate(current)
+              }
+          }
         .overlay(alignment: .bottom) {
             pitchesFacedOverlay
         }

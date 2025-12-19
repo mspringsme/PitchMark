@@ -191,7 +191,22 @@ struct SettingsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: { dismiss() }) {
+                    Button(action: {
+                        // Notify listeners (e.g., PitchTrackerView) to reload with the latest selected template before dismissing
+                        if let tmpl = selectedTemplate {
+                            NotificationCenter.default.post(
+                                name: .templateSelectionDidChange,
+                                object: nil,
+                                userInfo: [
+                                    "templateId": tmpl.id.uuidString
+                                ]
+                            )
+                        } else {
+                            NotificationCenter.default.post(name: .templateSelectionDidChange, object: nil, userInfo: nil)
+                        }
+
+                        dismiss()
+                    }) {
                         Image(systemName: "xmark")
                             .imageScale(.medium)
                     }
@@ -223,6 +238,13 @@ struct SettingsView: View {
                     onChoose: { gameId in
                         if let tmpl = templatePendingLaunch {
                             selectedTemplate = tmpl
+                            NotificationCenter.default.post(
+                                name: .templateSelectionDidChange,
+                                object: nil,
+                                userInfo: [
+                                    "templateId": tmpl.id.uuidString
+                                ]
+                            )
                         }
                         var opponent: String? = nil
                         authManager.loadGames { games in
@@ -252,6 +274,13 @@ struct SettingsView: View {
                     onChoose: { practiceId in
                         if let tmpl = templatePendingLaunch {
                             selectedTemplate = tmpl
+                            NotificationCenter.default.post(
+                                name: .templateSelectionDidChange,
+                                object: nil,
+                                userInfo: [
+                                    "templateId": tmpl.id.uuidString
+                                ]
+                            )
                         }
                         // Look up the session name locally so receivers can update UI immediately
                         let sessions = loadPracticeSessions()
@@ -388,3 +417,6 @@ private struct SettingsPreviewContainer: View {
     SettingsPreviewContainer()
 }
 
+extension Notification.Name {
+    static let templateSelectionDidChange = Notification.Name("templateSelectionDidChange")
+}

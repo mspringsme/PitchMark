@@ -897,7 +897,7 @@ struct PitchResultSheet: View {
                     .padding(.horizontal, 20)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 44) // 🔑 fixes the bar height
+                .frame(height: 44)
                 .padding(.vertical, -66)
 
                 ScrollView(.vertical) {
@@ -941,6 +941,7 @@ struct PitchResultSheet: View {
                     }
                 }
             }
+            .presentationDetents([.medium])
         }
     }
     

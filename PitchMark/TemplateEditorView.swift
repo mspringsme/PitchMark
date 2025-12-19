@@ -1004,32 +1004,4 @@ struct ColoredDivider: View {
     }
 }
 
-#Preview("Template Editor – New Template") {
-    let samplePitches = ["FB", "SL", "CH", "CB", "SI", "CT"]
-    return TemplateEditorView(
-        template: nil,
-        allPitches: samplePitches,
-        onSave: { _ in }
-    )
-}
-
-#Preview("Template Editor – Existing Template") {
-    let samplePitches = ["FB", "SL", "CH", "CB", "SI", "CT"]
-    let sampleTemplate = PitchTemplate(
-        id: UUID(),
-        name: "Bullpen vs L",
-        pitches: ["FB", "SL", "CH"],
-        codeAssignments: [
-            PitchCodeAssignment(code: "101", pitch: "FB", location: "Strike Middle"),
-            PitchCodeAssignment(code: "115", pitch: "FB", location: "Strike Up"),
-            PitchCodeAssignment(code: "205", pitch: "SL", location: "Ball ↓ & Out"),
-            PitchCodeAssignment(code: "309", pitch: "CH", location: "Strike Down")
-        ]
-    )
-    return TemplateEditorView(
-        template: sampleTemplate,
-        allPitches: samplePitches,
-        onSave: { _ in }
-    )
-}
 
