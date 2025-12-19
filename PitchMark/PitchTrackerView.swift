@@ -750,7 +750,10 @@ struct PitchTrackerView: View {
             titleVisibility: .visible
         ) {
             Button("Change / Add Session") {
-                // Open the practice session picker; do not change the template yet
+                // Open the practice session picker and switch to the pending template (if any)
+                if let toApply = pendingTemplateSelection {
+                    applyTemplate(toApply)
+                }
                 showPracticeSheet = true
                 pendingTemplateSelection = nil
             }
@@ -3456,4 +3459,5 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
 
