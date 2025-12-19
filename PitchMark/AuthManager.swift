@@ -278,8 +278,13 @@ extension AuthManager {
         let db = Firestore.firestore()
         let ref = db.collection("users").document(user.uid).collection("games")
         let doc = (game.id != nil) ? ref.document(game.id!) : ref.document()
+        let isNew = (game.id == nil)
         do {
             var toSave = game
+            if isNew {
+                // Ensure first-time saves start with an empty set/list of jersey numbers
+                toSave.jerseyNumbers = []
+            }
             toSave.id = doc.documentID
             try doc.setData(from: toSave, merge: true) { error in
                 if let error = error { print("Error saving game: \(error)") }
@@ -431,3 +436,4 @@ extension AuthManager {
         }
     }
 }
+
