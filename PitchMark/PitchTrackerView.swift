@@ -505,12 +505,7 @@ struct PitchTrackerView: View {
             VStack(spacing: 8) {
                 // Top toggle buttons
                 HStack(spacing: 6) {
-                    if sessionManager.currentMode == .practice {
-                        Text(selectedTemplate?.name ?? "")
-                            .font(.title3)
-                            .foregroundStyle(.purple)
-                            .padding(.trailing, 8)
-                    }
+                    
                     Button(action: { overlayTab = .progress }) {
                         HStack(spacing: 6) {
                             Image(systemName: "chart.bar.xaxis")
@@ -544,10 +539,10 @@ struct PitchTrackerView: View {
                     .buttonStyle(.plain)
                 }
                 .padding(.horizontal)
-                .padding(.top, 4)
+                .padding(.top, 12)
 
                 Divider()
-                .padding(.top, 10)
+                .padding(.top, 5)
                 
                 // Content switches with tab
                 Group {
@@ -1719,7 +1714,7 @@ private struct ProgressGameView: View {
                 .padding(.horizontal, 0)
                 .padding(.trailing, 10)
             }
-            .padding(.vertical, -210)
+            .padding(.vertical, -212)
         }
         .padding(.vertical, -6)
         .onAppear {
