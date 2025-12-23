@@ -115,6 +115,36 @@ struct SettingsView: View {
     }
     
     @ViewBuilder
+    private var storeSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Store")
+                .font(.title2)
+                .bold()
+                .padding(.horizontal)
+
+            NavigationLink {
+                Storefront
+            } label: {
+                HStack {
+                    Image(systemName: "cart")
+                        .foregroundStyle(.blue)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Template Inserts")
+                            .font(.headline)
+                        Text("Buy printable wristband card templates")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+    
+    @ViewBuilder
     private var accountSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Account")
@@ -150,7 +180,10 @@ struct SettingsView: View {
 
                     Divider()
                         .padding(.horizontal)
-
+                    
+                    storeSection
+                    Divider()
+                    
                     // 🔹 Account Section
                     accountSection
                     
@@ -402,19 +435,6 @@ private struct SettingsPreviewContainer: View {
         )
         .environmentObject(AuthManager())
     }
-}
-
-#Preview("Settings – Empty") {
-    SettingsView(
-        templates: .constant([]),
-        allPitches: ["FB", "SL", "CH"],
-        selectedTemplate: .constant(nil)
-    )
-    .environmentObject(AuthManager())
-}
-
-#Preview("Settings – With Templates") {
-    SettingsPreviewContainer()
 }
 
 extension Notification.Name {
