@@ -21,7 +21,7 @@ struct TemplateEditorView: View {
     @FocusState private var customPitchFieldFocused: Bool
     @FocusState private var nameFieldFocused: Bool
     @State private var showAssignedLocations = false
-    @State private var templateType: String = "classic"
+    @State private var templateType: String = "encrypted"
     
     let allPitches: [String]
     let templateID: UUID
@@ -287,6 +287,11 @@ struct TemplateEditorView: View {
                             .padding(.top)
                         }
                         
+                        Spacer()
+                    }
+                    else {
+                        // Encrypted template: show pitch grid editor
+                        PitchGridView()
                         Spacer()
                     }
                     
@@ -698,7 +703,6 @@ struct CodeAssignmentPanel: View {
                         }
                     }
                 }
-                .padding(.bottom)
             }
             .onChange(of: selectedPitch) {
                 selectedLocation = ""
@@ -1021,7 +1025,119 @@ struct ColoredDivider: View {
 }
 
 
+struct PitchGridView: View {
+    @State private var pitches: [String] = ["2S", "4S", "CHA", "CUR"]
+    @State private var rowLabels: [String] = ["23", "56", "90"]
+    @State private var grid: [[String]] = [
+        ["9", "8", "7", "6"],
+        ["1", "2", "3", "4"],
+        ["4", "8", "3", "9"]
+    ]
+    
+    let cellWidth: CGFloat = 60
+    let cellHeight: CGFloat = 36
+    
+    private func emptyCell() -> some View {
+        Color.clear
+            .frame(width: cellWidth, height: cellHeight)
+    }
+    private func boldCellBinding(_ binding: Binding<String>) -> some View {
+        TextField("", text: binding)
+            .textFieldStyle(RoundedBorderTextFieldStyle())
+            .bold()
+            .multilineTextAlignment(.center)
+            .frame(width: cellWidth, height: cellHeight)
+    }
+    
+    var body: some View {
+        ScrollView(.horizontal) {
+            VStack(alignment: .leading, spacing: 12) {
+                
+                // MARK: Header Grid
+                LazyVGrid(columns: gridColumns, spacing: 4) {
+                    
+                    // Top-left blank cell with NO border
+                    emptyCell()
+                    
+                    // Pitch headers
+                    ForEach(pitches.indices, id: \.self) { index in
+                        TextField("", text: $pitches[index])
+                            .textFieldStyle(.plain)
+                            .bold()
+                            .multilineTextAlignment(.center)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)   // 👈 auto-shrink text
+                            .frame(width: cellWidth, height: cellHeight)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.gray.opacity(0.4))
+                            )
+                        
+//                        TextField("", text: $pitches[index])
+//                            .textFieldStyle(.plain)          // removes default padding
+//                            .padding(.horizontal, 4)         // your custom padding
+//                            .frame(width: cellWidth, height: cellHeight)
+//                            .overlay(
+//                                RoundedRectangle(cornerRadius: 6)
+//                                    .stroke(Color.gray.opacity(0.4))
+//                            )
+                    }
+                    
+                    // Add column button
+                    Button(action: addPitch) {
+                        Image(systemName: "plus")
+                            .frame(width: cellWidth, height: cellHeight)
+                    }
+                    .buttonStyle(.plain)
+                }
 
-
-
+                // MARK: Data Rows
+                ForEach(grid.indices, id: \.self) { row in
+                    LazyVGrid(columns: gridColumns, spacing: 4) {
+                        
+                        // Row label — now bold
+                        boldCellBinding($rowLabels[row])
+                        
+                        // Row cells
+                        ForEach(grid[row].indices, id: \.self) { col in
+                            cellBinding($grid[row][col])
+                        }
+                        
+                        // Placeholder to align with "+" column
+                        emptyCell()
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+    
+    // MARK: Dynamic Grid Columns
+    private var gridColumns: [GridItem] {
+        // 1 label column + N pitch columns + 1 add button column
+        Array(repeating: GridItem(.fixed(cellWidth)), count: pitches.count + 2)
+    }
+    
+    // MARK: Helpers
+    private func cell(_ text: String) -> some View {
+        Text(text)
+            .frame(width: cellWidth, height: cellHeight)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.gray.opacity(0.4)))
+    }
+    
+    private func cellBinding(_ binding: Binding<String>) -> some View {
+        TextField("", text: binding)
+            .textFieldStyle(RoundedBorderTextFieldStyle())
+            .multilineTextAlignment(.center)
+            .frame(width: cellWidth, height: cellHeight)
+    }
+    
+    private func addPitch() {
+        let newName = "P\(pitches.count + 1)"
+        pitches.append(newName)
+        for row in grid.indices {
+            grid[row].append("")
+        }
+    }
+}
 
