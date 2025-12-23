@@ -21,6 +21,7 @@ struct TemplateEditorView: View {
     @FocusState private var customPitchFieldFocused: Bool
     @FocusState private var nameFieldFocused: Bool
     @State private var showAssignedLocations = false
+    @State private var templateType: String = "classic"
     
     let allPitches: [String]
     let templateID: UUID
@@ -226,63 +227,67 @@ struct TemplateEditorView: View {
                         }
                     }
                     ColoredDivider(color: .blue, height: 1.0)
-                    Text("Assign locations / codes to pitches")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.gray)
-                    // 🔹 Code Assignment Panel
-                    CodeAssignmentPanel(
-                        selectedCodes: $selectedCodes,
-                        selectedPitch: $selectedPitch,
-                        selectedLocation: $selectedLocation,
-                        pitchCodeAssignments: $codeAssignments,
-                        allPitches: availablePitches,
-                        allLocations: allLocationsFromGrid(),
-                        assignAction: {
-                            for code in selectedCodes {
-                                let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
-                                if !codeAssignments.contains(assignment) {
-                                    codeAssignments.append(assignment)
+                    if templateType != "encrypted" {
+                        Text("Assign locations / codes to pitches")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.gray)
+                        // 🔹 Code Assignment Panel
+                        CodeAssignmentPanel(
+                            selectedCodes: $selectedCodes,
+                            selectedPitch: $selectedPitch,
+                            selectedLocation: $selectedLocation,
+                            pitchCodeAssignments: $codeAssignments,
+                            allPitches: availablePitches,
+                            allLocations: allLocationsFromGrid(),
+                            assignAction: {
+                                for code in selectedCodes {
+                                    let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
+                                    if !codeAssignments.contains(assignment) {
+                                        codeAssignments.append(assignment)
+                                    }
                                 }
+                                selectedCodes.removeAll()
                             }
-                            selectedCodes.removeAll()
-                        }
-                    )
-                    
-                    if !(nameFieldFocused || customPitchFieldFocused) {
-                        HStack(spacing: 12) {
+                        )
+                        
+                        if !(nameFieldFocused || customPitchFieldFocused) {
+                            HStack(spacing: 12) {
+                                Spacer()
+                                Button("Assigned locations") {
+                                    showAssignedLocations = true
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .buttonBorderShape(.capsule)
+                                .tint(.white)
+                                .foregroundColor(.black)
+                                .shadow(color: .black.opacity(0.2),
+                                        radius: 3, x: 0, y: 2)
+                                .sheet(isPresented: $showAssignedLocations) {
+                                    AssignedLocationsOverview(codeAssignments: codeAssignments)
+                                        .presentationDetents([.fraction(0.8), .large])
+                                        .presentationDragIndicator(.visible)
+                                }
                             Spacer()
-                            Button("Assigned locations") {
-                                showAssignedLocations = true
+                                Button("Save") {
+                                    saveTemplate()
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .buttonBorderShape(.capsule)
+                                .tint(.white)
+                                .foregroundColor(.black)
+                                .shadow(color: .black.opacity(0.2),
+                                        radius: 3, x: 0, y: 2)
+                                .disabled(
+                                    name
+                                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                                        .isEmpty || selectedPitches.isEmpty
+                                )
+                                Spacer()
                             }
-                            .buttonStyle(.borderedProminent)
-                            .buttonBorderShape(.capsule)
-                            .tint(.white)
-                            .foregroundColor(.black)
-                            .shadow(color: .black.opacity(0.2),
-                                    radius: 3, x: 0, y: 2)
-                            .sheet(isPresented: $showAssignedLocations) {
-                                AssignedLocationsOverview(codeAssignments: codeAssignments)
-                                    .presentationDetents([.fraction(0.8), .large])
-                                    .presentationDragIndicator(.visible)
-                            }
+                            .padding(.top)
+                        }
+                        
                         Spacer()
-                            Button("Save") {
-                                saveTemplate()
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .buttonBorderShape(.capsule)
-                            .tint(.white)
-                            .foregroundColor(.black)
-                            .shadow(color: .black.opacity(0.2),
-                                    radius: 3, x: 0, y: 2)
-                            .disabled(
-                                name
-                                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                                    .isEmpty || selectedPitches.isEmpty
-                            )
-                            Spacer()
-                        }
-                        .padding(.top)
                     }
                     
                     Spacer()
@@ -297,7 +302,18 @@ struct TemplateEditorView: View {
                         saveTemplate()
                         dismiss()
                     }
+                    .fixedSize()
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                
+                ToolbarItem(placement: .topBarTrailing) {
+                    Picker("Template Type", selection: $templateType) {
+                        Text("Encrypted").tag("encrypted")
+                        Text("Classic").tag("classic")
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .accessibilityLabel("Template type")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
@@ -1003,6 +1019,9 @@ struct ColoredDivider: View {
             .frame(height: height)
     }
 }
+
+
+
 
 
 
