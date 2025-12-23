@@ -1033,82 +1033,150 @@ struct PitchGridView: View {
         ["1", "2", "3", "4"],
         ["4", "8", "3", "9"]
     ]
+    @State private var isDeleteMode: Bool = false
     
     let cellWidth: CGFloat = 60
     let cellHeight: CGFloat = 36
     
-    private func emptyCell() -> some View {
-        Color.clear
-            .frame(width: cellWidth, height: cellHeight)
+    private func normalizeGrid() {
+        // Ensure each row has the same number of columns as pitches
+        for row in grid.indices {
+            if grid[row].count < pitches.count {
+                grid[row].append(contentsOf: Array(repeating: "", count: pitches.count - grid[row].count))
+            } else if grid[row].count > pitches.count {
+                grid[row].removeLast(grid[row].count - pitches.count)
+            }
+        }
     }
-    private func boldCellBinding(_ binding: Binding<String>) -> some View {
-        TextField("", text: binding)
-            .textFieldStyle(RoundedBorderTextFieldStyle())
-            .bold()
-            .multilineTextAlignment(.center)
-            .frame(width: cellWidth, height: cellHeight)
+    
+    private func removePitch(at index: Int) {
+        guard pitches.indices.contains(index) else { return }
+        pitches.remove(at: index)
+        for row in grid.indices {
+            if grid[row].indices.contains(index) {
+                grid[row].remove(at: index)
+            } else if !grid[row].isEmpty {
+                // If index somehow out of bounds, remove last to keep widths aligned
+                grid[row].removeLast()
+            }
+        }
+        // Exit delete mode if nothing left to delete
+        if pitches.isEmpty { isDeleteMode = false }
+    }
+    
+    // Returns the first available single-digit string ("0".."9") not in the excluded set
+    private func firstAvailableDigit(excluding excluded: Set<String>) -> String? {
+        for d in 0...9 {
+            let s = String(d)
+            if !excluded.contains(s) {
+                return s
+            }
+        }
+        return nil
     }
     
     var body: some View {
-        ScrollView(.horizontal) {
-            VStack(alignment: .leading, spacing: 12) {
-                
-                // MARK: Header Grid
-                LazyVGrid(columns: gridColumns, spacing: 4) {
-                    
-                    // Top-left blank cell with NO border
-                    emptyCell()
-                    
-                    // Pitch headers
-                    ForEach(pitches.indices, id: \.self) { index in
-                        TextField("", text: $pitches[index])
-                            .textFieldStyle(.plain)
-                            .bold()
-                            .multilineTextAlignment(.center)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.5)   // 👈 auto-shrink text
-                            .frame(width: cellWidth, height: cellHeight)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.gray.opacity(0.4))
-                            )
-                        
-//                        TextField("", text: $pitches[index])
-//                            .textFieldStyle(.plain)          // removes default padding
-//                            .padding(.horizontal, 4)         // your custom padding
-//                            .frame(width: cellWidth, height: cellHeight)
-//                            .overlay(
-//                                RoundedRectangle(cornerRadius: 6)
-//                                    .stroke(Color.gray.opacity(0.4))
-//                            )
-                    }
-                    
-                    // Add column button
-                    Button(action: addPitch) {
-                        Image(systemName: "plus")
-                            .frame(width: cellWidth, height: cellHeight)
-                    }
-                    .buttonStyle(.plain)
+        VStack {
+            // Keep grid width in sync with pitches
+            // Normalize on appear and when pitches change
+            EmptyView()
+                .onAppear { normalizeGrid() }
+                .onChange(of: pitches) {
+                    normalizeGrid()
                 }
 
-                // MARK: Data Rows
-                ForEach(grid.indices, id: \.self) { row in
+            ScrollView(.horizontal) {
+                VStack(alignment: .leading, spacing: 12) {
+                    
+                    // MARK: Header Grid
                     LazyVGrid(columns: gridColumns, spacing: 4) {
                         
-                        // Row label — now bold
-                        boldCellBinding($rowLabels[row])
+                        // Top-left blank cell with NO border
+                        emptyCell()
                         
-                        // Row cells
-                        ForEach(grid[row].indices, id: \.self) { col in
-                            cellBinding($grid[row][col])
+                        // Pitch headers
+                        ForEach(pitches.indices, id: \.self) { index in
+                            ZStack(alignment: .topTrailing) {
+                                if pitches.indices.contains(index) {
+                                    TextField("", text: $pitches[index])
+                                        .textFieldStyle(.plain)
+                                        .bold()
+                                        .multilineTextAlignment(.center)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.5)
+                                        .frame(width: cellWidth, height: cellHeight)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(Color.gray.opacity(0.4))
+                                        )
+                                } else {
+                                    Color.clear
+                                        .frame(width: cellWidth, height: cellHeight)
+                                }
+
+                                if isDeleteMode && pitches.indices.contains(index) {
+                                    Button {
+                                        removePitch(at: index)
+                                        isDeleteMode = false
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.red)
+                                            .padding(4)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Delete column \(pitches.indices.contains(index) ? pitches[index] : "")")
+                                }
+                            }
                         }
                         
-                        // Placeholder to align with "+" column
-                        emptyCell()
+                        // Add column button replaced by Menu as requested
+                        Menu {
+                            Button {
+                                // Add column
+                                addPitch()
+                                isDeleteMode = false
+                            } label: {
+                                Label("Add column", systemImage: "plus")
+                            }
+                            Button(role: .destructive) {
+                                if !pitches.isEmpty {
+                                    isDeleteMode.toggle()
+                                }
+                            } label: {
+                                Label("Delete columns", systemImage: "minus.circle")
+                            }
+                            .disabled(pitches.isEmpty)
+                        } label: {
+                            Image(systemName: "plus.slash.minus")
+                                .frame(width: cellWidth, height: cellHeight)
+                        }
+                        .accessibilityLabel("Add or delete columns")
+                    }
+
+                    // MARK: Data Rows
+                    ForEach(grid.indices, id: \.self) { row in
+                        LazyVGrid(columns: gridColumns, spacing: 4) {
+                            
+                            // Row label — now bold
+                            boldCellBinding($rowLabels[row])
+                            
+                            // Row cells
+                            ForEach(grid[row].indices, id: \.self) { col in
+                                if grid.indices.contains(row) && grid[row].indices.contains(col) {
+                                    cellBinding($grid[row][col])
+                                } else {
+                                    Color.clear
+                                        .frame(width: cellWidth, height: cellHeight)
+                                }
+                            }
+                            
+                            // Placeholder to align with "+" column
+                            emptyCell()
+                        }
                     }
                 }
+                .padding()
             }
-            .padding()
         }
     }
     
@@ -1132,12 +1200,40 @@ struct PitchGridView: View {
             .frame(width: cellWidth, height: cellHeight)
     }
     
+    private func boldCellBinding(_ binding: Binding<String>) -> some View {
+        TextField("", text: binding)
+            .textFieldStyle(RoundedBorderTextFieldStyle())
+            .bold()
+            .multilineTextAlignment(.center)
+            .frame(width: cellWidth, height: cellHeight)
+    }
+    
     private func addPitch() {
         let newName = "P\(pitches.count + 1)"
         pitches.append(newName)
+
+        // Track which digits we've already used in this new column (by row index processed so far)
+        var usedInNewColumn: Set<String> = []
+
+        // For each row, append a unique single-digit (0-9) not already used in that row
+        // AND not already used earlier in this same new column. If none available, append "".
         for row in grid.indices {
-            grid[row].append("")
+            // Digits already used in this row (ignoring empties)
+            let usedDigitsInRow: Set<String> = Set(grid[row].filter { !$0.isEmpty })
+            // Combine constraints: digits used in this row OR already used in this new column
+            let excluded = usedDigitsInRow.union(usedInNewColumn)
+            let digitToUse = firstAvailableDigit(excluding: excluded)
+            let value = digitToUse ?? ""
+            grid[row].append(value)
+            if let d = digitToUse { usedInNewColumn.insert(d) }
         }
+
+        normalizeGrid()
+    }
+    
+    private func emptyCell() -> some View {
+        Color.clear
+            .frame(width: cellWidth, height: cellHeight)
     }
 }
 
