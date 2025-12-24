@@ -291,7 +291,9 @@ struct TemplateEditorView: View {
                     }
                     else {
                         // Encrypted template: show pitch grid editor
-                        PitchGridView()
+                        
+                        PitchGridView(availablePitches: availablePitches)
+                            .padding(.top, 24)
                         Spacer()
                     }
                     
@@ -1034,9 +1036,20 @@ struct PitchGridView: View {
         ["4", "8", "3", "9"]
     ]
     @State private var isDeleteMode: Bool = false
+    @State private var abbreviations: [String: String] = [:]
+    @State private var showAbbrevEditorForIndex: Int? = nil
+    @State private var pendingAbbreviation: String = ""
+    let availablePitches: [String]
     
     let cellWidth: CGFloat = 60
     let cellHeight: CGFloat = 36
+    
+    private func displayName(for pitch: String) -> String {
+        if let abbr = abbreviations[pitch], !abbr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return abbr
+        }
+        return pitch
+    }
     
     private func normalizeGrid() {
         // Ensure each row has the same number of columns as pitches
@@ -1099,7 +1112,7 @@ struct PitchGridView: View {
                             ZStack(alignment: .topTrailing) {
                                 
                                 // Header cell
-                                pitchHeaderCell($pitches[index])
+                                pitchHeaderCell(index: index, binding: $pitches[index])
                                 
                                 // Delete button overlay
                                 if isDeleteMode {
@@ -1198,15 +1211,78 @@ struct PitchGridView: View {
         }
     }
 
-    private func pitchHeaderCell(_ binding: Binding<String>) -> some View {
+    private func pitchHeaderCell(index: Int, binding: Binding<String>) -> some View {
         baseCell {
-            TextField("", text: binding)
-                .textFieldStyle(.plain)
-                .bold()
-                .multilineTextAlignment(.center)
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .padding(.horizontal, 0)
+            Menu {
+                // Select underlying pitch (unchanged logic)
+                ForEach(availablePitches, id: \.self) { pitch in
+                    Button(action: { binding.wrappedValue = pitch }) {
+                        HStack {
+                            Text(pitch)
+                            if binding.wrappedValue == pitch {
+                                Spacer()
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+
+                // Separator and abbreviation editor only when a pitch is selected
+                if !binding.wrappedValue.isEmpty {
+                    Divider()
+                    Button {
+                        // Prepare the editor with existing abbreviation (if any)
+                        pendingAbbreviation = abbreviations[binding.wrappedValue] ?? ""
+                        // Set the index for the abbreviation editor
+                        showAbbrevEditorForIndex = index
+                    } label: {
+                        Label("Edit Abbreviation", systemImage: "character.cursor.ibeam")
+                    }
+
+                    // Option to clear abbreviation
+                    if abbreviations[binding.wrappedValue] != nil {
+                        Button(role: .destructive) {
+                            abbreviations[binding.wrappedValue] = nil
+                        } label: {
+                            Label("Clear Abbreviation", systemImage: "trash")
+                        }
+                    }
+                }
+            } label: {
+                // Show abbreviation if it exists, otherwise the pitch name
+                Text(binding.wrappedValue.isEmpty ? "Select" : displayName(for: binding.wrappedValue))
+                    .bold()
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        // Alert for editing the abbreviation
+        .alert("Edit Abbreviation", isPresented: Binding(
+            get: { showAbbrevEditorForIndex == index },
+            set: { newValue in if !newValue { showAbbrevEditorForIndex = nil } }
+        )) {
+            TextField("Abbreviation", text: $pendingAbbreviation)
+            Button("Save") {
+                let keyPitch = binding.wrappedValue
+                // Save only if a pitch is actually selected
+                if !keyPitch.isEmpty {
+                    let trimmed = pendingAbbreviation.trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Save empty to remove or keep it empty if user wants nothing
+                    if trimmed.isEmpty {
+                        abbreviations[keyPitch] = nil
+                    } else {
+                        abbreviations[keyPitch] = trimmed
+                    }
+                }
+                showAbbrevEditorForIndex = nil
+            }
+            Button("Cancel", role: .cancel) {
+                showAbbrevEditorForIndex = nil
+            }
+        } message: {
+            Text("Enter a short label to display for this pitch.")
         }
     }
     
