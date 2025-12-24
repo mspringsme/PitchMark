@@ -291,9 +291,12 @@ struct TemplateEditorView: View {
                     }
                     else {
                         // Encrypted template: show pitch grid editor
-                        
+                        Text("Pitcher's Pitches Key Grid")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 4)
                         PitchGridView(availablePitches: availablePitches)
-                            .padding(.top, 24)
+                            .padding(.top, 20)
                         Spacer()
                     }
                     
@@ -1041,6 +1044,11 @@ struct PitchGridView: View {
     @State private var pendingAbbreviation: String = ""
     let availablePitches: [String]
     
+    @State private var showDuplicateAlert: Bool = false
+    @State private var duplicateAlertMessage: String = ""
+    @State private var lastInvalidPosition: (row: Int, col: Int)? = nil
+    @State private var lastInvalidValue: String = ""
+
     let cellWidth: CGFloat = 60
     let cellHeight: CGFloat = 36
     
@@ -1086,6 +1094,39 @@ struct PitchGridView: View {
             }
         }
         return nil
+    }
+    
+    private func isDuplicateInRow(row: Int, col: Int, value: String) -> Bool {
+        guard row >= 0, row < grid.count else { return false }
+        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let rowValues = grid[row]
+        for (idx, v) in rowValues.enumerated() where idx != col {
+            if v == value { return true }
+        }
+        return false
+    }
+    
+    private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
+        @State var previousValue: String = binding.wrappedValue
+        return baseCell {
+            TextField("", text: binding)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 0)
+                .onChange(of: binding.wrappedValue) { oldValue, newValue in
+                    // Validate against duplicates in the same row, excluding this column
+                    if isDuplicateInRow(row: row, col: col, value: newValue) {
+                        // Revert and alert
+                        binding.wrappedValue = previousValue
+                        lastInvalidPosition = (row, col)
+                        lastInvalidValue = newValue
+                        duplicateAlertMessage = "\"\(newValue)\" is already used in another column for this row. Each row must have unique values across columns."
+                        showDuplicateAlert = true
+                    } else {
+                        previousValue = newValue
+                    }
+                }
+        }
     }
     
     var body: some View {
@@ -1164,7 +1205,7 @@ struct PitchGridView: View {
                             
                             // Row cells
                             ForEach(grid[row].indices, id: \.self) { col in
-                                cellBinding($grid[row][col])
+                                cellBinding(row: row, col: col, binding: $grid[row][col])
                             }
                             
                             // Placeholder to align with "+" column
@@ -1173,6 +1214,30 @@ struct PitchGridView: View {
                     }
                 }
             }
+        }
+        .alert("Duplicate Value", isPresented: $showDuplicateAlert) {
+            Button("OK", role: .cancel) {
+                // After closing, clear the attempted value in the offending cell
+                if let pos = lastInvalidPosition {
+                    if grid.indices.contains(pos.row) && grid[pos.row].indices.contains(pos.col) {
+                        grid[pos.row][pos.col] = ""
+                    }
+                } else {
+                    // Fallback: clear any cell currently equal to the last invalid value in any row
+                    for r in grid.indices {
+                        for c in grid[r].indices {
+                            if grid[r][c] == lastInvalidValue {
+                                grid[r][c] = ""
+                            }
+                        }
+                    }
+                }
+                // Reset trackers
+                lastInvalidPosition = nil
+                lastInvalidValue = ""
+            }
+        } message: {
+            Text(duplicateAlertMessage)
         }
     }
     
@@ -1192,15 +1257,6 @@ struct PitchGridView: View {
     }
     
     // MARK: Helpers
-    private func cellBinding(_ binding: Binding<String>) -> some View {
-        baseCell {
-            TextField("", text: binding)
-                .textFieldStyle(.plain)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 0)
-        }
-    }
-
     private func boldCellBinding(_ binding: Binding<String>) -> some View {
         baseCell {
             ZStack(alignment: .center) {
@@ -1302,7 +1358,7 @@ struct PitchGridView: View {
         // Track which digits we've already used in this new column (by row index processed so far)
         var usedInNewColumn: Set<String> = []
 
-        // For each row, append a random single-digit (0-9) not already used in that row
+        // For each row, append a random single-digit (0-9) not already used in this row
         // AND not already used earlier in this same new column. If none available, append "".
         for row in grid.indices {
             // Digits already used in this row (ignoring empties)
