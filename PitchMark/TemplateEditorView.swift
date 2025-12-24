@@ -1302,17 +1302,20 @@ struct PitchGridView: View {
         // Track which digits we've already used in this new column (by row index processed so far)
         var usedInNewColumn: Set<String> = []
 
-        // For each row, append a unique single-digit (0-9) not already used in that row
+        // For each row, append a random single-digit (0-9) not already used in that row
         // AND not already used earlier in this same new column. If none available, append "".
         for row in grid.indices {
             // Digits already used in this row (ignoring empties)
             let usedDigitsInRow: Set<String> = Set(grid[row].filter { !$0.isEmpty })
             // Combine constraints: digits used in this row OR already used in this new column
             let excluded = usedDigitsInRow.union(usedInNewColumn)
-            let digitToUse = firstAvailableDigit(excluding: excluded)
-            let value = digitToUse ?? ""
+            // Build allowed digits 0-9 excluding the set
+            let allDigits = (0...9).map { String($0) }
+            let allowed = allDigits.filter { !excluded.contains($0) }
+            // Choose random allowed digit if available
+            let value = allowed.randomElement() ?? ""
             grid[row].append(value)
-            if let d = digitToUse { usedInNewColumn.insert(d) }
+            if !value.isEmpty { usedInNewColumn.insert(value) }
         }
 
         normalizeGrid()
