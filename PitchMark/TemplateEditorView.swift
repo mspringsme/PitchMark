@@ -1028,12 +1028,12 @@ struct ColoredDivider: View {
 
 
 struct PitchGridView: View {
-    @State private var pitches: [String] = ["2S", "4S", "CHA", "CUR"]
-    @State private var rowLabels: [String] = ["23", "56", "90"]
+    @State private var pitches: [String] = []
+    @State private var rowLabels: [String] = ["", "", ""]
     @State private var grid: [[String]] = [
-        ["9", "8", "7", "6"],
-        ["1", "2", "3", "4"],
-        ["4", "8", "3", "9"]
+        [],
+        [],
+        []
     ]
     @State private var isDeleteMode: Bool = false
     @State private var abbreviations: [String: String] = [:]
@@ -1203,11 +1203,20 @@ struct PitchGridView: View {
 
     private func boldCellBinding(_ binding: Binding<String>) -> some View {
         baseCell {
-            TextField("", text: binding)
-                .textFieldStyle(.plain)
-                .bold()
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 0)
+            ZStack(alignment: .center) {
+                // Placeholder when empty
+                if binding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Code(s)")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .allowsHitTesting(false)
+                }
+                TextField("", text: binding)
+                    .textFieldStyle(.plain)
+                    .bold()
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 0)
+            }
         }
     }
 
