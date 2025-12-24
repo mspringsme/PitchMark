@@ -1086,10 +1086,10 @@ struct PitchGridView: View {
                 }
 
             ScrollView(.horizontal) {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 0) {
                     
                     // MARK: Header Grid
-                    LazyVGrid(columns: gridColumns, spacing: 4) {
+                    LazyVGrid(columns: gridColumns, spacing: 0) {
                         
                         // Top-left blank cell with NO border
                         emptyCell()
@@ -1097,24 +1097,12 @@ struct PitchGridView: View {
                         // Pitch headers
                         ForEach(pitches.indices, id: \.self) { index in
                             ZStack(alignment: .topTrailing) {
-                                if pitches.indices.contains(index) {
-                                    TextField("", text: $pitches[index])
-                                        .textFieldStyle(.plain)
-                                        .bold()
-                                        .multilineTextAlignment(.center)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.5)
-                                        .frame(width: cellWidth, height: cellHeight)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .stroke(Color.gray.opacity(0.4))
-                                        )
-                                } else {
-                                    Color.clear
-                                        .frame(width: cellWidth, height: cellHeight)
-                                }
-
-                                if isDeleteMode && pitches.indices.contains(index) {
+                                
+                                // Header cell
+                                pitchHeaderCell($pitches[index])
+                                
+                                // Delete button overlay
+                                if isDeleteMode {
                                     Button {
                                         removePitch(at: index)
                                         isDeleteMode = false
@@ -1124,20 +1112,20 @@ struct PitchGridView: View {
                                             .padding(4)
                                     }
                                     .buttonStyle(.plain)
-                                    .accessibilityLabel("Delete column \(pitches.indices.contains(index) ? pitches[index] : "")")
+                                    .accessibilityLabel("Delete column \(pitches[index])")
                                 }
                             }
                         }
                         
-                        // Add column button replaced by Menu as requested
+                        // Add/delete menu column
                         Menu {
                             Button {
-                                // Add column
                                 addPitch()
                                 isDeleteMode = false
                             } label: {
                                 Label("Add column", systemImage: "plus")
                             }
+                            
                             Button(role: .destructive) {
                                 if !pitches.isEmpty {
                                     isDeleteMode.toggle()
@@ -1146,6 +1134,7 @@ struct PitchGridView: View {
                                 Label("Delete columns", systemImage: "minus.circle")
                             }
                             .disabled(pitches.isEmpty)
+                            
                         } label: {
                             Image(systemName: "plus.slash.minus")
                                 .frame(width: cellWidth, height: cellHeight)
@@ -1155,19 +1144,14 @@ struct PitchGridView: View {
 
                     // MARK: Data Rows
                     ForEach(grid.indices, id: \.self) { row in
-                        LazyVGrid(columns: gridColumns, spacing: 4) {
+                        LazyVGrid(columns: gridColumns, spacing: 0) {
                             
-                            // Row label — now bold
+                            // Row label (bold)
                             boldCellBinding($rowLabels[row])
                             
                             // Row cells
                             ForEach(grid[row].indices, id: \.self) { col in
-                                if grid.indices.contains(row) && grid[row].indices.contains(col) {
-                                    cellBinding($grid[row][col])
-                                } else {
-                                    Color.clear
-                                        .frame(width: cellWidth, height: cellHeight)
-                                }
+                                cellBinding($grid[row][col])
                             }
                             
                             // Placeholder to align with "+" column
@@ -1175,7 +1159,6 @@ struct PitchGridView: View {
                         }
                     }
                 }
-                .padding()
             }
         }
     }
@@ -1183,29 +1166,48 @@ struct PitchGridView: View {
     // MARK: Dynamic Grid Columns
     private var gridColumns: [GridItem] {
         // 1 label column + N pitch columns + 1 add button column
-        Array(repeating: GridItem(.fixed(cellWidth)), count: pitches.count + 2)
+        Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: pitches.count + 2)
+    }
+    
+    private func baseCell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack { content() }
+            .frame(width: cellWidth, height: cellHeight)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.gray.opacity(0.4))
+            )
     }
     
     // MARK: Helpers
-    private func cell(_ text: String) -> some View {
-        Text(text)
-            .frame(width: cellWidth, height: cellHeight)
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.gray.opacity(0.4)))
-    }
-    
     private func cellBinding(_ binding: Binding<String>) -> some View {
-        TextField("", text: binding)
-            .textFieldStyle(RoundedBorderTextFieldStyle())
-            .multilineTextAlignment(.center)
-            .frame(width: cellWidth, height: cellHeight)
+        baseCell {
+            TextField("", text: binding)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 0)
+        }
     }
-    
+
     private func boldCellBinding(_ binding: Binding<String>) -> some View {
-        TextField("", text: binding)
-            .textFieldStyle(RoundedBorderTextFieldStyle())
-            .bold()
-            .multilineTextAlignment(.center)
-            .frame(width: cellWidth, height: cellHeight)
+        baseCell {
+            TextField("", text: binding)
+                .textFieldStyle(.plain)
+                .bold()
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 0)
+        }
+    }
+
+    private func pitchHeaderCell(_ binding: Binding<String>) -> some View {
+        baseCell {
+            TextField("", text: binding)
+                .textFieldStyle(.plain)
+                .bold()
+                .multilineTextAlignment(.center)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .padding(.horizontal, 0)
+        }
     }
     
     private func addPitch() {
