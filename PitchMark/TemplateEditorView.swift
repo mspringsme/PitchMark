@@ -174,7 +174,8 @@ struct TemplateEditorView: View {
                             }
                         } label: {
                             let hasSelection = !selectedPitches.isEmpty
-                            let title = hasSelection ? "Pitches (\(selectedPitches.count))" : "Pitches"
+                            //let title = hasSelection ? "Pitches (\(selectedPitches.count))" : "Pitches"
+                            let title = "Pitches"
                             HStack(spacing: 8) {
                                 Text(title)
                                     .font(.subheadline)
@@ -1199,16 +1200,23 @@ struct PitchGridView: View {
                     // MARK: Data Rows
                     ForEach(grid.indices, id: \.self) { row in
                         LazyVGrid(columns: gridColumns, spacing: 0) {
-                            
-                            // Row label (bold)
+
+                            // Row label
                             boldCellBinding($rowLabels[row])
-                            
-                            // Row cells
-                            ForEach(grid[row].indices, id: \.self) { col in
-                                cellBinding(row: row, col: col, binding: $grid[row][col])
+
+                            // CASE 1: No pitches yet → show exactly ONE placeholder column
+                            if pitches.isEmpty {
+                                baseCell { Color.clear }
                             }
-                            
-                            // Placeholder to align with "+" column
+
+                            // CASE 2: Normal rows with pitches
+                            else {
+                                ForEach(grid[row].indices, id: \.self) { col in
+                                    cellBinding(row: row, col: col, binding: $grid[row][col])
+                                }
+                            }
+
+                            // Trailing empty cell (always required)
                             emptyCell()
                         }
                     }
@@ -1243,8 +1251,8 @@ struct PitchGridView: View {
     
     // MARK: Dynamic Grid Columns
     private var gridColumns: [GridItem] {
-        // 1 label column + N pitch columns + 1 add button column
-        Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: pitches.count + 2)
+        let count = pitches.isEmpty ? 3 : pitches.count + 2
+        return Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: count)
     }
     
     private func baseCell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
@@ -1254,6 +1262,12 @@ struct PitchGridView: View {
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.gray.opacity(0.4))
             )
+    }
+    
+    private func placeholderCells(count: Int) -> some View {
+        ForEach(0..<count, id: \.self) { _ in
+            baseCell { Color.clear }
+        }
     }
     
     // MARK: Helpers
