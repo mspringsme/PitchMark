@@ -298,6 +298,26 @@ struct TemplateEditorView: View {
                             .padding(.top, 4)
                         PitchGridView(availablePitches: availablePitches)
                             .padding(.top, 20)
+
+                        // New section for Strike Location Grid
+                        HStack{
+                            VStack{
+                                StrikeLocationGridView()
+                                    .padding(.top, 8)
+                                Text("Strikes")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.top, 2)
+                            }
+                            VStack{
+                                BallsLocationGridView()
+                                    .padding(.top, 8)
+                                Text("Balls")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.top, 2)
+                            }
+                        }
                         Spacer()
                     }
                     
@@ -1396,4 +1416,89 @@ struct PitchGridView: View {
             .frame(width: cellWidth, height: cellHeight)
     }
 }
+
+struct StrikeLocationGridView: View {
+    // Match PitchGridView sizing and no spacing
+    let cellWidth: CGFloat = 46
+    let cellHeight: CGFloat = 36
+    // 3 columns x 4 rows of editable cells
+    @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
+
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3)
+    }
+
+    private func baseCell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack { content() }
+            .frame(width: cellWidth, height: cellHeight)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.green)
+            )
+    }
+
+    private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
+        baseCell {
+            TextField("", text: binding)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 0)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: gridColumns, spacing: 0) {
+                ForEach(0..<(3 * 4), id: \.self) { index in
+                    let r = index / 3
+                    let c = index % 3
+                    cellBinding(row: r, col: c, binding: $grid[r][c])
+                }
+            }
+        }
+    }
+}
+
+struct BallsLocationGridView: View {
+    // Match PitchGridView sizing and no spacing
+    let cellWidth: CGFloat = 46
+    let cellHeight: CGFloat = 36
+    // 3 columns x 4 rows of editable cells
+    @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
+
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3)
+    }
+
+    private func baseCell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        ZStack { content() }
+            .frame(width: cellWidth, height: cellHeight)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.red)
+            )
+    }
+
+    private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
+        baseCell {
+            TextField("", text: binding)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 0)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: gridColumns, spacing: 0) {
+                ForEach(0..<(3 * 4), id: \.self) { index in
+                    let r = index / 3
+                    let c = index % 3
+                    cellBinding(row: r, col: c, binding: $grid[r][c])
+                }
+            }
+        }
+    }
+}
+
 
