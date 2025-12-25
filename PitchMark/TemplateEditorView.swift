@@ -1466,7 +1466,18 @@ struct PitchGridView2: View {
                 ForEach(0..<(8 * 4), id: \.self) { index in
                     let r = index / 8
                     let c = index % 8
-                    cellBinding(row: r, col: c, binding: $grid[r][c])
+                    if r == 0 && c == 0 {
+                        ZStack { Color.clear }
+                            .frame(width: cellWidth, height: cellHeight)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.clear)
+                            )
+                    } else {
+                        cellBinding(row: r, col: c, binding: $grid[r][c])
+                    }
                 }
             }
         }
@@ -1556,7 +1567,5 @@ struct BallsLocationGridView: View {
         }
     }
 }
-
-
 
 
