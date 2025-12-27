@@ -1495,20 +1495,22 @@ struct StrikeLocationGridView: View {
         Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3)
     }
 
-    private func baseCell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func baseCell<Content: View>(strokeColor: Color = .green, @ViewBuilder content: () -> Content) -> some View {
         ZStack { content() }
             .frame(width: cellWidth, height: cellHeight)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.green)
+                    .stroke(strokeColor)
             )
     }
 
     private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
-        baseCell {
+        let stroke: Color = (row == 0) ? .black : .green
+        return baseCell(strokeColor: stroke) {
             TextField("", text: binding)
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.center)
+                .fontWeight(row == 0 ? .bold : .regular)
                 .padding(.horizontal, 0)
         }
     }
@@ -1537,20 +1539,22 @@ struct BallsLocationGridView: View {
         Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3)
     }
 
-    private func baseCell<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func baseCell<Content: View>(strokeColor: Color = .red, @ViewBuilder content: () -> Content) -> some View {
         ZStack { content() }
             .frame(width: cellWidth, height: cellHeight)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.red)
+                    .stroke(strokeColor)
             )
     }
 
     private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
-        baseCell {
+        let stroke: Color = (row == 0) ? .black : .red
+        return baseCell(strokeColor: stroke) {
             TextField("", text: binding)
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.center)
+                .fontWeight(row == 0 ? .bold : .regular)
                 .padding(.horizontal, 0)
         }
     }
@@ -1567,5 +1571,6 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
 
 
