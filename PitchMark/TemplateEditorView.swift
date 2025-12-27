@@ -298,7 +298,7 @@ struct TemplateEditorView: View {
                             .padding(.top, 4)
                         
                         VStack{
-                            PitchGridView2()
+                            PitchGridView2(availablePitches: availablePitches)
                                 .padding(.top, 8)
                             Text("Pitch Selection")
                                 .font(.caption)
@@ -1427,6 +1427,11 @@ struct PitchGridView: View {
 }
 
 struct PitchGridView2: View {
+    let availablePitches: [String]
+    @State private var abbreviations: [String: String] = [:]
+    @State private var showAbbrevEditorForIndex: Int? = nil
+    @State private var pendingAbbreviation: String = ""
+
     // Match PitchGridView sizing and no spacing
     let cellWidth: CGFloat = 46
     let cellHeight: CGFloat = 36
@@ -1446,9 +1451,84 @@ struct PitchGridView2: View {
             )
     }
 
+    private func displayName(for pitch: String) -> String {
+        if let abbr = abbreviations[pitch], !abbr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return abbr
+        }
+        return pitch
+    }
+
+    private func headerCell(col: Int, binding: Binding<String>) -> some View {
+        baseCell(strokeColor: .black) {
+            Menu {
+                // Pitch selection list
+                ForEach(availablePitches, id: \.self) { pitch in
+                    Button(action: { binding.wrappedValue = pitch }) {
+                        HStack {
+                            Text(pitch)
+                            if binding.wrappedValue == pitch {
+                                Spacer()
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+                if !binding.wrappedValue.isEmpty {
+                    Divider()
+                    Button {
+                        pendingAbbreviation = abbreviations[binding.wrappedValue] ?? ""
+                        showAbbrevEditorForIndex = col
+                    } label: {
+                        Label("Edit Abbreviation", systemImage: "character.cursor.ibeam")
+                    }
+                    if abbreviations[binding.wrappedValue] != nil {
+                        Button(role: .destructive) {
+                            abbreviations[binding.wrappedValue] = nil
+                        } label: {
+                            Label("Clear Abbreviation", systemImage: "trash")
+                        }
+                    }
+                }
+            } label: {
+                Text(binding.wrappedValue.isEmpty ? "Select" : displayName(for: binding.wrappedValue))
+                    .fontWeight(.bold)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .alert("Edit Abbreviation", isPresented: Binding(
+            get: { showAbbrevEditorForIndex == col },
+            set: { newValue in if !newValue { showAbbrevEditorForIndex = nil } }
+        )) {
+            TextField("Abbreviation", text: $pendingAbbreviation)
+            Button("Save") {
+                let keyPitch = binding.wrappedValue
+                if !keyPitch.isEmpty {
+                    let trimmed = pendingAbbreviation.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        abbreviations[keyPitch] = nil
+                    } else {
+                        abbreviations[keyPitch] = trimmed
+                    }
+                }
+                showAbbrevEditorForIndex = nil
+            }
+            Button("Cancel", role: .cancel) {
+                showAbbrevEditorForIndex = nil
+            }
+        } message: {
+            Text("Enter a short label to display for this pitch.")
+        }
+    }
+
     private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
+        if row == 0 && col > 0 {
+            return AnyView(headerCell(col: col, binding: binding))
+        }
         let stroke: Color = (row == 0 || col == 0) ? .black : .blue
-        return baseCell(strokeColor: stroke) {
+        return AnyView(baseCell(strokeColor: stroke) {
             TextField("", text: binding)
                 .textFieldStyle(.plain)
                 .multilineTextAlignment(.center)
@@ -1457,7 +1537,7 @@ struct PitchGridView2: View {
                 .minimumScaleFactor(0.5)
                 .allowsTightening(true)
                 .padding(.horizontal, 0)
-        }
+        })
     }
 
     var body: some View {
@@ -1571,6 +1651,5 @@ struct BallsLocationGridView: View {
         }
     }
 }
-
 
 
