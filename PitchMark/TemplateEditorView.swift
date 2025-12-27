@@ -1476,20 +1476,26 @@ struct PitchGridView2: View {
     }
     
     private func removeColumn(at col: Int) {
-        guard grid[0].indices.contains(col) else { return }
-        // Clear the column values
+        // Ensure the column index is valid
+        guard grid.first?.indices.contains(col) == true else { return }
+
+        // Remove the column entirely from each row
         for r in 0..<grid.count {
-            grid[r][col] = ""
+            grid[r].remove(at: col)
         }
-        // If this was the last column and all of its values are empty, remove trailing empty columns to keep grid tidy
-        // Keep at least 2 columns as initial state
-        var lastIndex = grid[0].count - 1
-        while grid[0].count > 2 {
-            // Check if the last column is entirely empty
+
+        // Ensure we always keep at least 2 columns
+        while grid.first?.count ?? 0 < 2 {
+            for r in 0..<grid.count { grid[r].append("") }
+        }
+
+        // After removal, collapse any trailing columns that are entirely empty,
+        // but keep a minimum of 2 columns
+        while let first = grid.first, first.count > 2 {
+            let lastIndex = first.count - 1
             let isLastEmpty = (0..<grid.count).allSatisfy { grid[$0][lastIndex].isEmpty }
             if isLastEmpty {
                 for r in 0..<grid.count { grid[r].remove(at: lastIndex) }
-                lastIndex -= 1
             } else {
                 break
             }
@@ -1715,5 +1721,6 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
 
 
