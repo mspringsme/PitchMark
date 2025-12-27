@@ -1116,6 +1116,11 @@ struct PitchGridView: View {
         if pitches.isEmpty { isDeleteMode = false }
     }
     
+    // Helper to match menu action naming; delegates to existing removePitch
+    private func removeColumn(at index: Int) {
+        removePitch(at: index)
+    }
+    
     // Returns the first available single-digit string ("0".."9") not in the excluded set
     private func firstAvailableDigit(excluding excluded: Set<String>) -> String? {
         for d in 0...9 {
@@ -1337,7 +1342,15 @@ struct PitchGridView: View {
 
                 // Separator and abbreviation editor only when a pitch is selected
                 if !binding.wrappedValue.isEmpty {
+                    // Primary actions for a selected pitch in this column
+                    Button(role: .destructive) {
+                        removeColumn(at: index)
+                    } label: {
+                        Label("Remove Column", systemImage: "minus.circle")
+                    }
+
                     Divider()
+
                     Button {
                         // Prepare the editor with existing abbreviation (if any)
                         pendingAbbreviation = abbreviations[binding.wrappedValue] ?? ""
@@ -1428,21 +1441,65 @@ struct PitchGridView: View {
 
 struct PitchGridView2: View {
     let availablePitches: [String]
+
     @State private var abbreviations: [String: String] = [:]
     @State private var showAbbrevEditorForIndex: Int? = nil
     @State private var pendingAbbreviation: String = ""
 
-    // Match PitchGridView sizing and no spacing
-    let cellWidth: CGFloat = 46
-    let cellHeight: CGFloat = 36
-    // 10 columns x 4 rows of editable cells
-    @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 8), count: 4)
+    // Cell sizing
+    private let cellWidth: CGFloat = 46
+    private let cellHeight: CGFloat = 36
 
+    // Dynamic grid: 4 rows, starts with 2 columns
+    @State private var grid: [[String]] = Array(repeating: ["", ""], count: 4)
+
+    // MARK: - Dynamic Columns
     private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 8)
+        Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: grid[0].count)
     }
 
-    private func baseCell<Content: View>(strokeColor: Color = .blue, @ViewBuilder content: () -> Content) -> some View {
+    // MARK: - Helpers
+    private func displayName(for pitch: String) -> String {
+        if let abbr = abbreviations[pitch], !abbr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return abbr
+        }
+        return pitch
+    }
+
+    private func expandGridIfNeeded(col: Int) {
+        let lastCol = grid[0].count - 1
+        if col == lastCol && !grid[0][col].isEmpty {
+            for r in 0..<grid.count {
+                grid[r].append("")
+            }
+        }
+    }
+    
+    private func removeColumn(at col: Int) {
+        guard grid[0].indices.contains(col) else { return }
+        // Clear the column values
+        for r in 0..<grid.count {
+            grid[r][col] = ""
+        }
+        // If this was the last column and all of its values are empty, remove trailing empty columns to keep grid tidy
+        // Keep at least 2 columns as initial state
+        var lastIndex = grid[0].count - 1
+        while grid[0].count > 2 {
+            // Check if the last column is entirely empty
+            let isLastEmpty = (0..<grid.count).allSatisfy { grid[$0][lastIndex].isEmpty }
+            if isLastEmpty {
+                for r in 0..<grid.count { grid[r].remove(at: lastIndex) }
+                lastIndex -= 1
+            } else {
+                break
+            }
+        }
+    }
+
+    private func baseCell<Content: View>(
+        strokeColor: Color = .blue,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         ZStack { content() }
             .frame(width: cellWidth, height: cellHeight)
             .overlay(
@@ -1451,19 +1508,15 @@ struct PitchGridView2: View {
             )
     }
 
-    private func displayName(for pitch: String) -> String {
-        if let abbr = abbreviations[pitch], !abbr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return abbr
-        }
-        return pitch
-    }
-
+    // MARK: - Header Cell
     private func headerCell(col: Int, binding: Binding<String>) -> some View {
         baseCell(strokeColor: .black) {
             Menu {
-                // Pitch selection list
                 ForEach(availablePitches, id: \.self) { pitch in
-                    Button(action: { binding.wrappedValue = pitch }) {
+                    Button {
+                        binding.wrappedValue = pitch
+                        expandGridIfNeeded(col: col)
+                    } label: {
                         HStack {
                             Text(pitch)
                             if binding.wrappedValue == pitch {
@@ -1473,14 +1526,24 @@ struct PitchGridView2: View {
                         }
                     }
                 }
+
                 if !binding.wrappedValue.isEmpty {
+                    // Primary actions for a selected pitch in this column
+                    Button(role: .destructive) {
+                        removeColumn(at: col)
+                    } label: {
+                        Label("Remove Column", systemImage: "minus.circle")
+                    }
+
                     Divider()
+
                     Button {
                         pendingAbbreviation = abbreviations[binding.wrappedValue] ?? ""
                         showAbbrevEditorForIndex = col
                     } label: {
                         Label("Edit Abbreviation", systemImage: "character.cursor.ibeam")
                     }
+
                     if abbreviations[binding.wrappedValue] != nil {
                         Button(role: .destructive) {
                             abbreviations[binding.wrappedValue] = nil
@@ -1495,24 +1558,17 @@ struct PitchGridView2: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .alert("Edit Abbreviation", isPresented: Binding(
             get: { showAbbrevEditorForIndex == col },
-            set: { newValue in if !newValue { showAbbrevEditorForIndex = nil } }
+            set: { if !$0 { showAbbrevEditorForIndex = nil } }
         )) {
             TextField("Abbreviation", text: $pendingAbbreviation)
             Button("Save") {
-                let keyPitch = binding.wrappedValue
-                if !keyPitch.isEmpty {
-                    let trimmed = pendingAbbreviation.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.isEmpty {
-                        abbreviations[keyPitch] = nil
-                    } else {
-                        abbreviations[keyPitch] = trimmed
-                    }
-                }
+                let key = binding.wrappedValue
+                let trimmed = pendingAbbreviation.trimmingCharacters(in: .whitespacesAndNewlines)
+                abbreviations[key] = trimmed.isEmpty ? nil : trimmed
                 showAbbrevEditorForIndex = nil
             }
             Button("Cancel", role: .cancel) {
@@ -1523,40 +1579,48 @@ struct PitchGridView2: View {
         }
     }
 
-    private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
+    // MARK: - Cell Binding
+    private func cellBinding(row: Int, col: Int) -> some View {
+        let binding = Binding(
+            get: { grid[row][col] },
+            set: { newValue in
+                grid[row][col] = newValue
+                if row == 0 { expandGridIfNeeded(col: col) }
+            }
+        )
+
         if row == 0 && col > 0 {
             return AnyView(headerCell(col: col, binding: binding))
         }
+
         let stroke: Color = (row == 0 || col == 0) ? .black : .blue
-        return AnyView(baseCell(strokeColor: stroke) {
-            TextField("", text: binding)
-                .textFieldStyle(.plain)
-                .multilineTextAlignment(.center)
-                .fontWeight((row == 0 || col == 0) ? .bold : .regular)
-                .lineLimit(1)
-                .minimumScaleFactor(0.5)
-                .allowsTightening(true)
-                .padding(.horizontal, 0)
-        })
+
+        return AnyView(
+            baseCell(strokeColor: stroke) {
+                TextField("", text: binding)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.center)
+                    .fontWeight((row == 0 || col == 0) ? .bold : .regular)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+            }
+        )
     }
 
+    // MARK: - Body
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             LazyVGrid(columns: gridColumns, spacing: 0) {
-                ForEach(0..<(8 * 4), id: \.self) { index in
-                    let r = index / 8
-                    let c = index % 8
+                ForEach(0..<(grid.count * grid[0].count), id: \.self) { index in
+                    let r = index / grid[0].count
+                    let c = index % grid[0].count
+
                     if r == 0 && c == 0 {
                         ZStack { Color.clear }
                             .frame(width: cellWidth, height: cellHeight)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color.clear)
-                            )
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.clear))
                     } else {
-                        cellBinding(row: r, col: c, binding: $grid[r][c])
+                        cellBinding(row: r, col: c)
                     }
                 }
             }
