@@ -7,6 +7,66 @@
 import SwiftUI
 import UIKit
 
+// Shared validation helpers and environment to coordinate top-row rules across Strike and Balls grids
+private func digitsOnly(_ string: String) -> [Character] { string.filter { $0.isNumber } }
+
+private func isSequentialDigits(_ chars: [Character]) -> Bool {
+    if chars.count <= 1 { return true }
+    let ints = chars.compactMap { $0.wholeNumberValue }
+    let asc = ints.enumerated().allSatisfy { idx, val in idx == 0 || val == ints[idx - 1] + 1 }
+    if asc { return true }
+    let desc = ints.enumerated().allSatisfy { idx, val in idx == 0 || val == ints[idx - 1] - 1 }
+    return desc
+}
+
+// Environment object to share the combined top row between StrikeLocationGridView and BallsLocationGridView
+final class TopRowValidationCoordinator: ObservableObject {
+    // Three cells from Strike row 0 and three from Balls row 0
+    @Published var strikeTopRow: [String] = Array(repeating: "", count: 3)
+    @Published var ballsTopRow: [String] = Array(repeating: "", count: 3)
+
+    // Returns the set of digits used across both top rows, optionally excluding a specific cell (grid identifier + index)
+    func usedDigits(excluding isStrike: Bool, index: Int) -> Set<Character> {
+        var set: Set<Character> = []
+        for (i, v) in strikeTopRow.enumerated() where !(isStrike && i == index) {
+            for ch in digitsOnly(v) { set.insert(ch) }
+        }
+        for (i, v) in ballsTopRow.enumerated() where !(!isStrike && i == index) {
+            for ch in digitsOnly(v) { set.insert(ch) }
+        }
+        return set
+    }
+
+    // Sanitize input for a top-row cell ensuring: up to 3 digits, sequential asc/desc, and no duplicate digits across the combined row
+    func sanitizeTopRowInput(isStrike: Bool, index: Int, newValue: String) -> String {
+        let onlyDigits = String(digitsOnly(newValue).prefix(3))
+        var chars = Array(onlyDigits)
+        // enforce sequential asc/desc as the user types by trimming last non-conforming digit
+        if !isSequentialDigits(chars) {
+            chars = Array(chars.dropLast())
+        }
+        let existing = usedDigits(excluding: isStrike, index: index)
+        var result: [Character] = []
+        for ch in chars {
+            if existing.contains(ch) { continue }
+            if result.contains(ch) { continue }
+            result.append(ch)
+        }
+        return String(result)
+    }
+}
+
+private struct TopRowCoordinatorKey: EnvironmentKey {
+    static let defaultValue: TopRowValidationCoordinator? = nil
+}
+
+extension EnvironmentValues {
+    var topRowCoordinator: TopRowValidationCoordinator? {
+        get { self[TopRowCoordinatorKey.self] }
+        set { self[TopRowCoordinatorKey.self] = newValue }
+    }
+}
+
 struct TemplateEditorView: View {
     @State private var name: String
     @State private var selectedPitches: Set<String>
@@ -313,8 +373,11 @@ struct TemplateEditorView: View {
 
                         // New section for Strike Location Grid
                         HStack{
+                            // Shared coordinator so the two grids validate their top rows as one combined row
+                            let coordinator = TopRowValidationCoordinator()
                             VStack{
                                 StrikeLocationGridView()
+                                    .environment(\ .topRowCoordinator, coordinator)
                                     .padding(.top, 8)
                                 Text("Strikes")
                                     .font(.caption)
@@ -323,6 +386,7 @@ struct TemplateEditorView: View {
                             }
                             VStack{
                                 BallsLocationGridView()
+                                    .environment(\ .topRowCoordinator, coordinator)
                                     .padding(.top, 8)
                                 Text("Balls")
                                     .font(.caption)
@@ -1759,6 +1823,8 @@ struct StrikeLocationGridView: View {
     // 3 columns x 4 rows of editable cells
     @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
 
+    @Environment(\.topRowCoordinator) private var topRowCoordinator
+
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3)
     }
@@ -1775,11 +1841,32 @@ struct StrikeLocationGridView: View {
     private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
         let stroke: Color = (row == 0) ? .black : .green
         return baseCell(strokeColor: stroke) {
-            TextField("", text: binding)
-                .textFieldStyle(.plain)
-                .multilineTextAlignment(.center)
-                .fontWeight(row == 0 ? .bold : .regular)
-                .padding(.horizontal, 0)
+            TextField("", text: Binding(
+                get: { binding.wrappedValue },
+                set: { newValue in
+                    if row == 0, let coord = topRowCoordinator {
+                        let sanitized = coord.sanitizeTopRowInput(isStrike: true, index: col, newValue: newValue)
+                        binding.wrappedValue = sanitized
+                        // Update coordinator shared state for strike top row
+                        if coord.strikeTopRow.indices.contains(col) {
+                            coord.strikeTopRow[col] = sanitized
+                        }
+                    } else {
+                        binding.wrappedValue = newValue
+                    }
+                }
+            ))
+            .textFieldStyle(.plain)
+            .multilineTextAlignment(.center)
+            .fontWeight(row == 0 ? .bold : .regular)
+            .padding(.horizontal, 0)
+            .onAppear {
+                if row == 0, let coord = topRowCoordinator {
+                    if coord.strikeTopRow.indices.contains(col) {
+                        coord.strikeTopRow[col] = binding.wrappedValue
+                    }
+                }
+            }
         }
     }
 
@@ -1803,6 +1890,8 @@ struct BallsLocationGridView: View {
     // 3 columns x 4 rows of editable cells
     @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
 
+    @Environment(\.topRowCoordinator) private var topRowCoordinator
+
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3)
     }
@@ -1822,9 +1911,7 @@ struct BallsLocationGridView: View {
             return AnyView(
                 baseCell(strokeColor: .red) {
                     ZStack {
-                        // Filled green background
                         Color.green
-                        // Show no editable text field; display placeholder or empty content
                         Text("")
                     }
                 }
@@ -1835,11 +1922,31 @@ struct BallsLocationGridView: View {
         let stroke: Color = (row == 0) ? .black : .red
         return AnyView(
             baseCell(strokeColor: stroke) {
-                TextField("", text: binding)
-                    .textFieldStyle(.plain)
-                    .multilineTextAlignment(.center)
-                    .fontWeight(row == 0 ? .bold : .regular)
-                    .padding(.horizontal, 0)
+                TextField("", text: Binding(
+                    get: { binding.wrappedValue },
+                    set: { newValue in
+                        if row == 0, let coord = topRowCoordinator {
+                            let sanitized = coord.sanitizeTopRowInput(isStrike: false, index: col, newValue: newValue)
+                            binding.wrappedValue = sanitized
+                            if coord.ballsTopRow.indices.contains(col) {
+                                coord.ballsTopRow[col] = sanitized
+                            }
+                        } else {
+                            binding.wrappedValue = newValue
+                        }
+                    }
+                ))
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .fontWeight(row == 0 ? .bold : .regular)
+                .padding(.horizontal, 0)
+                .onAppear {
+                    if row == 0, let coord = topRowCoordinator {
+                        if coord.ballsTopRow.indices.contains(col) {
+                            coord.ballsTopRow[col] = binding.wrappedValue
+                        }
+                    }
+                }
             }
         )
     }
@@ -1856,7 +1963,5 @@ struct BallsLocationGridView: View {
         }
     }
 }
-
-
 
 
