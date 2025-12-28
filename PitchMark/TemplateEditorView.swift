@@ -8,7 +8,9 @@ import SwiftUI
 import UIKit
 
 // Shared validation helpers and environment to coordinate top-row rules across Strike and Balls grids
-private func digitsOnly(_ string: String) -> [Character] { string.filter { $0.isNumber } }
+private func alnumOnlyUppercased(_ string: String) -> [Character] {
+    return string.uppercased().filter { $0.isNumber || ($0.isLetter && $0.isASCII) }
+}
 
 private func isSequentialDigits(_ chars: [Character]) -> Bool {
     if chars.count <= 1 { return true }
@@ -25,29 +27,27 @@ final class TopRowValidationCoordinator: ObservableObject {
     @Published var strikeTopRow: [String] = Array(repeating: "", count: 3)
     @Published var ballsTopRow: [String] = Array(repeating: "", count: 3)
 
-    // Returns the set of digits used across both top rows, optionally excluding a specific cell (grid identifier + index)
-    func usedDigits(excluding isStrike: Bool, index: Int) -> Set<Character> {
+    // Returns the set of alphanumeric characters used across both top rows, optionally excluding a specific cell (grid identifier + index)
+    func usedAlnum(excluding isStrike: Bool, index: Int) -> Set<Character> {
         var set: Set<Character> = []
         for (i, v) in strikeTopRow.enumerated() where !(isStrike && i == index) {
-            for ch in digitsOnly(v) { set.insert(ch) }
+            for ch in alnumOnlyUppercased(v) { set.insert(ch) }
         }
         for (i, v) in ballsTopRow.enumerated() where !(!isStrike && i == index) {
-            for ch in digitsOnly(v) { set.insert(ch) }
+            for ch in alnumOnlyUppercased(v) { set.insert(ch) }
         }
         return set
     }
 
-    // Sanitize input for a top-row cell ensuring: up to 3 digits, sequential asc/desc, and no duplicate digits across the combined row
+    // Sanitize input for a top-row cell ensuring: up to 3 alphanumeric chars, no duplicate across combined rows, no sequential requirement
     func sanitizeTopRowInput(isStrike: Bool, index: Int, newValue: String) -> String {
-        let onlyDigits = String(digitsOnly(newValue).prefix(3))
-        var chars = Array(onlyDigits)
-        // enforce sequential asc/desc as the user types by trimming last non-conforming digit
-        if !isSequentialDigits(chars) {
-            chars = Array(chars.dropLast())
-        }
-        let existing = usedDigits(excluding: isStrike, index: index)
+        // Allow only ASCII letters or digits, up to 3 characters. No repeats across combined top rows.
+        let onlyAlnum = String(alnumOnlyUppercased(newValue).prefix(3))
+        let existing = usedAlnum(excluding: isStrike, index: index)
+        // Build result without duplicates across the combined row and within the same field
         var result: [Character] = []
-        for ch in chars {
+        for ch in onlyAlnum {
+            // Prevent duplicates across combined row; treat letters and digits uniformly
             if existing.contains(ch) { continue }
             if result.contains(ch) { continue }
             result.append(ch)
