@@ -22,6 +22,8 @@ struct TemplateEditorView: View {
     @FocusState private var nameFieldFocused: Bool
     @State private var showAssignedLocations = false
     @State private var templateType: String = "encrypted"
+    @State private var showRandomConfirm = false
+    @State private var showClearConfirm = false
     
     let allPitches: [String]
     let templateID: UUID
@@ -292,18 +294,18 @@ struct TemplateEditorView: View {
                     }
                     else {
                         // Encrypted template: show pitch grid editor
-                        Text("Pitcher's Pitches Key Grid")
-                            .font(.caption)
+                        Text("Pitcher's Pitches Grid Key")
+                            .font(.title3)
                             .foregroundColor(.secondary)
                             .padding(.top, 4)
                         
                         VStack{
                             PitchGridView2(availablePitches: availablePitches)
-                                .padding(.top, 8)
+                                .padding(.top, 60)
                             Text("Pitch Selection")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                                .padding(.top, 2)
+                                .padding(.top, -2)
                         }
                         
 //                        PitchGridView(availablePitches: availablePitches)
@@ -317,7 +319,7 @@ struct TemplateEditorView: View {
                                 Text("Strikes")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                    .padding(.top, 2)
+                                    .padding(.top, -2)
                             }
                             VStack{
                                 BallsLocationGridView()
@@ -325,8 +327,54 @@ struct TemplateEditorView: View {
                                 Text("Balls")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                    .padding(.top, 2)
+                                    .padding(.top, -2)
                             }
+                        }
+                        VStack() {
+                            Spacer()
+                            HStack(spacing: 16) {
+                                Button {
+                                    showRandomConfirm = true
+                                } label: {
+                                    Label("Random", systemImage: "shuffle")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .buttonBorderShape(.capsule)
+                                .tint(.white)
+                                .foregroundColor(.black)
+                                .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
+                                .confirmationDialog("Randomize grid values?", isPresented: $showRandomConfirm, titleVisibility: .visible) {
+                                    Button("Randomize", role: .destructive) {
+                                        // TODO: Wire up randomization logic for encrypted grids
+                                    }
+                                    Button("Cancel", role: .cancel) { }
+                                } message: {
+                                    Text("This will randomize the values in your grids. This action cannot be undone.")
+                                }
+
+                                Button {
+                                    showClearConfirm = true
+                                } label: {
+                                    Label("Clear", systemImage: "trash")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .buttonBorderShape(.capsule)
+                                .tint(.white)
+                                .foregroundColor(.black)
+                                .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
+                                .confirmationDialog("Clear all grid values?", isPresented: $showClearConfirm, titleVisibility: .visible) {
+                                    Button("Clear", role: .destructive) {
+                                        // TODO: Wire up clear logic for encrypted grids
+                                    }
+                                    Button("Cancel", role: .cancel) { }
+                                } message: {
+                                    Text("This will remove all values from your grids. This action cannot be undone.")
+                                }
+                            }
+                            .padding(.horizontal)
+                            Spacer()
                         }
                         Spacer()
                     }
@@ -1514,6 +1562,69 @@ struct PitchGridView2: View {
             )
     }
 
+    // MARK: - Validation Helpers for First Column
+    private func digits(in string: String) -> [Character] {
+        return string.filter { $0.isNumber }
+    }
+
+    private func isSequential(_ chars: [Character]) -> Bool {
+        // Allow ascending (e.g., 12, 123) or descending (e.g., 21, 321, 890)
+        guard chars.count >= 1 else { return true }
+        if chars.count == 1 { return true }
+        let ints = chars.compactMap { $0.wholeNumberValue }
+        // Check ascending consecutive
+        let asc = ints.enumerated().allSatisfy { idx, val in
+            idx == 0 || val == ints[idx - 1] + 1
+        }
+        if asc { return true }
+        // Check descending consecutive
+        let desc = ints.enumerated().allSatisfy { idx, val in
+            idx == 0 || val == ints[idx - 1] - 1
+        }
+        return desc
+    }
+
+    private func rowDigits(excludingCol excludedCol: Int, row: Int) -> Set<Character> {
+        var set: Set<Character> = []
+        guard row >= 0, row < grid.count else { return set }
+        for c in 0..<(grid[row].count) {
+            if c == excludedCol { continue }
+            for ch in digits(in: grid[row][c]) { set.insert(ch) }
+        }
+        return set
+    }
+
+    private func columnZeroDigits(excludingRow excludedRow: Int) -> Set<Character> {
+        var set: Set<Character> = []
+        for r in 0..<grid.count {
+            if r == excludedRow { continue }
+            for ch in digits(in: grid[r][0]) { set.insert(ch) }
+        }
+        return set
+    }
+    
+    private func sanitizeFirstColumnInput(row: Int, newValue: String) -> String {
+        // Keep only digits and limit to 3
+        let onlyDigits = String(digits(in: newValue).prefix(3))
+        // Must be sequential ascending or descending
+        let chars = Array(onlyDigits)
+        guard isSequential(chars) else { return String(chars.dropLast()) }
+        // No duplicate digits across the same row (other columns)
+        let existingInRow = rowDigits(excludingCol: 0, row: row)
+        // No duplicate digits across other rows' first column
+        let existingInOtherRowsCol0 = columnZeroDigits(excludingRow: row)
+        // Remove any digits that already exist elsewhere (row or other rows' col 0)
+        var result: [Character] = []
+        for ch in chars {
+            if existingInRow.contains(ch) { continue }
+            if existingInOtherRowsCol0.contains(ch) { continue }
+            if result.contains(ch) { continue }
+            result.append(ch)
+        }
+        return String(result)
+    }
+
+
     // MARK: - Header Cell
     private func headerCell(col: Int, binding: Binding<String>) -> some View {
         baseCell(strokeColor: .black) {
@@ -1590,7 +1701,14 @@ struct PitchGridView2: View {
         let binding = Binding(
             get: { grid[row][col] },
             set: { newValue in
-                grid[row][col] = newValue
+                if col == 0 {
+                    // Enforce: up to 3 digits, sequential (asc/desc), and no repeated digits within the row
+                    let sanitized = sanitizeFirstColumnInput(row: row, newValue: newValue)
+                    grid[row][col] = sanitized
+                } else {
+                    grid[row][col] = newValue
+                }
+                // Expand grid when typing in header row
                 if row == 0 { expandGridIfNeeded(col: col) }
             }
         )
@@ -1699,14 +1817,31 @@ struct BallsLocationGridView: View {
     }
 
     private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
-        let stroke: Color = (row == 0) ? .black : .red
-        return baseCell(strokeColor: stroke) {
-            TextField("", text: binding)
-                .textFieldStyle(.plain)
-                .multilineTextAlignment(.center)
-                .fontWeight(row == 0 ? .bold : .regular)
-                .padding(.horizontal, 0)
+        // Disable the cell in the 2nd column (index 1) and 3rd row (index 2), fill with green
+        if row == 2 && col == 1 {
+            return AnyView(
+                baseCell(strokeColor: .red) {
+                    ZStack {
+                        // Filled green background
+                        Color.green
+                        // Show no editable text field; display placeholder or empty content
+                        Text("")
+                    }
+                }
+                .allowsHitTesting(false)
+            )
         }
+
+        let stroke: Color = (row == 0) ? .black : .red
+        return AnyView(
+            baseCell(strokeColor: stroke) {
+                TextField("", text: binding)
+                    .textFieldStyle(.plain)
+                    .multilineTextAlignment(.center)
+                    .fontWeight(row == 0 ? .bold : .regular)
+                    .padding(.horizontal, 0)
+            }
+        )
     }
 
     var body: some View {
@@ -1721,6 +1856,7 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
 
 
 
