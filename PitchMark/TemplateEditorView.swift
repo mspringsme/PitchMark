@@ -6,6 +6,7 @@
 //
 import SwiftUI
 import UIKit
+import Combine
 
 // Shared validation helpers and environment to coordinate top-row rules across Strike and Balls grids
 private func alnumOnlyUppercased(_ string: String) -> [Character] {
@@ -23,11 +24,15 @@ private func isSequentialDigits(_ chars: [Character]) -> Bool {
 
 // Environment object to share the combined top row between StrikeLocationGridView and BallsLocationGridView
 final class TopRowValidationCoordinator: ObservableObject {
-    // Three cells from Strike row 0 and three from Balls row 0
+    // Top rows
     @Published var strikeTopRow: [String] = Array(repeating: "", count: 3)
     @Published var ballsTopRow: [String] = Array(repeating: "", count: 3)
 
-    // Returns the set of alphanumeric characters used across both top rows, optionally excluding a specific cell (grid identifier + index)
+    // Body rows (rows 1..3) for both grids
+    @Published var strikeRows: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
+    @Published var ballsRows: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
+
+    // MARK: - Top row helpers
     func usedAlnum(excluding isStrike: Bool, index: Int) -> Set<Character> {
         var set: Set<Character> = []
         for (i, v) in strikeTopRow.enumerated() where !(isStrike && i == index) {
@@ -39,20 +44,68 @@ final class TopRowValidationCoordinator: ObservableObject {
         return set
     }
 
-    // Sanitize input for a top-row cell ensuring: up to 3 alphanumeric chars, no duplicate across combined rows, no sequential requirement
     func sanitizeTopRowInput(isStrike: Bool, index: Int, newValue: String) -> String {
-        // Allow only ASCII letters or digits, up to 3 characters. No repeats across combined top rows.
         let onlyAlnum = String(alnumOnlyUppercased(newValue).prefix(3))
         let existing = usedAlnum(excluding: isStrike, index: index)
-        // Build result without duplicates across the combined row and within the same field
         var result: [Character] = []
         for ch in onlyAlnum {
-            // Prevent duplicates across combined row; treat letters and digits uniformly
             if existing.contains(ch) { continue }
             if result.contains(ch) { continue }
             result.append(ch)
         }
         return String(result)
+    }
+
+    // MARK: - Body rows (rows 1..3)
+    // Sanitize: up to 3 uppercase alnum
+    func sanitizeBodyInput(_ value: String) -> String {
+        String(alnumOnlyUppercased(value).prefix(3))
+    }
+
+    // For a specific column, gather all characters already used in that column across rows 1..3 in both grids
+    private func usedCharactersInColumn(_ col: Int, excludingRow excludedRow: Int) -> Set<Character> {
+        var set: Set<Character> = []
+        // Strike
+        for r in 1...3 where r != excludedRow {
+            for ch in alnumOnlyUppercased(strikeRows[r][col]) { set.insert(ch) }
+        }
+        // Balls
+        for r in 1...3 where r != excludedRow {
+            for ch in alnumOnlyUppercased(ballsRows[r][col]) { set.insert(ch) }
+        }
+        return set
+    }
+
+    // Apply column-uniqueness filter to a proposed value for (row, col)
+    private func filteredForColumnUniqueness(row: Int, col: Int, proposed: String) -> String {
+        guard (1...3).contains(row) else { return proposed }
+        let used = usedCharactersInColumn(col, excludingRow: row)
+        var result: [Character] = []
+        for ch in alnumOnlyUppercased(proposed) {
+            if used.contains(ch) { continue }
+            if result.contains(ch) { continue }
+            result.append(ch)
+        }
+        return String(result.prefix(3))
+    }
+
+    // Set a body row value (rows 1..3): mirror to all three columns in that row for BOTH grids, after enforcing column uniqueness.
+    func setBodyRowMirrored(row: Int, col: Int, rawValue: String) {
+        guard (1...3).contains(row) else { return }
+        // Sanitize
+        let sanitized = sanitizeBodyInput(rawValue)
+        // Enforce column uniqueness for the originating column first
+        let filtered = filteredForColumnUniqueness(row: row, col: col, proposed: sanitized)
+        // Mirror across all 3 columns in this row for both grids, but for each column re-apply column-specific uniqueness
+        for c in 0..<3 {
+            let colFiltered = filteredForColumnUniqueness(row: row, col: c, proposed: filtered)
+            if strikeRows.indices.contains(row) && strikeRows[row].indices.contains(c) {
+                strikeRows[row][c] = colFiltered
+            }
+            if ballsRows.indices.contains(row) && ballsRows[row].indices.contains(c) {
+                ballsRows[row][c] = colFiltered
+            }
+        }
     }
 }
 
@@ -1847,12 +1900,14 @@ struct StrikeLocationGridView: View {
                     if row == 0, let coord = topRowCoordinator {
                         let sanitized = coord.sanitizeTopRowInput(isStrike: true, index: col, newValue: newValue)
                         binding.wrappedValue = sanitized
-                        // Update coordinator shared state for strike top row
                         if coord.strikeTopRow.indices.contains(col) {
                             coord.strikeTopRow[col] = sanitized
                         }
+                    } else if let coord = topRowCoordinator {
+                        // Rows 1..3: sanitize, mirror across row in both grids with column-uniqueness
+                        coord.setBodyRowMirrored(row: row, col: col, rawValue: newValue)
                     } else {
-                        binding.wrappedValue = newValue
+                        binding.wrappedValue = String(alnumOnlyUppercased(newValue).prefix(3))
                     }
                 }
             ))
@@ -1861,11 +1916,30 @@ struct StrikeLocationGridView: View {
             .fontWeight(row == 0 ? .bold : .regular)
             .padding(.horizontal, 0)
             .onAppear {
-                if row == 0, let coord = topRowCoordinator {
-                    if coord.strikeTopRow.indices.contains(col) {
-                        coord.strikeTopRow[col] = binding.wrappedValue
+                if let coord = topRowCoordinator {
+                    if row == 0 {
+                        if coord.strikeTopRow.indices.contains(col) {
+                            coord.strikeTopRow[col] = binding.wrappedValue
+                        }
+                    } else {
+                        if coord.strikeRows.indices.contains(row) && coord.strikeRows[row].indices.contains(col) {
+                            coord.strikeRows[row][col] = binding.wrappedValue
+                        }
                     }
                 }
+            }
+            .onReceive(
+                (topRowCoordinator?
+                    .$strikeRows
+                    .receive(on: RunLoop.main)
+                    .map { $0 }
+                    .eraseToAnyPublisher())
+                ?? Just([[String]]())
+                    .eraseToAnyPublisher()
+            ) { rows in
+                guard (1...3).contains(row), rows.indices.contains(row), rows[row].indices.contains(col) else { return }
+                let v = rows[row][col]
+                if binding.wrappedValue != v { binding.wrappedValue = v }
             }
         }
     }
@@ -1931,8 +2005,10 @@ struct BallsLocationGridView: View {
                             if coord.ballsTopRow.indices.contains(col) {
                                 coord.ballsTopRow[col] = sanitized
                             }
+                        } else if let coord = topRowCoordinator {
+                            coord.setBodyRowMirrored(row: row, col: col, rawValue: newValue)
                         } else {
-                            binding.wrappedValue = newValue
+                            binding.wrappedValue = String(alnumOnlyUppercased(newValue).prefix(3))
                         }
                     }
                 ))
@@ -1941,11 +2017,30 @@ struct BallsLocationGridView: View {
                 .fontWeight(row == 0 ? .bold : .regular)
                 .padding(.horizontal, 0)
                 .onAppear {
-                    if row == 0, let coord = topRowCoordinator {
-                        if coord.ballsTopRow.indices.contains(col) {
-                            coord.ballsTopRow[col] = binding.wrappedValue
+                    if let coord = topRowCoordinator {
+                        if row == 0 {
+                            if coord.ballsTopRow.indices.contains(col) {
+                                coord.ballsTopRow[col] = binding.wrappedValue
+                            }
+                        } else {
+                            if coord.ballsRows.indices.contains(row) && coord.ballsRows[row].indices.contains(col) {
+                                coord.ballsRows[row][col] = binding.wrappedValue
+                            }
                         }
                     }
+                }
+                .onReceive(
+                    (topRowCoordinator?
+                        .$ballsRows
+                        .receive(on: RunLoop.main)
+                        .map { $0 }
+                        .eraseToAnyPublisher())
+                    ?? Just([[String]]())
+                        .eraseToAnyPublisher()
+                ) { rows in
+                    guard (1...3).contains(row), rows.indices.contains(row), rows[row].indices.contains(col) else { return }
+                    let v = rows[row][col]
+                    if binding.wrappedValue != v { binding.wrappedValue = v }
                 }
             }
         )
@@ -1963,5 +2058,4 @@ struct BallsLocationGridView: View {
         }
     }
 }
-
 
