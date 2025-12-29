@@ -1631,6 +1631,9 @@ struct PitchGridView2: View {
     @State private var abbreviations: [String: String] = [:]
     @State private var showAbbrevEditorForIndex: Int? = nil
     @State private var pendingAbbreviation: String = ""
+    
+    // Maximum number of assigned pitch headers allowed
+    private let maxAssignedPitches = 7
 
     // Cell sizing
     private let cellWidth: CGFloat = 46
@@ -1638,6 +1641,11 @@ struct PitchGridView2: View {
 
     // Dynamic grid: 4 rows, starts with 2 columns
     @State private var grid: [[String]] = Array(repeating: ["", ""], count: 4)
+
+    // Count of non-empty headers in row 0 excluding column 0
+    private var assignedHeaderCount: Int {
+        grid[0].dropFirst().filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+    }
 
     // MARK: - Dynamic Columns
     private var gridColumns: [GridItem] {
@@ -1654,10 +1662,12 @@ struct PitchGridView2: View {
 
     private func expandGridIfNeeded(col: Int) {
         let lastCol = grid[0].count - 1
-        if col == lastCol && !grid[0][col].isEmpty {
-            for r in 0..<grid.count {
-                grid[r].append("")
-            }
+        // Only expand if we're typing in the last column AND that cell becomes non-empty
+        guard col == lastCol, !grid[0][col].isEmpty else { return }
+        // Prevent creating a new select column if we've reached the max assigned headers
+        guard assignedHeaderCount < maxAssignedPitches else { return }
+        for r in 0..<grid.count {
+            grid[r].append("")
         }
     }
     
@@ -1820,6 +1830,45 @@ struct PitchGridView2: View {
 
         // Assign to first column rows 1..3
         for r in 1...3 { grid[r][0] = picked[r - 1] }
+
+        // Also randomize subsequent columns under assigned pitch headers
+        randomizeSubsequentColumns()
+    }
+
+    // Randomize subsequent columns (columns > 0) under assigned pitch headers.
+    // For each column where header (row 0) is non-empty, set rows 1..3 to a single random digit (0-9).
+    // Digits are allowed to repeat across rows and columns.
+    func randomizeSubsequentColumns() {
+        // Ensure there is at least one assigned pitch column beyond the header
+        let columnCount = grid.first?.count ?? 0
+        guard columnCount > 1 else { return }
+
+        // Determine which columns have an assigned pitch in the header (row 0)
+        let assignedColumns: [Int] = (1..<columnCount).filter { c in
+            !grid[0][c].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        guard !assignedColumns.isEmpty else { return }
+
+        // For each row 1..3, fill assigned columns with digits that do not repeat within that row
+        for r in 1...3 {
+            var usedDigitsInRow: Set<String> = []
+            // If there are preexisting values in assigned columns for this row, include them to avoid duplicates
+            for c in assignedColumns {
+                let existing = grid[r][c].trimmingCharacters(in: .whitespacesAndNewlines)
+                if existing.count == 1, existing.first?.isNumber == true {
+                    usedDigitsInRow.insert(existing)
+                }
+            }
+
+            for c in assignedColumns {
+                // Choose a random digit 0-9 not yet used in this row
+                let allDigits = (0...9).map { String($0) }
+                let available = allDigits.filter { !usedDigitsInRow.contains($0) }
+                let chosen = (available.randomElement() ?? allDigits.randomElement()) ?? "0"
+                grid[r][c] = chosen
+                usedDigitsInRow.insert(chosen)
+            }
+        }
     }
 
     // MARK: - Header Cell
@@ -1828,7 +1877,13 @@ struct PitchGridView2: View {
             Menu {
                 ForEach(availablePitches, id: \.self) { pitch in
                     Button {
+                        // If this header is currently empty and assigning it would exceed the max, block it
+                        let wasEmpty = binding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        if wasEmpty && assignedHeaderCount >= maxAssignedPitches {
+                            return
+                        }
                         binding.wrappedValue = pitch
+                        // Attempt to expand only if under the cap
                         expandGridIfNeeded(col: col)
                         hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                     } label: {
