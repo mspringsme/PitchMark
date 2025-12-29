@@ -1836,8 +1836,9 @@ struct PitchGridView2: View {
     }
 
     // Randomize subsequent columns (columns > 0) under assigned pitch headers.
-    // For each column where header (row 0) is non-empty, set rows 1..3 to a single random digit (0-9).
-    // Digits are allowed to repeat across rows and columns.
+    // Enforce both:
+    // - Column uniqueness across rows (no repeats within a column for rows 1..3)
+    // - Row uniqueness across columns (no repeats within a row across all assigned columns)
     func randomizeSubsequentColumns() {
         // Ensure there is at least one assigned pitch column beyond the header
         let columnCount = grid.first?.count ?? 0
@@ -1849,24 +1850,69 @@ struct PitchGridView2: View {
         }
         guard !assignedColumns.isEmpty else { return }
 
-        // For each row 1..3, fill assigned columns with digits that do not repeat within that row
-        for r in 1...3 {
-            var usedDigitsInRow: Set<String> = []
-            // If there are preexisting values in assigned columns for this row, include them to avoid duplicates
-            for c in assignedColumns {
-                let existing = grid[r][c].trimmingCharacters(in: .whitespacesAndNewlines)
-                if existing.count == 1, existing.first?.isNumber == true {
-                    usedDigitsInRow.insert(existing)
+        // Build row-used sets from existing assigned columns if we wanted to preserve, but we will overwrite.
+        // Reset row-used to empty and fill fresh to guarantee constraints post-randomization.
+        var rowUsed: [Int: Set<String>] = [1: [], 2: [], 3: []]
+
+        // Helper: attempt to assign three distinct digits to rows 1..3 for a given column,
+        // respecting rowUsed for each row. Returns the chosen digits per row or nil if not possible.
+        func assignColumnDigits() -> [Int: String]? {
+            let allDigits = (0...9).map { String($0) }
+            // We will try permutations by choosing an order of rows to reduce conflicts.
+            let rowOrder = [1, 2, 3].shuffled()
+
+            var result: [Int: String] = [:]
+            var usedInColumn: Set<String> = []
+
+            func backtrack(_ idx: Int) -> Bool {
+                if idx == rowOrder.count { return true }
+                let r = rowOrder[idx]
+                // Candidates for this row: digits not yet used in this column and not used in this row across columns
+                let candidates = allDigits.filter { !usedInColumn.contains($0) && !(rowUsed[r]?.contains($0) ?? false) }.shuffled()
+                for d in candidates {
+                    result[r] = d
+                    usedInColumn.insert(d)
+                    if backtrack(idx + 1) { return true }
+                    usedInColumn.remove(d)
+                    result[r] = nil
                 }
+                return false
             }
 
-            for c in assignedColumns {
-                // Choose a random digit 0-9 not yet used in this row
+            return backtrack(0) ? result : nil
+        }
+
+        // For each assigned column, compute digits that satisfy both constraints and write them.
+        for c in assignedColumns {
+            // Find a valid assignment; try a few times with different random orders to avoid rare dead-ends
+            var assignment: [Int: String]? = nil
+            for _ in 0..<10 { // up to 10 attempts
+                if let a = assignColumnDigits() {
+                    assignment = a
+                    break
+                }
+            }
+            // If we somehow fail to find an assignment (very unlikely with 0-9 pool), fallback to a simple non-conflicting greedy
+            if assignment == nil {
+                var usedInColumn: Set<String> = []
                 let allDigits = (0...9).map { String($0) }
-                let available = allDigits.filter { !usedDigitsInRow.contains($0) }
-                let chosen = (available.randomElement() ?? allDigits.randomElement()) ?? "0"
-                grid[r][c] = chosen
-                usedDigitsInRow.insert(chosen)
+                var temp: [Int: String] = [:]
+                for r in 1...3 {
+                    let candidates = allDigits.filter { !usedInColumn.contains($0) && !(rowUsed[r]?.contains($0) ?? false) }
+                    let chosen = (candidates.randomElement() ?? allDigits.randomElement()) ?? "0"
+                    temp[r] = chosen
+                    usedInColumn.insert(chosen)
+                }
+                assignment = temp
+            }
+
+            // Write the assignment to the grid and update rowUsed
+            if let a = assignment {
+                for r in 1...3 {
+                    let val = a[r] ?? "0"
+                    grid[r][c] = val
+                    rowUsed[r, default: []].insert(val)
+                }
             }
         }
     }
