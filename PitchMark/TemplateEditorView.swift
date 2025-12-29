@@ -137,6 +137,9 @@ struct TemplateEditorView: View {
     @State private var templateType: String = "encrypted"
     @State private var showRandomConfirm = false
     @State private var showClearConfirm = false
+    @State private var hasAnyPitchInTopRow = false
+    @State private var showNoPitchAlert = false
+    @State private var randomizeFirstColumnAction: (() -> Void)? = nil
     
     let allPitches: [String]
     let templateID: UUID
@@ -413,7 +416,13 @@ struct TemplateEditorView: View {
                             .padding(.top, 4)
                         
                         VStack{
-                            PitchGridView2(availablePitches: availablePitches)
+                            PitchGridView2(
+                                availablePitches: availablePitches,
+                                hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
+                                onProvideRandomizeAction: { action in
+                                    self.randomizeFirstColumnAction = action
+                                }
+                            )
                                 .padding(.top, 60)
                             Text("Pitch Selection")
                                 .font(.caption)
@@ -463,11 +472,21 @@ struct TemplateEditorView: View {
                                 .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
                                 .confirmationDialog("Randomize grid values?", isPresented: $showRandomConfirm, titleVisibility: .visible) {
                                     Button("Randomize", role: .destructive) {
-                                        // TODO: Wire up randomization logic for encrypted grids
+                                        if !hasAnyPitchInTopRow {
+                                            showNoPitchAlert = true
+                                            return
+                                        }
+                                        // Randomize first column with unique two-digit sequential numbers
+                                        randomizeFirstColumnAction?()
                                     }
                                     Button("Cancel", role: .cancel) { }
                                 } message: {
                                     Text("This will randomize the values in your grids. This action cannot be undone.")
+                                }
+                                .alert("Add a pitch first", isPresented: $showNoPitchAlert) {
+                                    Button("OK", role: .cancel) { }
+                                } message: {
+                                    Text("Please enter at least one pitch in the top row before randomizing.")
                                 }
 
                                 Button {
@@ -1606,6 +1625,8 @@ struct PitchGridView: View {
 
 struct PitchGridView2: View {
     let availablePitches: [String]
+    @Binding var hasAnyPitchInTopRow: Bool
+    var onProvideRandomizeAction: ((@escaping () -> Void) -> Void)? = nil
 
     @State private var abbreviations: [String: String] = [:]
     @State private var showAbbrevEditorForIndex: Int? = nil
@@ -1742,6 +1763,65 @@ struct PitchGridView2: View {
     }
 
 
+    // Randomize first column (rows 1..3) with unique two-digit sequential numbers
+    func randomizeFirstColumn() {
+        // Ensure there is at least one pitch column beyond the header (i.e., grid[0].count > 1 and some non-empty header)
+        let hasAtLeastOnePitchColumn = grid[0].count > 1 && grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard hasAtLeastOnePitchColumn else { return }
+
+        // Gather all existing values in the grid to avoid duplicates anywhere
+        var usedValues: Set<String> = []
+        for r in 0..<grid.count {
+            for c in 0..<grid[r].count {
+                let v = grid[r][c].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !v.isEmpty { usedValues.insert(v) }
+            }
+        }
+        // Also remove current first-column rows 1..3 from usedValues temporarily so we can replace them freely
+        for r in 1...3 {
+            usedValues.remove(grid[r][0].trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        // Build all two-digit sequential numbers as strings (ascending or descending): 01..89 and 10..98
+        var candidates: [String] = []
+        for tens in 0...9 {
+            for ones in 0...9 where ones != tens {
+                let diff = abs(ones - tens)
+                if diff == 1 { // sequential
+                    candidates.append(String(format: "%d%d", tens, ones))
+                }
+            }
+        }
+        // Filter out any candidate already used anywhere in the grid
+        candidates = candidates.filter { !usedValues.contains($0) }
+        // Shuffle candidates for randomness
+        candidates.shuffle()
+
+        // Helper to get digits of a two-char string
+        func digits(of s: String) -> (Character, Character)? {
+            guard s.count == 2, let first = s.first, let last = s.last, first.isNumber, last.isNumber else { return nil }
+            return (first, last)
+        }
+
+        // We need 3 values such that:
+        // - All three are unique (already ensured by candidates uniqueness)
+        // - No digit repeats across the three values (six digits all distinct)
+        var picked: [String] = []
+        var usedDigits: Set<Character> = []
+        for cand in candidates {
+            guard let (d1, d2) = digits(of: cand) else { continue }
+            if usedDigits.contains(d1) || usedDigits.contains(d2) { continue }
+            picked.append(cand)
+            usedDigits.insert(d1)
+            usedDigits.insert(d2)
+            if picked.count == 3 { break }
+        }
+        guard picked.count == 3 else { return }
+
+        // Assign to first column rows 1..3
+        for r in 1...3 { grid[r][0] = picked[r - 1] }
+    }
+
     // MARK: - Header Cell
     private func headerCell(col: Int, binding: Binding<String>) -> some View {
         baseCell(strokeColor: .black) {
@@ -1750,6 +1830,7 @@ struct PitchGridView2: View {
                     Button {
                         binding.wrappedValue = pitch
                         expandGridIfNeeded(col: col)
+                        hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                     } label: {
                         HStack {
                             Text(pitch)
@@ -1864,6 +1945,14 @@ struct PitchGridView2: View {
                         cellBinding(row: r, col: c)
                     }
                 }
+            }
+            .onAppear {
+                hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                onProvideRandomizeAction?(self.randomizeFirstColumn)
+            }
+            .onChange(of: grid) { _, _ in
+                hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                onProvideRandomizeAction?(self.randomizeFirstColumn)
             }
         }
     }
@@ -2058,4 +2147,5 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
 
