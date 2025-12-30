@@ -1959,20 +1959,16 @@ struct PitchGridView2: View {
         return set
     }
     
+    // MODIFIED per instructions
     private func sanitizeFirstColumnInput(row: Int, newValue: String) -> String {
         // Keep only digits and limit to 3
         let onlyDigits = String(digits(in: newValue).prefix(3))
-        // Must be sequential ascending or descending
         let chars = Array(onlyDigits)
-        guard isSequential(chars) else { return String(chars.dropLast()) }
-        // No duplicate digits across the same row (other columns)
-        let existingInRow = rowDigits(excludingCol: 0, row: row)
         // No duplicate digits across other rows' first column
         let existingInOtherRowsCol0 = columnZeroDigits(excludingRow: row)
-        // Remove any digits that already exist elsewhere (row or other rows' col 0)
+        // Remove any digits that already exist in other rows' col 0, and avoid duplicates within the new value
         var result: [Character] = []
         for ch in chars {
-            if existingInRow.contains(ch) { continue }
             if existingInOtherRowsCol0.contains(ch) { continue }
             if result.contains(ch) { continue }
             result.append(ch)
