@@ -312,6 +312,14 @@ final class TopRowValidationCoordinator: ObservableObject {
             }
         }
     }
+    
+    // Added clear helper for intent clarity
+    func clearAll() {
+        strikeTopRow = Array(repeating: "", count: 3)
+        ballsTopRow = Array(repeating: "", count: 3)
+        strikeRows = Array(repeating: Array(repeating: "", count: 3), count: 4)
+        ballsRows = Array(repeating: Array(repeating: "", count: 3), count: 4)
+    }
 }
 
 private struct TopRowCoordinatorKey: EnvironmentKey {
@@ -345,7 +353,9 @@ struct TemplateEditorView: View {
     @State private var hasAnyPitchInTopRow = false
     @State private var showNoPitchAlert = false
     @State private var randomizeFirstColumnAction: (() -> Void)? = nil
-    @State private var topRowCoordinator = TopRowValidationCoordinator()
+    @State private var clearPitchGridAction: (() -> Void)? = nil
+    
+    @StateObject private var topRowCoordinator = TopRowValidationCoordinator()
     
     let allPitches: [String]
     let templateID: UUID
@@ -627,6 +637,9 @@ struct TemplateEditorView: View {
                                 hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
                                 onProvideRandomizeAction: { action in
                                     self.randomizeFirstColumnAction = action
+                                },
+                                onProvideClearAction: { action in
+                                    self.clearPitchGridAction = action
                                 }
                             )
                                 .padding(.top, 60)
@@ -645,7 +658,7 @@ struct TemplateEditorView: View {
 //                            let coordinator = TopRowValidationCoordinator()
                             VStack{
                                 StrikeLocationGridView()
-                                    .environment(\ .topRowCoordinator, topRowCoordinator)
+                                    .environment(\.topRowCoordinator, topRowCoordinator)
                                     .padding(.top, 8)
                                 Text("Strikes")
                                     .font(.caption)
@@ -654,7 +667,7 @@ struct TemplateEditorView: View {
                             }
                             VStack{
                                 BallsLocationGridView()
-                                    .environment(\ .topRowCoordinator, topRowCoordinator)
+                                    .environment(\.topRowCoordinator, topRowCoordinator)
                                     .padding(.top, 8)
                                 Text("Balls")
                                     .font(.caption)
@@ -710,7 +723,9 @@ struct TemplateEditorView: View {
                                 .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
                                 .confirmationDialog("Clear all grid values?", isPresented: $showClearConfirm, titleVisibility: .visible) {
                                     Button("Clear", role: .destructive) {
-                                        // TODO: Wire up clear logic for encrypted grids
+                                        topRowCoordinator.clearAll()
+                                        clearPitchGridAction?()
+                                        hasAnyPitchInTopRow = false
                                     }
                                     Button("Cancel", role: .cancel) { }
                                 } message: {
@@ -1835,6 +1850,7 @@ struct PitchGridView2: View {
     let availablePitches: [String]
     @Binding var hasAnyPitchInTopRow: Bool
     var onProvideRandomizeAction: ((@escaping () -> Void) -> Void)? = nil
+    var onProvideClearAction: ((@escaping () -> Void) -> Void)? = nil
 
     @State private var abbreviations: [String: String] = [:]
     @State private var showAbbrevEditorForIndex: Int? = nil
@@ -2096,6 +2112,13 @@ struct PitchGridView2: View {
             }
         }
     }
+    
+    func clearAll() {
+        // Reset all cells to empty and collapse to the initial 2-column shape
+        grid = Array(repeating: ["", ""], count: 4)
+        abbreviations.removeAll()
+        hasAnyPitchInTopRow = false
+    }
 
     // MARK: - Header Cell
     private func headerCell(col: Int, binding: Binding<String>) -> some View {
@@ -2231,10 +2254,12 @@ struct PitchGridView2: View {
             .onAppear {
                 hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 onProvideRandomizeAction?(self.randomizeFirstColumn)
+                onProvideClearAction?(self.clearAll)
             }
             .onChange(of: grid) { _, _ in
                 hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 onProvideRandomizeAction?(self.randomizeFirstColumn)
+                onProvideClearAction?(self.clearAll)
             }
         }
     }
@@ -2453,6 +2478,9 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
+
+
 
 
 
