@@ -237,6 +237,81 @@ final class TopRowValidationCoordinator: ObservableObject {
         fill(isStrike: true)
         fill(isStrike: false)
     }
+    // Populate rows 1..3 in both grids with sequential two-digit codes, repeating across columns but unique per row and never repeating down
+    func randomizeBodyRowsWithSequentialPairs() {
+        // Build ascending sequential digit pairs with wrap from 9->0 (01,12,...,89,90)
+        var pairs: [String] = []
+        for i in 0..<10 {
+            let next = (i + 1) % 10
+            pairs.append("\(i)\(next)")
+        }
+
+        // Helper to extract the two digits as Characters
+        func digits(of s: String) -> (Character, Character)? {
+            guard s.count == 2, let a = s.first, let b = s.last, a.isNumber, b.isNumber else { return nil }
+            return (a, b)
+        }
+
+        // Find three pairs that do not share any digit among them (six distinct digits total)
+        var picked: [String] = []
+        var usedDigits: Set<Character> = []
+        let shuffled = pairs.shuffled()
+
+        for first in shuffled {
+            guard let (f1, f2) = digits(of: first) else { continue }
+            var used1: Set<Character> = [f1, f2]
+            for second in shuffled where second != first {
+                guard let (s1, s2) = digits(of: second) else { continue }
+                if used1.contains(s1) || used1.contains(s2) { continue }
+                var used2 = used1
+                used2.insert(s1); used2.insert(s2)
+                for third in shuffled where third != first && third != second {
+                    guard let (t1, t2) = digits(of: third) else { continue }
+                    if used2.contains(t1) || used2.contains(t2) { continue }
+                    picked = [first, second, third]
+                    usedDigits = used2
+                    usedDigits.insert(t1); usedDigits.insert(t2)
+                    break
+                }
+                if picked.count == 3 { break }
+            }
+            if picked.count == 3 { break }
+        }
+
+        // Fallback: if not found (should be rare), greedily pick without digit overlap where possible
+        if picked.count < 3 {
+            picked.removeAll()
+            usedDigits.removeAll()
+            for p in shuffled {
+                guard let (d1, d2) = digits(of: p) else { continue }
+                if usedDigits.contains(d1) || usedDigits.contains(d2) { continue }
+                picked.append(p)
+                usedDigits.insert(d1); usedDigits.insert(d2)
+                if picked.count == 3 { break }
+            }
+        }
+
+        // Absolute safety: if still < 3, fill with any remaining pairs (won't happen realistically)
+        var idx = 0
+        while picked.count < 3 && idx < pairs.count {
+            let cand = pairs[idx]
+            if !picked.contains(cand) { picked.append(cand) }
+            idx += 1
+        }
+
+        // Assign to rows 1..3, mirror across all three columns, for both strike and balls grids
+        for r in 1...3 {
+            let value = picked[r - 1]
+            for c in 0..<3 {
+                if strikeRows.indices.contains(r) && strikeRows[r].indices.contains(c) {
+                    strikeRows[r][c] = value
+                }
+                if ballsRows.indices.contains(r) && ballsRows[r].indices.contains(c) {
+                    ballsRows[r][c] = value
+                }
+            }
+        }
+    }
 }
 
 private struct TopRowCoordinatorKey: EnvironmentKey {
@@ -610,6 +685,7 @@ struct TemplateEditorView: View {
                                         // Randomize first column with unique two-digit sequential numbers
                                         randomizeFirstColumnAction?()
                                         topRowCoordinator.randomizeTopRowsWithSequentialPairs()
+                                        topRowCoordinator.randomizeBodyRowsWithSequentialPairs()
                                     }
                                     Button("Cancel", role: .cancel) { }
                                 } message: {
@@ -2353,6 +2429,7 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
 
 
 
