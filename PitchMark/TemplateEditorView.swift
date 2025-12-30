@@ -1959,6 +1959,33 @@ struct PitchGridView2: View {
         return set
     }
     
+    // Collect all individual characters used in the same row across non-leftmost columns, excluding a specific column
+    private func usedCharsInRowNonLeftmost(row: Int, excludingCol excludedCol: Int) -> Set<Character> {
+        var set: Set<Character> = []
+        guard row >= 0, row < grid.count else { return set }
+        // Consider only columns > 0 (non-leftmost)
+        for c in 1..<(grid[row].count) {
+            if c == excludedCol { continue }
+            for ch in grid[row][c] { set.insert(ch) }
+        }
+        return set
+    }
+    
+    // Sanitize input for non-leftmost columns (col > 0) in body rows (row 1..3):
+    // ensure no character repeats within the same row across non-leftmost columns, and avoid duplicates within the cell
+    private func sanitizeNonLeftmostBodyCell(row: Int, col: Int, newValue: String) -> String {
+        // If top row or leftmost column, do nothing here
+        guard row >= 1, row <= 3, col > 0 else { return newValue }
+        let used = usedCharsInRowNonLeftmost(row: row, excludingCol: col)
+        var result: [Character] = []
+        for ch in newValue {
+            if used.contains(ch) { continue }
+            if result.contains(ch) { continue }
+            result.append(ch)
+        }
+        return String(result)
+    }
+
     // MODIFIED per instructions
     private func sanitizeFirstColumnInput(row: Int, newValue: String) -> String {
         // Keep only digits and limit to 3
@@ -2122,7 +2149,7 @@ struct PitchGridView2: View {
                     }
                 }
             } label: {
-                Text(binding.wrappedValue.isEmpty ? "Select" : displayName(for: binding.wrappedValue))
+                Text(binding.wrappedValue.isEmpty ? "+" : displayName(for: binding.wrappedValue))
                     .fontWeight(.bold)
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
@@ -2158,7 +2185,8 @@ struct PitchGridView2: View {
                     let sanitized = sanitizeFirstColumnInput(row: row, newValue: newValue)
                     grid[row][col] = sanitized
                 } else {
-                    grid[row][col] = newValue
+                    let sanitized = sanitizeNonLeftmostBodyCell(row: row, col: col, newValue: newValue)
+                    grid[row][col] = sanitized
                 }
                 // Expand grid when typing in header row
                 if row == 0 { expandGridIfNeeded(col: col) }
@@ -2425,6 +2453,7 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
 
 
 
