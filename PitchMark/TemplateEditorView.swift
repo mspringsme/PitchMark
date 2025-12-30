@@ -107,6 +107,136 @@ final class TopRowValidationCoordinator: ObservableObject {
             }
         }
     }
+    
+    func randomizeTopRowsWithUpToTwoAlnum() {
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        let digits = Array("0123456789")
+        let pool = letters + digits
+
+        func proposeFor(isStrike: Bool, index: Int) -> String {
+            for _ in 0..<40 { // more attempts to find a valid combo
+                var candidate: [Character] = []
+                let len = Int.random(in: 1...2)
+                for _ in 0..<len {
+                    if let ch = pool.randomElement() {
+                        candidate.append(ch)
+                    }
+                }
+                let proposed = String(candidate)
+                let sanitized = sanitizeTopRowInput(isStrike: isStrike, index: index, newValue: proposed)
+                if !sanitized.isEmpty && sanitized.count <= 2 {
+                    return sanitized
+                }
+            }
+            return ""
+        }
+
+        for i in 0..<3 {
+            let value = proposeFor(isStrike: true, index: i)
+            if strikeTopRow.indices.contains(i) {
+                strikeTopRow[i] = value
+            }
+        }
+        for i in 0..<3 {
+            let value = proposeFor(isStrike: false, index: i)
+            if ballsTopRow.indices.contains(i) {
+                ballsTopRow[i] = value
+            }
+        }
+    }
+    
+    func randomizeTopRowsWithSequentialPairs() {
+        // Generate two-character pairs for top rows across both grids.
+        // Mostly sequential digit pairs (e.g., 12, 23, 34, 90), with occasional letter substitutions.
+        // Maintain uniqueness across the combined top rows using existing sanitizeTopRowInput.
+        let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+        // Build ascending sequential digit pairs with wrap from 9->0 (01,12,...,89,90)
+        var seqPairs: [String] = []
+        for i in 0..<10 {
+            let next = (i + 1) % 10
+            seqPairs.append("\(i)\(next)")
+        }
+        // Deduplicate while keeping order
+        var seen: Set<String> = []
+        let basePairs: [String] = seqPairs.filter { seen.insert($0).inserted }
+
+        func maybeLetterize(_ s: String) -> String {
+            guard s.count == 2 else { return s }
+            // 5% chance to replace one character with a letter
+            if Int.random(in: 0..<20) == 0 {
+                let idxToReplace = Int.random(in: 0..<2)
+                let ch = letters.randomElement() ?? "A"
+                var arr = Array(s)
+                arr[idxToReplace] = ch
+                return String(arr)
+            }
+            return s
+        }
+
+        // Fallback creator: ensure we always return exactly 2 characters by replacing conflicts with letters
+        func conflictResolvingFallback(isStrike: Bool, index: Int) -> String {
+            let used = usedAlnum(excluding: isStrike, index: index)
+            // Phase A: try to find a digits-only ascending pair that doesn't use any 'used' chars
+            for raw in basePairs {
+                let arr = Array(raw)
+                if !used.contains(arr[0]) && !used.contains(arr[1]) {
+                    // Both digits available
+                    return raw
+                }
+            }
+            // Phase B: allow substituting conflicts with letters to keep length==2
+            for raw in basePairs {
+                var arr = Array(raw)
+                for i in 0..<arr.count {
+                    if used.contains(arr[i]) {
+                        if let replacement = ("ABCDEFGHIJKLMNOPQRSTUVWXYZ").first(where: { ch in
+                            let c = Character(String(ch))
+                            return !used.contains(c) && !arr.contains(c)
+                        }) {
+                            arr[i] = replacement
+                        }
+                    }
+                }
+                // Ensure two distinct alnum chars
+                let only = alnumOnlyUppercased(String(arr))
+                var result: [Character] = []
+                for ch in only where !result.contains(ch) { result.append(ch) }
+                if result.count == 2 { return String(result) }
+            }
+            // Absolute last resort: two letters
+            let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            let a = letters.randomElement() ?? "A"
+            let b = letters.first(where: { $0 != a }) ?? "B"
+            return String([a, b])
+        }
+
+        func fill(isStrike: Bool) {
+            var bag = basePairs.shuffled()
+            for col in 0..<3 {
+                var placed = ""
+                // Phase 1: try a number of randomized candidates (with occasional letterization)
+                for _ in 0..<60 {
+                    if bag.isEmpty { bag = basePairs.shuffled() }
+                    let raw = maybeLetterize(bag.removeFirst())
+                    let sanitized = sanitizeTopRowInput(isStrike: isStrike, index: col, newValue: raw)
+                    if sanitized.count == 2 { placed = sanitized; break }
+                }
+                // Phase 2: deterministic conflict-resolving fallback to guarantee non-empty two chars
+                if placed.isEmpty {
+                    placed = conflictResolvingFallback(isStrike: isStrike, index: col)
+                }
+                if isStrike {
+                    if strikeTopRow.indices.contains(col) { strikeTopRow[col] = placed }
+                } else {
+                    if ballsTopRow.indices.contains(col) { ballsTopRow[col] = placed }
+                }
+            }
+        }
+
+        fill(isStrike: true)
+        fill(isStrike: false)
+    }
 }
 
 private struct TopRowCoordinatorKey: EnvironmentKey {
@@ -140,6 +270,7 @@ struct TemplateEditorView: View {
     @State private var hasAnyPitchInTopRow = false
     @State private var showNoPitchAlert = false
     @State private var randomizeFirstColumnAction: (() -> Void)? = nil
+    @State private var topRowCoordinator = TopRowValidationCoordinator()
     
     let allPitches: [String]
     let templateID: UUID
@@ -436,10 +567,10 @@ struct TemplateEditorView: View {
                         // New section for Strike Location Grid
                         HStack{
                             // Shared coordinator so the two grids validate their top rows as one combined row
-                            let coordinator = TopRowValidationCoordinator()
+//                            let coordinator = TopRowValidationCoordinator()
                             VStack{
                                 StrikeLocationGridView()
-                                    .environment(\ .topRowCoordinator, coordinator)
+                                    .environment(\ .topRowCoordinator, topRowCoordinator)
                                     .padding(.top, 8)
                                 Text("Strikes")
                                     .font(.caption)
@@ -448,7 +579,7 @@ struct TemplateEditorView: View {
                             }
                             VStack{
                                 BallsLocationGridView()
-                                    .environment(\ .topRowCoordinator, coordinator)
+                                    .environment(\ .topRowCoordinator, topRowCoordinator)
                                     .padding(.top, 8)
                                 Text("Balls")
                                     .font(.caption)
@@ -478,6 +609,7 @@ struct TemplateEditorView: View {
                                         }
                                         // Randomize first column with unique two-digit sequential numbers
                                         randomizeFirstColumnAction?()
+                                        topRowCoordinator.randomizeTopRowsWithSequentialPairs()
                                     }
                                     Button("Cancel", role: .cancel) { }
                                 } message: {
@@ -2080,6 +2212,18 @@ struct StrikeLocationGridView: View {
                 let v = rows[row][col]
                 if binding.wrappedValue != v { binding.wrappedValue = v }
             }
+            // Inserted onReceive for strikeTopRow per instructions
+            .onReceive(
+                (topRowCoordinator?
+                    .$strikeTopRow
+                    .receive(on: RunLoop.main)
+                    .eraseToAnyPublisher())
+                ?? Just([String]()).eraseToAnyPublisher()
+            ) { row0 in
+                guard row == 0, row0.indices.contains(col) else { return }
+                let v = row0[col]
+                if binding.wrappedValue != v { binding.wrappedValue = v }
+            }
         }
     }
 
@@ -2181,6 +2325,18 @@ struct BallsLocationGridView: View {
                     let v = rows[row][col]
                     if binding.wrappedValue != v { binding.wrappedValue = v }
                 }
+                // Inserted onReceive for ballsTopRow per instructions
+                .onReceive(
+                    (topRowCoordinator?
+                        .$ballsTopRow
+                        .receive(on: RunLoop.main)
+                        .eraseToAnyPublisher())
+                    ?? Just([String]()).eraseToAnyPublisher()
+                ) { row0 in
+                    guard row == 0, row0.indices.contains(col) else { return }
+                    let v = row0[col]
+                    if binding.wrappedValue != v { binding.wrappedValue = v }
+                }
             }
         )
     }
@@ -2197,5 +2353,8 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
+
+
 
 
