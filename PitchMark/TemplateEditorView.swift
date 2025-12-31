@@ -354,8 +354,14 @@ struct TemplateEditorView: View {
     @State private var showNoPitchAlert = false
     @State private var randomizeFirstColumnAction: (() -> Void)? = nil
     @State private var clearPitchGridAction: (() -> Void)? = nil
-    
+    @State private var pitchGridSnapshotProvider: (() -> (headers: [PitchHeader], grid: [[String]]))? = nil
+
+    // Added new states for initial snapshot injection
+    @State private var initialPitchGridHeaders: [PitchHeader]? = nil
+    @State private var initialPitchGridValues: [[String]]? = nil
+
     @StateObject private var topRowCoordinator = TopRowValidationCoordinator()
+    @EnvironmentObject var authManager: AuthManager
     
     let allPitches: [String]
     let templateID: UUID
@@ -386,11 +392,27 @@ struct TemplateEditorView: View {
             selectedCodes.removeAll()
         }
 
+        // Collect encrypted grid states
+        let snapshot = pitchGridSnapshotProvider?()
+        let headers: [PitchHeader] = snapshot?.headers ?? []
+        let gridValues: [[String]] = snapshot?.grid ?? []
+
+        let strikeTop = topRowCoordinator.strikeTopRow
+        let strikeRows = topRowCoordinator.strikeRows
+        let ballsTop = topRowCoordinator.ballsTopRow
+        let ballsRows = topRowCoordinator.ballsRows
+
         let newTemplate = PitchTemplate(
             id: templateID,
             name: name,
             pitches: Array(selectedPitches),
-            codeAssignments: codeAssignments
+            codeAssignments: codeAssignments,
+            pitchGridHeaders: headers,
+            pitchGridValues: gridValues,
+            strikeTopRow: strikeTop,
+            strikeRows: strikeRows,
+            ballsTopRow: ballsTop,
+            ballsRows: ballsRows
         )
         onSave(newTemplate)
     }
@@ -640,7 +662,12 @@ struct TemplateEditorView: View {
                                 },
                                 onProvideClearAction: { action in
                                     self.clearPitchGridAction = action
-                                }
+                                },
+                                onProvideSnapshot: { provider in
+                                    self.pitchGridSnapshotProvider = provider
+                                },
+                                initialHeaders: initialPitchGridHeaders,
+                                initialGrid: initialPitchGridValues
                             )
                                 .padding(.top, 60)
                             Text("Pitch Selection")
@@ -742,6 +769,26 @@ struct TemplateEditorView: View {
                     
                 }
                 .padding(.horizontal)
+                .task {
+                    // Load latest template by ID
+                    authManager.loadTemplate(id: templateID.uuidString) { loaded in
+                        guard let t = loaded else { return }
+                        // Basic fields
+                        DispatchQueue.main.async {
+                            self.name = t.name
+                            self.codeAssignments = t.codeAssignments
+                            self.selectedPitches = Self.loadActivePitches(for: t.id, fallback: t.pitches)
+                            self.customPitches = t.pitches.filter { !pitchOrder.contains($0) }
+                            self.initialPitchGridHeaders = t.pitchGridHeaders
+                            self.initialPitchGridValues = t.pitchGridValues
+                            // Update location grids via coordinator
+                            if t.strikeTopRow.count == 3 { self.topRowCoordinator.strikeTopRow = t.strikeTopRow }
+                            if t.ballsTopRow.count == 3 { self.topRowCoordinator.ballsTopRow = t.ballsTopRow }
+                            if t.strikeRows.count == 4 { self.topRowCoordinator.strikeRows = t.strikeRows }
+                            if t.ballsRows.count == 4 { self.topRowCoordinator.ballsRows = t.ballsRows }
+                        }
+                    }
+                }
             }
             .interactiveDismissDisabled(true)
             .toolbar {
@@ -1851,6 +1898,11 @@ struct PitchGridView2: View {
     @Binding var hasAnyPitchInTopRow: Bool
     var onProvideRandomizeAction: ((@escaping () -> Void) -> Void)? = nil
     var onProvideClearAction: ((@escaping () -> Void) -> Void)? = nil
+    var onProvideSnapshot: (((@escaping () -> (headers: [PitchHeader], grid: [[String]]))) -> Void)? = nil
+
+    // Added initial headers and grid for snapshot application
+    var initialHeaders: [PitchHeader]? = nil
+    var initialGrid: [[String]]? = nil
 
     @State private var abbreviations: [String: String] = [:]
     @State private var showAbbrevEditorForIndex: Int? = nil
@@ -2120,6 +2172,21 @@ struct PitchGridView2: View {
         hasAnyPitchInTopRow = false
     }
 
+    // MARK: - Build Headers Snapshot Helper
+    private func buildHeadersFromTopRow() -> [PitchHeader] {
+        // grid[0] is header row; columns > 0 are pitches
+        guard !grid.isEmpty else { return [] }
+        var result: [PitchHeader] = []
+        let headerRow = grid[0]
+        for c in 1..<headerRow.count {
+            let pitchName = headerRow[c].trimmingCharacters(in: .whitespacesAndNewlines)
+            if pitchName.isEmpty { continue }
+            let abbr = abbreviations[pitchName]
+            result.append(PitchHeader(pitch: pitchName, abbreviation: abbr))
+        }
+        return result
+    }
+
     // MARK: - Header Cell
     private func headerCell(col: Int, binding: Binding<String>) -> some View {
         baseCell(strokeColor: .black) {
@@ -2177,6 +2244,8 @@ struct PitchGridView2: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
+                    .frame(minWidth: 44, minHeight: 36)  // standard tap target
+                    .contentShape(Rectangle())
             }
         }
         .alert("Edit Abbreviation", isPresented: Binding(
@@ -2252,16 +2321,57 @@ struct PitchGridView2: View {
                 }
             }
             .onAppear {
+                // Apply initial snapshot if provided
+                if let ih = initialHeaders, let ig = initialGrid {
+                    applySnapshot(headers: ih, grid: ig)
+                }
                 hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 onProvideRandomizeAction?(self.randomizeFirstColumn)
                 onProvideClearAction?(self.clearAll)
+                onProvideSnapshot?({
+                    let headers = buildHeadersFromTopRow()
+                    let snapshotGrid = grid
+                    return (headers, snapshotGrid)
+                })
+            }
+            .onChange(of: initialHeaders?.map { $0.pitch + ( $0.abbreviation ?? "" ) } ?? []) { _, _ in
+                // If parent updates the initial headers/grid after load (e.g., fetched from Firestore),
+                // re-apply the snapshot so the grid reflects the loaded template.
+                if let ih = initialHeaders, let ig = initialGrid {
+                    applySnapshot(headers: ih, grid: ig)
+                }
+            }
+            .onChange(of: initialGrid?.flatMap { $0 } ?? []) { _, _ in
+                if let ih = initialHeaders, let ig = initialGrid {
+                    applySnapshot(headers: ih, grid: ig)
+                }
             }
             .onChange(of: grid) { _, _ in
                 hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 onProvideRandomizeAction?(self.randomizeFirstColumn)
                 onProvideClearAction?(self.clearAll)
+                onProvideSnapshot?({
+                    let headers = buildHeadersFromTopRow()
+                    let snapshotGrid = grid
+                    return (headers, snapshotGrid)
+                })
             }
         }
+    }
+    
+    // Allow parent to populate grid and abbreviations
+    func applySnapshot(headers: [PitchHeader], grid snapshot: [[String]]) {
+        // Build abbreviations from headers
+        var newAbbr: [String: String] = [:]
+        for h in headers { if let ab = h.abbreviation { newAbbr[h.pitch] = ab } }
+        abbreviations = newAbbr
+        // Apply grid directly (validate shape minimally)
+        if snapshot.count == 4 && snapshot.allSatisfy({ !$0.isEmpty }) {
+            grid = snapshot
+        } else {
+            grid = Array(repeating: ["", ""], count: 4)
+        }
+        hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 }
 
@@ -2478,6 +2588,8 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
+
 
 
 

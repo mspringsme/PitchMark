@@ -244,7 +244,7 @@ struct PitchLocation {
     let isStrike: Bool
 }
 
-struct GridLocation: Identifiable {
+struct GridLocation: Identifiable, Codable, Hashable {
     let id = UUID()
     let row: Int
     let col: Int
@@ -300,17 +300,32 @@ struct PitchLabelManager {
     }
 }
 
-struct PitchCodeAssignment: Hashable {
+struct PitchCodeAssignment: Hashable, Codable {
     let code: String
     let pitch: String
     let location: String
 }
 
-struct PitchTemplate: Identifiable, Hashable {
+struct PitchHeader: Codable, Hashable {
+    var pitch: String
+    var abbreviation: String?
+}
+
+struct PitchTemplate: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
     var pitches: [String]
     var codeAssignments: [PitchCodeAssignment]
+
+    // Encrypted editor data
+    var pitchGridHeaders: [PitchHeader] = []          // headers from PitchGridView2 (col > 0)
+    var pitchGridValues: [[String]] = []              // 4 x N grid values
+
+    var strikeTopRow: [String] = []                   // length 3
+    var strikeRows: [[String]] = []                   // 4 x 3
+
+    var ballsTopRow: [String] = []                    // length 3
+    var ballsRows: [[String]] = []                    // 4 x 3
 }
 
 enum BatterSide: String, CaseIterable, Identifiable, Codable {

@@ -121,16 +121,51 @@ class AuthManager: ObservableObject {
             .collection("templates")
             .document(template.id.uuidString)
 
+        // Build strongly-typed components to avoid type inference ambiguity
+        let codeAssignmentsArray: [[String: String]] = template.codeAssignments.map { assignment in
+            [
+                "pitch": assignment.pitch,
+                "location": assignment.location,
+                "code": assignment.code
+            ]
+        }
+
+        // Serialize strongly-typed grid additions
+        let headersArray: [[String: Any]] = template.pitchGridHeaders.map { h in
+            var dict: [String: Any] = ["pitch": h.pitch]
+            if let abbr = h.abbreviation { dict["abbreviation"] = abbr }
+            return dict
+        }
+
+        // Firestore does not support nested arrays (arrays of arrays). Convert 2D arrays to maps keyed by row index.
+        func rowsToMap(_ rows: [[String]]) -> [String: [String]] {
+            var map: [String: [String]] = [:]
+            for (idx, row) in rows.enumerated() {
+                map[String(idx)] = row
+            }
+            return map
+        }
+
+        let pitchGridMap: [String: [String]] = rowsToMap(template.pitchGridValues)
+        let strikeRowsMap: [String: [String]] = rowsToMap(template.strikeRows)
+        let ballsRowsMap: [String: [String]] = rowsToMap(template.ballsRows)
+
         let data: [String: Any] = [
             "name": template.name,
             "pitches": template.pitches,
-            "codeAssignments": template.codeAssignments.map { assignment in
-                [
-                    "pitch": assignment.pitch,
-                    "location": assignment.location,
-                    "code": assignment.code
-                ]
-            },
+            "codeAssignments": codeAssignmentsArray,
+            "pitchGrid": [
+                "headers": headersArray,
+                "gridRows": pitchGridMap
+            ],
+            "strikeGrid": [
+                "topRow": template.strikeTopRow,
+                "rowsMap": strikeRowsMap
+            ],
+            "ballsGrid": [
+                "topRow": template.ballsTopRow,
+                "rowsMap": ballsRowsMap
+            ],
             "updatedAt": FieldValue.serverTimestamp()
         ]
 
@@ -198,15 +233,152 @@ class AuthManager: ObservableObject {
                         return PitchCodeAssignment(code: code, pitch: pitch, location: location)
                     }
 
+                    // Optional encrypted grid fields
+                    let pitchGrid = data["pitchGrid"] as? [String: Any]
+                    let headersRaw = pitchGrid?["headers"] as? [[String: Any]] ?? []
+                    let headers: [PitchHeader] = headersRaw.compactMap { dict in
+                        guard let pitch = dict["pitch"] as? String else { return nil }
+                        let abbr = dict["abbreviation"] as? String
+                        return PitchHeader(pitch: pitch, abbreviation: abbr)
+                    }
+
+                    // Handle grid values: prefer map form (keyed by row index), fallback to legacy [[String]]
+                    var gridValues: [[String]] = []
+                    if let gridMap = pitchGrid?["gridRows"] as? [String: [String]] {
+                        let sortedKeys = gridMap.keys.compactMap { Int($0) }.sorted()
+                        gridValues = sortedKeys.map { gridMap[String($0)] ?? [] }
+                    } else if let legacyGrid = pitchGrid?["grid"] as? [[String]] {
+                        gridValues = legacyGrid
+                    }
+
+                    let strikeGrid = data["strikeGrid"] as? [String: Any]
+                    let strikeTop = strikeGrid?["topRow"] as? [String] ?? []
+                    var strikeRows: [[String]] = []
+                    if let rowsMap = strikeGrid?["rowsMap"] as? [String: [String]] {
+                        let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
+                        strikeRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
+                    } else if let legacyRows = strikeGrid?["rows"] as? [[String]] {
+                        strikeRows = legacyRows
+                    }
+
+                    let ballsGrid = data["ballsGrid"] as? [String: Any]
+                    let ballsTop = ballsGrid?["topRow"] as? [String] ?? []
+                    var ballsRows: [[String]] = []
+                    if let rowsMap = ballsGrid?["rowsMap"] as? [String: [String]] {
+                        let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
+                        ballsRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
+                    } else if let legacyRows = ballsGrid?["rows"] as? [[String]] {
+                        ballsRows = legacyRows
+                    }
+
                     return PitchTemplate(
                         id: UUID(uuidString: doc.documentID) ?? UUID(),
                         name: name,
                         pitches: pitches,
-                        codeAssignments: codeAssignments
+                        codeAssignments: codeAssignments,
+                        pitchGridHeaders: headers,
+                        pitchGridValues: gridValues,
+                        strikeTopRow: strikeTop,
+                        strikeRows: strikeRows,
+                        ballsTopRow: ballsTop,
+                        ballsRows: ballsRows
                     )
                 } ?? []
 
                 completion(templates)
+            }
+    }
+    
+    func loadTemplate(id: String, completion: @escaping (PitchTemplate?) -> Void) {
+        guard let user = user else {
+            print("No signed-in user to load template for.")
+            completion(nil)
+            return
+        }
+
+        let db = Firestore.firestore()
+        db.collection("users")
+            .document(user.uid)
+            .collection("templates")
+            .document(id)
+            .getDocument { snapshot, error in
+                if let error = error {
+                    print("Error loading template: \(error.localizedDescription)")
+                    completion(nil)
+                    return
+                }
+                guard let doc = snapshot, doc.exists else {
+                    print("Template not found for id: \(id)")
+                    completion(nil)
+                    return
+                }
+
+                let data = doc.data() ?? [:]
+                guard let name = data["name"] as? String,
+                      let pitches = data["pitches"] as? [String],
+                      let codeAssignmentsRaw = data["codeAssignments"] as? [[String: String]] else {
+                    print("Template data missing required fields for id: \(id)")
+                    completion(nil)
+                    return
+                }
+
+                let codeAssignments: [PitchCodeAssignment] = codeAssignmentsRaw.compactMap { dict in
+                    guard let pitch = dict["pitch"],
+                          let location = dict["location"],
+                          let code = dict["code"] else { return nil }
+                    return PitchCodeAssignment(code: code, pitch: pitch, location: location)
+                }
+
+                let pitchGrid = data["pitchGrid"] as? [String: Any]
+                let headersRaw = pitchGrid?["headers"] as? [[String: Any]] ?? []
+                let headers: [PitchHeader] = headersRaw.compactMap { dict in
+                    guard let pitch = dict["pitch"] as? String else { return nil }
+                    let abbr = dict["abbreviation"] as? String
+                    return PitchHeader(pitch: pitch, abbreviation: abbr)
+                }
+
+                var gridValues: [[String]] = []
+                if let gridMap = pitchGrid?["gridRows"] as? [String: [String]] {
+                    let sortedKeys = gridMap.keys.compactMap { Int($0) }.sorted()
+                    gridValues = sortedKeys.map { gridMap[String($0)] ?? [] }
+                } else if let legacyGrid = pitchGrid?["grid"] as? [[String]] {
+                    gridValues = legacyGrid
+                }
+
+                let strikeGrid = data["strikeGrid"] as? [String: Any]
+                let strikeTop = strikeGrid?["topRow"] as? [String] ?? []
+                var strikeRows: [[String]] = []
+                if let rowsMap = strikeGrid?["rowsMap"] as? [String: [String]] {
+                    let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
+                    strikeRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
+                } else if let legacyRows = strikeGrid?["rows"] as? [[String]] {
+                    strikeRows = legacyRows
+                }
+
+                let ballsGrid = data["ballsGrid"] as? [String: Any]
+                let ballsTop = ballsGrid?["topRow"] as? [String] ?? []
+                var ballsRows: [[String]] = []
+                if let rowsMap = ballsGrid?["rowsMap"] as? [String: [String]] {
+                    let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
+                    ballsRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
+                } else if let legacyRows = ballsGrid?["rows"] as? [[String]] {
+                    ballsRows = legacyRows
+                }
+
+                let template = PitchTemplate(
+                    id: UUID(uuidString: doc.documentID) ?? UUID(),
+                    name: name,
+                    pitches: pitches,
+                    codeAssignments: codeAssignments,
+                    pitchGridHeaders: headers,
+                    pitchGridValues: gridValues,
+                    strikeTopRow: strikeTop,
+                    strikeRows: strikeRows,
+                    ballsTopRow: ballsTop,
+                    ballsRows: ballsRows
+                )
+
+                completion(template)
             }
     }
     
