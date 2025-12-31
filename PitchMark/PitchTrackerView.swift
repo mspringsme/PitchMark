@@ -184,6 +184,10 @@ struct PitchTrackerView: View {
     @State private var showTemplateChangeWarning = false
     @State private var pendingTemplateSelection: PitchTemplate? = nil
 
+    // Added per instructions:
+    @State private var encryptedSelectionByGameId: [String: Bool] = [:]
+    @State private var encryptedSelectionByPracticeId: [String: Bool] = [:]
+
     fileprivate enum OverlayTab { case cards, progress }
     @State private var overlayTab: OverlayTab = .progress
 
@@ -204,7 +208,18 @@ struct PitchTrackerView: View {
 
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
-        // Default to a single version label until templates provide versioning info
+        // Prefer explicit per-session selection when available
+        if isGame, let gid = selectedGameId, let explicit = encryptedSelectionByGameId[gid] {
+            return explicit ? "Encrypted" : "Classic"
+        }
+        if !isGame, let pid = selectedPracticeId, let explicit = encryptedSelectionByPracticeId[pid] {
+            return explicit ? "Encrypted" : "Classic"
+        }
+        // Fallback: infer from template data presence
+        if let t = selectedTemplate {
+            let hasEncryptedData = !t.pitchGridHeaders.isEmpty || !t.pitchGridValues.isEmpty || !t.strikeTopRow.isEmpty || !t.strikeRows.isEmpty || !t.ballsTopRow.isEmpty || !t.ballsRows.isEmpty
+            return hasEncryptedData ? "Encrypted" : "Classic"
+        }
         return "Classic"
     }
 
@@ -1321,7 +1336,8 @@ struct PitchTrackerView: View {
                     // User canceled: preserve any existing game state.
                     // If no game was active, onDismiss will revert to practice.
                     showGameSheet = false
-                }
+                },
+                encryptedSelectionByGameId: $encryptedSelectionByGameId
             )
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
@@ -1374,7 +1390,8 @@ struct PitchTrackerView: View {
                     showPracticeSheet = false
                 },
                 currentTemplateId: selectedTemplate?.id.uuidString,
-                currentTemplateName: selectedTemplate?.name
+                currentTemplateName: selectedTemplate?.name,
+                encryptedSelectionByPracticeId: $encryptedSelectionByPracticeId
             )
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
@@ -2868,6 +2885,8 @@ struct GameSelectionSheet: View {
     var onCreate: (String, Date) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
+    
+    @Binding var encryptedSelectionByGameId: [String: Bool]
 
     @State private var games: [Game] = []
     @State private var showAddGamePopover: Bool = false
@@ -2891,34 +2910,53 @@ struct GameSelectionSheet: View {
                 } else {
                     Section() {
                         ForEach(games) { game in
-                            Button(action: {
-                                if let gid = game.id, !gid.isEmpty {
-                                    onChoose(gid)
-                                    dismiss()
-                                } else {
-                                    // Resolve freshly created game by reloading and matching on name/date
-                                    authManager.loadGames { loaded in
-                                        self.games = loaded
-                                        let calendar = Calendar.current
-                                        if let resolved = loaded.first(where: { $0.opponent == game.opponent && calendar.isDate($0.date, inSameDayAs: game.date) }) {
-                                            onChoose(resolved.id ?? "")
-                                        }
+                            HStack {
+                                Button(action: {
+                                    if let gid = game.id, !gid.isEmpty {
+                                        onChoose(gid)
                                         dismiss()
+                                    } else {
+                                        // Resolve freshly created game by reloading and matching on name/date
+                                        authManager.loadGames { loaded in
+                                            self.games = loaded
+                                            let calendar = Calendar.current
+                                            if let resolved = loaded.first(where: { $0.opponent == game.opponent && calendar.isDate($0.date, inSameDayAs: game.date) }) {
+                                                onChoose(resolved.id ?? "")
+                                            }
+                                            dismiss()
+                                        }
+                                    }
+                                }) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(game.opponent)
+                                                .font(.headline)
+                                            Text(Self.formatter.string(from: game.date))
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
                                     }
                                 }
-                            }) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(game.opponent)
-                                            .font(.headline)
-                                        Text(Self.formatter.string(from: game.date))
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
+                                .buttonStyle(.plain)
+
+                                // Inline encrypted toggle
+                                HStack(spacing: 8) {
+                                    Text("Mode:")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    Picker("Mode", selection: Binding(
+                                        get: { (encryptedSelectionByGameId[game.id ?? ""] ?? false) ? "Encrypted" : "Classic" },
+                                        set: { encryptedSelectionByGameId[game.id ?? ""] = ($0 == "Encrypted") }
+                                    )) {
+                                        Text("Encrypted").tag("Encrypted")
+                                        Text("Classic").tag("Classic")
                                     }
-                                    Spacer()
+                                    .pickerStyle(.segmented)
+                                    .frame(width: 180)
                                 }
                             }
-                            .buttonStyle(.plain)
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     if let id = game.id {
@@ -3234,6 +3272,8 @@ struct PracticeSelectionSheet: View {
     
     var currentTemplateId: String?
     var currentTemplateName: String?
+    
+    @Binding var encryptedSelectionByPracticeId: [String: Bool]
 
     @State private var sessions: [PracticeSession] = []
     @State private var showAddPopover: Bool = false
@@ -3315,7 +3355,24 @@ struct PracticeSelectionSheet: View {
 
                                 Spacer(minLength: 8)
 
-                                // Inline reset icon
+                                // Inline encrypted toggle
+                                HStack(spacing: 8) {
+                                    Text("Mode:")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    Picker("Mode", selection: Binding(
+                                        get: { (encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] ?? false) ? "Encrypted" : "Classic" },
+                                        set: { encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] = ($0 == "Encrypted") }
+                                    )) {
+                                        Text("Encrypted").tag("Encrypted")
+                                        Text("Classic").tag("Classic")
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .frame(width: 180)
+                                }
+
+                                // Existing reset icon remains
                                 Button {
                                     if let id = session.id {
                                         pendingResetPracticeId = id
@@ -3504,5 +3561,6 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
 
 

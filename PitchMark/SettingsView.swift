@@ -26,6 +26,9 @@ struct SettingsView: View {
     @State private var showKindChoice = false
     @State private var editorKind: TemplateEditorView.TemplateKind = .encrypted
     @State private var pendingEditorTemplate: PitchTemplate? = nil
+
+    @State private var encryptedSelectionByGameId: [String: Bool] = [:]
+    @State private var encryptedSelectionByPracticeId: [String: Bool] = [:]
     
     private var sortedTemplates: [PitchTemplate] {
         templates.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
@@ -312,7 +315,8 @@ struct SettingsView: View {
                     },
                     onCancel: {
                         showGameChooser = false
-                    }
+                    },
+                    encryptedSelectionByGameId: $encryptedSelectionByGameId
                 )
                 .presentationDetents([.fraction(0.5)])
                 .presentationDragIndicator(.visible)
@@ -362,7 +366,8 @@ struct SettingsView: View {
                     },
                     onCancel: {
                         showPracticeChooser = false
-                    }
+                    },
+                    encryptedSelectionByPracticeId: $encryptedSelectionByPracticeId
                 )
                 .presentationDetents([.fraction(0.5)])
                 .presentationDragIndicator(.visible)
