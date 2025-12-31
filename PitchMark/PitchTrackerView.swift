@@ -202,6 +202,12 @@ struct PitchTrackerView: View {
     @State private var selectedEventIDs: Set<String> = []
     @State private var localTemplateOverrides: [String: String] = [:]
 
+    // MARK: - Template Version Indicator
+    private var currentTemplateVersionLabel: String {
+        // Default to a single version label until templates provide versioning info
+        return "Classic"
+    }
+
     private var filteredEvents: [PitchEvent] {
         if isGame, let gid = selectedGameId {
             return pitchEvents.filter { $0.gameId == gid }
@@ -545,11 +551,11 @@ struct PitchTrackerView: View {
                 .padding(.top, 5)
                 
                 // Content switches with tab
-                Group {
+                let overlayContent: AnyView = {
                     switch overlayTab {
                     case .cards:
                         if selectedTemplate != nil {
-                            PitchResultSheet(
+                            return PitchResultSheet(
                                 allEvents: filteredEvents,
                                 games: games,
                                 templates: templates
@@ -558,18 +564,22 @@ struct PitchTrackerView: View {
                             .environmentObject(sessionManager)
                             .frame(maxWidth: .infinity, minHeight: 170)
                             .padding(.top, 6)
+                            .erasedToAnyView()
+                        } else {
+                            return EmptyView().erasedToAnyView()
                         }
                     case .progress:
                         if sessionManager.currentMode == .practice {
-                            ProgressSummaryView(
+                            return ProgressSummaryView(
                                 events: pitchEvents,
                                 currentMode: sessionManager.currentMode,
                                 selectedPracticeId: selectedPracticeId,
                                 templates: templates
                             )
                             .frame(maxWidth: .infinity, minHeight: 170)
-                        } else if sessionManager.currentMode == .game {
-                            ProgressGameView(
+                            .erasedToAnyView()
+                        } else {
+                            return ProgressGameView(
                                 balls: ballsBinding,
                                 strikes: strikesBinding,
                                 inning: inningBinding,
@@ -581,9 +591,12 @@ struct PitchTrackerView: View {
                             )
                             .environmentObject(authManager)
                             .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
+                            .erasedToAnyView()
                         }
                     }
-                }
+                }()
+
+                overlayContent
             }
             .blur(radius: shouldBlurBackground ? 6 : 0)
             .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
@@ -697,6 +710,12 @@ struct PitchTrackerView: View {
                         Text(widestLabel)
                             .font(.headline)
                             .opacity(0)
+                        Text(currentTemplateVersionLabel)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.clear)
+                            .opacity(0)
                         Image(systemName: "chevron.down")
                             .font(.subheadline.weight(.semibold))
                             .opacity(0)
@@ -706,6 +725,14 @@ struct PitchTrackerView: View {
                     HStack(spacing: 8) {
                         Text(currentLabel)
                             .font(.headline)
+                        Text(currentTemplateVersionLabel)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(Color.gray.opacity(0.2))
+                            .foregroundStyle(Color.gray)
+                            .clipShape(Capsule())
+                            .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
                         Image(systemName: "chevron.down")
                             .font(.subheadline.weight(.semibold))
                     }
@@ -3224,23 +3251,16 @@ struct PracticeSelectionSheet: View {
 
     // Extracted to help the compiler type-check faster
     private func chooseSession(_ session: PracticeSession) {
-        if let pid = session.id, !pid.isEmpty {
-            onChoose(pid)
-            dismiss()
-        } else {
-            // Resolve from UserDefaults by matching name/date (should be rare)
-            let key = PitchTrackerView.DefaultsKeys.storedPracticeSessions
-            if let data = UserDefaults.standard.data(forKey: key),
-               let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
-                let calendar = Calendar.current
-                if let resolved = decoded.first(where: { $0.name == session.name && calendar.isDate($0.date, inSameDayAs: session.date) }) {
-                    onChoose(resolved.id ?? "")
-                }
-            }
-            dismiss()
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(session.name)
+                .font(.headline)
+            Text(Self.formatter.string(from: session.date))
+                .font(.caption)
+                .foregroundColor(.secondary)
         }
+        Spacer()
     }
-    
+
     // Added method as per instructions
     private func deleteSession(withId id: String) {
         // 1) Remove from local list
