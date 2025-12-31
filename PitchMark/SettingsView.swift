@@ -23,6 +23,10 @@ struct SettingsView: View {
     @State private var showPracticeChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
     
+    @State private var showKindChoice = false
+    @State private var editorKind: TemplateEditorView.TemplateKind = .encrypted
+    @State private var pendingEditorTemplate: PitchTemplate? = nil
+    
     private var sortedTemplates: [PitchTemplate] {
         templates.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
@@ -69,12 +73,13 @@ struct SettingsView: View {
                 .padding(.horizontal)
             Spacer()
             Button("New Template") {
-                editorTemplate = PitchTemplate(
+                pendingEditorTemplate = PitchTemplate(
                     id: UUID(),
                     name: "",
                     pitches: [],
                     codeAssignments: []
                 )
+                showKindChoice = true
             }
             .padding(.horizontal)
         }
@@ -94,7 +99,10 @@ struct SettingsView: View {
                     TemplateRowView(
                         template: template,
                         isSelected: selectedTemplate?.id == template.id,
-                        editAction: { editorTemplate = template },
+                        editAction: {
+                            pendingEditorTemplate = template
+                            showKindChoice = true
+                        },
                         launchAction: {
                             templatePendingLaunch = template
                             showModeChoice = true
@@ -222,6 +230,19 @@ struct SettingsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
+            .confirmationDialog("Open editor as…", isPresented: $showKindChoice, titleVisibility: .visible) {
+                Button("Encrypted") {
+                    editorKind = .encrypted
+                    editorTemplate = pendingEditorTemplate
+                    pendingEditorTemplate = nil
+                }
+                Button("Classic") {
+                    editorKind = .classic
+                    editorTemplate = pendingEditorTemplate
+                    pendingEditorTemplate = nil
+                }
+                Button("Cancel", role: .cancel) {}
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
@@ -251,6 +272,7 @@ struct SettingsView: View {
                 TemplateEditorView(
                     template: template,
                     allPitches: allPitches,
+                    kind: editorKind,
                     onSave: { updatedTemplate in
                         if let index = templates.firstIndex(where: { $0.id == updatedTemplate.id }) {
                             templates[index] = updatedTemplate
@@ -440,3 +462,4 @@ private struct SettingsPreviewContainer: View {
 extension Notification.Name {
     static let templateSelectionDidChange = Notification.Name("templateSelectionDidChange")
 }
+

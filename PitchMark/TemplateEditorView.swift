@@ -334,6 +334,8 @@ extension EnvironmentValues {
 }
 
 struct TemplateEditorView: View {
+    enum TemplateKind { case encrypted, classic }
+
     @State private var name: String
     @State private var selectedPitches: Set<String>
     @State private var selectedPitch: String = ""
@@ -347,7 +349,7 @@ struct TemplateEditorView: View {
     @FocusState private var customPitchFieldFocused: Bool
     @FocusState private var nameFieldFocused: Bool
     @State private var showAssignedLocations = false
-    @State private var templateType: String = "encrypted"
+    let kind: TemplateKind
     @State private var showRandomConfirm = false
     @State private var showClearConfirm = false
     @State private var hasAnyPitchInTopRow = false
@@ -417,7 +419,7 @@ struct TemplateEditorView: View {
         onSave(newTemplate)
     }
     
-    init(template: PitchTemplate?, allPitches: [String], onSave: @escaping (PitchTemplate) -> Void) {
+    init(template: PitchTemplate?, allPitches: [String], kind: TemplateKind, onSave: @escaping (PitchTemplate) -> Void) {
         self.allPitches = allPitches
         self.onSave = onSave
         
@@ -438,6 +440,7 @@ struct TemplateEditorView: View {
         _codeAssignments = State(initialValue: initialAssignments)
         _customPitches = State(initialValue: (template?.pitches ?? []).filter { !pitchOrder.contains($0) })
         self.templateID = id
+        self.kind = kind
     }
     
     private var availablePitches: [String] {
@@ -584,7 +587,7 @@ struct TemplateEditorView: View {
                         }
                     }
                     ColoredDivider(color: .blue, height: 1.0)
-                    if templateType != "encrypted" {
+                    if kind != .encrypted {
                         Text("Assign locations / codes to pitches")
                             .font(.system(size: 10))
                             .foregroundStyle(.gray)
@@ -801,6 +804,7 @@ struct TemplateEditorView: View {
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 
+                /*
                 ToolbarItem(placement: .topBarTrailing) {
                     Picker("Template Type", selection: $templateType) {
                         Text("Encrypted").tag("encrypted")
@@ -810,6 +814,7 @@ struct TemplateEditorView: View {
                     .fixedSize()
                     .accessibilityLabel("Template type")
                 }
+                */
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
                         dismiss()
@@ -2588,6 +2593,7 @@ struct BallsLocationGridView: View {
         }
     }
 }
+
 
 
 
