@@ -201,6 +201,8 @@ struct PitchTrackerView: View {
         static let activeIsPractice = "activeIsPractice"
         static let activePracticeId = "activePracticeId"
         static let storedPracticeSessions = "storedPracticeSessions"
+        static let encryptedByGameId = "encryptedByGameId"
+        static let encryptedByPracticeId = "encryptedByPracticeId"
     }
     @State private var isSelecting: Bool = false
     @State private var selectedEventIDs: Set<String> = []
@@ -290,6 +292,23 @@ struct PitchTrackerView: View {
             return Set(arr)
         }
         return Set(fallback)
+    }
+    
+    // MARK: - Encrypted/Classic Selection Persistence
+    private func loadEncryptedSelections() {
+        let defaults = UserDefaults.standard
+        if let gameData = defaults.dictionary(forKey: DefaultsKeys.encryptedByGameId) as? [String: Bool] {
+            encryptedSelectionByGameId = gameData
+        }
+        if let practiceData = defaults.dictionary(forKey: DefaultsKeys.encryptedByPracticeId) as? [String: Bool] {
+            encryptedSelectionByPracticeId = practiceData
+        }
+    }
+
+    private func persistEncryptedSelections() {
+        let defaults = UserDefaults.standard
+        defaults.set(encryptedSelectionByGameId, forKey: DefaultsKeys.encryptedByGameId)
+        defaults.set(encryptedSelectionByPracticeId, forKey: DefaultsKeys.encryptedByPracticeId)
     }
     
     // Helper property to merge pitchOrder with template-specific custom pitches
@@ -744,7 +763,7 @@ struct PitchTrackerView: View {
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 3)
-                            .background(Color.gray.opacity(0.2))
+                        //.background(Color.gray.opacity(0.2))
                             .foregroundStyle(Color.gray)
                             .clipShape(Capsule())
                             .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
@@ -1288,6 +1307,7 @@ struct PitchTrackerView: View {
             authManager.loadGames { loadedGames in
                 self.games = loadedGames
             }
+            loadEncryptedSelections()
         }
     }
     
@@ -1300,6 +1320,12 @@ struct PitchTrackerView: View {
             if let template = selectedTemplate {
                 persistActivePitches(for: template.id, active: newValue)
             }
+        }
+        .onChange(of: encryptedSelectionByGameId) { _, _ in
+            persistEncryptedSelections()
+        }
+        .onChange(of: encryptedSelectionByPracticeId) { _, _ in
+            persistEncryptedSelections()
         }
         .sheet(isPresented: $showGameSheet, onDismiss: {
             // If user canceled without creating/choosing, optionally revert to practice
@@ -2942,10 +2968,6 @@ struct GameSelectionSheet: View {
 
                                 // Inline encrypted toggle (menu style)
                                 HStack(spacing: 8) {
-                                    Text("Mode:")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-
                                     Menu {
                                         Picker("Mode", selection: Binding(
                                             get: { (encryptedSelectionByGameId[game.id ?? ""] ?? false) ? "Encrypted" : "Classic" },
@@ -3302,18 +3324,6 @@ struct PracticeSelectionSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    // Extracted to help the compiler type-check faster
-    private func chooseSession(_ session: PracticeSession) {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(session.name)
-                .font(.headline)
-            Text(Self.formatter.string(from: session.date))
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        Spacer()
-    }
-
     // Added method as per instructions
     private func deleteSession(withId id: String) {
         // 1) Remove from local list
@@ -3361,19 +3371,24 @@ struct PracticeSelectionSheet: View {
                     Section() {
                         ForEach(sessions) { session in
                             HStack {
-                                Button(action: { chooseSession(session) }) {
+                                Button(action: {
+                                    // Trigger selection: call back with id and dismiss
+                                    if let id = session.id {
+                                        onChoose(id)
+                                    } else {
+                                        // Fallback to general when no id is present
+                                        onChoose("__GENERAL__")
+                                    }
+                                    dismiss()
+                                }) {
                                     sessionRow(session: session)
                                 }
                                 .buttonStyle(.plain)
-
+                                
                                 Spacer(minLength: 8)
 
                                 // Inline encrypted toggle (menu style)
                                 HStack(spacing: 8) {
-                                    Text("Mode:")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-
                                     Menu {
                                         Picker("Mode", selection: Binding(
                                             get: { (encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] ?? false) ? "Encrypted" : "Classic" },
@@ -3587,6 +3602,7 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
 
 
 
