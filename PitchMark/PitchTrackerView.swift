@@ -2940,21 +2940,34 @@ struct GameSelectionSheet: View {
                                 }
                                 .buttonStyle(.plain)
 
-                                // Inline encrypted toggle
+                                // Inline encrypted toggle (menu style)
                                 HStack(spacing: 8) {
                                     Text("Mode:")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
 
-                                    Picker("Mode", selection: Binding(
-                                        get: { (encryptedSelectionByGameId[game.id ?? ""] ?? false) ? "Encrypted" : "Classic" },
-                                        set: { encryptedSelectionByGameId[game.id ?? ""] = ($0 == "Encrypted") }
-                                    )) {
-                                        Text("Encrypted").tag("Encrypted")
-                                        Text("Classic").tag("Classic")
+                                    Menu {
+                                        Picker("Mode", selection: Binding(
+                                            get: { (encryptedSelectionByGameId[game.id ?? ""] ?? false) ? "Encrypted" : "Classic" },
+                                            set: { encryptedSelectionByGameId[game.id ?? ""] = ($0 == "Encrypted") }
+                                        )) {
+                                            Text("Encrypted").tag("Encrypted")
+                                            Text("Classic").tag("Classic")
+                                        }
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Text((encryptedSelectionByGameId[game.id ?? ""] ?? false) ? "Encrypted" : "Classic")
+                                                .font(.caption.weight(.semibold))
+                                            Image(systemName: "chevron.down")
+                                                .font(.caption2)
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            Capsule().stroke(Color.gray, lineWidth: 1)
+                                        )
                                     }
-                                    .pickerStyle(.segmented)
-                                    .frame(width: 180)
+                                    .fixedSize()
                                 }
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -3355,21 +3368,34 @@ struct PracticeSelectionSheet: View {
 
                                 Spacer(minLength: 8)
 
-                                // Inline encrypted toggle
+                                // Inline encrypted toggle (menu style)
                                 HStack(spacing: 8) {
                                     Text("Mode:")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
 
-                                    Picker("Mode", selection: Binding(
-                                        get: { (encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] ?? false) ? "Encrypted" : "Classic" },
-                                        set: { encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] = ($0 == "Encrypted") }
-                                    )) {
-                                        Text("Encrypted").tag("Encrypted")
-                                        Text("Classic").tag("Classic")
+                                    Menu {
+                                        Picker("Mode", selection: Binding(
+                                            get: { (encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] ?? false) ? "Encrypted" : "Classic" },
+                                            set: { encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] = ($0 == "Encrypted") }
+                                        )) {
+                                            Text("Encrypted").tag("Encrypted")
+                                            Text("Classic").tag("Classic")
+                                        }
+                                    } label: {
+                                        HStack(spacing: 4) {
+                                            Text((encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] ?? false) ? "Encrypted" : "Classic")
+                                                .font(.caption.weight(.semibold))
+                                            Image(systemName: "chevron.down")
+                                                .font(.caption2)
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            Capsule().stroke(Color.gray, lineWidth: 1)
+                                        )
                                     }
-                                    .pickerStyle(.segmented)
-                                    .frame(width: 180)
+                                    .fixedSize()
                                 }
 
                                 // Existing reset icon remains
