@@ -122,12 +122,16 @@ class AuthManager: ObservableObject {
             .document(template.id.uuidString)
 
         // Build strongly-typed components to avoid type inference ambiguity
-        let codeAssignmentsArray: [[String: String]] = template.codeAssignments.map { assignment in
-            [
+        let codeAssignmentsArray: [[String: Any]] = template.codeAssignments.map { assignment in
+            var dict: [String: Any] = [
                 "pitch": assignment.pitch,
                 "location": assignment.location,
                 "code": assignment.code
             ]
+            if let enc = assignment.encryptedCode {
+                dict["encryptedCode"] = enc
+            }
+            return dict
         }
 
         // Serialize strongly-typed grid additions
@@ -154,6 +158,7 @@ class AuthManager: ObservableObject {
             "name": template.name,
             "pitches": template.pitches,
             "codeAssignments": codeAssignmentsArray,
+            "isEncrypted": template.isEncrypted,
             "pitchGrid": [
                 "headers": headersArray,
                 "gridRows": pitchGridMap
@@ -220,17 +225,18 @@ class AuthManager: ObservableObject {
                     let data = doc.data()
                     guard let name = data["name"] as? String,
                           let pitches = data["pitches"] as? [String],
-                          let codeAssignmentsRaw = data["codeAssignments"] as? [[String: String]] else {
+                          let codeAssignmentsRaw = data["codeAssignments"] as? [[String: Any]] else {
                         return nil
                     }
 
                     let codeAssignments: [PitchCodeAssignment] = codeAssignmentsRaw.compactMap { dict in
-                        guard let pitch = dict["pitch"],
-                              let location = dict["location"],
-                              let code = dict["code"] else {
+                        guard let pitch = dict["pitch"] as? String,
+                              let location = dict["location"] as? String,
+                              let code = dict["code"] as? String else {
                             return nil
                         }
-                        return PitchCodeAssignment(code: code, pitch: pitch, location: location)
+                        let encrypted = dict["encryptedCode"] as? String
+                        return PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted)
                     }
 
                     // Optional encrypted grid fields
@@ -271,11 +277,14 @@ class AuthManager: ObservableObject {
                         ballsRows = legacyRows
                     }
 
+                    let isEncrypted = data["isEncrypted"] as? Bool ?? false
+
                     return PitchTemplate(
                         id: UUID(uuidString: doc.documentID) ?? UUID(),
                         name: name,
                         pitches: pitches,
                         codeAssignments: codeAssignments,
+                        isEncrypted: isEncrypted,
                         pitchGridHeaders: headers,
                         pitchGridValues: gridValues,
                         strikeTopRow: strikeTop,
@@ -316,17 +325,18 @@ class AuthManager: ObservableObject {
                 let data = doc.data() ?? [:]
                 guard let name = data["name"] as? String,
                       let pitches = data["pitches"] as? [String],
-                      let codeAssignmentsRaw = data["codeAssignments"] as? [[String: String]] else {
+                      let codeAssignmentsRaw = data["codeAssignments"] as? [[String: Any]] else {
                     print("Template data missing required fields for id: \(id)")
                     completion(nil)
                     return
                 }
 
                 let codeAssignments: [PitchCodeAssignment] = codeAssignmentsRaw.compactMap { dict in
-                    guard let pitch = dict["pitch"],
-                          let location = dict["location"],
-                          let code = dict["code"] else { return nil }
-                    return PitchCodeAssignment(code: code, pitch: pitch, location: location)
+                    guard let pitch = dict["pitch"] as? String,
+                          let location = dict["location"] as? String,
+                          let code = dict["code"] as? String else { return nil }
+                    let encrypted = dict["encryptedCode"] as? String
+                    return PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted)
                 }
 
                 let pitchGrid = data["pitchGrid"] as? [String: Any]
@@ -365,11 +375,14 @@ class AuthManager: ObservableObject {
                     ballsRows = legacyRows
                 }
 
+                let isEncrypted = data["isEncrypted"] as? Bool ?? false
+
                 let template = PitchTemplate(
                     id: UUID(uuidString: doc.documentID) ?? UUID(),
                     name: name,
                     pitches: pitches,
                     codeAssignments: codeAssignments,
+                    isEncrypted: isEncrypted,
                     pitchGridHeaders: headers,
                     pitchGridValues: gridValues,
                     strikeTopRow: strikeTop,

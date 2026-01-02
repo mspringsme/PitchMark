@@ -7,31 +7,47 @@
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "CA5A72A6-AB57-4CDA-B92E-BE7F1C08EF2B"
+            uuid = "8F69675D-6474-47A8-BBE5-8EBCA3ED20D6"
             shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
-            filePath = "PitchMark/SettingsView.swift"
+            filePath = "PitchMark/PitchMenuContent.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "132"
-            endingLineNumber = "132"
-            landmarkName = "storeSection"
+            startingLineNumber = "27"
+            endingLineNumber = "27"
+            landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>
       <BreakpointProxy
          BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
          <BreakpointContent
-            uuid = "50A166AD-61E9-4C46-9EBC-7D8C3AF3609B"
+            uuid = "1453C2F3-1867-44F7-B49F-1F1DE52B7C4B"
             shouldBeEnabled = "No"
             ignoreCount = "0"
             continueAfterRunningActions = "No"
-            filePath = "PitchMark/Retail.swift"
+            filePath = "PitchMark/Utilities.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "9"
-            endingLineNumber = "9"
+            startingLineNumber = "303"
+            endingLineNumber = "303"
+            landmarkName = "PitchCodeAssignment"
+            landmarkType = "14">
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "2D5B144E-9FEA-40D6-BC47-D89579A9F590"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "PitchMark/Utilities.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "323"
+            endingLineNumber = "323"
             landmarkName = "unknown"
             landmarkType = "0">
          </BreakpointContent>

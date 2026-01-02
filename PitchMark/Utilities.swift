@@ -301,9 +301,40 @@ struct PitchLabelManager {
 }
 
 struct PitchCodeAssignment: Hashable, Codable {
+    // Plaintext code retained for backward compatibility
     let code: String
     let pitch: String
     let location: String
+
+    // Optional encrypted representation of the code. When present and the template is encrypted,
+    // prefer this over the plaintext `code`.
+    var encryptedCode: String? = nil
+
+    // Helper to resolve which code to use based on encryption context.
+    // Pass `true` when the surrounding template is encrypted.
+    func effectiveCode(usingEncrypted: Bool) -> String {
+        if usingEncrypted, let encryptedCode {
+            return encryptedCode
+        }
+        return code
+    }
+}
+
+/// Returns the display code for an assignment given the active template mode.
+/// In classic mode, this is the classic `code`.
+/// In fail-safe (“encrypted”) mode, this selects `encryptedCode` if provided; otherwise falls back to `code`.
+func decipherDisplayCode(from assignment: PitchCodeAssignment, using template: PitchTemplate) -> String {
+    // Select the stored code for the current mode
+    let stored = assignment.effectiveCode(usingEncrypted: template.isEncrypted)
+
+    // Optional: apply a transformation for fail-safe mode if you want a distinct presentation.
+    // For now, we simply return the selected value without further changes.
+    // Example transform (commented):
+    // if template.isEncrypted {
+    //     return stored.replacingOccurrences(of: "-", with: "•")
+    // }
+
+    return stored
 }
 
 struct PitchHeader: Codable, Hashable {
@@ -316,6 +347,7 @@ struct PitchTemplate: Identifiable, Hashable, Codable {
     var name: String
     var pitches: [String]
     var codeAssignments: [PitchCodeAssignment]
+    var isEncrypted: Bool = false
 
     // Encrypted editor data
     var pitchGridHeaders: [PitchHeader] = []          // headers from PitchGridView2 (col > 0)

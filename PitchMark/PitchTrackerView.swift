@@ -311,13 +311,33 @@ struct PitchTrackerView: View {
         defaults.set(encryptedSelectionByPracticeId, forKey: DefaultsKeys.encryptedByPracticeId)
     }
     
-    // Helper property to merge pitchOrder with template-specific custom pitches
+    // Determine if a template carries encrypted grid data
+    private func templateHasEncryptedData(_ t: PitchTemplate?) -> Bool {
+        guard let t = t else { return false }
+        return !t.pitchGridHeaders.isEmpty || !t.pitchGridValues.isEmpty || !t.strikeTopRow.isEmpty || !t.strikeRows.isEmpty || !t.ballsTopRow.isEmpty || !t.ballsRows.isEmpty
+    }
+    
+    // Returns the list of pitches to use for UI (chips/menus) based on template mode
+    private func availablePitches(for template: PitchTemplate?) -> [String] {
+        guard let t = template else { return pitchOrder }
+        if templateHasEncryptedData(t) {
+            // Build from encrypted assignments: unique pitch names with stable ordering
+            let encrypted = Array(Set(t.codeAssignments.map { $0.pitch })).sorted()
+            // Preserve preferred pitchOrder first, then append any extras from encrypted list
+            let ordered = pitchOrder.filter { encrypted.contains($0) }
+            let extras = encrypted.filter { !pitchOrder.contains($0) }
+            return ordered + extras
+        } else {
+            // Classic path: use template.pitches merged with pitchOrder
+            let base = pitchOrder
+            let extras = t.pitches.filter { !base.contains($0) }
+            return base + extras
+        }
+    }
+    
     fileprivate var orderedPitchesForTemplate: [String] {
-        let base = pitchOrder
-        let extras = selectedTemplate.map { tmpl in
-            tmpl.pitches.filter { !pitchOrder.contains($0) }
-        } ?? []
-        return base + extras
+        let list = availablePitches(for: selectedTemplate)
+        return list
     }
     
     // MARK: - Practice Sessions Persistence (local)
@@ -354,7 +374,7 @@ struct PitchTrackerView: View {
     // MARK: - Template Apply Helper
     private func applyTemplate(_ template: PitchTemplate) {
         selectedTemplate = template
-        selectedPitches = loadActivePitches(for: template.id, fallback: template.pitches)
+        selectedPitches = loadActivePitches(for: template.id, fallback: availablePitches(for: template))
         pitchCodeAssignments = template.codeAssignments
         // 🧹 Reset strike zone and called pitch state
         lastTappedPosition = nil
@@ -538,8 +558,6 @@ struct PitchTrackerView: View {
         }
     }
     
-    
-    
     private var cardsAndOverlay: some View {
         ZStack {
             VStack(spacing: 8) {
@@ -643,7 +661,8 @@ struct PitchTrackerView: View {
                         activeCalledPitchId: $activeCalledPitchId,
                         call: call,
                         pitchCodeAssignments: pitchCodeAssignments,
-                        batterSide: batterSide
+                        batterSide: batterSide,
+                        template: selectedTemplate
                     )
                     .transition(.opacity)
                     .padding(.top, 4)
@@ -701,10 +720,6 @@ struct PitchTrackerView: View {
             .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
     }
 
-    // Added binding that prevents the confirm sheet from ever appearing in Practice mode
-    // Inserted here exactly after contentSectionDimmed per instructions
-    // -------------------------------------------------------------
-    // Binding that prevents the confirm sheet from ever appearing in Practice mode
     private var confirmSheetBinding: Binding<Bool> {
         Binding<Bool>(
             get: { sessionManager.currentMode == .game && showConfirmSheet },
@@ -718,7 +733,6 @@ struct PitchTrackerView: View {
             }
         )
     }
-    // -------------------------------------------------------------
     
     // MARK: - Extracted subviews to help type-checker
     private var topBar: some View {
@@ -1499,7 +1513,7 @@ struct PitchTrackerView: View {
             // Persist and sync dependent state whenever template changes (from menu or Settings)
             persistSelectedTemplate(newValue)
             if let t = newValue {
-                selectedPitches = loadActivePitches(for: t.id, fallback: t.pitches)
+                selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
                 pitchCodeAssignments = t.codeAssignments
                 // Reset strike zone and called pitch state
                 lastTappedPosition = nil
@@ -1887,6 +1901,7 @@ private struct ProgressGameView: View {
         .accessibilityLabel("Toggle")
     }
 }
+
 struct InningCounterCompact: View {
     @Binding var inning: Int
     
@@ -2470,7 +2485,6 @@ private struct ProgressSummaryView: View {
     }
 }
 
-
 private struct JerseyDropDelegate: DropDelegate {
     let current: JerseyCell
     @Binding var items: [JerseyCell]
@@ -2771,15 +2785,23 @@ struct CalledPitchView: View {
     let call: PitchCall
     let pitchCodeAssignments: [PitchCodeAssignment]
     let batterSide: BatterSide
+    let template: PitchTemplate?
     
     var body: some View {
         let displayLocation = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
-        let assignedCodes = pitchCodeAssignments
-            .filter {
-                $0.pitch == call.pitch &&
-                $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == displayLocation
+        let assignments = pitchCodeAssignments.filter {
+            $0.pitch == call.pitch &&
+            $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == displayLocation
+        }
+
+        let assignedCodes: [String] = {
+            if let template = template {
+                return assignments.map { decipherDisplayCode(from: $0, using: template) }
+            } else {
+                // Fallback (classic)
+                return assignments.map(\.code)
             }
-            .map(\.code)
+        }()
 
         let isStrike = call.type == "Strike"
         let callColor: Color = isStrike ? .green : .red
@@ -2793,29 +2815,12 @@ struct CalledPitchView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
 
-//                    Text(call.type)
-//                        .font(.caption.weight(.bold))
-//                        .foregroundColor(.white)
-//                        .padding(.horizontal, 8)
-//                        .padding(.vertical, 4)
-//                        .background(callColor)
-//                        .clipShape(Capsule())
-//                        .accessibilityLabel("Call type \(call.type)")
                 }
 
                 // Big pitch name
                 Text(call.pitch)
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.primary)
-
-                // Location
-//                HStack(spacing: 6) {
-//                    Image(systemName: "mappin.and.ellipse")
-//                        .foregroundStyle(.secondary)
-//                    Text(displayLocation.isEmpty ? "-" : displayLocation)
-//                        .font(.subheadline)
-//                        .foregroundStyle(.secondary)
-//                }
 
                 // Assigned codes as chips
                 if !assignedCodes.isEmpty {
