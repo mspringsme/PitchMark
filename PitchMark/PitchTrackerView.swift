@@ -265,7 +265,7 @@ struct PitchTrackerView: View {
         if let idString = defaults.string(forKey: DefaultsKeys.lastTemplateId),
            let template = loadedTemplates.first(where: { $0.id.uuidString == idString }) {
             selectedTemplate = template
-            selectedPitches = loadActivePitches(for: template.id, fallback: template.pitches)
+            selectedPitches = loadActivePitches(for: template.id, fallback: availablePitches(for: template))
             pitchCodeAssignments = template.codeAssignments
         }
         // Restore batter side
@@ -316,11 +316,24 @@ struct PitchTrackerView: View {
         guard let t = t else { return false }
         return !t.pitchGridHeaders.isEmpty || !t.pitchGridValues.isEmpty || !t.strikeTopRow.isEmpty || !t.strikeRows.isEmpty || !t.ballsTopRow.isEmpty || !t.ballsRows.isEmpty
     }
+
+    private func useEncrypted(for template: PitchTemplate?) -> Bool {
+        guard let template = template else { return false }
+        // Prefer explicit per-session selection
+        if isGame, let gid = selectedGameId, let explicit = encryptedSelectionByGameId[gid] {
+            return explicit
+        }
+        if !isGame, let pid = selectedPracticeId, let explicit = encryptedSelectionByPracticeId[pid] {
+            return explicit
+        }
+        // Fallback: infer from template data presence
+        return templateHasEncryptedData(template)
+    }
     
     // Returns the list of pitches to use for UI (chips/menus) based on template mode
     private func availablePitches(for template: PitchTemplate?) -> [String] {
         guard let t = template else { return pitchOrder }
-        if templateHasEncryptedData(t) {
+        if useEncrypted(for: t) {
             // Build from encrypted assignments: unique pitch names with stable ordering
             let encrypted = Array(Set(t.codeAssignments.map { $0.pitch })).sorted()
             // Preserve preferred pitchOrder first, then append any extras from encrypted list
@@ -1337,9 +1350,17 @@ struct PitchTrackerView: View {
         }
         .onChange(of: encryptedSelectionByGameId) { _, _ in
             persistEncryptedSelections()
+            if let t = selectedTemplate {
+                selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                colorRefreshToken = UUID()
+            }
         }
         .onChange(of: encryptedSelectionByPracticeId) { _, _ in
             persistEncryptedSelections()
+            if let t = selectedTemplate {
+                selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                colorRefreshToken = UUID()
+            }
         }
         .sheet(isPresented: $showGameSheet, onDismiss: {
             // If user canceled without creating/choosing, optionally revert to practice
@@ -1605,6 +1626,10 @@ struct PitchTrackerView: View {
                 }
                 isGame = false
                 sessionManager.switchMode(to: .practice)
+                if let t = selectedTemplate {
+                    selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                    colorRefreshToken = UUID()
+                }
                 let defaults = UserDefaults.standard
                 defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
                 defaults.removeObject(forKey: DefaultsKeys.activeGameId)
@@ -1638,6 +1663,10 @@ struct PitchTrackerView: View {
                     }
                     isGame = true
                     sessionManager.switchMode(to: .game)
+                    if let t = selectedTemplate {
+                        selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                        colorRefreshToken = UUID()
+                    }
                     let defaults = UserDefaults.standard
                     defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
                     defaults.set(gid, forKey: DefaultsKeys.activeGameId)
