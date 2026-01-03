@@ -330,22 +330,40 @@ struct PitchTrackerView: View {
         return templateHasEncryptedData(template)
     }
     
-    // Returns the list of pitches to use for UI (chips/menus) based on template mode
     private func availablePitches(for template: PitchTemplate?) -> [String] {
+        // If no template, fall back to app-wide default order
         guard let t = template else { return pitchOrder }
+
+        // When using encrypted mode for this template/session, build the list from
+        // the assignments that originate in AuthManager (`dict["pitch"]`).
         if useEncrypted(for: t) {
-            // Build from encrypted assignments: unique pitch names with stable ordering
-            let encrypted = Array(Set(t.codeAssignments.map { $0.pitch })).sorted()
-            // Preserve preferred pitchOrder first, then append any extras from encrypted list
-            let ordered = pitchOrder.filter { encrypted.contains($0) }
-            let extras = encrypted.filter { !pitchOrder.contains($0) }
+            // Build from encrypted headers provided by the template (AuthManager parsed `pitchGridHeaders`)
+            // Prefer the headers' `pitch` values, trimming whitespace and removing empties/duplicates.
+            let headerSet = Set(
+                t.pitchGridHeaders
+                    .map { $0.pitch.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+            let headerList = Array(headerSet)
+
+            // Preserve preferred ordering first, then append any extras from header list
+            let ordered = pitchOrder.filter { headerList.contains($0) }
+            let extras = headerList.filter { !pitchOrder.contains($0) }.sorted()
+            print("Encrypted headers used:", headerList)
             return ordered + extras
-        } else {
-            // Classic path: use template.pitches merged with pitchOrder
-            let base = pitchOrder
-            let extras = t.pitches.filter { !base.contains($0) }
-            return base + extras
         }
+
+        // Classic path: start from the preferred order and append any extras listed on the template
+        let base = pitchOrder
+        let extras = t.pitches.filter { !base.contains($0) }
+        return base + extras
+    }
+    
+    private var effectivePitchesForStrikeZone: Set<String> {
+        if let t = selectedTemplate, useEncrypted(for: t) {
+            return Set(availablePitches(for: t))
+        }
+        return selectedPitches
     }
     
     fileprivate var orderedPitchesForTemplate: [String] {
@@ -387,7 +405,13 @@ struct PitchTrackerView: View {
     // MARK: - Template Apply Helper
     private func applyTemplate(_ template: PitchTemplate) {
         selectedTemplate = template
-        selectedPitches = loadActivePitches(for: template.id, fallback: availablePitches(for: template))
+        let fallbackList = availablePitches(for: template)
+        if useEncrypted(for: template) {
+            // In encrypted mode, always show the full set derived from encrypted assignments
+            selectedPitches = Set(fallbackList)
+        } else {
+            selectedPitches = loadActivePitches(for: template.id, fallback: fallbackList)
+        }
         pitchCodeAssignments = template.codeAssignments
         // 🧹 Reset strike zone and called pitch state
         lastTappedPosition = nil
@@ -1020,7 +1044,7 @@ struct PitchTrackerView: View {
                     setLastTapped: { lastTappedPosition = $0 },
                     calledPitch: calledPitch,
                     setCalledPitch: { calledPitch = $0 },
-                    selectedPitches: selectedPitches,
+                    selectedPitches: effectivePitchesForStrikeZone,
                     gameIsActive: gameIsActive,
                     selectedPitch: selectedPitch,
                     pitchCodeAssignments: pitchCodeAssignments,
@@ -1351,14 +1375,24 @@ struct PitchTrackerView: View {
         .onChange(of: encryptedSelectionByGameId) { _, _ in
             persistEncryptedSelections()
             if let t = selectedTemplate {
-                selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                let fallbackList = availablePitches(for: t)
+                if useEncrypted(for: t) {
+                    selectedPitches = Set(fallbackList)
+                } else {
+                    selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                }
                 colorRefreshToken = UUID()
             }
         }
         .onChange(of: encryptedSelectionByPracticeId) { _, _ in
             persistEncryptedSelections()
             if let t = selectedTemplate {
-                selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                let fallbackList = availablePitches(for: t)
+                if useEncrypted(for: t) {
+                    selectedPitches = Set(fallbackList)
+                } else {
+                    selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                }
                 colorRefreshToken = UUID()
             }
         }
@@ -1534,7 +1568,12 @@ struct PitchTrackerView: View {
             // Persist and sync dependent state whenever template changes (from menu or Settings)
             persistSelectedTemplate(newValue)
             if let t = newValue {
-                selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                let fallbackList = availablePitches(for: t)
+                if useEncrypted(for: t) {
+                    selectedPitches = Set(fallbackList)
+                } else {
+                    selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                }
                 pitchCodeAssignments = t.codeAssignments
                 // Reset strike zone and called pitch state
                 lastTappedPosition = nil
@@ -1627,7 +1666,12 @@ struct PitchTrackerView: View {
                 isGame = false
                 sessionManager.switchMode(to: .practice)
                 if let t = selectedTemplate {
-                    selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                    let fallbackList = availablePitches(for: t)
+                        if useEncrypted(for: t) {
+                            selectedPitches = Set(fallbackList)
+                        } else {
+                            selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                        }
                     colorRefreshToken = UUID()
                 }
                 let defaults = UserDefaults.standard
@@ -1664,7 +1708,12 @@ struct PitchTrackerView: View {
                     isGame = true
                     sessionManager.switchMode(to: .game)
                     if let t = selectedTemplate {
-                        selectedPitches = loadActivePitches(for: t.id, fallback: availablePitches(for: t))
+                        let fallbackList = availablePitches(for: t)
+                            if useEncrypted(for: t) {
+                                selectedPitches = Set(fallbackList)
+                            } else {
+                                selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                            }
                         colorRefreshToken = UUID()
                     }
                     let defaults = UserDefaults.standard
@@ -3636,6 +3685,7 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
 
 
 
