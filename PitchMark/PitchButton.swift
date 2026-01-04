@@ -29,7 +29,8 @@ func pitchButton(
     resultVisualState: String?,
     setResultVisualState: @escaping (String?) -> Void,
     pendingResultLabel: Binding<String?>,
-    showConfirmSheet: Binding<Bool>
+    showConfirmSheet: Binding<Bool>,
+    isEncryptedMode: Bool
 ) -> some View {
     let tappedPoint = CGPoint(x: x, y: y)
     let isSelected = lastTappedPosition == tappedPoint
@@ -101,10 +102,11 @@ func pitchButton(
                     setLastTapped: setLastTapped,
                     setCalledPitch: setCalledPitch,
                     selectedPitches: selectedPitches,
-                    pitchCodeAssignments: pitchCodeAssignments,
+                    pitchCodeAssignments: isEncryptedMode ? [] : pitchCodeAssignments,
                     lastTappedPosition: lastTappedPosition,
                     calledPitch: calledPitch,
-                    setSelectedPitch: setSelectedPitch
+                    setSelectedPitch: setSelectedPitch,
+                    isEncryptedMode: isEncryptedMode
                 )
             } label: {
                 ZStack {

@@ -699,7 +699,13 @@ struct PitchTrackerView: View {
                         call: call,
                         pitchCodeAssignments: pitchCodeAssignments,
                         batterSide: batterSide,
-                        template: selectedTemplate
+                        template: selectedTemplate,
+                        isEncryptedMode: {
+                            if let t = selectedTemplate {
+                                return useEncrypted(for: t)
+                            }
+                            return false
+                        }()
                     )
                     .transition(.opacity)
                     .padding(.top, 4)
@@ -1057,7 +1063,11 @@ struct PitchTrackerView: View {
                     setResultVisualState: { resultVisualState = $0 },
                     pendingResultLabel: $pendingResultLabel,
                     showResultConfirmation: $showResultConfirmation,
-                    showConfirmSheet: confirmSheetBinding
+                    showConfirmSheet: confirmSheetBinding,
+                    isEncryptedMode: {
+                        if let t = selectedTemplate { return useEncrypted(for: t) }
+                        return false
+                    }()
                 )
                 .id(colorRefreshToken)
             }
@@ -2864,6 +2874,7 @@ struct CalledPitchView: View {
     let pitchCodeAssignments: [PitchCodeAssignment]
     let batterSide: BatterSide
     let template: PitchTemplate?
+    let isEncryptedMode: Bool
     
     var body: some View {
         let displayLocation = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2882,8 +2893,9 @@ struct CalledPitchView: View {
         }()
 
         let isStrike = call.type == "Strike"
+        
         let callColor: Color = isStrike ? .green : .red
-
+        
         return HStack(spacing: 12) {
             // Left: Details
             VStack(alignment: .leading, spacing: 8) {
@@ -2901,7 +2913,7 @@ struct CalledPitchView: View {
                     .foregroundStyle(.primary)
 
                 // Assigned codes as chips
-                if !assignedCodes.isEmpty {
+                if !isEncryptedMode, !assignedCodes.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(assignedCodes, id: \.self) { code in
@@ -2917,7 +2929,7 @@ struct CalledPitchView: View {
                         }
                     }
                     .padding(.top, 2)
-                } else {
+                } else if !isEncryptedMode {
                     Text("No assigned calls for this pitch/location")
                         .font(.caption)
                         .foregroundStyle(.secondary)

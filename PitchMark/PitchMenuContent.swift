@@ -11,6 +11,7 @@ struct PitchMenuContent: View {
     let lastTappedPosition: CGPoint?
     let calledPitch: PitchCall?
     let setSelectedPitch: (String) -> Void
+    let isEncryptedMode: Bool
 
     var body: some View {
         Group {
