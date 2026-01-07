@@ -30,7 +30,8 @@ func pitchButton(
     setResultVisualState: @escaping (String?) -> Void,
     pendingResultLabel: Binding<String?>,
     showConfirmSheet: Binding<Bool>,
-    isEncryptedMode: Bool
+    isEncryptedMode: Bool,
+    template: PitchTemplate?
 ) -> some View {
     let tappedPoint = CGPoint(x: x, y: y)
     let isSelected = lastTappedPosition == tappedPoint
@@ -106,7 +107,34 @@ func pitchButton(
                     lastTappedPosition: lastTappedPosition,
                     calledPitch: calledPitch,
                     setSelectedPitch: setSelectedPitch,
-                    isEncryptedMode: isEncryptedMode
+                    isEncryptedMode: isEncryptedMode,
+                    generateEncryptedCodes: { selectedPitch, gridKind, columnIndex, rowIndex in
+                        print("[PitchButton] Preparing encrypted generation for label=\(fullLabel) isStrike=\(location.isStrike) selectedPitch=\(selectedPitch)")
+                        guard let template = template else {
+                            print("[PitchButton] No template available for encrypted generation.")
+                            return []
+                        }
+                        print("""
+                        [PitchButton] Encrypted generate inputs
+                        selectedPitch=\(selectedPitch)
+                        kind=\(gridKind) col=\(columnIndex) row=\(rowIndex)
+                        strikeTopRow=\(template.strikeTopRow)
+                        ballsTopRow=\(template.ballsTopRow)
+                        strikeRows count=\(template.strikeRows.count) firstRow=\(template.strikeRows.first ?? [])
+                        ballsRows count=\(template.ballsRows.count) firstRow=\(template.ballsRows.first ?? [])
+                        """)
+                        let codes = EncryptedCodeGenerator.generateCalls(
+                            template: template,
+                            selectedPitch: selectedPitch,
+                            gridKind: gridKind,
+                            columnIndex: columnIndex,
+                            rowIndex: rowIndex
+                        )
+                        print("[PitchButton] Summary kind=\(gridKind) col=\(columnIndex) row=\(rowIndex) → count=\(codes.count)")
+                        print("[PitchButton] Encrypted generate output codes=\(codes)")
+
+                        return codes
+                    }
                 )
             } label: {
                 ZStack {

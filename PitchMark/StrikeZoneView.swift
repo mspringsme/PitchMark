@@ -29,6 +29,7 @@ struct StrikeZoneView: View {
     let showResultConfirmation: Binding<Bool>
     let showConfirmSheet: Binding<Bool>
     let isEncryptedMode: Bool
+    let template: PitchTemplate?
     
     var body: some View {
         ZStack {
@@ -80,7 +81,8 @@ struct StrikeZoneView: View {
                             setResultVisualState: setResultVisualState,
                             pendingResultLabel: pendingResultLabel,
                             showConfirmSheet: showConfirmSheet,
-                            isEncryptedMode: isEncryptedMode
+                            isEncryptedMode: isEncryptedMode,
+                            template: template
                         )
                     }
                     
@@ -121,7 +123,8 @@ struct StrikeZoneView: View {
                             setResultVisualState: setResultVisualState,
                             pendingResultLabel: pendingResultLabel,
                             showConfirmSheet: showConfirmSheet,
-                            isEncryptedMode: isEncryptedMode
+                            isEncryptedMode: isEncryptedMode,
+                            template: template
                         )
                     }
                 }
