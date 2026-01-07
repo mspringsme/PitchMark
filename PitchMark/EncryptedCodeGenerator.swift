@@ -49,14 +49,27 @@ struct EncryptedCodeGenerator {
             return []
         }
 
-        // Locate the selected pitch column in the top grid.
-        // `pitchGridValues` uses col 0 for the leading two-char cell, so pitch columns start at 1.
-        guard let pitchColOffset = template.pitches.firstIndex(of: selectedPitch) else {
-            print("EncryptedCodeGenerator: selected pitch not found in template.pitches — \(selectedPitch)")
+        // Resolve pitch column using headers (which align with pitchGridValues columns 1...N-1)
+        let headerPitches = template.pitchGridHeaders.map { $0.pitch }
+        // Warn if headers and pitches differ (count or order)
+        if headerPitches.count != template.pitches.count || headerPitches != template.pitches {
+            print("[GENERATOR WARNING] pitchGridHeaders and pitches differ in count or order.")
+            print("Headers: \(headerPitches)")
+            print("Pitches: \(template.pitches)")
+        }
+        let pitchCol: Int
+        if let headerIndex = headerPitches.firstIndex(of: selectedPitch) {
+            // headerIndex maps directly to the grid column (since col 0 is the leading cell)
+            pitchCol = headerIndex + 1
+            print("[GENERATOR] Using headers. headerPitches=\(headerPitches) selectedPitchIndex=\(headerIndex) pitchCol=\(pitchCol)")
+        } else if let pitchIndex = template.pitches.firstIndex(of: selectedPitch) {
+            // Fallback: assumes pitches are in the same order as headers
+            pitchCol = pitchIndex + 1
+            print("[GENERATOR] Using pitches fallback. pitches=\(template.pitches) selectedPitchIndex=\(pitchIndex) pitchCol=\(pitchCol)")
+        } else {
+            print("EncryptedCodeGenerator: selected pitch not found in headers or pitches — \(selectedPitch)")
             return []
         }
-        let pitchCol = pitchColOffset + 1
-        print("[GENERATOR] pitches=\(template.pitches) selectedPitchIndex=\(pitchColOffset) pitchCol=\(pitchCol)")
 
         // Sanity-check top grid dimensions (expecting 4 rows)
         guard !template.pitchGridValues.isEmpty else {
@@ -75,6 +88,13 @@ struct EncryptedCodeGenerator {
             bottomHeaders = template.ballsTopRow
             bottomRowsRaw = template.ballsRows
         }
+        
+        print("Headers: \(template.pitchGridHeaders)")
+        print("Pitches: \(template.pitches)")
+        for (i, row) in template.pitchGridValues.enumerated() {
+            print("Row \(i): \(row)")
+        }
+        
         // Normalize a leading blank row if present (editor sometimes stores 4 rows with first empty)
         let bottomRows: [[String]] = {
             if bottomRowsRaw.count == 4,
