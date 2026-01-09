@@ -2950,18 +2950,23 @@ struct CalledPitchView: View {
     var body: some View {
         let displayLocation = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
         let assignments = pitchCodeAssignments.filter {
-            $0.pitch == call.pitch &&
-            $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == displayLocation
-        }
+              $0.pitch == call.pitch &&
+              $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == displayLocation
+          }
 
-        let assignedCodes: [String] = {
-            if let template = template {
-                return assignments.map { decipherDisplayCode(from: $0, using: template) }
-            } else {
-                // Fallback (classic)
-                return assignments.map(\.code)
-            }
-        }()
+          // In encrypted mode, prefer the generated codes already carried on the call.
+          // In classic mode, show assigned codes (deciphered via template when present).
+          let displayCodes: [String] = {
+              if isEncryptedMode {
+                  return call.codes
+              } else {
+                  if let template = template {
+                      return assignments.map { decipherDisplayCode(from: $0, using: template) }
+                  } else {
+                      return assignments.map(\.code)
+                  }
+              }
+          }()
 
         let isStrike = call.type == "Strike"
         
@@ -2984,28 +2989,29 @@ struct CalledPitchView: View {
                     .foregroundStyle(.primary)
 
                 // Assigned codes as chips
-                if !isEncryptedMode, !assignedCodes.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(assignedCodes, id: \.self) { code in
-                                Text(code)
-                                    .font(.title3.weight(.semibold))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(callColor.opacity(0.85))
-                                    .clipShape(Capsule())
-                                    .accessibilityLabel("Assigned code \(code)")
-                            }
-                        }
-                    }
-                    .padding(.top, 2)
-                } else if !isEncryptedMode {
-                    Text("No assigned calls for this pitch/location")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 2)
-                }
+                // Codes as chips (encrypted uses generated call.codes, classic uses assignments)
+                  if !displayCodes.isEmpty {
+                      ScrollView(.horizontal, showsIndicators: false) {
+                          HStack(spacing: 6) {
+                              ForEach(displayCodes, id: \.self) { code in
+                                  Text(code)
+                                      .font(.title3.weight(.semibold))
+                                      .foregroundColor(.white)
+                                      .padding(.horizontal, 8)
+                                      .padding(.vertical, 4)
+                                      .background(callColor.opacity(0.85))
+                                      .clipShape(Capsule())
+                                      .accessibilityLabel("Code \(code)")
+                              }
+                          }
+                      }
+                      .padding(.top, 2)
+                  } else if !isEncryptedMode {
+                      Text("No assigned calls for this pitch/location")
+                          .font(.caption)
+                          .foregroundStyle(.secondary)
+                          .padding(.top, 2)
+                  }
                 
                 if isRecordingResult {
                     HStack(spacing: 8) {
