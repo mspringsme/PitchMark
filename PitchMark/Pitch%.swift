@@ -8,6 +8,7 @@ import SwiftUI
 import FirebaseCore
 import FirebaseAuth
 import FirebaseFirestore
+import Combine
 
 enum FilterType {
     case location
