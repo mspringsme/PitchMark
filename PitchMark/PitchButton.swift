@@ -48,9 +48,14 @@ func pitchButton(
             .filter { $0.location == fullLabel && selectedPitches.contains($0.pitch) }
             .map(\.pitch)
     )
-    let shouldOutline = assignedPitches.isEmpty && !isRecordingResult
+    // In encrypted mode, always render outline-only (no filled segments)
+    let shouldOutline = isEncryptedMode ? true : (assignedPitches.isEmpty && !isRecordingResult)
 
     let segmentColors: [Color] = {
+        // In encrypted mode, suppress filled segments entirely to show outline-only
+        if isEncryptedMode {
+            return []
+        }
         if let resultLabel = resultVisualState {
             if fullLabel == resultLabel {
                 return [location.isStrike ? .green : .red]
