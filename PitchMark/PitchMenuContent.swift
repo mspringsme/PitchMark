@@ -14,80 +14,96 @@ struct PitchMenuContent: View {
     let setSelectedPitch: (String) -> Void
     let isEncryptedMode: Bool
     let generateEncryptedCodes: ((String, EncryptedGridKind, Int, Int) -> [String])?
+    let onSelection: (() -> Void)?
 
     var body: some View {
-        Group {
-            if selectedPitches.isEmpty {
-                Button("Select pitches first") {}.disabled(true)
-            } else {
-                let orderedSelected: [String] = {
-                    let base = pitchOrder.filter { selectedPitches.contains($0) }
-                    let extras = Array(selectedPitches.subtracting(Set(pitchOrder))).sorted()
-                    return base + extras
-                }()
+        VStack(alignment: .leading, spacing: 12) {
+            
 
-                ForEach(orderedSelected, id: \.self) { pitch in
-                    let assignedCodes = pitchCodeAssignments
-                        .filter { $0.pitch == pitch && $0.location == adjustedLabel }
-                        .map(\.code)
+            Group {
+                if selectedPitches.isEmpty {
+                    Button("Select pitches first") {}.disabled(true)
+                } else {
+                    let orderedSelected: [String] = {
+                        let base = pitchOrder.filter { selectedPitches.contains($0) }
+                        let extras = Array(selectedPitches.subtracting(Set(pitchOrder))).sorted()
+                        return base + extras
+                    }()
 
-                    let codeSuffix = assignedCodes.isEmpty
-                        ? "     --"
-                        : "   \(assignedCodes.joined(separator: ", "))"
+                    ForEach(orderedSelected, id: \.self) { (pitch: String) in
+                        let assignedCodes = pitchCodeAssignments
+                            .filter { $0.pitch == pitch && $0.location == adjustedLabel }
+                            .map(\.code)
 
-                    Button("\(pitch)\(codeSuffix)") {
-                        withAnimation {
-                            setSelectedPitch(pitch)
+                        let codeSuffix = assignedCodes.isEmpty
+                            ? "     --"
+                            : "   \(assignedCodes.joined(separator: ", "))"
 
-                            var newCallCodes: [String] = []
+                        let isCurrent = lastTappedPosition == tappedPoint &&
+                            calledPitch?.location == adjustedLabel &&
+                            calledPitch?.pitch == pitch
 
-                            if isEncryptedMode {
-                                let labelForGrid = normalizedLabel(adjustedLabel, isStrike: location.isStrike)
-                                print("[PitchMenuContent] normalized label='\(labelForGrid)' from adjusted='\(adjustedLabel)' isStrike=\(location.isStrike)")
-                                if let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(label: labelForGrid, isStrike: location.isStrike) {
-                                    print("[PitchMenuContent] mapped → kind=\(gridKind) col=\(columnIndex) row=\(rowIndex)")
-                                    // Attempt to generate encrypted codes if a generator is provided
-                                    print("Encrypted mode: generating with gridKind=\(gridKind), col=\(columnIndex), row=\(rowIndex)")
-                                    if let generator = generateEncryptedCodes {
-                                        let generated = generator(pitch, gridKind, columnIndex, rowIndex)
-                                        newCallCodes = generated
-                                        print("Generated codes: \(generated)")
+                        Button {
+                            withAnimation {
+                                setSelectedPitch(pitch)
+
+                                var newCallCodes: [String] = []
+
+                                if isEncryptedMode {
+                                    let labelForGrid = normalizedLabel(adjustedLabel, isStrike: location.isStrike)
+                                    print("[PitchMenuContent] normalized label='\(labelForGrid)' from adjusted='\(adjustedLabel)' isStrike=\(location.isStrike)")
+                                    if let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(label: labelForGrid, isStrike: location.isStrike) {
+                                        print("[PitchMenuContent] mapped → kind=\(gridKind) col=\(columnIndex) row=\(rowIndex)")
+                                        // Attempt to generate encrypted codes if a generator is provided
+                                        print("Encrypted mode: generating with gridKind=\(gridKind), col=\(columnIndex), row=\(rowIndex)")
+                                        if let generator = generateEncryptedCodes {
+                                            let generated = generator(pitch, gridKind, columnIndex, rowIndex)
+                                            newCallCodes = generated
+                                            print("Generated codes: \(generated)")
+                                        } else {
+                                            print("No generator provided. Skipping encrypted code generation.")
+                                            newCallCodes = []
+                                        }
                                     } else {
-                                        print("No generator provided. Skipping encrypted code generation.")
+                                        print("[PitchMenuContent] mapping failed for adjusted='\(adjustedLabel)' normalized='\(labelForGrid)' isStrike=\(location.isStrike)")
                                         newCallCodes = []
                                     }
                                 } else {
-                                    print("[PitchMenuContent] mapping failed for adjusted='\(adjustedLabel)' normalized='\(labelForGrid)' isStrike=\(location.isStrike)")
-                                    newCallCodes = []
+                                    newCallCodes = assignedCodes
+                                    print("Assigned codes (non-encrypted): \(assignedCodes)")
                                 }
-                            } else {
-                                newCallCodes = assignedCodes
-                                print("Assigned codes (non-encrypted): \(assignedCodes)")
-                            }
 
-                            let newCall = PitchCall(
-                                pitch: pitch,
-                                location: adjustedLabel,
-                                isStrike: location.isStrike,
-                                codes: newCallCodes
-                            )
-                            print("New call codes: \(newCall.codes)")
+                                let newCall = PitchCall(
+                                    pitch: pitch,
+                                    location: adjustedLabel,
+                                    isStrike: location.isStrike,
+                                    codes: newCallCodes
+                                )
+                                print("New call codes: \(newCall.codes)")
 
-                            if lastTappedPosition == tappedPoint,
-                               let currentCall = calledPitch,
-                               currentCall.location == newCall.location,
-                               currentCall.pitch == newCall.pitch {
-                                setLastTapped(nil)
-                                setCalledPitch(nil)
-                            } else {
-                                setLastTapped(tappedPoint)
-                                setCalledPitch(newCall)
+                                if lastTappedPosition == tappedPoint,
+                                   let currentCall = calledPitch,
+                                   currentCall.location == newCall.location,
+                                   currentCall.pitch == newCall.pitch {
+                                    setLastTapped(nil)
+                                    setCalledPitch(nil)
+                                } else {
+                                    setLastTapped(tappedPoint)
+                                    setCalledPitch(newCall)
+                                }
+                                onSelection?()
                             }
+                        } label: {
+                            Text("\(pitch)\(codeSuffix)")
+                                .font(.system(size: 17, weight: isCurrent ? .semibold : .regular))
+                                .foregroundColor(isCurrent ? .accentColor : .primary)
                         }
                     }
                 }
             }
         }
+        .padding(.horizontal)
+        .padding(.top, 8)
     }
 
     private func normalizedLabel(_ label: String, isStrike: Bool) -> String {

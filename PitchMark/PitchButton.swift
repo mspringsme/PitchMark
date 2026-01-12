@@ -6,6 +6,190 @@
 //
 import SwiftUI
 
+private struct PitchButtonView: View {
+    let x: CGFloat
+    let y: CGFloat
+    let location: PitchLocation
+    let labelManager: PitchLabelManager
+    let lastTappedPosition: CGPoint?
+    let setLastTapped: (CGPoint?) -> Void
+    let setCalledPitch: (PitchCall?) -> Void
+    let buttonSize: CGFloat
+    let selectedPitches: Set<String>
+    let pitchCodeAssignments: [PitchCodeAssignment]
+    let calledPitch: PitchCall?
+    let selectedPitch: String
+    let gameIsActive: Bool
+    let isRecordingResult: Bool
+    let setIsRecordingResult: (Bool) -> Void
+    let setActualLocation: (String) -> Void
+    let actualLocationRecorded: String?
+    let calledPitchLocation: String?
+    let setSelectedPitch: (String) -> Void
+    let resultVisualState: String?
+    let setResultVisualState: (String?) -> Void
+    let pendingResultLabel: Binding<String?>
+    let showConfirmSheet: Binding<Bool>
+    let isEncryptedMode: Bool
+    let template: PitchTemplate?
+
+    @State private var showMenuSheet = false
+
+    var body: some View {
+        let tappedPoint = CGPoint(x: x, y: y)
+        let isSelected = lastTappedPosition == tappedPoint
+        let adjustedLabel = labelManager.adjustedLabel(from: location.label)
+        let fullLabel = "\(location.isStrike ? "Strike" : "Ball") \(adjustedLabel)"
+        let assignedCode = pitchCodeAssignments.first {
+            $0.pitch == selectedPitch && $0.location == fullLabel
+        }
+
+        let isDisabled = gameIsActive && assignedCode == nil
+
+        let assignedPitches = Set(
+            pitchCodeAssignments
+                .filter { $0.location == fullLabel && selectedPitches.contains($0.pitch) }
+                .map(\.pitch)
+        )
+        // In encrypted mode, always render outline-only (no filled segments)
+        let shouldOutline = isEncryptedMode ? true : (assignedPitches.isEmpty && !isRecordingResult)
+
+        let segmentColors: [Color] = {
+            // In encrypted mode, suppress filled segments entirely to show outline-only
+            if isEncryptedMode {
+                return []
+            }
+            if let resultLabel = resultVisualState {
+                if fullLabel == resultLabel {
+                    return [location.isStrike ? .green : .red]
+                } else {
+                    return [location.isStrike ? .green : .red]
+                }
+            } else if isRecordingResult {
+                if fullLabel == calledPitchLocation {
+                    return [colorForPitch(selectedPitch)]
+                } else {
+                    return [location.isStrike ? .green : .red]
+                }
+            } else if lastTappedPosition == tappedPoint {
+                return [colorForPitch(selectedPitch)]
+            } else {
+                return Array(assignedPitches).map { colorForPitch($0) }
+            }
+        }()
+
+        return Group {
+            if isDisabled {
+                disabledView(isStrike: location.isStrike)
+                    .frame(width: buttonSize, height: buttonSize)
+            } else if isRecordingResult {
+                Button(action: {
+                    pendingResultLabel.wrappedValue = fullLabel
+                    showConfirmSheet.wrappedValue = true
+                }) {
+                    StrikeZoneButtonLabel(
+                        isStrike: location.isStrike,
+                        isSelected: isSelected,
+                        fullLabel: fullLabel,
+                        segmentColors: segmentColors,
+                        buttonSize: buttonSize,
+                        isRecordingResult: isRecordingResult,
+                        actualLocationRecorded: actualLocationRecorded,
+                        calledPitchLocation: calledPitchLocation,
+                        pendingResultLabel: pendingResultLabel.wrappedValue,
+                        outlineOnly: shouldOutline
+                    )
+                }
+                .buttonStyle(.plain)
+
+            } else {
+                Button(action: {
+                    showMenuSheet = true
+                }) {
+                    ZStack {
+                        StrikeZoneButtonLabel(
+                            isStrike: location.isStrike,
+                            isSelected: isSelected,
+                            fullLabel: fullLabel,
+                            segmentColors: segmentColors,
+                            buttonSize: buttonSize,
+                            isRecordingResult: isRecordingResult,
+                            actualLocationRecorded: actualLocationRecorded,
+                            calledPitchLocation: calledPitchLocation,
+                            pendingResultLabel: pendingResultLabel.wrappedValue,
+                            outlineOnly: shouldOutline
+                        )
+                    }
+                    .padding(10)
+                    .compositingGroup()
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showMenuSheet) {
+                    VStack(spacing: 12) {
+                        HStack {
+                            Spacer(minLength: 0)
+                            HStack(spacing: 6) {
+                                Text(location.isStrike ? "Strike:  " : "Ball:  ")
+                                    .font(.title)
+                                    .fontWeight(.bold)
+                                    .foregroundStyle(.secondary)
+                                Text(labelManager.adjustedLabel(from: location.label))
+                                    .font(.title)
+                                    .fontWeight(.bold)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .fixedSize()
+                            Spacer(minLength: 0)
+                        }
+                        .multilineTextAlignment(.center)
+
+                        HStack {
+                            Spacer(minLength: 0)
+                            PitchMenuContent(
+                                adjustedLabel: adjustedLabel,
+                                tappedPoint: tappedPoint,
+                                location: location,
+                                setLastTapped: setLastTapped,
+                                setCalledPitch: setCalledPitch,
+                                selectedPitches: selectedPitches,
+                                pitchCodeAssignments: isEncryptedMode ? [] : pitchCodeAssignments,
+                                lastTappedPosition: lastTappedPosition,
+                                calledPitch: calledPitch,
+                                setSelectedPitch: setSelectedPitch,
+                                isEncryptedMode: isEncryptedMode,
+                                generateEncryptedCodes: { selectedPitch, gridKind, columnIndex, rowIndex in
+                                    if let template = template {
+                                        return EncryptedCodeGenerator.generateCalls(
+                                            template: template,
+                                            selectedPitch: selectedPitch,
+                                            gridKind: gridKind,
+                                            columnIndex: columnIndex,
+                                            rowIndex: rowIndex
+                                        )
+                                    }
+                                    return []
+                                },
+                                onSelection: {
+                                    showMenuSheet = false
+                                }
+                            )
+                            .fixedSize(horizontal: true, vertical: false)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.bottom, 8)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .presentationDetents([.fraction(0.4), .medium])
+                    .presentationDragIndicator(.visible)
+                }
+            }
+        }
+        .position(x: x, y: y)
+        .zIndex(1)
+    }
+}
+
 func pitchButton(
     x: CGFloat,
     y: CGFloat,
@@ -33,136 +217,32 @@ func pitchButton(
     isEncryptedMode: Bool,
     template: PitchTemplate?
 ) -> some View {
-    let tappedPoint = CGPoint(x: x, y: y)
-    let isSelected = lastTappedPosition == tappedPoint
-    let adjustedLabel = labelManager.adjustedLabel(from: location.label)
-    let fullLabel = "\(location.isStrike ? "Strike" : "Ball") \(adjustedLabel)"
-    let assignedCode = pitchCodeAssignments.first {
-        $0.pitch == selectedPitch && $0.location == fullLabel
-    }
-
-    let isDisabled = gameIsActive && assignedCode == nil
-
-    let assignedPitches = Set(
-        pitchCodeAssignments
-            .filter { $0.location == fullLabel && selectedPitches.contains($0.pitch) }
-            .map(\.pitch)
+    PitchButtonView(
+        x: x,
+        y: y,
+        location: location,
+        labelManager: labelManager,
+        lastTappedPosition: lastTappedPosition,
+        setLastTapped: setLastTapped,
+        setCalledPitch: setCalledPitch,
+        buttonSize: buttonSize,
+        selectedPitches: selectedPitches,
+        pitchCodeAssignments: pitchCodeAssignments,
+        calledPitch: calledPitch,
+        selectedPitch: selectedPitch,
+        gameIsActive: gameIsActive,
+        isRecordingResult: isRecordingResult,
+        setIsRecordingResult: setIsRecordingResult,
+        setActualLocation: setActualLocation,
+        actualLocationRecorded: actualLocationRecorded,
+        calledPitchLocation: calledPitchLocation,
+        setSelectedPitch: setSelectedPitch,
+        resultVisualState: resultVisualState,
+        setResultVisualState: setResultVisualState,
+        pendingResultLabel: pendingResultLabel,
+        showConfirmSheet: showConfirmSheet,
+        isEncryptedMode: isEncryptedMode,
+        template: template
     )
-    // In encrypted mode, always render outline-only (no filled segments)
-    let shouldOutline = isEncryptedMode ? true : (assignedPitches.isEmpty && !isRecordingResult)
-
-    let segmentColors: [Color] = {
-        // In encrypted mode, suppress filled segments entirely to show outline-only
-        if isEncryptedMode {
-            return []
-        }
-        if let resultLabel = resultVisualState {
-            if fullLabel == resultLabel {
-                return [location.isStrike ? .green : .red]
-            } else {
-                return [location.isStrike ? .green : .red]
-            }
-        } else if isRecordingResult {
-            if fullLabel == calledPitchLocation {
-                return [colorForPitch(selectedPitch)]
-            } else {
-                return [location.isStrike ? .green : .red]
-            }
-        } else if lastTappedPosition == tappedPoint {
-            return [colorForPitch(selectedPitch)]
-        } else {
-            return Array(assignedPitches).map { colorForPitch($0) }
-        }
-    }()
-    
-    return Group {
-        if isDisabled {
-            disabledView(isStrike: location.isStrike)
-                .frame(width: buttonSize, height: buttonSize)
-        } else if isRecordingResult {
-            Button(action: {
-                pendingResultLabel.wrappedValue = fullLabel
-                showConfirmSheet.wrappedValue = true
-            }) {
-                StrikeZoneButtonLabel(
-                    isStrike: location.isStrike,
-                    isSelected: isSelected,
-                    fullLabel: fullLabel,
-                    segmentColors: segmentColors,
-                    buttonSize: buttonSize,
-                    isRecordingResult: isRecordingResult,
-                    actualLocationRecorded: actualLocationRecorded,
-                    calledPitchLocation: calledPitchLocation,
-                    pendingResultLabel: pendingResultLabel.wrappedValue,
-                    outlineOnly: shouldOutline
-                )
-            }
-            .buttonStyle(.plain)
-            
-        } else {
-            Menu {
-                PitchMenuContent(
-                    adjustedLabel: fullLabel,
-                    tappedPoint: tappedPoint,
-                    location: location,
-                    setLastTapped: setLastTapped,
-                    setCalledPitch: setCalledPitch,
-                    selectedPitches: selectedPitches,
-                    pitchCodeAssignments: isEncryptedMode ? [] : pitchCodeAssignments,
-                    lastTappedPosition: lastTappedPosition,
-                    calledPitch: calledPitch,
-                    setSelectedPitch: setSelectedPitch,
-                    isEncryptedMode: isEncryptedMode,
-                    generateEncryptedCodes: { selectedPitch, gridKind, columnIndex, rowIndex in
-                        print("[PitchButton] Preparing encrypted generation for label=\(fullLabel) isStrike=\(location.isStrike) selectedPitch=\(selectedPitch)")
-                        guard let template = template else {
-                            print("[PitchButton] No template available for encrypted generation.")
-                            return []
-                        }
-                        print("""
-                        [PitchButton] Encrypted generate inputs
-                        selectedPitch=\(selectedPitch)
-                        kind=\(gridKind) col=\(columnIndex) row=\(rowIndex)
-                        strikeTopRow=\(template.strikeTopRow)
-                        ballsTopRow=\(template.ballsTopRow)
-                        strikeRows count=\(template.strikeRows.count) firstRow=\(template.strikeRows.first ?? [])
-                        ballsRows count=\(template.ballsRows.count) firstRow=\(template.ballsRows.first ?? [])
-                        """)
-                        let codes = EncryptedCodeGenerator.generateCalls(
-                            template: template,
-                            selectedPitch: selectedPitch,
-                            gridKind: gridKind,
-                            columnIndex: columnIndex,
-                            rowIndex: rowIndex
-                        )
-                        print("[PitchButton] Summary kind=\(gridKind) col=\(columnIndex) row=\(rowIndex) → count=\(codes.count)")
-                        print("[PitchButton] Encrypted generate output codes=\(codes)")
-
-                        return codes
-                    }
-                )
-            } label: {
-                ZStack {
-                    StrikeZoneButtonLabel(
-                        isStrike: location.isStrike,
-                        isSelected: isSelected,
-                        fullLabel: fullLabel,
-                        segmentColors: segmentColors,
-                        buttonSize: buttonSize,
-                        isRecordingResult: isRecordingResult,
-                        actualLocationRecorded: actualLocationRecorded,
-                        calledPitchLocation: calledPitchLocation,
-                        pendingResultLabel: pendingResultLabel.wrappedValue,
-                        outlineOnly: shouldOutline
-                    )
-                }
-                .padding(10)
-                .compositingGroup()
-                .contentShape(Rectangle())
-            }
-        }
-    }
-    .position(x: x, y: y)
-    .zIndex(1)
 }
 

@@ -299,3 +299,4 @@ struct RotatingGlowModifier: AnimatableModifier {
             )
     }
 }
+
