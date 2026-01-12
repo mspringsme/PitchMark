@@ -2939,6 +2939,7 @@ struct ResetPitchButton: View {
 struct CalledPitchView: View {
     @State private var showResultOverlay = false
     @State private var selectedActualLocation: String?
+    @State private var tappedCode: String?
     @Binding var isRecordingResult: Bool
     @Binding var activeCalledPitchId: String?
     let call: PitchCall
@@ -2994,14 +2995,37 @@ struct CalledPitchView: View {
                       ScrollView(.horizontal, showsIndicators: false) {
                           HStack(spacing: 6) {
                               ForEach(displayCodes, id: \.self) { code in
-                                  Text(code)
-                                      .font(.title3.weight(.semibold))
-                                      .foregroundColor(.white)
-                                      .padding(.horizontal, 8)
-                                      .padding(.vertical, 4)
-                                      .background(callColor.opacity(0.85))
-                                      .clipShape(Capsule())
-                                      .accessibilityLabel("Code \(code)")
+                                  Button {
+                                      // Haptic feedback + trigger recording
+                                      let generator = UIImpactFeedbackGenerator(style: .medium)
+                                      generator.impactOccurred()
+                                      tappedCode = code
+                                      isRecordingResult = true
+                                  } label: {
+                                      ZStack {
+                                          // Base chip background
+                                          Capsule()
+                                              .fill(callColor.opacity(0.85))
+
+                                          // Highlight overlay when tapped
+                                          if tappedCode == code {
+                                              Capsule()
+                                                  .stroke(Color.black.opacity(0.9), lineWidth: 2)
+                                                  .shadow(color: Color.black.opacity(0.35), radius: 6, x: 0, y: 0)
+                                                  .transition(.opacity)
+                                          }
+
+                                          Text(code)
+                                              .font(.title3.weight(.semibold))
+                                              .foregroundColor(.white)
+                                              .padding(.horizontal, 8)
+                                              .padding(.vertical, 4)
+                                      }
+                                      .frame(height: 32)
+                                      .animation(.easeInOut(duration: 0.15), value: tappedCode)
+                                  }
+                                  .buttonStyle(.plain) // preserve chip styling
+                                  .accessibilityLabel("Record for code \(code)")
                               }
                           }
                       }
@@ -3038,30 +3062,6 @@ struct CalledPitchView: View {
                     .accessibilityLabel("Choose a pitch result")
                 }
             }
-
-            Spacer(minLength: 12)
-
-            // Right: Record button
-            Button {
-                // Light haptic to make it feel “real”
-                let generator = UIImpactFeedbackGenerator(style: .medium)
-                generator.impactOccurred()
-                isRecordingResult = true
-            } label: {
-                VStack(spacing: 6) {
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 28, weight: .semibold))
-                    Text("Record")
-                        .font(.footnote.weight(.semibold))
-                }
-                .foregroundStyle(.white)
-                .frame(width: 84, height: 84)
-                .background(callColor.gradient)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: callColor.opacity(0.25), radius: 6, x: 0, y: 4)
-                .accessibilityLabel("Record pitch result")
-            }
-            .buttonStyle(.plain)
         }
         .padding(14)
         .background(
