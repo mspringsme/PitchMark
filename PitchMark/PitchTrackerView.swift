@@ -586,19 +586,6 @@ struct PitchTrackerView: View {
             }
     }
     
-    @ViewBuilder
-    private var chooseResultPrompt: some View {
-        let shouldShowChooseResultText = isRecordingResult && pendingResultLabel == nil
-        if shouldShowChooseResultText {
-            Text("Choose a Pitch Result")
-                .opacity(shouldShowChooseResultText ? 1 : 0)
-                .scaleEffect(shouldShowChooseResultText ? 1.05 : 1)
-                .shadow(color: .yellow.opacity(shouldShowChooseResultText ? 0.3 : 0), radius: 4)
-                .animation(.easeInOut(duration: 0.3), value: shouldShowChooseResultText)
-                .padding(.top, 4)
-        }
-    }
-    
     private var cardsAndOverlay: some View {
         ZStack {
             VStack(spacing: 8) {
@@ -694,7 +681,8 @@ struct PitchTrackerView: View {
             .blur(radius: shouldBlurBackground ? 6 : 0)
             .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
             .transition(.opacity)
-
+            
+            // Called pitch appears view after a user taps a location
             Group {
                 if let call = calledPitch {
                     CalledPitchView(
@@ -717,11 +705,11 @@ struct PitchTrackerView: View {
                     .onDisappear { shouldBlurBackground = false }
                 }
             }
+            .padding(.top, -90)
         }
         // Make this layer fill the entire screen space and bleed off the edges
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.horizontal, .bottom])
-//        .background(Color.red.opacity(0.9))
         .background(.regularMaterial)
     }
 
@@ -2976,91 +2964,86 @@ struct CalledPitchView: View {
         return HStack(spacing: 12) {
             // Left: Details
             VStack(alignment: .leading, spacing: 8) {
-                // Header row: title + call badge
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("Called Pitch")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-
+                
+                
+                HStack(){
+                    Spacer()
+                    VStack(){
+                        // Header row: title + call badge
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text("Called Pitch")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            
+                        }
+                        // Big pitch name
+                        Text(call.pitch)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.primary)
+                    }
+                    Spacer()
+                    
+                    PitchResultBanner(isRecording: isRecordingResult, callColor: callColor)
+                    Spacer()
                 }
-
-                // Big pitch name
-                Text(call.pitch)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-
                 // Assigned codes as chips
                 // Codes as chips (encrypted uses generated call.codes, classic uses assignments)
-                  if !displayCodes.isEmpty {
-                      ScrollView(.horizontal, showsIndicators: false) {
-                          HStack(spacing: 6) {
-                              ForEach(displayCodes, id: \.self) { code in
-                                  Button {
-                                      // Haptic feedback + trigger recording
-                                      let generator = UIImpactFeedbackGenerator(style: .medium)
-                                      generator.impactOccurred()
-                                      tappedCode = code
-                                      isRecordingResult = true
-                                  } label: {
-                                      ZStack {
-                                          // Base chip background
-                                          Capsule()
-                                              .fill(callColor.opacity(0.85))
-
-                                          // Highlight overlay when tapped
-                                          if tappedCode == code {
-                                              Capsule()
-                                                  .stroke(Color.black.opacity(0.9), lineWidth: 2)
-                                                  .shadow(color: Color.black.opacity(0.35), radius: 6, x: 0, y: 0)
-                                                  .transition(.opacity)
-                                          }
-
-                                          Text(code)
-                                              .font(.title3.weight(.semibold))
-                                              .foregroundColor(.white)
-                                              .padding(.horizontal, 8)
-                                              .padding(.vertical, 4)
-                                      }
-                                      .frame(height: 32)
-                                      .animation(.easeInOut(duration: 0.15), value: tappedCode)
-                                  }
-                                  .buttonStyle(.plain) // preserve chip styling
-                                  .accessibilityLabel("Record for code \(code)")
-                              }
-                          }
-                      }
-                      .padding(.top, 2)
-                  } else if !isEncryptedMode {
-                      Text("No assigned calls for this pitch/location")
-                          .font(.caption)
-                          .foregroundStyle(.secondary)
-                          .padding(.top, 2)
-                  }
-                
-                if isRecordingResult {
-                    HStack(spacing: 8) {
-                        Image(systemName: "hand.tap.fill")
-                            .font(.caption.bold())
-                        Text("Choose a pitch result")
-                            .font(.footnote.weight(.semibold))
+                if !displayCodes.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(displayCodes, id: \.self) { code in
+                                Button {
+                                    // Haptic feedback + trigger recording
+                                    let generator = UIImpactFeedbackGenerator(style: .medium)
+                                    generator.impactOccurred()
+                                    tappedCode = code
+                                    isRecordingResult = true
+                                } label: {
+                                    ZStack {
+                                        // Base chip background
+                                        Capsule()
+                                            .fill(callColor.opacity(0.85))
+                                        
+                                        // Highlight overlay when tapped
+                                        if tappedCode == code {
+                                            Capsule()
+                                                .fill(.white)
+                                                .stroke(Color.black.opacity(0.9), lineWidth: 2)
+                                                .shadow(color: Color.black.opacity(0.35), radius: 6, x: 0, y: 0)
+                                                .transition(.opacity)
+                                        }
+                                        if tappedCode == code {
+                                            Text(code)
+                                                .font(.title3.weight(.semibold))
+                                                .foregroundColor(callColor.opacity(0.85))
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                        } else {
+                                            Text(code)
+                                                .font(.title3.weight(.semibold))
+                                                .foregroundColor(.white)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                        }
+                                    }
+                                    .frame(height: 32)
+                                    .animation(.easeInOut(duration: 0.15), value: tappedCode)
+                                }
+                                .buttonStyle(.plain) // preserve chip styling
+                                .accessibilityLabel("Record for code \(code)")
+                            }
+                        }
+                        .frame(height: 60)
                     }
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        .ultraThinMaterial,
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(callColor.opacity(0.35), lineWidth: 1)
-                    )
-                    .shadow(color: callColor.opacity(0.15), radius: 3, x: 0, y: 2)
-                    .padding(.top, 6)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                    .animation(.easeInOut(duration: 0.25), value: isRecordingResult)
-                    .accessibilityLabel("Choose a pitch result")
+                    .padding(.top, 2)
+                } else if !isEncryptedMode {
+                    Text("No assigned calls for this pitch/location")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
                 }
+                
+                
             }
         }
         .padding(14)
@@ -3076,6 +3059,37 @@ struct CalledPitchView: View {
         .padding(.horizontal)
         .transition(.opacity)
         .accessibilityElement(children: .combine)
+    }
+}
+
+struct PitchResultBanner: View {
+    let isRecording: Bool
+    let callColor: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: isRecording ? "checkmark.circle.fill" : "hand.tap.fill")
+                .font(.caption.bold())
+
+            Text(isRecording ? "Choose a pitch result" : "Tap a Code")
+                .font(.footnote.weight(.semibold))
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(callColor.opacity(0.35), lineWidth: 1)
+        )
+        .shadow(color: callColor.opacity(0.15), radius: 3, x: 0, y: 2)
+        .padding(.top, 6)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+        .animation(.easeInOut(duration: 0.25), value: isRecording)
+        .accessibilityLabel(isRecording ? "Choose a pitch result" : "Tap a Code")
     }
 }
 
