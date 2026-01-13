@@ -210,6 +210,7 @@ struct PitchTrackerView: View {
     @State private var isSelecting: Bool = false
     @State private var selectedEventIDs: Set<String> = []
     @State private var localTemplateOverrides: [String: String] = [:]
+    @State private var pitchFirst = true
 
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
@@ -689,6 +690,7 @@ struct PitchTrackerView: View {
                     CalledPitchView(
                         isRecordingResult: $isRecordingResult,
                         activeCalledPitchId: $activeCalledPitchId,
+                        pitchFirst: $pitchFirst,
                         call: call,
                         pitchCodeAssignments: pitchCodeAssignments,
                         batterSide: batterSide,
@@ -699,6 +701,7 @@ struct PitchTrackerView: View {
                             }
                             return false
                         }()
+                        
                     )
                     .transition(.opacity)
                     .padding(.top, 4)
@@ -2963,17 +2966,50 @@ struct ResetPitchButton: View {
     }
 }
 
+struct CodeOrderToggle: View {
+    @Binding var pitchFirst: Bool   // true = Pitch 1st, false = Location 1st
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Picker("", selection: $pitchFirst) {
+                Text("Pitch 1st").tag(true)
+                Text("Location 1st").tag(false)
+            }
+            .pickerStyle(.segmented)
+
+            Text("Code Order")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 struct CalledPitchView: View {
     @State private var showResultOverlay = false
     @State private var selectedActualLocation: String?
     @State private var tappedCode: String?
     @Binding var isRecordingResult: Bool
     @Binding var activeCalledPitchId: String?
+    @Binding var pitchFirst: Bool
     let call: PitchCall
     let pitchCodeAssignments: [PitchCodeAssignment]
     let batterSide: BatterSide
     let template: PitchTemplate?
     let isEncryptedMode: Bool
+    
+    private func reorderedCodeIfNeeded(_ code: String) -> String {
+        // When pitchFirst is false (Location 1st), swap first two and last two characters of a 4-char code.
+        // If the code isn't exactly 4 characters, leave it unchanged.
+        if !pitchFirst, code.count == 4 {
+            let start = code.startIndex
+            let mid = code.index(start, offsetBy: 2)
+            let firstTwo = code[start..<mid]
+            let lastTwo = code[mid..<code.endIndex]
+            return String(lastTwo + firstTwo)
+        }
+        return code
+    }
     
     var body: some View {
         let displayLocation = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3003,8 +3039,6 @@ struct CalledPitchView: View {
         return HStack(spacing: 12) {
             // Left: Details
             VStack(alignment: .leading, spacing: 8) {
-                
-                
                 HStack(){
                     Spacer()
                     VStack(){
@@ -3031,6 +3065,7 @@ struct CalledPitchView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(displayCodes, id: \.self) { code in
+                                let shown = reorderedCodeIfNeeded(code)
                                 Button {
                                     // Haptic feedback + trigger recording
                                     let generator = UIImpactFeedbackGenerator(style: .medium)
@@ -3052,13 +3087,13 @@ struct CalledPitchView: View {
                                                 .transition(.opacity)
                                         }
                                         if tappedCode == code {
-                                            Text(code)
+                                            Text(shown)
                                                 .font(.title3.weight(.semibold))
                                                 .foregroundColor(callColor.opacity(0.85))
                                                 .padding(.horizontal, 8)
                                                 .padding(.vertical, 4)
                                         } else {
-                                            Text(code)
+                                            Text(shown)
                                                 .font(.title3.weight(.semibold))
                                                 .foregroundColor(.white)
                                                 .padding(.horizontal, 8)
@@ -3069,12 +3104,16 @@ struct CalledPitchView: View {
                                     .animation(.easeInOut(duration: 0.15), value: tappedCode)
                                 }
                                 .buttonStyle(.plain) // preserve chip styling
-                                .accessibilityLabel("Record for code \(code)")
+                                .accessibilityLabel("Record for code \(shown)")
                             }
                         }
                         .frame(height: 60)
+                        
+                        
                     }
                     .padding(.top, 2)
+                    //Toggle (order of codes)
+                    CodeOrderToggle(pitchFirst: $pitchFirst)
                 } else if !isEncryptedMode {
                     Text("No assigned calls for this pitch/location")
                         .font(.caption)
@@ -3827,6 +3866,7 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
 
 
 
