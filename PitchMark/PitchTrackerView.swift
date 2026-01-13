@@ -111,6 +111,7 @@ struct ToggleChip: View {
 
 struct PitchTrackerView: View {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @State private var showSelectBatterOverlay: Bool = false
     @State private var showCodeAssignmentSheet = false
     @State private var pitcherName: String = ""
     @State private var selectedPitches: Set<String> = []
@@ -701,11 +702,49 @@ struct PitchTrackerView: View {
                     )
                     .transition(.opacity)
                     .padding(.top, 4)
-                    .onAppear { shouldBlurBackground = true }
-                    .onDisappear { shouldBlurBackground = false }
+                    .onAppear {
+                        shouldBlurBackground = true
+                        // If in game mode and no batter is selected, show a brief overlay prompt
+                        if isGame && selectedBatterId == nil {
+                            showSelectBatterOverlay = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                                showSelectBatterOverlay = false
+                            }
+                        }
+                    }
+                    .onDisappear {
+                        shouldBlurBackground = false
+                        showSelectBatterOverlay = false
+                    }
                 }
             }
             .padding(.top, -90)
+            if showSelectBatterOverlay {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Text("Select a batter?")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(
+                                .ultraThinMaterial,
+                                in: Capsule()
+                            )
+                            .overlay(
+                                Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                        Spacer()
+                    }
+                    .padding(.bottom, 24)
+                }
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.5), value: showSelectBatterOverlay)
+            }
+            
         }
         // Make this layer fill the entire screen space and bleed off the edges
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
