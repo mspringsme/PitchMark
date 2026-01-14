@@ -19,11 +19,11 @@ extension View {
 
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
-
+    
     func makeUIViewController(context: Context) -> UIActivityViewController {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
-
+    
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
@@ -46,11 +46,11 @@ final class TopRowValidationCoordinator: ObservableObject {
     // Top rows
     @Published var strikeTopRow: [String] = Array(repeating: "", count: 3)
     @Published var ballsTopRow: [String] = Array(repeating: "", count: 3)
-
+    
     // Body rows (rows 1..3) for both grids
     @Published var strikeRows: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
     @Published var ballsRows: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
-
+    
     // MARK: - Top row helpers
     func usedAlnum(excluding isStrike: Bool, index: Int) -> Set<Character> {
         var set: Set<Character> = []
@@ -62,7 +62,7 @@ final class TopRowValidationCoordinator: ObservableObject {
         }
         return set
     }
-
+    
     func sanitizeTopRowInput(isStrike: Bool, index: Int, newValue: String) -> String {
         let onlyAlnum = String(alnumOnlyUppercased(newValue).prefix(3))
         let existing = usedAlnum(excluding: isStrike, index: index)
@@ -74,13 +74,13 @@ final class TopRowValidationCoordinator: ObservableObject {
         }
         return String(result)
     }
-
+    
     // MARK: - Body rows (rows 1..3)
     // Sanitize: up to 3 uppercase alnum
     func sanitizeBodyInput(_ value: String) -> String {
         String(alnumOnlyUppercased(value).prefix(3))
     }
-
+    
     // For a specific column, gather all characters already used in that column across rows 1..3 in both grids
     private func usedCharactersInColumn(_ col: Int, excludingRow excludedRow: Int) -> Set<Character> {
         var set: Set<Character> = []
@@ -94,7 +94,7 @@ final class TopRowValidationCoordinator: ObservableObject {
         }
         return set
     }
-
+    
     // Apply column-uniqueness filter to a proposed value for (row, col)
     private func filteredForColumnUniqueness(row: Int, col: Int, proposed: String) -> String {
         guard (1...3).contains(row) else { return proposed }
@@ -107,7 +107,7 @@ final class TopRowValidationCoordinator: ObservableObject {
         }
         return String(result.prefix(3))
     }
-
+    
     // Set a body row value (rows 1..3): mirror to all three columns in that row for BOTH grids, after enforcing column uniqueness.
     func setBodyRowMirrored(row: Int, col: Int, rawValue: String) {
         guard (1...3).contains(row) else { return }
@@ -131,7 +131,7 @@ final class TopRowValidationCoordinator: ObservableObject {
         let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
         let digits = Array("0123456789")
         let pool = letters + digits
-
+        
         func proposeFor(isStrike: Bool, index: Int) -> String {
             for _ in 0..<40 { // more attempts to find a valid combo
                 var candidate: [Character] = []
@@ -149,7 +149,7 @@ final class TopRowValidationCoordinator: ObservableObject {
             }
             return ""
         }
-
+        
         for i in 0..<3 {
             let value = proposeFor(isStrike: true, index: i)
             if strikeTopRow.indices.contains(i) {
@@ -169,7 +169,7 @@ final class TopRowValidationCoordinator: ObservableObject {
         // Mostly sequential digit pairs (e.g., 12, 23, 34, 90), with occasional letter substitutions.
         // Maintain uniqueness across the combined top rows using existing sanitizeTopRowInput.
         let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
+        
         // Build ascending sequential digit pairs with wrap from 9->0 (01,12,...,89,90)
         var seqPairs: [String] = []
         for i in 0..<10 {
@@ -179,7 +179,7 @@ final class TopRowValidationCoordinator: ObservableObject {
         // Deduplicate while keeping order
         var seen: Set<String> = []
         let basePairs: [String] = seqPairs.filter { seen.insert($0).inserted }
-
+        
         func maybeLetterize(_ s: String) -> String {
             guard s.count == 2 else { return s }
             // 5% chance to replace one character with a letter
@@ -192,7 +192,7 @@ final class TopRowValidationCoordinator: ObservableObject {
             }
             return s
         }
-
+        
         // Fallback creator: ensure we always return exactly 2 characters by replacing conflicts with letters
         func conflictResolvingFallback(isStrike: Bool, index: Int) -> String {
             let used = usedAlnum(excluding: isStrike, index: index)
@@ -229,7 +229,7 @@ final class TopRowValidationCoordinator: ObservableObject {
             let b = letters.first(where: { $0 != a }) ?? "B"
             return String([a, b])
         }
-
+        
         func fill(isStrike: Bool) {
             var bag = basePairs.shuffled()
             for col in 0..<3 {
@@ -252,7 +252,7 @@ final class TopRowValidationCoordinator: ObservableObject {
                 }
             }
         }
-
+        
         fill(isStrike: true)
         fill(isStrike: false)
     }
@@ -264,18 +264,18 @@ final class TopRowValidationCoordinator: ObservableObject {
             let next = (i + 1) % 10
             pairs.append("\(i)\(next)")
         }
-
+        
         // Helper to extract the two digits as Characters
         func digits(of s: String) -> (Character, Character)? {
             guard s.count == 2, let a = s.first, let b = s.last, a.isNumber, b.isNumber else { return nil }
             return (a, b)
         }
-
+        
         // Find three pairs that do not share any digit among them (six distinct digits total)
         var picked: [String] = []
         var usedDigits: Set<Character> = []
         let shuffled = pairs.shuffled()
-
+        
         for first in shuffled {
             guard let (f1, f2) = digits(of: first) else { continue }
             var used1: Set<Character> = [f1, f2]
@@ -296,7 +296,7 @@ final class TopRowValidationCoordinator: ObservableObject {
             }
             if picked.count == 3 { break }
         }
-
+        
         // Fallback: if not found (should be rare), greedily pick without digit overlap where possible
         if picked.count < 3 {
             picked.removeAll()
@@ -309,7 +309,7 @@ final class TopRowValidationCoordinator: ObservableObject {
                 if picked.count == 3 { break }
             }
         }
-
+        
         // Absolute safety: if still < 3, fill with any remaining pairs (won't happen realistically)
         var idx = 0
         while picked.count < 3 && idx < pairs.count {
@@ -317,7 +317,7 @@ final class TopRowValidationCoordinator: ObservableObject {
             if !picked.contains(cand) { picked.append(cand) }
             idx += 1
         }
-
+        
         // Assign to rows 1..3, mirror across all three columns, for both strike and balls grids
         for r in 1...3 {
             let value = picked[r - 1]
@@ -353,8 +353,7 @@ extension EnvironmentValues {
 }
 
 struct TemplateEditorView: View {
-    enum TemplateKind { case encrypted, classic }
-
+    
     @State private var name: String
     @State private var selectedPitches: Set<String>
     @State private var selectedPitch: String = ""
@@ -368,24 +367,23 @@ struct TemplateEditorView: View {
     @FocusState private var customPitchFieldFocused: Bool
     @FocusState private var nameFieldFocused: Bool
     @State private var showAssignedLocations = false
-    let kind: TemplateKind
     @State private var showRandomConfirm = false
     @State private var showClearConfirm = false
     @State private var hasAnyPitchInTopRow = false
     @State private var showNoPitchAlert = false
-
+    
     // Added new states for encrypted share sheet
     @State private var showEncryptedShare = false
     @State private var encryptedShareImage: UIImage? = nil
-
+    
     @State private var randomizeFirstColumnAction: (() -> Void)? = nil
     @State private var clearPitchGridAction: (() -> Void)? = nil
     @State private var pitchGridSnapshotProvider: (() -> (headers: [PitchHeader], grid: [[String]]))? = nil
-
+    
     // Added new states for initial snapshot injection
     @State private var initialPitchGridHeaders: [PitchHeader]? = nil
     @State private var initialPitchGridValues: [[String]]? = nil
-
+    
     @StateObject private var topRowCoordinator = TopRowValidationCoordinator()
     @EnvironmentObject var authManager: AuthManager
     
@@ -393,7 +391,7 @@ struct TemplateEditorView: View {
     let templateID: UUID
     let onSave: (PitchTemplate) -> Void
     @Environment(\.dismiss) var dismiss
-
+    
     // MARK: - Active Pitches Overrides (per-template)
     private static func loadActivePitches(for templateId: UUID, fallback: [String]) -> Set<String> {
         let key = "activePitches." + templateId.uuidString
@@ -408,26 +406,26 @@ struct TemplateEditorView: View {
             let newAssignments = selectedCodes.map {
                 PitchCodeAssignment(code: $0, pitch: selectedPitch, location: selectedLocation)
             }
-
+            
             for assignment in newAssignments {
                 if !codeAssignments.contains(assignment) {
                     codeAssignments.append(assignment)
                 }
             }
-
+            
             selectedCodes.removeAll()
         }
-
+        
         // Collect encrypted grid states
         let snapshot = pitchGridSnapshotProvider?()
         let headers: [PitchHeader] = snapshot?.headers ?? []
         let gridValues: [[String]] = snapshot?.grid ?? []
-
+        
         let strikeTop = topRowCoordinator.strikeTopRow
         let strikeRows = topRowCoordinator.strikeRows
         let ballsTop = topRowCoordinator.ballsTopRow
         let ballsRows = topRowCoordinator.ballsRows
-
+        
         let newTemplate = PitchTemplate(
             id: templateID,
             name: name,
@@ -443,7 +441,7 @@ struct TemplateEditorView: View {
         onSave(newTemplate)
     }
     
-    init(template: PitchTemplate?, allPitches: [String], kind: TemplateKind, onSave: @escaping (PitchTemplate) -> Void) {
+    init(template: PitchTemplate?, allPitches: [String], onSave: @escaping (PitchTemplate) -> Void) {
         self.allPitches = allPitches
         self.onSave = onSave
         
@@ -464,18 +462,18 @@ struct TemplateEditorView: View {
         _codeAssignments = State(initialValue: initialAssignments)
         _customPitches = State(initialValue: (template?.pitches ?? []).filter { !pitchOrder.contains($0) })
         self.templateID = id
-        self.kind = kind
+        
     }
     
     private var availablePitches: [String] {
         // Base pitch order followed by any custom pitches the user adds
         pitchOrder + customPitches
     }
-
+    
     private func addCustomPitch() {
         let trimmed = customPitchName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-
+        
         // Check if it already exists (case-insensitive) in the base list
         if let existingBase = pitchOrder.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
             selectedPitches.insert(existingBase)
@@ -483,7 +481,7 @@ struct TemplateEditorView: View {
             customPitchFieldFocused = false
             return
         }
-
+        
         // Check if it already exists (case-insensitive) in custom list
         if let existingCustom = customPitches.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
             selectedPitches.insert(existingCustom)
@@ -491,7 +489,7 @@ struct TemplateEditorView: View {
             customPitchFieldFocused = false
             return
         }
-
+        
         // Otherwise, add new custom pitch and select it
         customPitches.append(trimmed)
         selectedPitches.insert(trimmed)
@@ -522,9 +520,9 @@ struct TemplateEditorView: View {
                         .frame(width: 200)
                         .bold()
                         .foregroundColor(.blue)
-                        // Add some right padding so text doesn't run under the icon
+                    // Add some right padding so text doesn't run under the icon
                         .padding(.trailing, 32)
-                        // Overlay the icon on the trailing edge
+                    // Overlay the icon on the trailing edge
                         .overlay(alignment: .trailing) {
                             Button {
                                 nameFieldFocused = true
@@ -536,7 +534,7 @@ struct TemplateEditorView: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("Edit template name")
                         }
-                        
+                    
                     ColoredDivider(color: .blue, height: 1.0)
                     Text("Pitcher's Pitches")
                         .font(.system(size: 10))
@@ -587,7 +585,7 @@ struct TemplateEditorView: View {
                                 .focused($customPitchFieldFocused)
                                 .onSubmit { customPitchFieldFocused = false }
                                 .submitLabel(.done)
-
+                            
                             Button(action: { addCustomPitch() }) {
                                 Image(systemName: "checkmark.circle.fill")
                                     .imageScale(.large)
@@ -596,7 +594,7 @@ struct TemplateEditorView: View {
                             }
                             .disabled(customPitchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                             .accessibilityLabel("Add custom pitch")
-
+                            
                             Button(action: {
                                 customPitchName = ""
                                 customPitchFieldFocused = false
@@ -611,224 +609,162 @@ struct TemplateEditorView: View {
                         }
                     }
                     ColoredDivider(color: .blue, height: 1.0)
-                    if kind != .encrypted {
-                        Text("Assign locations / codes to pitches")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.gray)
-                        // 🔹 Code Assignment Panel
-                        CodeAssignmentPanel(
-                            selectedCodes: $selectedCodes,
-                            selectedPitch: $selectedPitch,
-                            selectedLocation: $selectedLocation,
-                            pitchCodeAssignments: $codeAssignments,
-                            allPitches: availablePitches,
-                            allLocations: allLocationsFromGrid(),
-                            assignAction: {
-                                for code in selectedCodes {
-                                    let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
-                                    if !codeAssignments.contains(assignment) {
-                                        codeAssignments.append(assignment)
-                                    }
-                                }
-                                selectedCodes.removeAll()
-                            }
-                        )
-                        
-                        if !(nameFieldFocused || customPitchFieldFocused) {
-                            HStack(spacing: 12) {
-                                Spacer()
-                                Button("Assigned locations") {
-                                    showAssignedLocations = true
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .buttonBorderShape(.capsule)
-                                .tint(.white)
-                                .foregroundColor(.black)
-                                .shadow(color: .black.opacity(0.2),
-                                        radius: 3, x: 0, y: 2)
-                                .sheet(isPresented: $showAssignedLocations) {
-                                    AssignedLocationsOverview(codeAssignments: codeAssignments)
-                                        .presentationDetents([.fraction(0.8), .large])
-                                        .presentationDragIndicator(.visible)
-                                }
-                            Spacer()
-                                Button("Save") {
-                                    saveTemplate()
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .buttonBorderShape(.capsule)
-                                .tint(.white)
-                                .foregroundColor(.black)
-                                .shadow(color: .black.opacity(0.2),
-                                        radius: 3, x: 0, y: 2)
-                                .disabled(
-                                    name
-                                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                                        .isEmpty || selectedPitches.isEmpty
-                                )
-                                Spacer()
-                            }
-                            .padding(.top)
+                    
+                    // Encrypted template: show pitch grid editor
+                    Text("Pitcher's Pitches Grid Key")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 4)
+                    // 3 grids
+                    VStack{
+                        VStack{
+                            
+                            Text("Pitch Selection")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, 60)
+                                .padding(.bottom, -2)
+                            
+                            PitchGridView2(
+                                availablePitches: availablePitches,
+                                hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
+                                onProvideRandomizeAction: { action in
+                                    self.randomizeFirstColumnAction = action
+                                },
+                                onProvideClearAction: { action in
+                                    self.clearPitchGridAction = action
+                                },
+                                onProvideSnapshot: { provider in
+                                    self.pitchGridSnapshotProvider = provider
+                                },
+                                initialHeaders: initialPitchGridHeaders,
+                                initialGrid: initialPitchGridValues
+                            )
                         }
                         
-                        Spacer()
-                    }
-                    else {
-                        // Encrypted template: show pitch grid editor
-                        Text("Pitcher's Pitches Grid Key")
-                            .font(.title3)
-                            .foregroundColor(.secondary)
-                            .padding(.top, 4)
-                        // 3 grids
-                        VStack{
+                        HStack{
+                            
                             VStack{
-                                
-                                Text("Pitch Selection")
+                                StrikeLocationGridView()
+                                    .environment(\.topRowCoordinator, topRowCoordinator)
+                                    .padding(.top, 8)
+                                Text("Strikes")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                    .padding(.top, 60)
-                                    .padding(.bottom, -2)
-                                
-                                PitchGridView2(
-                                    availablePitches: availablePitches,
-                                    hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
-                                    onProvideRandomizeAction: { action in
-                                        self.randomizeFirstColumnAction = action
-                                    },
-                                    onProvideClearAction: { action in
-                                        self.clearPitchGridAction = action
-                                    },
-                                    onProvideSnapshot: { provider in
-                                        self.pitchGridSnapshotProvider = provider
-                                    },
-                                    initialHeaders: initialPitchGridHeaders,
-                                    initialGrid: initialPitchGridValues
-                                )
+                                    .padding(.top, -2)
+                            }
+                            VStack{
+                                BallsLocationGridView()
+                                    .environment(\.topRowCoordinator, topRowCoordinator)
+                                    .padding(.top, 8)
+                                Text("Balls")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.top, -2)
+                            }
+                        }
+                    }
+                    
+                    VStack() {
+                        Spacer()
+                        HStack(spacing: 16) {
+                            Button {
+                                showRandomConfirm = true
+                            } label: {
+                                Label("Random", systemImage: "shuffle")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .buttonBorderShape(.capsule)
+                            .tint(.white)
+                            .foregroundColor(.black)
+                            .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
+                            .confirmationDialog("Randomize grid values?", isPresented: $showRandomConfirm, titleVisibility: .visible) {
+                                Button("Randomize", role: .destructive) {
+                                    if !hasAnyPitchInTopRow {
+                                        showNoPitchAlert = true
+                                        return
+                                    }
+                                    // Randomize first column with unique two-digit sequential numbers
+                                    randomizeFirstColumnAction?()
+                                    topRowCoordinator.randomizeTopRowsWithSequentialPairs()
+                                    topRowCoordinator.randomizeBodyRowsWithSequentialPairs()
+                                }
+                                Button("Cancel", role: .cancel) { }
+                            } message: {
+                                Text("This will randomize the values in your grids. This action cannot be undone.")
+                            }
+                            .alert("Add a pitch first", isPresented: $showNoPitchAlert) {
+                                Button("OK", role: .cancel) { }
+                            } message: {
+                                Text("Please enter at least one pitch in the top row before randomizing.")
                             }
                             
-                            HStack{
+                            Button {
+                                // Build a printable view of the encrypted grids
+                                let strikeTop = topRowCoordinator.strikeTopRow
+                                let strikeRows = topRowCoordinator.strikeRows
+                                let ballsTop = topRowCoordinator.ballsTopRow
+                                let ballsRows = topRowCoordinator.ballsRows
+                                let snapshot = pitchGridSnapshotProvider?()
+                                let headers = snapshot?.headers ?? []
+                                let grid = snapshot?.grid ?? []
                                 
-                                VStack{
-                                    StrikeLocationGridView()
-                                        .environment(\.topRowCoordinator, topRowCoordinator)
-                                        .padding(.top, 8)
-                                    Text("Strikes")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .padding(.top, -2)
+                                let printable = PrintableEncryptedGridsView(
+                                    grid: grid,
+                                    strikeTopRow: strikeTop,
+                                    strikeRows: strikeRows,
+                                    ballsTopRow: ballsTop,
+                                    ballsRows: ballsRows
+                                )
+                                // Letter-sized points; adjust as needed
+                                let targetSize = CGSize(width: 612, height: 792)
+                                if let img = printable.renderAsPNG(size: targetSize, scale: 2.0) {
+                                    encryptedShareImage = img
+                                    showEncryptedShare = true
                                 }
-                                VStack{
-                                    BallsLocationGridView()
-                                        .environment(\.topRowCoordinator, topRowCoordinator)
-                                        .padding(.top, 8)
-                                    Text("Balls")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .padding(.top, -2)
+                            } label: {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .buttonBorderShape(.capsule)
+                            .tint(.white)
+                            .foregroundColor(.black)
+                            .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
+                            
+                            Button {
+                                showClearConfirm = true
+                            } label: {
+                                Label("Clear", systemImage: "trash")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .buttonBorderShape(.capsule)
+                            .tint(.white)
+                            .foregroundColor(.black)
+                            .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
+                            .confirmationDialog("Clear all grid values?", isPresented: $showClearConfirm, titleVisibility: .visible) {
+                                Button("Clear", role: .destructive) {
+                                    topRowCoordinator.clearAll()
+                                    clearPitchGridAction?()
+                                    hasAnyPitchInTopRow = false
                                 }
+                                Button("Cancel", role: .cancel) { }
+                            } message: {
+                                Text("This will remove all values from your grids. This action cannot be undone.")
                             }
                         }
-                        
-                        VStack() {
-                            Spacer()
-                            HStack(spacing: 16) {
-                                Button {
-                                    showRandomConfirm = true
-                                } label: {
-                                    Label("Random", systemImage: "shuffle")
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                                .buttonBorderShape(.capsule)
-                                .tint(.white)
-                                .foregroundColor(.black)
-                                .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
-                                .confirmationDialog("Randomize grid values?", isPresented: $showRandomConfirm, titleVisibility: .visible) {
-                                    Button("Randomize", role: .destructive) {
-                                        if !hasAnyPitchInTopRow {
-                                            showNoPitchAlert = true
-                                            return
-                                        }
-                                        // Randomize first column with unique two-digit sequential numbers
-                                        randomizeFirstColumnAction?()
-                                        topRowCoordinator.randomizeTopRowsWithSequentialPairs()
-                                        topRowCoordinator.randomizeBodyRowsWithSequentialPairs()
-                                    }
-                                    Button("Cancel", role: .cancel) { }
-                                } message: {
-                                    Text("This will randomize the values in your grids. This action cannot be undone.")
-                                }
-                                .alert("Add a pitch first", isPresented: $showNoPitchAlert) {
-                                    Button("OK", role: .cancel) { }
-                                } message: {
-                                    Text("Please enter at least one pitch in the top row before randomizing.")
-                                }
-
-                                Button {
-                                    // Build a printable view of the encrypted grids
-                                    let strikeTop = topRowCoordinator.strikeTopRow
-                                    let strikeRows = topRowCoordinator.strikeRows
-                                    let ballsTop = topRowCoordinator.ballsTopRow
-                                    let ballsRows = topRowCoordinator.ballsRows
-                                    let snapshot = pitchGridSnapshotProvider?()
-                                    let headers = snapshot?.headers ?? []
-                                    let grid = snapshot?.grid ?? []
-
-                                    let printable = PrintableEncryptedGridsView(
-                                        grid: grid,
-                                        strikeTopRow: strikeTop,
-                                        strikeRows: strikeRows,
-                                        ballsTopRow: ballsTop,
-                                        ballsRows: ballsRows
-                                    )
-                                    // Letter-sized points; adjust as needed
-                                    let targetSize = CGSize(width: 612, height: 792)
-                                    if let img = printable.renderAsPNG(size: targetSize, scale: 2.0) {
-                                        encryptedShareImage = img
-                                        showEncryptedShare = true
-                                    }
-                                } label: {
-                                    Label("Share", systemImage: "square.and.arrow.up")
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                                .buttonBorderShape(.capsule)
-                                .tint(.white)
-                                .foregroundColor(.black)
-                                .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
-
-                                Button {
-                                    showClearConfirm = true
-                                } label: {
-                                    Label("Clear", systemImage: "trash")
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.small)
-                                .buttonBorderShape(.capsule)
-                                .tint(.white)
-                                .foregroundColor(.black)
-                                .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
-                                .confirmationDialog("Clear all grid values?", isPresented: $showClearConfirm, titleVisibility: .visible) {
-                                    Button("Clear", role: .destructive) {
-                                        topRowCoordinator.clearAll()
-                                        clearPitchGridAction?()
-                                        hasAnyPitchInTopRow = false
-                                    }
-                                    Button("Cancel", role: .cancel) { }
-                                } message: {
-                                    Text("This will remove all values from your grids. This action cannot be undone.")
-                                }
-                            }
-                            .padding(.horizontal)
-                            Spacer()
-                        }
-                        .sheet(isPresented: $showEncryptedShare) {
-                            if let encryptedShareImage {
-                                ShareSheet(items: [encryptedShareImage])
-                            }
-                        }
+                        .padding(.horizontal)
                         Spacer()
                     }
+                    .sheet(isPresented: $showEncryptedShare) {
+                        if let encryptedShareImage {
+                            ShareSheet(items: [encryptedShareImage])
+                        }
+                    }
+                    Spacer()
+                    
                     
                     Spacer()
                     
@@ -900,21 +836,21 @@ struct CodeAssignmentPanel: View {
             return (start...end).map { String(format: "%03d", $0) }
         }
     }
-
+    
     private var assignedCodesForSelection: [String] {
         // If no pitch is selected, don't show anything
         guard !selectedPitch.isEmpty else { return [] }
-
+        
         // All codes already assigned to this pitch (across all locations)
         let assignedForPitch = Set(
             pitchCodeAssignments
                 .filter { $0.pitch == selectedPitch }
                 .map(\.code)
         )
-
+        
         // Union with currently selected (staged) codes so they appear immediately
         let combined = assignedForPitch.union(selectedCodes)
-
+        
         // Return a stable ordering
         return combined.sorted()
     }
@@ -922,7 +858,7 @@ struct CodeAssignmentPanel: View {
     private func codeCount(for pitch: String) -> Int {
         pitchCodeAssignments.filter { $0.pitch == pitch }.count
     }
-
+    
     private func codeCount(forLocation label: String, isStrike: Bool) -> Int {
         let prefix = isStrike ? "Strike" : "Ball"
         let fullLabel = "\(prefix) \(label)"
@@ -935,7 +871,7 @@ struct CodeAssignmentPanel: View {
     private func locationButton(label: String, isStrike: Bool) -> some View{
         let fullLabel = "\(isStrike ? "Strike" : "Ball") \(label)"
         let isSelected = selectedLocation == fullLabel
-
+        
         Button(action: {
             selectedLocation = fullLabel
         }) {
@@ -952,11 +888,11 @@ struct CodeAssignmentPanel: View {
                 )
         }
     }
-
+    
     var body: some View {
         VStack(spacing: 12) {
-
-
+            
+            
             ZStack {
                 
                 HStack(spacing: 12) {
@@ -1039,36 +975,36 @@ struct CodeAssignmentPanel: View {
                     //Spacer()
                     let hasSelection = !selectedPitch.isEmpty && !selectedLocation.isEmpty
                     
-                        Button(action: {
-                            // Confirm assignment and reset selections (mirror overlay behavior)
-                            assignAction()
-                            selectedPitch = ""
-                            selectedLocation = ""
-                            showSelectionOverlay = false
-                        }) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .imageScale(.large)
-                                .foregroundColor((hasSelection && !selectedCodes.isEmpty) ? .green : Color.gray.opacity(0.5))
-                                .opacity((hasSelection && !selectedCodes.isEmpty) ? 1.0 : 0.6)
-                                //.padding(.horizontal, 4)
-                        }
-                        .accessibilityLabel("Done")
-                        .disabled(!hasSelection || selectedCodes.isEmpty)
-
-                        Button(action: {
-                            // Cancel selection and clear staged codes (mirror overlay behavior)
-                            selectedCodes.removeAll()
-                            selectedPitch = ""
-                            selectedLocation = ""
-                            showSelectionOverlay = false
-                        }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .imageScale(.large)
-                                .foregroundColor(.red)
-                                .opacity(1.0)
-                                //.padding(.horizontal, 4)
-                        }
-                        .accessibilityLabel("Cancel")
+                    Button(action: {
+                        // Confirm assignment and reset selections (mirror overlay behavior)
+                        assignAction()
+                        selectedPitch = ""
+                        selectedLocation = ""
+                        showSelectionOverlay = false
+                    }) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .imageScale(.large)
+                            .foregroundColor((hasSelection && !selectedCodes.isEmpty) ? .green : Color.gray.opacity(0.5))
+                            .opacity((hasSelection && !selectedCodes.isEmpty) ? 1.0 : 0.6)
+                        //.padding(.horizontal, 4)
+                    }
+                    .accessibilityLabel("Done")
+                    .disabled(!hasSelection || selectedCodes.isEmpty)
+                    
+                    Button(action: {
+                        // Cancel selection and clear staged codes (mirror overlay behavior)
+                        selectedCodes.removeAll()
+                        selectedPitch = ""
+                        selectedLocation = ""
+                        showSelectionOverlay = false
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .imageScale(.large)
+                            .foregroundColor(.red)
+                            .opacity(1.0)
+                        //.padding(.horizontal, 4)
+                    }
+                    .accessibilityLabel("Cancel")
                     
                     Spacer()
                     
@@ -1076,7 +1012,7 @@ struct CodeAssignmentPanel: View {
                 .blur(radius: showSelectionOverlay ? 3 : 0)
                 .allowsHitTesting(!showSelectionOverlay)
                 .frame(maxWidth: .infinity, alignment: .leading)
-
+                
                 if showSelectionOverlay {
                     // Overlay card prompting to choose codes
                     VStack(spacing: 10) {
@@ -1142,23 +1078,23 @@ struct CodeAssignmentPanel: View {
             .frame(minHeight: 28, maxHeight: 36, alignment: .leading)
             
             
-
+            
             
             ColoredDivider(color: .blue, height: 1.0)
             
-
+            
             // 🔹 Embedded Scrollable Code Picker
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(groupedCodes.indices, id: \.self) { groupIndex in
                         let codes = groupedCodes[groupIndex]
                         let rangeLabel = "\(codes.first!)–\(codes.last!)"
-
+                        
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Codes \(rangeLabel)")
                                 .font(.headline)
                                 .padding(.leading)
-
+                            
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
                                 ForEach(codes, id: \.self) { code in
                                     let assignment = PitchCodeAssignment(code: code, pitch: selectedPitch, location: selectedLocation)
@@ -1168,7 +1104,7 @@ struct CodeAssignmentPanel: View {
                                     let isAssignedToSelectedPitch = pitchCodeAssignments.contains {
                                         $0.code == code && $0.pitch == selectedPitch
                                     }
-
+                                    
                                     // Visual styling
                                     let backgroundColor: Color = {
                                         if isAssignedToCurrentLocation {
@@ -1183,7 +1119,7 @@ struct CodeAssignmentPanel: View {
                                             return Color.blue.opacity(0.2)
                                         }
                                     }()
-
+                                    
                                     let borderColor: Color = {
                                         if isAssignedToCurrentLocation {
                                             return .clear
@@ -1197,7 +1133,7 @@ struct CodeAssignmentPanel: View {
                                             return .blue
                                         }
                                     }()
-
+                                    
                                     let borderWidth: CGFloat = isAssignedToCurrentLocation ? 0 : (isAssignedToSelectedPitch ? 1 : 1)
                                     let pitchHighlight: Color = isAssignedToSelectedPitch ? Color.purple.opacity(0.2) : .clear
                                     let textColor: Color = {
@@ -1211,7 +1147,7 @@ struct CodeAssignmentPanel: View {
                                             return .black
                                         }
                                     }()
-
+                                    
                                     Button(action: {
                                         // If both a pitch and a location are selected and this code is assigned at that exact pair,
                                         // remove the assignment and clear any staged selection so the button returns to blue.
@@ -1220,7 +1156,7 @@ struct CodeAssignmentPanel: View {
                                             selectedCodes.remove(code)
                                             return
                                         }
-
+                                        
                                         // Otherwise, if this code isn't globally assigned yet, toggle staged selection.
                                         if !isGloballyAssigned {
                                             if isSelected {
@@ -1263,28 +1199,28 @@ struct CodeAssignmentPanelWithPrint: View {
     @Binding var selectedPitch: String
     @Binding var selectedLocation: String
     @Binding var pitchCodeAssignments: [PitchCodeAssignment]
-
+    
     let allPitches: [String]
     let allLocations: [String]
     let assignAction: () -> Void
-
+    
     @State private var showShare = false
     @State private var pngImage: UIImage?
-
+    
     // 3.5" × 2.75" at 72pt per inch ~= 252×198pt; rendering uses scale for higher DPI
     private let cardSize = CGSize(width: 252, height: 198)
-
+    
     private func presentPrintSheet(for image: UIImage) {
         let printInfo = UIPrintInfo(dictionary: nil)
         printInfo.outputType = .photo
         printInfo.jobName = "PitchMark Codes"
-
+        
         let printController = UIPrintInteractionController.shared
         printController.printInfo = printInfo
         printController.printingItem = image
         printController.present(animated: true, completionHandler: nil)
     }
-
+    
     var body: some View {
         VStack(spacing: 20) {
             // Original panel content
@@ -1298,7 +1234,7 @@ struct CodeAssignmentPanelWithPrint: View {
                 assignAction: assignAction
             )
             .background(Color.white)
-
+            
             // Export PNG button
             Button {
                 let view = CodeAssignmentPanel(
@@ -1326,7 +1262,7 @@ struct CodeAssignmentPanelWithPrint: View {
                             .stroke(Color.blue, lineWidth: 1)
                     )
             }
-
+            
             // Print button
             Button {
                 let view = CodeAssignmentPanel(
@@ -1372,7 +1308,7 @@ struct ColoredDivider: View {
         self.color = color
         self.height = height
     }
-
+    
     var body: some View {
         Rectangle()
             .fill(color)
@@ -1414,17 +1350,17 @@ struct StrikeZoneLocationPicker: View {
                     let buttonSize = min(cellWidth, cellHeight) * 0.8
                     let originX = (availableWidth - zoneWidth) / 2
                     let originY: CGFloat = 40
-
+                    
                     ZStack(alignment: .topLeading) {
                         Rectangle()
                             .stroke(Color.black, lineWidth: 2)
                             .frame(width: zoneWidth, height: zoneHeight)
                             .position(x: originX + zoneWidth / 2, y: originY + zoneHeight / 2)
-
+                        
                         ForEach(strikeGrid) { loc in
                             let x = originX + CGFloat(loc.col) * cellWidth + cellWidth / 2
                             let y = originY + CGFloat(loc.row) * cellHeight + cellHeight / 2
-
+                            
                             Button(action: {
                                 onSelect("Strike \(loc.label)")
                                 dismiss()
@@ -1452,7 +1388,7 @@ struct StrikeZoneLocationPicker: View {
                             }
                             .position(x: x, y: y)
                         }
-
+                        
                         let ballLocations: [(String, CGFloat, CGFloat)] = [
                             ("Up & Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
                             ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
@@ -1463,7 +1399,7 @@ struct StrikeZoneLocationPicker: View {
                             ("↓", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
                             ("↓ & In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
                         ]
-
+                        
                         ForEach(ballLocations, id: \.0) { label, x, y in
                             Button(action: {
                                 onSelect("Ball \(label)")
@@ -1499,7 +1435,7 @@ struct StrikeZoneLocationPicker: View {
                 }
                 .frame(height: 420)
                 .padding(.horizontal)
-
+                
                 Spacer(minLength: 0)
             }
             .toolbar {
@@ -1514,22 +1450,22 @@ struct StrikeZoneLocationPicker: View {
 struct AssignedLocationsOverview: View {
     let codeAssignments: [PitchCodeAssignment]
     @Environment(\.dismiss) private var dismiss
-
+    
     private func count(for fullLabel: String) -> Int {
         Set(codeAssignments
             .filter { $0.location == fullLabel }
             .map(\.code)).count
     }
-
+    
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
                 Text("Assigned Locations")
                     .font(.headline)
                     .padding(.top, 8)
-
+                
                 Spacer(minLength: 0)
-
+                
                 GeometryReader { geo in
                     let availableWidth = geo.size.width
                     let availableHeight = geo.size.height
@@ -1540,20 +1476,20 @@ struct AssignedLocationsOverview: View {
                     let buttonSize = min(cellWidth, cellHeight) * 0.8
                     let originX = (availableWidth - zoneWidth) / 2
                     let originY: CGFloat = 40
-
+                    
                     ZStack(alignment: .topLeading) {
                         Rectangle()
                             .stroke(Color.black, lineWidth: 2)
                             .frame(width: zoneWidth, height: zoneHeight)
                             .position(x: originX + zoneWidth / 2, y: originY + zoneHeight / 2)
-
+                        
                         ForEach(strikeGrid) { loc in
                             let x = originX + CGFloat(loc.col) * cellWidth + cellWidth / 2
                             let y = originY + CGFloat(loc.row) * cellHeight + cellHeight / 2
-
+                            
                             let fullStrikeLabel = "Strike \(loc.label)"
                             let countHere = count(for: fullStrikeLabel)
-
+                            
                             ZStack {
                                 Text(loc.label)
                                     .font(.caption)
@@ -1575,7 +1511,7 @@ struct AssignedLocationsOverview: View {
                             }
                             .position(x: x, y: y)
                         }
-
+                        
                         let ballLocations: [(String, CGFloat, CGFloat)] = [
                             ("Up & Out", originX - buttonSize * 0.6, originY - buttonSize * 0.6),
                             ("Up", originX + zoneWidth / 2, originY - buttonSize * 0.75),
@@ -1586,11 +1522,11 @@ struct AssignedLocationsOverview: View {
                             ("↓", originX + zoneWidth / 2, originY + zoneHeight + buttonSize * 0.75),
                             ("↓ & In", originX + zoneWidth + buttonSize * 0.6, originY + zoneHeight + buttonSize * 0.6)
                         ]
-
+                        
                         ForEach(ballLocations, id: \.0) { label, x, y in
                             let fullLabel = "Ball \(label)"
                             let countHere = count(for: fullLabel)
-
+                            
                             ZStack {
                                 Text(label)
                                     .font(.caption2)
@@ -1619,7 +1555,7 @@ struct AssignedLocationsOverview: View {
                 }
                 .frame(height: 420)
                 .padding(.horizontal)
-
+                
                 Spacer(minLength: 0)
             }
             .toolbar {
@@ -1639,36 +1575,36 @@ struct PitchGridView2: View {
     var onProvideRandomizeAction: ((@escaping () -> Void) -> Void)? = nil
     var onProvideClearAction: ((@escaping () -> Void) -> Void)? = nil
     var onProvideSnapshot: (((@escaping () -> (headers: [PitchHeader], grid: [[String]]))) -> Void)? = nil
-
+    
     var initialHeaders: [PitchHeader]? = nil
     var initialGrid: [[String]]? = nil
-
+    
     @State private var abbreviations: [String: String] = [:]
     @State private var showAbbrevEditorForIndex: Int? = nil
     @State private var pendingAbbreviation: String = ""
     
     private let maxAssignedPitches = 7
-
+    
     private let cellWidth: CGFloat = 46
     private let cellHeight: CGFloat = 30
-
+    
     @State private var grid: [[String]] = Array(repeating: ["", ""], count: 4)
-
+    
     private var assignedHeaderCount: Int {
         grid[0].dropFirst().filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
     }
-
+    
     private var gridColumns: [GridItem] {
         Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: grid[0].count)
     }
-
+    
     private func displayName(for pitch: String) -> String {
         if let abbr = abbreviations[pitch], !abbr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return abbr
         }
         return pitch
     }
-
+    
     private func expandGridIfNeeded(col: Int) {
         let lastCol = grid[0].count - 1
         guard col == lastCol, !grid[0][col].isEmpty else { return }
@@ -1686,7 +1622,7 @@ struct PitchGridView2: View {
             if isLastEmpty { for r in 0..<grid.count { grid[r].remove(at: lastIndex) } } else { break }
         }
     }
-
+    
     private func baseCell<Content: View>(
         strokeColor: Color = .blue,
         @ViewBuilder content: () -> Content
@@ -1698,9 +1634,9 @@ struct PitchGridView2: View {
                     .stroke(strokeColor)
             )
     }
-
+    
     private func digits(in string: String) -> [Character] { string.filter { $0.isNumber } }
-
+    
     private func rowDigits(excludingCol excludedCol: Int, row: Int) -> Set<Character> {
         var set: Set<Character> = []
         guard row >= 0, row < grid.count else { return set }
@@ -1710,7 +1646,7 @@ struct PitchGridView2: View {
         }
         return set
     }
-
+    
     private func columnZeroDigits(excludingRow excludedRow: Int) -> Set<Character> {
         var set: Set<Character> = []
         for r in 0..<grid.count {
@@ -1741,7 +1677,7 @@ struct PitchGridView2: View {
         }
         return String(result)
     }
-
+    
     private func sanitizeFirstColumnInput(row: Int, newValue: String) -> String {
         let onlyDigits = String(digits(in: newValue).prefix(3))
         let chars = Array(onlyDigits)
@@ -1754,11 +1690,11 @@ struct PitchGridView2: View {
         }
         return String(result)
     }
-
+    
     func randomizeFirstColumn() {
         let hasAtLeastOnePitchColumn = grid[0].count > 1 && grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard hasAtLeastOnePitchColumn else { return }
-
+        
         var usedValues: Set<String> = []
         for r in 0..<grid.count {
             for c in 0..<grid[r].count {
@@ -1767,7 +1703,7 @@ struct PitchGridView2: View {
             }
         }
         for r in 1...3 { usedValues.remove(grid[r][0].trimmingCharacters(in: .whitespacesAndNewlines)) }
-
+        
         var candidates: [String] = []
         for tens in 0...9 {
             for ones in 0...9 where ones != tens {
@@ -1777,12 +1713,12 @@ struct PitchGridView2: View {
         }
         candidates = candidates.filter { !usedValues.contains($0) }
         candidates.shuffle()
-
+        
         func digits(of s: String) -> (Character, Character)? {
             guard s.count == 2, let first = s.first, let last = s.last, first.isNumber, last.isNumber else { return nil }
             return (first, last)
         }
-
+        
         var picked: [String] = []
         var usedDigits: Set<Character> = []
         for cand in candidates {
@@ -1794,11 +1730,11 @@ struct PitchGridView2: View {
             if picked.count == 3 { break }
         }
         guard picked.count == 3 else { return }
-
+        
         for r in 1...3 { grid[r][0] = picked[r - 1] }
         randomizeSubsequentColumns()
     }
-
+    
     func randomizeSubsequentColumns() {
         let columnCount = grid.first?.count ?? 0
         guard columnCount > 1 else { return }
@@ -1821,7 +1757,7 @@ struct PitchGridView2: View {
         abbreviations.removeAll()
         hasAnyPitchInTopRow = false
     }
-
+    
     private func buildHeadersFromTopRow() -> [PitchHeader] {
         guard !grid.isEmpty else { return [] }
         var result: [PitchHeader] = []
@@ -1834,7 +1770,7 @@ struct PitchGridView2: View {
         }
         return result
     }
-
+    
     private func headerCell(col: Int, binding: Binding<String>) -> some View {
         baseCell(strokeColor: .black) {
             Menu {
@@ -1852,7 +1788,7 @@ struct PitchGridView2: View {
                         }
                     }
                 }
-
+                
                 if !binding.wrappedValue.isEmpty {
                     Button(role: .destructive) { removeColumn(at: col) } label: { Label("Remove Column", systemImage: "minus.circle") }
                     Divider()
@@ -1885,7 +1821,7 @@ struct PitchGridView2: View {
             Button("Cancel", role: .cancel) { showAbbrevEditorForIndex = nil }
         } message: { Text("Enter a short label to display for this pitch.") }
     }
-
+    
     private func cellBinding(row: Int, col: Int) -> some View {
         let binding = Binding(
             get: { grid[row][col] },
@@ -1900,7 +1836,7 @@ struct PitchGridView2: View {
                 if row == 0 { expandGridIfNeeded(col: col) }
             }
         )
-
+        
         if row == 0 && col > 0 { return AnyView(headerCell(col: col, binding: binding)) }
         let stroke: Color = (row == 0 || col == 0) ? .black : .blue
         return AnyView(
@@ -1914,14 +1850,14 @@ struct PitchGridView2: View {
             }
         )
     }
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             LazyVGrid(columns: gridColumns, spacing: 0) {
                 ForEach(0..<(grid.count * grid[0].count), id: \.self) { index in
                     let r = index / grid[0].count
                     let c = index % grid[0].count
-
+                    
                     if r == 0 && c == 0 {
                         ZStack { Color.clear }
                             .frame(width: cellWidth, height: cellHeight)
@@ -1970,17 +1906,17 @@ struct StrikeLocationGridView: View {
     let cellWidth: CGFloat = 46
     let cellHeight: CGFloat = 30
     @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
-
+    
     @Environment(\.topRowCoordinator) private var topRowCoordinator
-
+    
     private var gridColumns: [GridItem] { Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3) }
-
+    
     private func baseCell<Content: View>(strokeColor: Color = .green, @ViewBuilder content: () -> Content) -> some View {
         ZStack { content() }
             .frame(width: cellWidth, height: cellHeight)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(strokeColor))
     }
-
+    
     private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
         let stroke: Color = (row == 0) ? .black : .green
         return baseCell(strokeColor: stroke) {
@@ -2023,7 +1959,7 @@ struct StrikeLocationGridView: View {
             }
         }
     }
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             LazyVGrid(columns: gridColumns, spacing: 0) {
@@ -2041,24 +1977,24 @@ struct BallsLocationGridView: View {
     let cellWidth: CGFloat = 46
     let cellHeight: CGFloat = 30
     @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 4)
-
+    
     @Environment(\.topRowCoordinator) private var topRowCoordinator
-
+    
     private var gridColumns: [GridItem] { Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3) }
-
+    
     private func baseCell<Content: View>(strokeColor: Color = .red, @ViewBuilder content: () -> Content) -> some View {
         ZStack { content() }
             .frame(width: cellWidth, height: cellHeight)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(strokeColor))
     }
-
+    
     private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
         if row == 2 && col == 1 {
             return AnyView(
                 baseCell(strokeColor: .red) {
                     ZStack { Color.green; Text("") }
                 }
-                .allowsHitTesting(false)
+                    .allowsHitTesting(false)
             )
         }
         let stroke: Color = (row == 0) ? .black : .red
@@ -2104,7 +2040,7 @@ struct BallsLocationGridView: View {
             }
         )
     }
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             LazyVGrid(columns: gridColumns, spacing: 0) {
@@ -2128,35 +2064,35 @@ import SwiftUI
 /// - Skips printing the trailing "+" pitch column (if present in grid[0].last)
 struct PrintableEncryptedGridsView: View {
     let grid: [[String]]
-
+    
     let strikeTopRow: [String]
     let strikeRows: [[String]]   // expects count == 4, uses rows 1..3
-
+    
     let ballsTopRow: [String]
     let ballsRows: [[String]]    // expects count == 4, uses rows 1..3
-
+    
     // Your screenshot has a fixed green block in Balls at (row 2, col 1) in the 4x3 grid
     // (i.e., body row 2, col 1). Keep this default for drop-in compatibility.
     let selectedBallBodyCell: (row: Int, col: Int) = (1, 1)
     
     private let bodyFontSize: CGFloat = 18
     private let headerFontSize: CGFloat = 22   // ← for circled cells
-
+    
     
     private let printFontSize: CGFloat = 20 // font size
-
-
+    
+    
     private let cellW: CGFloat = 70
     private let cellH: CGFloat = 48
     private let corner: CGFloat = 10
     private let lineW: CGFloat = 2.0
-
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-
-
+            
+            
             pitchSelectionBlock()
-
+            
             HStack(alignment: .top, spacing: 50) {
                 locationBlock(
                     title: "Strikes",
@@ -2165,7 +2101,7 @@ struct PrintableEncryptedGridsView: View {
                     border: .green,
                     highlightBodyCell: nil
                 )
-
+                
                 locationBlock(
                     title: "Balls",
                     header: ballsTopRow,
@@ -2184,36 +2120,36 @@ struct PrintableEncryptedGridsView: View {
 // MARK: - Pitch Selection (top table)
 
 private extension PrintableEncryptedGridsView {
-
+    
     func pitchSelectionBlock() -> some View {
         Group {
             guard grid.count >= 2, let headerRow = grid.first else { return AnyView(EmptyView()) }
-
+            
             let pitchCols = printablePitchColumnCount(from: headerRow) // excludes leading "" and trailing "+"
             let headers = printablePitchHeaders(from: headerRow)        // size == pitchCols
-
+            
             return AnyView(
                 VStack(alignment: .center, spacing: 8) {
                     Text("Pitch Selection")
                         .font(.system(size: 18, weight: .medium))
                         .foregroundColor(.gray)
-
+                    
                     VStack(spacing: 0) {
                         // Header row: blank borderless + pitch headers
                         HStack(spacing: 0) {
                             cell("", stroke: .clear, fill: .clear, bold: false, borderless: true)
-
+                            
                             ForEach(headers.indices, id: \.self) { i in
                                 cell(headers[i], stroke: .black, fill: .white, bold: true)
                             }
                         }
-
+                        
                         // Body rows (print rows 1..3 if present)
                         ForEach(1..<min(grid.count, 4), id: \.self) { r in
                             HStack(spacing: 0) {
                                 // Left label (col 0)
                                 cell(value(in: grid, row: r, col: 0), stroke: .black, fill: .white, bold: true, emphasized: true)
-
+                                
                                 // Code columns (col 1...pitchCols) — this automatically skips the "+" col
                                 ForEach(1...pitchCols, id: \.self) { c in
                                     cell(value(in: grid, row: r, col: c), stroke: .blue, fill: .white, bold: false)
@@ -2230,7 +2166,7 @@ private extension PrintableEncryptedGridsView {
 // MARK: - Locations (Strikes / Balls)
 
 private extension PrintableEncryptedGridsView {
-
+    
     func locationBlock(
         title: String,
         header: [String],
@@ -2252,23 +2188,23 @@ private extension PrintableEncryptedGridsView {
                         )
                     }
                 }
-
+                
                 // Body rows correspond to rows[1], rows[2], rows[3] in your coordinator storage.
                 // We render them as bodyRowIndex 0..2, mapping to sourceRow = bodyRowIndex + 1.
                 ForEach(0..<3, id: \.self) { bodyRow in
                     let sourceRow = bodyRow + 1
-
+                    
                     HStack(spacing: 0) {
                         ForEach(0..<3, id: \.self) { c in
                             let isHighlighted = (highlightBodyCell?.row == bodyRow && highlightBodyCell?.col == c)
-
+                            
                             let txt: String = {
                                 guard rows.indices.contains(sourceRow),
                                       rows[sourceRow].indices.contains(c)
                                 else { return "" }
                                 return rows[sourceRow][c]
                             }()
-
+                            
                             cell(
                                 isHighlighted ? "" : txt,
                                 stroke: border,
@@ -2279,7 +2215,7 @@ private extension PrintableEncryptedGridsView {
                     }
                 }
             }
-
+            
             Text(title)
                 .font(.system(size: 16))
                 .foregroundColor(.gray)
@@ -2290,7 +2226,7 @@ private extension PrintableEncryptedGridsView {
 // MARK: - Cell + Utilities
 
 private extension PrintableEncryptedGridsView {
-
+    
     func cell(
         _ text: String,
         stroke: Color,
@@ -2302,12 +2238,12 @@ private extension PrintableEncryptedGridsView {
         ZStack {
             RoundedRectangle(cornerRadius: corner)
                 .fill(borderless ? Color.clear : fill)
-
+            
             if !borderless {
                 RoundedRectangle(cornerRadius: corner)
                     .stroke(stroke, lineWidth: lineW)
             }
-
+            
             if !text.isEmpty {
                 Text(text)
                     .font(
@@ -2323,13 +2259,13 @@ private extension PrintableEncryptedGridsView {
         }
         .frame(width: cellW, height: cellH)
     }
-
-
+    
+    
     func value(in grid: [[String]], row: Int, col: Int) -> String {
         guard grid.indices.contains(row), grid[row].indices.contains(col) else { return "" }
         return grid[row][col]
     }
-
+    
     /// Printable pitch columns = headerRow count minus:
     /// - leading "" at col 0
     /// - trailing "+" if present as last header cell
@@ -2339,7 +2275,7 @@ private extension PrintableEncryptedGridsView {
         let printable = headerRow.count - 1 - (lastIsPlus ? 1 : 0)
         return max(0, printable)
     }
-
+    
     /// Returns headers excluding leading "" and excluding trailing "+"
     func printablePitchHeaders(from headerRow: [String]) -> [String] {
         let n = printablePitchColumnCount(from: headerRow)

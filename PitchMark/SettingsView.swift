@@ -23,8 +23,6 @@ struct SettingsView: View {
     @State private var showPracticeChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
     
-    @State private var showKindChoice = false
-    @State private var editorKind: TemplateEditorView.TemplateKind = .encrypted
     @State private var pendingEditorTemplate: PitchTemplate? = nil
 
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
@@ -82,7 +80,6 @@ struct SettingsView: View {
                     pitches: [],
                     codeAssignments: []
                 )
-                showKindChoice = true
             }
             .padding(.horizontal)
         }
@@ -103,8 +100,7 @@ struct SettingsView: View {
                         template: template,
                         isSelected: selectedTemplate?.id == template.id,
                         editAction: {
-                            pendingEditorTemplate = template
-                            showKindChoice = true
+                            editorTemplate = template
                         },
                         launchAction: {
                             templatePendingLaunch = template
@@ -233,19 +229,6 @@ struct SettingsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             }
-            .confirmationDialog("Open editor as…", isPresented: $showKindChoice, titleVisibility: .visible) {
-                Button("Encrypted") {
-                    editorKind = .encrypted
-                    editorTemplate = pendingEditorTemplate
-                    pendingEditorTemplate = nil
-                }
-                Button("Classic") {
-                    editorKind = .classic
-                    editorTemplate = pendingEditorTemplate
-                    pendingEditorTemplate = nil
-                }
-                Button("Cancel", role: .cancel) {}
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
@@ -275,7 +258,6 @@ struct SettingsView: View {
                 TemplateEditorView(
                     template: template,
                     allPitches: allPitches,
-                    kind: editorKind,
                     onSave: { updatedTemplate in
                         if let index = templates.firstIndex(where: { $0.id == updatedTemplate.id }) {
                             templates[index] = updatedTemplate
@@ -315,8 +297,7 @@ struct SettingsView: View {
                     },
                     onCancel: {
                         showGameChooser = false
-                    },
-                    encryptedSelectionByGameId: $encryptedSelectionByGameId
+                    }
                 )
                 .presentationDetents([.fraction(0.5)])
                 .presentationDragIndicator(.visible)
@@ -401,33 +382,6 @@ private struct TemplateRowView: View {
         .listRowBackground(
             isSelected ? Color.blue.opacity(0.2) : Color.clear
         )
-    }
-}
-
-struct CodeAssignmentPanelWrapper: View {
-    @State private var selectedCodes: Set<String> = []
-    @State private var selectedPitch: String = ""
-    @State private var selectedLocation: String = ""
-    @State private var pitchCodeAssignments: [PitchCodeAssignment] = []
-    
-    let allPitches = ["2 Seam", "4 Seam", "Change", "Curve", "Screw", "Smile", "Drop", "Rise", "Pipe"]
-    let allLocations = allLocationsFromGrid()
-    
-    var body: some View {
-        CodeAssignmentPanel(
-            selectedCodes: $selectedCodes,
-            selectedPitch: $selectedPitch,
-            selectedLocation: $selectedLocation,
-            pitchCodeAssignments: $pitchCodeAssignments,
-            allPitches: allPitches,
-            allLocations: allLocations,
-            assignAction: {
-                // Optional: handle external sync or feedback
-            }
-        )
-        .navigationTitle("Assign Codes")
-        .navigationBarTitleDisplayMode(.inline)
-        .padding()
     }
 }
 

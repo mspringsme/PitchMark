@@ -1468,6 +1468,12 @@ struct PitchTrackerView: View {
             
             authManager.loadGames { loadedGames in
                 self.games = loadedGames
+                // Set default encryptedSelectionByGameId to true for all loaded games with id
+                for game in loadedGames {
+                    if let id = game.id {
+                        encryptedSelectionByGameId[id] = true
+                    }
+                }
             }
             loadEncryptedSelections()
         }
@@ -1542,8 +1548,7 @@ struct PitchTrackerView: View {
                     // User canceled: preserve any existing game state.
                     // If no game was active, onDismiss will revert to practice.
                     showGameSheet = false
-                },
-                encryptedSelectionByGameId: $encryptedSelectionByGameId
+                }
             )
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
@@ -1563,6 +1568,7 @@ struct PitchTrackerView: View {
                     savePracticeSessions(sessions)
                 },
                 onChoose: { practiceId in
+                    encryptedSelectionByPracticeId[practiceId] = true
                     if practiceId == "__GENERAL__" {
                         selectedPracticeId = nil
                         practiceName = nil
@@ -3175,8 +3181,6 @@ struct GameSelectionSheet: View {
     var onCreate: (String, Date) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
-    
-    @Binding var encryptedSelectionByGameId: [String: Bool]
 
     @State private var games: [Game] = []
     @State private var showAddGamePopover: Bool = false
@@ -3193,10 +3197,6 @@ struct GameSelectionSheet: View {
         NavigationStack {
             List {
                 if games.isEmpty {
-//                    Section {
-//                        Text("No games yet. Tap + to add one.")
-//                            .foregroundColor(.secondary)
-//                    }
                 } else {
                     Section() {
                         ForEach(games) { game in
@@ -3229,32 +3229,6 @@ struct GameSelectionSheet: View {
                                     }
                                 }
                                 .buttonStyle(.plain)
-
-                                // Inline encrypted toggle (menu style)
-                                HStack(spacing: 8) {
-                                    Menu {
-                                        Picker("Mode", selection: Binding(
-                                            get: { (encryptedSelectionByGameId[game.id ?? ""] ?? false) ? "Encrypted" : "Classic" },
-                                            set: { encryptedSelectionByGameId[game.id ?? ""] = ($0 == "Encrypted") }
-                                        )) {
-                                            Text("Encrypted").tag("Encrypted")
-                                            Text("Classic").tag("Classic")
-                                        }
-                                    } label: {
-                                        HStack(spacing: 4) {
-                                            Text((encryptedSelectionByGameId[game.id ?? ""] ?? false) ? "Encrypted" : "Classic")
-                                                .font(.caption.weight(.semibold))
-                                            Image(systemName: "chevron.down")
-                                                .font(.caption2)
-                                        }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(
-                                            Capsule().stroke(Color.gray, lineWidth: 1)
-                                        )
-                                    }
-                                    .fixedSize()
-                                }
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
@@ -3339,11 +3313,13 @@ struct GameSelectionSheet: View {
                 }
             }
         )
+        
         .onAppear {
             authManager.loadGames { loadedGames in
                 self.games = loadedGames
             }
         }
+        
     }
 
     private static let formatter: DateFormatter = {
@@ -3636,6 +3612,7 @@ struct PracticeSelectionSheet: View {
                         ForEach(sessions) { session in
                             HStack {
                                 Button(action: {
+                                    encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] = true
                                     // Trigger selection: call back with id and dismiss
                                     if let id = session.id {
                                         onChoose(id)
@@ -3651,33 +3628,6 @@ struct PracticeSelectionSheet: View {
                                 
                                 Spacer(minLength: 8)
 
-                                // Inline encrypted toggle (menu style)
-                                HStack(spacing: 8) {
-                                    Menu {
-                                        Picker("Mode", selection: Binding(
-                                            get: { (encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] ?? false) ? "Encrypted" : "Classic" },
-                                            set: { encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] = ($0 == "Encrypted") }
-                                        )) {
-                                            Text("Encrypted").tag("Encrypted")
-                                            Text("Classic").tag("Classic")
-                                        }
-                                    } label: {
-                                        HStack(spacing: 4) {
-                                            Text((encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] ?? false) ? "Encrypted" : "Classic")
-                                                .font(.caption.weight(.semibold))
-                                            Image(systemName: "chevron.down")
-                                                .font(.caption2)
-                                        }
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(
-                                            Capsule().stroke(Color.gray, lineWidth: 1)
-                                        )
-                                    }
-                                    .fixedSize()
-                                }
-
-                                // Existing reset icon remains
                                 Button {
                                     if let id = session.id {
                                         pendingResetPracticeId = id
@@ -3776,6 +3726,10 @@ struct PracticeSelectionSheet: View {
                                 if let data = UserDefaults.standard.data(forKey: PitchTrackerView.DefaultsKeys.storedPracticeSessions),
                                    let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
                                     self.sessions = decoded
+                                    // Set encryptedSelectionByPracticeId to true for newly added session id
+                                    if let session = decoded.first(where: { $0.name == name && Calendar.current.isDate($0.date, inSameDayAs: newDate) }), let sid = session.id {
+                                        encryptedSelectionByPracticeId[sid] = true
+                                    }
                                 }
                                 showAddPopover = false
                             }
@@ -3793,6 +3747,10 @@ struct PracticeSelectionSheet: View {
             if let data = UserDefaults.standard.data(forKey: PitchTrackerView.DefaultsKeys.storedPracticeSessions),
                let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {
                 self.sessions = decoded
+                // Set default encryptedSelectionByPracticeId to true for all loaded sessions with id
+                for session in decoded {
+                    encryptedSelectionByPracticeId[session.id ?? "__GENERAL__"] = true
+                }
             } else {
                 self.sessions = []
             }
@@ -3866,6 +3824,7 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
 
 
 

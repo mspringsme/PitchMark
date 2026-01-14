@@ -248,13 +248,11 @@ class AuthManager: ObservableObject {
                         return PitchHeader(pitch: pitch, abbreviation: abbr)
                     }
 
-                    // Handle grid values: prefer map form (keyed by row index), fallback to legacy [[String]]
+                    // Handle grid values: prefer map form (keyed by row index), no legacy fallback
                     var gridValues: [[String]] = []
                     if let gridMap = pitchGrid?["gridRows"] as? [String: [String]] {
                         let sortedKeys = gridMap.keys.compactMap { Int($0) }.sorted()
                         gridValues = sortedKeys.map { gridMap[String($0)] ?? [] }
-                    } else if let legacyGrid = pitchGrid?["grid"] as? [[String]] {
-                        gridValues = legacyGrid
                     }
 
                     let strikeGrid = data["strikeGrid"] as? [String: Any]
@@ -263,8 +261,6 @@ class AuthManager: ObservableObject {
                     if let rowsMap = strikeGrid?["rowsMap"] as? [String: [String]] {
                         let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
                         strikeRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
-                    } else if let legacyRows = strikeGrid?["rows"] as? [[String]] {
-                        strikeRows = legacyRows
                     }
 
                     let ballsGrid = data["ballsGrid"] as? [String: Any]
@@ -273,8 +269,6 @@ class AuthManager: ObservableObject {
                     if let rowsMap = ballsGrid?["rowsMap"] as? [String: [String]] {
                         let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
                         ballsRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
-                    } else if let legacyRows = ballsGrid?["rows"] as? [[String]] {
-                        ballsRows = legacyRows
                     }
 
                     let isEncrypted = data["isEncrypted"] as? Bool ?? false
@@ -351,8 +345,6 @@ class AuthManager: ObservableObject {
                 if let gridMap = pitchGrid?["gridRows"] as? [String: [String]] {
                     let sortedKeys = gridMap.keys.compactMap { Int($0) }.sorted()
                     gridValues = sortedKeys.map { gridMap[String($0)] ?? [] }
-                } else if let legacyGrid = pitchGrid?["grid"] as? [[String]] {
-                    gridValues = legacyGrid
                 }
 
                 let strikeGrid = data["strikeGrid"] as? [String: Any]
@@ -361,8 +353,6 @@ class AuthManager: ObservableObject {
                 if let rowsMap = strikeGrid?["rowsMap"] as? [String: [String]] {
                     let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
                     strikeRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
-                } else if let legacyRows = strikeGrid?["rows"] as? [[String]] {
-                    strikeRows = legacyRows
                 }
 
                 let ballsGrid = data["ballsGrid"] as? [String: Any]
@@ -371,8 +361,6 @@ class AuthManager: ObservableObject {
                 if let rowsMap = ballsGrid?["rowsMap"] as? [String: [String]] {
                     let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
                     ballsRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
-                } else if let legacyRows = ballsGrid?["rows"] as? [[String]] {
-                    ballsRows = legacyRows
                 }
 
                 let isEncrypted = data["isEncrypted"] as? Bool ?? false
