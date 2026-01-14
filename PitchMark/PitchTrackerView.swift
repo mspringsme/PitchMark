@@ -724,7 +724,6 @@ struct PitchTrackerView: View {
             .padding(.top, -90)
             if showSelectBatterOverlay {
                 VStack {
-                    Spacer()
                     HStack {
                         Spacer()
                         Text("Select a batter?")
@@ -742,8 +741,9 @@ struct PitchTrackerView: View {
                             .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
                         Spacer()
                     }
-                    .padding(.bottom, 24)
+                    Spacer()
                 }
+                .padding(.top, -10) // adjust this to sit above the code chips
                 .transition(.opacity)
                 .animation(.easeInOut(duration: 0.5), value: showSelectBatterOverlay)
             }
