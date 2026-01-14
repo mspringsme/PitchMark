@@ -2138,11 +2138,18 @@ struct PrintableEncryptedGridsView: View {
     // Your screenshot has a fixed green block in Balls at (row 2, col 1) in the 4x3 grid
     // (i.e., body row 2, col 1). Keep this default for drop-in compatibility.
     let selectedBallBodyCell: (row: Int, col: Int) = (1, 1)
+    
+    private let bodyFontSize: CGFloat = 18
+    private let headerFontSize: CGFloat = 22   // ← for circled cells
+
+    
+    private let printFontSize: CGFloat = 20 // font size
+
 
     private let cellW: CGFloat = 70
     private let cellH: CGFloat = 48
     private let corner: CGFloat = 10
-    private let lineW: CGFloat = 1.5
+    private let lineW: CGFloat = 2.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -2205,7 +2212,7 @@ private extension PrintableEncryptedGridsView {
                         ForEach(1..<min(grid.count, 4), id: \.self) { r in
                             HStack(spacing: 0) {
                                 // Left label (col 0)
-                                cell(value(in: grid, row: r, col: 0), stroke: .black, fill: .white, bold: true)
+                                cell(value(in: grid, row: r, col: 0), stroke: .black, fill: .white, bold: true, emphasized: true)
 
                                 // Code columns (col 1...pitchCols) — this automatically skips the "+" col
                                 ForEach(1...pitchCols, id: \.self) { c in
@@ -2240,7 +2247,8 @@ private extension PrintableEncryptedGridsView {
                             header.indices.contains(c) ? header[c] : "",
                             stroke: .black,
                             fill: .white,
-                            bold: true
+                            bold: true,
+                            emphasized: true
                         )
                     }
                 }
@@ -2288,6 +2296,7 @@ private extension PrintableEncryptedGridsView {
         stroke: Color,
         fill: Color,
         bold: Bool,
+        emphasized: Bool = false,
         borderless: Bool = false
     ) -> some View {
         ZStack {
@@ -2301,13 +2310,20 @@ private extension PrintableEncryptedGridsView {
 
             if !text.isEmpty {
                 Text(text)
-                    .font(.system(size: 16, weight: bold ? .bold : .regular, design: .rounded))
+                    .font(
+                        .system(
+                            size: emphasized ? headerFontSize : bodyFontSize,
+                            weight: bold ? .bold : .regular,
+                            design: .rounded
+                        )
+                    )
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
         }
         .frame(width: cellW, height: cellH)
     }
+
 
     func value(in grid: [[String]], row: Int, col: Int) -> String {
         guard grid.indices.contains(row), grid[row].indices.contains(col) else { return "" }
