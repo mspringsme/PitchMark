@@ -332,23 +332,83 @@ struct PitchCardView: View {
 }
 
 enum PitchAssetMapper {
+    private static func normalizedKey(from label: String) -> String {
+        var key = label
+        // Standardize common phrases and symbols
+        key = key.replacingOccurrences(of: " & ", with: " And ")
+        key = key.replacingOccurrences(of: "&", with: "And")
+        key = key.replacingOccurrences(of: "↓", with: "Down")
+        key = key.replacingOccurrences(of: "↑", with: "Up")
+        key = key.replacingOccurrences(of: "→", with: "Right")
+        key = key.replacingOccurrences(of: "←", with: "Left")
+        // Remove em/en dashes and hyphens
+        key = key.replacingOccurrences(of: "—", with: " ")
+        key = key.replacingOccurrences(of: "–", with: " ")
+        key = key.replacingOccurrences(of: "-", with: " ")
+        // Collapse multiple spaces and then remove spaces
+        key = key.replacingOccurrences(of: "  ", with: " ")
+        key = key.replacingOccurrences(of: "  ", with: " ")
+        key = key.replacingOccurrences(of: " ", with: "")
+        return key
+    }
+    
     static func imageName(for rawLabel: String, isStrike: Bool, batterSide: BatterSide) -> String {
+        // Build adjusted label using the same manager the rest of the app uses
         let manager = PitchLabelManager(batterSide: batterSide)
         let adjusted = manager.adjustedLabel(from: rawLabel)
-        
-        // Remove "Strike " or "Ball " prefix if present
+
+        // Compose the same lookup key used by PitchImageDictionary
+        let prefix = isStrike ? "Strike" : "Ball"
+        let sideKey = batterSide.rawValue // "left" or "right"
+        let trimmed = adjusted.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lookupKey = "\(prefix) \(trimmed)|\(sideKey)"
+        print("🔎 Left-image lookup key: \(lookupKey)")
+
+        // If the dictionary has an explicit mapping, use it for perfect parity with the right image
+        if let mapped = PitchImageDictionary.imageMap[lookupKey] {
+            print("✅ Using mapped asset: \(mapped)")
+            return mapped
+        }
+
+        // If not mapped explicitly, fall back to our normalized construction
         let cleaned = adjusted
             .replacingOccurrences(of: "Strike ", with: "")
             .replacingOccurrences(of: "Ball ", with: "")
-            .replacingOccurrences(of: " ", with: "") // remove spaces for asset name
-        
+        let normalized = normalizedKey(from: cleaned)
+
+        // Neutral zones without side suffix
         let neutralZones = ["High", "Low", "Middle"]
-        if neutralZones.contains(cleaned) {
-            return isStrike ? "Strike\(cleaned)" : "ball\(cleaned)"
+        if neutralZones.contains(normalized) {
+            let candidate = (isStrike ? "Strike" : "ball") + normalized
+            if UIImage(named: candidate) != nil {
+                print("🔧 Asset name (neutral): \(candidate)")
+                return candidate
+            } else {
+                let fallback = isStrike ? "StrikeMiddle" : "ballMiddle"
+                print("⚠️ Missing asset: \(candidate). Falling back to \(fallback)")
+                return fallback
+            }
         }
-        
+
+        // Try side-agnostic first (some assets may omit side suffix)
+        let base = (isStrike ? "Strike" : "ball") + normalized
+        if UIImage(named: base) != nil {
+            print("🔧 Asset name (agnostic): \(base)")
+            return base
+        }
+
+        // Then side-specific
         let suffix = batterSide == .left ? "Right" : "Left"
-        return isStrike ? "Strike\(cleaned)\(suffix)" : "ball\(cleaned)\(suffix)"
+        let candidate = base + suffix
+        if UIImage(named: candidate) != nil {
+            print("🔧 Asset name: \(candidate)")
+            return candidate
+        }
+
+        // Final fallback
+        let fallback = isStrike ? "StrikeMiddle" : "ballMiddle"
+        print("❌ Missing assets for key=\(lookupKey). Falling back to \(fallback)")
+        return fallback
     }
 }
 
@@ -391,7 +451,7 @@ struct PitchResultCard: View {
     }
 
     var body: some View {
-        let leftImageName: String = PitchImageDictionary.imageName(
+        let leftImageName: String = PitchAssetMapper.imageName(
             for: event.calledPitch?.location ?? "-",
             isStrike: event.calledPitch?.isStrike ?? false,
             batterSide: event.batterSide
