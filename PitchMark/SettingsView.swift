@@ -22,8 +22,6 @@ struct SettingsView: View {
     @State private var showGameChooser = false
     @State private var showPracticeChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
-    
-    @State private var pendingEditorTemplate: PitchTemplate? = nil
 
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
     @State private var encryptedSelectionByPracticeId: [String: Bool] = [:]
@@ -74,7 +72,7 @@ struct SettingsView: View {
                 .padding(.horizontal)
             Spacer()
             Button("New Template") {
-                pendingEditorTemplate = PitchTemplate(
+                editorTemplate = PitchTemplate(
                     id: UUID(),
                     name: "",
                     pitches: [],
