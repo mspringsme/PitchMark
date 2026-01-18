@@ -645,7 +645,7 @@ struct PitchTrackerView: View {
                             .environmentObject(authManager)
                             .environmentObject(sessionManager)
                             .frame(maxWidth: .infinity, minHeight: 170)
-                            .padding(.top, 6)
+                            .padding(.top, -14)
                             .erasedToAnyView()
                         } else {
                             return EmptyView().erasedToAnyView()

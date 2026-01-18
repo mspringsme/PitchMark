@@ -243,7 +243,7 @@ struct PitchCardView: View {
             
             // 🧩 Main card content
             content
-                .padding(.horizontal, 2)
+                .padding(.horizontal, 0)
                 .padding(.vertical, 0)
         }
         .background(cardBackground)
@@ -255,7 +255,7 @@ struct PitchCardView: View {
     private var content: some View {
         HStack(alignment: .center, spacing: 2) {
             leadingImages
-                .padding(.leading, 2)
+                .padding(.leading, 10)
             
             VStack(alignment: .leading, spacing: 6) {
                 HStack{
@@ -294,7 +294,7 @@ struct PitchCardView: View {
                     color: rightImageShouldHighlight ? .green.opacity(0.7) : .red.opacity(0.5),
                     radius: 6, x: 0, y: 0
                 )
-                .padding(.trailing, 8)
+                .padding(.trailing, 10)
         }
     }
     
@@ -620,6 +620,7 @@ struct PitchResultCard: View {
                 onLongPress: { showDetails = true }
             )
         }
+        .padding(.horizontal, 8)
         .popover(isPresented: $showDetails) {
             PitchEventDetailPopover(event: event, allEvents: allEvents, templateName: templateName)
                 .padding()
@@ -755,7 +756,7 @@ struct PitchEventDetailPopover: View {
                             .background(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                                     .fill(Color(.systemBackground))
-                                    .shadow(color: isSource ? Color.blue.opacity(0.45) : Color.black.opacity(0.15), radius: isSource ? 12 : 6, x: 0, y: isSource ? 0 : 3)
+                                    .shadow(color: isSource ? Color.blue.opacity(0.45) : Color.black.opacity(0.15), radius: isSource ? 6 : 6, x: 0, y: isSource ? 0 : 3)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -764,15 +765,9 @@ struct PitchEventDetailPopover: View {
                         }
                     }
                     .padding(.horizontal, 2)
+                    .padding(.vertical, 8)
                 }
                 .frame(minHeight: 160)
-
-                Text(timestampText)
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.blue)
-                    
-                    .frame(maxWidth: .infinity)
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -780,25 +775,38 @@ struct PitchEventDetailPopover: View {
                             .font(.subheadline).bold()
                         Spacer()
                         if hasIdentity {
-                            Text("\(eventsWithCoords.count) hits")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            let count = eventsWithCoords.count
+                            let hitLabel = (count == 1) ? "hit" : "hits"
+                            Text("\(count) \(hitLabel)")
+                                .font(.subheadline).bold()
                         }
                     }
-                    FieldSprayOverlay(
-                        fieldImageName: "FieldImage",
-                        events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
-                        homePlateNormalized: CGPoint(x: 0.5, y: 0.69) // tweak per asset if needed
-                    )
-                    .frame(maxWidth: .infinity, minHeight: 415)
-                    .padding(8)
-                    .background(
+                    ZStack {
+                        // Background rounded container that clips content
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(Color(.secondarySystemBackground))
-                    )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+
+                        // Centered, size-aware spray overlay
+                        FieldSprayOverlay(
+                            fieldImageName: "FieldImage",
+                            events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
+                            homePlateNormalized: CGPoint(x: 0.5, y: 0.69),
+                            focalNormalized: CGPoint(x: 0.5, y: 0.5),
+                            overscan: 1.12
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 415, maxHeight: .infinity)
+                    .clipped()
                 }
             }
-            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
         }
     }
 }
@@ -810,12 +818,15 @@ struct FieldSprayOverlay: View {
     let homePlateNormalized: CGPoint
 
     let focalNormalized: CGPoint
+    
+    let overscan: CGFloat
 
-    init(fieldImageName: String, events: [PitchEvent], homePlateNormalized: CGPoint = CGPoint(x: 0.5, y: 0.88), focalNormalized: CGPoint = CGPoint(x: 0.5, y: 0.60)) {
+    init(fieldImageName: String, events: [PitchEvent], homePlateNormalized: CGPoint = CGPoint(x: 0.5, y: 0.88), focalNormalized: CGPoint = CGPoint(x: 0.5, y: 0.60), overscan: CGFloat = 1.0) {
         self.fieldImageName = fieldImageName
         self.events = events
         self.homePlateNormalized = homePlateNormalized
         self.focalNormalized = focalNormalized
+        self.overscan = overscan
     }
 
     var body: some View {
@@ -827,17 +838,17 @@ struct FieldSprayOverlay: View {
                 return 1
             }()
 
-            // Fit the image within the available size to avoid clipping
+            // Fill the image within the available size (may crop) for better container coverage
             let targetSize: CGSize = {
                 if let img = uiImage, img.size.width > 0, img.size.height > 0 {
-                    let scale = min(availableSize.width / img.size.width, availableSize.height / img.size.height)
+                    let scale = max(availableSize.width / img.size.width, availableSize.height / img.size.height) * max(overscan, 1.0)
                     return CGSize(width: img.size.width * scale, height: img.size.height * scale)
                 } else {
-                    // Fallback to fitting by width using the computed aspect
+                    // Fallback to filling by width using the computed aspect, and then by height
                     let width = availableSize.width
                     let height = width / max(aspect, 0.0001)
-                    if height > availableSize.height {
-                        // Fit by height if needed
+                    if height < availableSize.height {
+                        // Fill by height if needed
                         let height = availableSize.height
                         let width = height * max(aspect, 0.0001)
                         return CGSize(width: width, height: height)
@@ -880,7 +891,7 @@ struct FieldSprayOverlay: View {
             ZStack {
                 Image(fieldImageName)
                     .resizable()
-                    .scaledToFit()
+                    .scaledToFill()
                     .frame(width: imageRect.width, height: imageRect.height)
                     .position(x: imageRect.midX + focalShift.x, y: imageRect.midY + focalShift.y)
 
@@ -918,7 +929,7 @@ struct FieldSprayOverlay: View {
                         // Solid path from home plate to marker
                         SprayPath(start: origin, end: point)
                             .stroke(style: StrokeStyle(lineWidth: 2.0))
-                            .foregroundStyle((isHit && !isFoul) ? Color.white : Color.black.opacity(0.25))
+                            .foregroundStyle((isHit && !isFoul) ? Color.white : ((!isHit && !isFoul) ? Color.red : Color.black.opacity(0.25)))
                             .frame(width: availableSize.width, height: availableSize.height, alignment: .topLeading)
 
                         // Use corresponding event to color the marker
@@ -945,17 +956,13 @@ private struct MarkerView: View {
             if isFoul { return .white }
             return .red
         }()
-        let stroke: Color = {
-            if highlight { return .white }
-            return .black
-        }()
 
         return Circle()
             .fill(fill)
             .frame(width: 8, height: 8)
             .overlay(
                 Circle()
-                    .stroke(stroke, lineWidth: 1)
+                    .stroke(.white, lineWidth: 1)
             )
     }
 }
@@ -984,10 +991,37 @@ struct PitchResultSheet: View {
     @State private var showTemplatePicker = false
     @State private var localTemplateOverrides: [String: String] = [:]
     @State private var pendingTemplateSelection: PitchTemplate? = nil
+    
+    @State private var jerseyFilter: String = ""
+    
+    private var availableJerseyNumbers: [String] {
+        let nums = allEvents.compactMap { $0.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let unique = Set(nums)
+        return unique.sorted { lhs, rhs in
+            // Sort numerically when possible, else lexicographically
+            if let li = Int(lhs), let ri = Int(rhs) { return li < ri }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
 
     // Basic default filter: show all events, newest first. Adjust as needed.
     private var filteredEvents: [PitchEvent] {
-        allEvents.sorted { (lhs: PitchEvent, rhs: PitchEvent) -> Bool in
+        // Start with all events
+        let base = allEvents
+        // Apply jersey filter if provided (trimmed and case-insensitive)
+        let trimmed = jerseyFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filtered: [PitchEvent]
+        if trimmed.isEmpty {
+            filtered = base
+        } else {
+            filtered = base.filter { evt in
+                guard let jersey = evt.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty else { return false }
+                return jersey.caseInsensitiveCompare(trimmed) == .orderedSame
+            }
+        }
+        // Sort newest first
+        return filtered.sorted { (lhs: PitchEvent, rhs: PitchEvent) -> Bool in
             return lhs.timestamp > rhs.timestamp
         }
     }
@@ -1050,12 +1084,53 @@ struct PitchResultSheet: View {
                             .transition(.scale.combined(with: .opacity)) // gear fades/scales in
                             
                             Spacer()
+
+                            Menu {
+                                // Clear option
+                                if !jerseyFilter.isEmpty {
+                                    Button(role: .destructive) {
+                                        jerseyFilter = ""
+                                    } label: {
+                                        Label("Clear Filter", systemImage: "xmark.circle")
+                                    }
+                                    Divider()
+                                }
+                                // Jersey options
+                                ForEach(availableJerseyNumbers, id: \.self) { num in
+                                    Button {
+                                        jerseyFilter = num
+                                    } label: {
+                                        HStack {
+                                            Text("#\(num)")
+                                            if jerseyFilter == num {
+                                                Image(systemName: "checkmark")
+                                            }
+                                        }
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "line.3.horizontal.decrease.circle")
+                                    if jerseyFilter.isEmpty {
+                                        Text("#")
+                                    } else {
+                                        Text("#\(jerseyFilter)")
+                                            .fontWeight(.semibold)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule().fill(Color(.tertiarySystemFill))
+                                )
+                            }
+                            .padding(.top, 6)
                         }
                     }
                     .padding(.horizontal, 20)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 44)
+                .frame(height: 75)
                 .padding(.vertical, -66)
 
                 ScrollView(.vertical) {
@@ -1070,15 +1145,13 @@ struct PitchResultSheet: View {
                                 selectedEventIDs: $selectedEventIDs,
                                 localTemplateOverrides: localTemplateOverrides
                             )
-                            .padding(.horizontal)
                             .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
-                    .padding(.horizontal)
                 }
             }
-            .padding(.horizontal)
         }
+        .padding(.horizontal, 10)
         .sheet(isPresented: $showTemplatePicker) {
             NavigationView {
                 List(templates) { template in
@@ -1379,5 +1452,4 @@ extension PitchEvent {
         return text.contains("hr") || text.contains("home run") || text.contains("homerun")
     }
 }
-
 
