@@ -645,7 +645,6 @@ struct PitchTrackerView: View {
                             .environmentObject(authManager)
                             .environmentObject(sessionManager)
                             .frame(maxWidth: .infinity, minHeight: 170)
-                            .padding(.top, -14)
                             .erasedToAnyView()
                         } else {
                             return EmptyView().erasedToAnyView()
@@ -679,6 +678,10 @@ struct PitchTrackerView: View {
                 }()
 
                 overlayContent
+                      .padding(.top, -14)
+                      .frame(maxWidth: .infinity)
+                      .frame(height: 170, alignment: .top)
+                
             }
             .blur(radius: shouldBlurBackground ? 6 : 0)
             .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
@@ -2004,7 +2007,7 @@ private struct ProgressGameView: View {
                 .padding(.horizontal, 0)
                 .padding(.trailing, 10)
             }
-            .padding(.vertical, -212)
+            .padding(.vertical, -214)
         }
         .padding(.vertical, -6)
         .onAppear {
@@ -2103,9 +2106,7 @@ struct InningCounterCompact: View {
     var body: some View {
         
         HStack(alignment: .center, spacing: 6) {
-            
             HStack(spacing: 6) {
-                // Decrement
                 Button {
                     let generator = UIImpactFeedbackGenerator(style: .light)
                     generator.impactOccurred()
@@ -2164,7 +2165,7 @@ struct InningCounterCompact: View {
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
             .background(
-                .ultraThinMaterial,
+                .ultraThickMaterial,
                 in: Capsule()
             )
             .overlay(
@@ -2178,7 +2179,7 @@ struct InningCounterCompact: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.trailing, 12)
-        //.padding(.vertical, 12)
+        .padding(.top, 18)
     }
 }
 struct HitsCounterCompact: View {
@@ -2248,7 +2249,7 @@ struct HitsCounterCompact: View {
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
             .background(
-                .ultraThinMaterial,
+                .ultraThickMaterial,
                 in: Capsule()
             )
             .overlay(
@@ -2331,7 +2332,7 @@ struct WalksCounterCompact: View {
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
             .background(
-                .ultraThinMaterial,
+                .ultraThickMaterial,
                 in: Capsule()
             )
             .overlay(
@@ -2359,16 +2360,16 @@ struct ScoreTrackerCompact: View {
             
             VStack(spacing: 0) {
                 // Us row with label above
-                VStack(spacing: 0) {   // no extra spacing
+                VStack(spacing: 1) {   // no extra spacing
                     Text("us")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 2) // optional, keep horizontal only
                     scoreRow(score: $usScore)
                 }
-                Divider()
+                .padding(.bottom, 2)
                 // Them row with label below
-                VStack(spacing: 0) {   // no extra spacing
+                VStack(spacing: 1) {   // no extra spacing
                     scoreRow(score: $themScore)
                     Text("them")
                         .font(.caption2)
@@ -2379,7 +2380,7 @@ struct ScoreTrackerCompact: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
-                .ultraThinMaterial,
+                .ultraThickMaterial,
                 in: RoundedRectangle(cornerRadius: 14, style: .continuous)
             )
             .overlay(
@@ -2389,6 +2390,7 @@ struct ScoreTrackerCompact: View {
             .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
             .fixedSize()
         }
+        .padding(.top, 16)
     }
     
     // MARK: - Row (no leading label)
