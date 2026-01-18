@@ -1119,10 +1119,6 @@ struct PitchResultSheet: View {
                                     }
                                 }
                                 .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    Capsule().fill(Color(.tertiarySystemFill))
-                                )
                             }
                             .padding(.top, 6)
                         }
