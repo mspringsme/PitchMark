@@ -277,7 +277,7 @@ struct PitchCardView: View {
                     .font(.caption)
                     .multilineTextAlignment(.leading)
             }
-            .frame(minWidth: 80)
+            .frame(minWidth: 90)
             .layoutPriority(1)
             
             Spacer()
@@ -1080,7 +1080,7 @@ struct PitchResultSheet: View {
                                     .imageScale(.medium)
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(Color(.gray))
+                            //.foregroundStyle(Color(.bleu))
                             .transition(.scale.combined(with: .opacity)) // gear fades/scales in
                             
                             Spacer()
@@ -1111,16 +1111,15 @@ struct PitchResultSheet: View {
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: "line.3.horizontal.decrease.circle")
-                                    if jerseyFilter.isEmpty {
-                                        Text("#")
-                                    } else {
-                                        Text("#\(jerseyFilter)")
-                                            .fontWeight(.semibold)
-                                    }
+                                    Text(jerseyFilter.isEmpty ? "#" : "#\(jerseyFilter)")
+                                        .fontWeight(jerseyFilter.isEmpty ? .regular : .semibold)
+                                        .monospacedDigit()
+                                        .frame(minWidth: 24, alignment: .leading)
                                 }
-                                .padding(.horizontal, 10)
+                                .padding(.horizontal, 8)
+                                .clipShape(Capsule())
+                                .compositingGroup()
                             }
-                            .padding(.top, 6)
                         }
                     }
                     .padding(.horizontal, 20)
