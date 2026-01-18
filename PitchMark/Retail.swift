@@ -15,7 +15,7 @@ var Storefront: some View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Pitcher Wristband Inserts")
                         .font(.largeTitle.bold())
-                    Text("Browse and purchase printable template card inserts designed for pitcher wristbands.")
+                    Text("Purchase template card inserts designed for pitcher wristbands.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -148,7 +148,7 @@ private struct TemplateDetailView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                Text("Choose template to encrypt")
+                Text("Choose template to ship")
                     .font(.headline)
 
                 Menu {

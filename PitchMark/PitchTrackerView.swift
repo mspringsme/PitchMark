@@ -602,7 +602,7 @@ struct PitchTrackerView: View {
                             Text("Progress")
                                 .font(.subheadline.weight(.semibold))
                         }
-                        .foregroundColor(overlayTab == .progress ? .black : .black.opacity(0.2))
+                        .foregroundColor(overlayTab == .progress ? .black : .black.opacity(0.4))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 8)
                         .background(overlayTab == .progress ? .ultraThickMaterial : .ultraThinMaterial)
@@ -618,7 +618,7 @@ struct PitchTrackerView: View {
                             Text("Cards")
                                 .font(.subheadline.weight(.semibold))
                         }
-                        .foregroundColor(overlayTab == .cards ? .black : .black.opacity(0.2))
+                        .foregroundColor(overlayTab == .cards ? .black : .black.opacity(0.4))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 8)
                         .background(overlayTab == .cards ? .ultraThickMaterial : .ultraThinMaterial)

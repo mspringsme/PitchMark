@@ -136,7 +136,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Template Inserts")
                             .font(.headline)
-                        Text("Buy printable wristband card templates")
+                        Text("Buy wristband card inserts")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
