@@ -35,10 +35,6 @@ struct PitchMenuContent: View {
                             .filter { $0.pitch == pitch && $0.location == adjustedLabel }
                             .map(\.code)
 
-                        let codeSuffix = assignedCodes.isEmpty
-                            ? "     --"
-                            : "   \(assignedCodes.joined(separator: ", "))"
-
                         let isCurrent = lastTappedPosition == tappedPoint &&
                             calledPitch?.location == adjustedLabel &&
                             calledPitch?.pitch == pitch
@@ -94,9 +90,9 @@ struct PitchMenuContent: View {
                                 onSelection?()
                             }
                         } label: {
-                            Text("\(pitch)\(codeSuffix)")
-                                .font(.system(size: 17, weight: isCurrent ? .semibold : .regular))
-                                .foregroundColor(isCurrent ? .accentColor : .primary)
+                            Text("\(pitch)")
+                                .font(.system(size: 20, weight: .semibold))
+                                .padding(.top, 12)
                         }
                     }
                 }

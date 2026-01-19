@@ -180,7 +180,7 @@ private struct PitchButtonView: View {
                         .padding(.bottom, 8)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
-                    .presentationDetents([.fraction(0.4), .medium])
+                    .presentationDetents([.fraction(0.6), .medium])
                     .presentationDragIndicator(.visible)
                 }
             }
