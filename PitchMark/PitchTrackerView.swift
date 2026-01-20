@@ -1610,6 +1610,7 @@ struct PitchTrackerView: View {
             )
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
+            .environmentObject(authManager)
         }
         .sheet(isPresented: confirmSheetBinding) {
             PitchResultSheetView(
@@ -1874,6 +1875,11 @@ struct PitchTrackerView: View {
                   applyTemplate(current)
               }
           }
+        .onReceive(NotificationCenter.default.publisher(for: .practiceProgressReset)) { _ in
+            authManager.loadPitchEvents { events in
+                self.pitchEvents = events
+            }
+        }
         .overlay(alignment: .bottom) {
             pitchesFacedOverlay
         }
@@ -2461,6 +2467,24 @@ private struct ProgressSummaryView: View {
     let templates: [PitchTemplate]
     
     @State private var isReset: Bool = false
+    private func normalizeLocationForHitSpot(_ raw: String?) -> String {
+        // Local, calculation-only normalization to compare called vs actual locations.
+        // 1) Trim whitespace/newlines
+        // 2) Uppercase for case-insensitive compare
+        // 3) Collapse internal spaces
+        guard let raw = raw else { return "" }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        let upper = trimmed.uppercased()
+        let collapsed = upper.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return collapsed
+    }
+
+    private func locationsMatchForHitSpot(called: String?, actual: String?) -> Bool {
+        let c = normalizeLocationForHitSpot(called)
+        let a = normalizeLocationForHitSpot(actual)
+        return !c.isEmpty && c == a
+    }
     
     private var practiceEvents: [PitchEvent] {
         if isReset { return [] }
@@ -2478,11 +2502,8 @@ private struct ProgressSummaryView: View {
     private var ballCount: Int { practiceEvents.filter { $0.isStrike == false }.count }
     private var hitSpotCount: Int {
         practiceEvents.filter { ev in
-            guard let calledPitch = ev.calledPitch else { return false }
-            let called = calledPitch.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !called.isEmpty else { return false }
-            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !actual.isEmpty && actual == called
+            guard let call = ev.calledPitch else { return false }
+            return locationsMatchForHitSpot(called: call.location, actual: ev.location)
         }.count
     }
 
@@ -2490,10 +2511,7 @@ private struct ProgressSummaryView: View {
         practiceEvents.filter { ev in
             guard ev.isStrike == true else { return false }
             guard let call = ev.calledPitch else { return false }
-            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !target.isEmpty else { return false }
-            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !actual.isEmpty && actual == target
+            return locationsMatchForHitSpot(called: call.location, actual: ev.location)
         }.count
     }
 
@@ -2501,10 +2519,7 @@ private struct ProgressSummaryView: View {
         practiceEvents.filter { ev in
             guard ev.isStrike == false else { return false }
             guard let call = ev.calledPitch else { return false }
-            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !target.isEmpty else { return false }
-            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !actual.isEmpty && actual == target
+            return locationsMatchForHitSpot(called: call.location, actual: ev.location)
         }.count
     }
     
@@ -2525,19 +2540,14 @@ private struct ProgressSummaryView: View {
         // Aggregate attempts and hits per (pitch, template) based on matching actual == called location
         var dict: [String: (hits: Int, attempts: Int, templateId: String?)] = [:]
         for ev in practiceEvents {
-            // Require a called pitch target
             guard let call = ev.calledPitch else { continue }
-            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !target.isEmpty else { continue }
-
-            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = ev.pitch
             let tid = ev.templateId
-            let key = name + "|" + (tid ?? "-")
+            let key = (name) + "|" + (tid ?? "-")
 
             var current = dict[key] ?? (hits: 0, attempts: 0, templateId: tid)
             current.attempts += 1
-            if !actual.isEmpty && actual == target {
+            if locationsMatchForHitSpot(called: call.location, actual: ev.location) {
                 current.hits += 1
             }
             dict[key] = current
@@ -2561,13 +2571,8 @@ private struct ProgressSummaryView: View {
     private var pitchRanking: [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
         for ev in practiceEvents {
-            // Require a called pitch
             guard let call = ev.calledPitch else { continue }
-            // Normalize and compare locations
-            let target = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            let actual = ev.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !target.isEmpty, !actual.isEmpty, target == actual else { continue }
-            // Tally by pitch name
+            if !locationsMatchForHitSpot(called: call.location, actual: ev.location) { continue }
             let name = ev.pitch
             if !name.isEmpty {
                 counts[name, default: 0] += 1
@@ -2650,6 +2655,7 @@ private struct ProgressSummaryView: View {
             .frame(maxWidth: .infinity, alignment: .center)
         }
         .padding(.horizontal)
+        .offset(y: 20)
         .onReceive(NotificationCenter.default.publisher(for: .practiceProgressReset)) { notification in
             guard let userInfo = notification.userInfo as? [String: Any], let pid = userInfo["practiceId"] as? String? else { return }
             // If current view is showing the same practice session (or general when nil), reset displayed stats
@@ -3565,6 +3571,7 @@ struct PracticeSelectionSheet: View {
     @State private var pendingResetPracticeId: String? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var authManager: AuthManager
 
     // Added method as per instructions
     private func deleteSession(withId id: String) {
@@ -3698,8 +3705,17 @@ struct PracticeSelectionSheet: View {
         ) {
             Button("Reset", role: .destructive) {
                 let id = pendingResetPracticeId
-                NotificationCenter.default.post(name: .practiceProgressReset, object: nil, userInfo: ["practiceId": id as Any])
-                pendingResetPracticeId = nil
+                authManager.deletePracticeEvents(practiceId: id) { result in
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success:
+                            NotificationCenter.default.post(name: .practiceProgressReset, object: nil, userInfo: ["practiceId": id as Any])
+                        case .failure(let error):
+                            print("Failed to delete practice events: \(error)")
+                        }
+                        pendingResetPracticeId = nil
+                    }
+                }
             }
             Button("Cancel", role: .cancel) {
                 pendingResetPracticeId = nil

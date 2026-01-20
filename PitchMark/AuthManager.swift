@@ -25,34 +25,34 @@ class AuthManager: ObservableObject {
         guard let clientID = FirebaseApp.app()?.options.clientID else {
             fatalError("Missing Firebase client ID")
         }
-
+        
         let config = GIDConfiguration(clientID: clientID)
         GIDSignIn.sharedInstance.configuration = config
-
+        
         GIDSignIn.sharedInstance.signIn(withPresenting: viewController) { result, error in
             guard let resultUser = result?.user,
                   let idToken = resultUser.idToken?.tokenString else {
                 print("Google Sign-In failed: \(error?.localizedDescription ?? "Unknown error")")
                 return
             }
-
+            
             let accessToken = resultUser.accessToken.tokenString
             let credential = GoogleAuthProvider.credential(withIDToken: idToken, accessToken: accessToken)
-
+            
             Auth.auth().signIn(with: credential) { authResult, error in
                 if let error = error {
                     print("Firebase Sign-In failed: \(error.localizedDescription)")
                     return
                 }
-
+                
                 guard let firebaseUser = authResult?.user else { return }
-
+                
                 self.user = firebaseUser
                 self.isSignedIn = true
-
+                
                 let db = Firestore.firestore()
                 let userRef = db.collection("users").document(firebaseUser.uid)
-
+                
                 userRef.setData([
                     "email": firebaseUser.email ?? "",
                     "createdAt": FieldValue.serverTimestamp()
@@ -66,7 +66,7 @@ class AuthManager: ObservableObject {
             }
         }
     }
-
+    
     func restoreSignIn() {
         isCheckingAuth = true
         GIDSignIn.sharedInstance.restorePreviousSignIn { user, error in
@@ -76,10 +76,10 @@ class AuthManager: ObservableObject {
                 self.isCheckingAuth = false
                 return
             }
-
+            
             let accessToken = restoredUser.accessToken.tokenString
             let credential = GoogleAuthProvider.credential(withIDToken: idToken, accessToken: accessToken)
-
+            
             Auth.auth().signIn(with: credential) { authResult, error in
                 if let error = error {
                     print("Firebase Sign-In failed: \(error.localizedDescription)")
@@ -93,7 +93,7 @@ class AuthManager: ObservableObject {
             }
         }
     }
-
+    
     func signOut() {
         do {
             try Auth.auth().signOut()
@@ -101,10 +101,10 @@ class AuthManager: ObservableObject {
         } catch {
             print("Firebase sign-out failed: \(error.localizedDescription)")
         }
-
+        
         GIDSignIn.sharedInstance.signOut()
         print("Signed out from Google")
-
+        
         self.user = nil
         self.isSignedIn = false
     }
@@ -114,13 +114,13 @@ class AuthManager: ObservableObject {
             print("No signed-in user to save template for.")
             return
         }
-
+        
         let db = Firestore.firestore()
         let templateRef = db.collection("users")
             .document(user.uid)
             .collection("templates")
             .document(template.id.uuidString)
-
+        
         // Build strongly-typed components to avoid type inference ambiguity
         let codeAssignmentsArray: [[String: Any]] = template.codeAssignments.map { assignment in
             var dict: [String: Any] = [
@@ -133,14 +133,14 @@ class AuthManager: ObservableObject {
             }
             return dict
         }
-
+        
         // Serialize strongly-typed grid additions
         let headersArray: [[String: Any]] = template.pitchGridHeaders.map { h in
             var dict: [String: Any] = ["pitch": h.pitch]
             if let abbr = h.abbreviation { dict["abbreviation"] = abbr }
             return dict
         }
-
+        
         // Firestore does not support nested arrays (arrays of arrays). Convert 2D arrays to maps keyed by row index.
         func rowsToMap(_ rows: [[String]]) -> [String: [String]] {
             var map: [String: [String]] = [:]
@@ -149,11 +149,11 @@ class AuthManager: ObservableObject {
             }
             return map
         }
-
+        
         let pitchGridMap: [String: [String]] = rowsToMap(template.pitchGridValues)
         let strikeRowsMap: [String: [String]] = rowsToMap(template.strikeRows)
         let ballsRowsMap: [String: [String]] = rowsToMap(template.ballsRows)
-
+        
         let data: [String: Any] = [
             "name": template.name,
             "pitches": template.pitches,
@@ -173,7 +173,7 @@ class AuthManager: ObservableObject {
             ],
             "updatedAt": FieldValue.serverTimestamp()
         ]
-
+        
         templateRef.setData(data) { error in
             if let error = error {
                 print("Error saving template: \(error.localizedDescription)")
@@ -188,13 +188,13 @@ class AuthManager: ObservableObject {
             print("No signed-in user to delete template for.")
             return
         }
-
+        
         let db = Firestore.firestore()
         let templateRef = db.collection("users")
             .document(user.uid)
             .collection("templates")
             .document(template.id.uuidString)
-
+        
         templateRef.delete { error in
             if let error = error {
                 print("Error deleting template: \(error.localizedDescription)")
@@ -209,7 +209,7 @@ class AuthManager: ObservableObject {
             completion([])
             return
         }
-
+        
         let db = Firestore.firestore()
         db.collection("users")
             .document(user.uid)
@@ -220,7 +220,7 @@ class AuthManager: ObservableObject {
                     completion([])
                     return
                 }
-
+                
                 let templates = snapshot?.documents.compactMap { doc -> PitchTemplate? in
                     let data = doc.data()
                     guard let name = data["name"] as? String,
@@ -228,7 +228,7 @@ class AuthManager: ObservableObject {
                           let codeAssignmentsRaw = data["codeAssignments"] as? [[String: Any]] else {
                         return nil
                     }
-
+                    
                     let codeAssignments: [PitchCodeAssignment] = codeAssignmentsRaw.compactMap { dict in
                         guard let pitch = dict["pitch"] as? String,
                               let location = dict["location"] as? String,
@@ -238,7 +238,7 @@ class AuthManager: ObservableObject {
                         let encrypted = dict["encryptedCode"] as? String
                         return PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted)
                     }
-
+                    
                     // Optional encrypted grid fields
                     let pitchGrid = data["pitchGrid"] as? [String: Any]
                     let headersRaw = pitchGrid?["headers"] as? [[String: Any]] ?? []
@@ -247,14 +247,14 @@ class AuthManager: ObservableObject {
                         let abbr = dict["abbreviation"] as? String
                         return PitchHeader(pitch: pitch, abbreviation: abbr)
                     }
-
+                    
                     // Handle grid values: prefer map form (keyed by row index), no legacy fallback
                     var gridValues: [[String]] = []
                     if let gridMap = pitchGrid?["gridRows"] as? [String: [String]] {
                         let sortedKeys = gridMap.keys.compactMap { Int($0) }.sorted()
                         gridValues = sortedKeys.map { gridMap[String($0)] ?? [] }
                     }
-
+                    
                     let strikeGrid = data["strikeGrid"] as? [String: Any]
                     let strikeTop = strikeGrid?["topRow"] as? [String] ?? []
                     var strikeRows: [[String]] = []
@@ -262,7 +262,7 @@ class AuthManager: ObservableObject {
                         let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
                         strikeRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
                     }
-
+                    
                     let ballsGrid = data["ballsGrid"] as? [String: Any]
                     let ballsTop = ballsGrid?["topRow"] as? [String] ?? []
                     var ballsRows: [[String]] = []
@@ -270,9 +270,9 @@ class AuthManager: ObservableObject {
                         let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
                         ballsRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
                     }
-
+                    
                     let isEncrypted = data["isEncrypted"] as? Bool ?? false
-
+                    
                     return PitchTemplate(
                         id: UUID(uuidString: doc.documentID) ?? UUID(),
                         name: name,
@@ -287,7 +287,7 @@ class AuthManager: ObservableObject {
                         ballsRows: ballsRows
                     )
                 } ?? []
-
+                
                 completion(templates)
             }
     }
@@ -298,7 +298,7 @@ class AuthManager: ObservableObject {
             completion(nil)
             return
         }
-
+        
         let db = Firestore.firestore()
         db.collection("users")
             .document(user.uid)
@@ -315,7 +315,7 @@ class AuthManager: ObservableObject {
                     completion(nil)
                     return
                 }
-
+                
                 let data = doc.data() ?? [:]
                 guard let name = data["name"] as? String,
                       let pitches = data["pitches"] as? [String],
@@ -324,7 +324,7 @@ class AuthManager: ObservableObject {
                     completion(nil)
                     return
                 }
-
+                
                 let codeAssignments: [PitchCodeAssignment] = codeAssignmentsRaw.compactMap { dict in
                     guard let pitch = dict["pitch"] as? String,
                           let location = dict["location"] as? String,
@@ -332,7 +332,7 @@ class AuthManager: ObservableObject {
                     let encrypted = dict["encryptedCode"] as? String
                     return PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted)
                 }
-
+                
                 let pitchGrid = data["pitchGrid"] as? [String: Any]
                 let headersRaw = pitchGrid?["headers"] as? [[String: Any]] ?? []
                 let headers: [PitchHeader] = headersRaw.compactMap { dict in
@@ -340,13 +340,13 @@ class AuthManager: ObservableObject {
                     let abbr = dict["abbreviation"] as? String
                     return PitchHeader(pitch: pitch, abbreviation: abbr)
                 }
-
+                
                 var gridValues: [[String]] = []
                 if let gridMap = pitchGrid?["gridRows"] as? [String: [String]] {
                     let sortedKeys = gridMap.keys.compactMap { Int($0) }.sorted()
                     gridValues = sortedKeys.map { gridMap[String($0)] ?? [] }
                 }
-
+                
                 let strikeGrid = data["strikeGrid"] as? [String: Any]
                 let strikeTop = strikeGrid?["topRow"] as? [String] ?? []
                 var strikeRows: [[String]] = []
@@ -354,7 +354,7 @@ class AuthManager: ObservableObject {
                     let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
                     strikeRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
                 }
-
+                
                 let ballsGrid = data["ballsGrid"] as? [String: Any]
                 let ballsTop = ballsGrid?["topRow"] as? [String] ?? []
                 var ballsRows: [[String]] = []
@@ -362,9 +362,9 @@ class AuthManager: ObservableObject {
                     let sortedKeys = rowsMap.keys.compactMap { Int($0) }.sorted()
                     ballsRows = sortedKeys.map { rowsMap[String($0)] ?? [] }
                 }
-
+                
                 let isEncrypted = data["isEncrypted"] as? Bool ?? false
-
+                
                 let template = PitchTemplate(
                     id: UUID(uuidString: doc.documentID) ?? UUID(),
                     name: name,
@@ -378,7 +378,7 @@ class AuthManager: ObservableObject {
                     ballsTopRow: ballsTop,
                     ballsRows: ballsRows
                 )
-
+                
                 completion(template)
             }
     }
@@ -388,13 +388,13 @@ class AuthManager: ObservableObject {
             print("No signed-in user to save pitch event for.")
             return
         }
-
+        
         let db = Firestore.firestore()
         let eventRef = db.collection("users")
             .document(user.uid)
             .collection("pitchEvents")
             .document() // auto-generated ID
-
+        
         do {
             try eventRef.setData(from: event) { error in
                 if let error = error {
@@ -414,7 +414,7 @@ class AuthManager: ObservableObject {
             completion([])
             return
         }
-
+        
         let db = Firestore.firestore()
         db.collection("users")
             .document(user.uid)
@@ -426,7 +426,7 @@ class AuthManager: ObservableObject {
                     completion([])
                     return
                 }
-
+                
                 let events: [PitchEvent] = snapshot?.documents.compactMap { doc in
                     do {
                         return try doc.data(as: PitchEvent.self)
@@ -435,11 +435,93 @@ class AuthManager: ObservableObject {
                         return nil
                     }
                 } ?? []
-
+                
                 print("📦 Loaded \(events.count) pitch events")
                 completion(events)
             }
     }
+    
+    func deletePracticeEvents(practiceId: String?, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let user = user else {
+            print("⚠️ No signed-in user; nothing to delete.")
+            completion(.success(()))
+            return
+        }
+        let db = Firestore.firestore()
+        let collectionRef = db.collection("users").document(user.uid).collection("pitchEvents")
+
+        // Base query: practice mode only
+        var query: Query = collectionRef.whereField("mode", isEqualTo: "practice")
+
+        if let pid = practiceId {
+            // Filter to specific practice session
+            query = query.whereField("practiceId", isEqualTo: pid)
+            query.getDocuments { snapshot, error in
+                if let error = error {
+                    print("❌ Failed to query practice events for practiceId=\(pid): \(error)")
+                    completion(.failure(error))
+                    return
+                }
+                let docs = snapshot?.documents ?? []
+                guard !docs.isEmpty else {
+                    print("🧹 No practice events found to delete for practiceId=\(pid)")
+                    completion(.success(()))
+                    return
+                }
+                let batch = db.batch()
+                docs.forEach { batch.deleteDocument($0.reference) }
+                batch.commit { err in
+                    if let err = err {
+                        print("❌ Batch delete failed for practiceId=\(pid): \(err)")
+                        completion(.failure(err))
+                    } else {
+                        print("✅ Deleted \(docs.count) practice events for practiceId=\(pid)")
+                        completion(.success(()))
+                    }
+                }
+            }
+        } else {
+            // General session (no practiceId stored). Firestore cannot query for missing fields directly.
+            // Strategy: fetch practice-mode events and client-filter those with missing or empty practiceId.
+            query.getDocuments { snapshot, error in
+                if let error = error {
+                    print("❌ Failed to query general practice events: \(error)")
+                    completion(.failure(error))
+                    return
+                }
+                let allDocs = snapshot?.documents ?? []
+                let toDelete = allDocs.filter { doc in
+                    let data = doc.data()
+                    // Consider missing or empty string as General. Adjust if you use a sentinel value.
+                    if let pidAny = data["practiceId"] {
+                        if let pidStr = pidAny as? String {
+                            return pidStr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        }
+                        return false
+                    } else {
+                        return true // missing field
+                    }
+                }
+                guard !toDelete.isEmpty else {
+                    print("🧹 No general practice events found to delete")
+                    completion(.success(()))
+                    return
+                }
+                let batch = db.batch()
+                toDelete.forEach { batch.deleteDocument($0.reference) }
+                batch.commit { err in
+                    if let err = err {
+                        print("❌ Batch delete failed for general practice events: \(err)")
+                        completion(.failure(err))
+                    } else {
+                        print("✅ Deleted \(toDelete.count) general practice events")
+                        completion(.success(()))
+                    }
+                }
+            }
+        }
+    }
+    
 }
 
 extension AuthManager {
