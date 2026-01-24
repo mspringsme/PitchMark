@@ -2469,7 +2469,6 @@ private struct ProgressSummaryView: View {
     @State private var isReset: Bool = false
     
     private func didHitLocation(_ event: PitchEvent) -> Bool {
-        // Use the shared predicate from the codebase that powers the cards
         return isLocationMatch(event)
     }
     
