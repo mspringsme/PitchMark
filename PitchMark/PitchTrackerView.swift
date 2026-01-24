@@ -190,6 +190,9 @@ struct PitchTrackerView: View {
     // Added per instructions:
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
     @State private var encryptedSelectionByPracticeId: [String: Bool] = [:]
+    
+    // Added progressRefreshToken as per instruction 1
+    @State private var progressRefreshToken = UUID()
 
     fileprivate enum OverlayTab { case cards, progress }
     @State private var overlayTab: OverlayTab = .progress
@@ -657,6 +660,8 @@ struct PitchTrackerView: View {
                                 selectedPracticeId: selectedPracticeId,
                                 templates: templates
                             )
+                            // Added .id(progressRefreshToken) per instruction 2
+                            .id(progressRefreshToken)
                             .frame(maxWidth: .infinity, minHeight: 170)
                             .erasedToAnyView()
                         } else {
@@ -1317,6 +1322,8 @@ struct PitchTrackerView: View {
                         } else {
                             showPracticeSheet = true
                         }
+                        // Added per instruction 5: bump progressRefreshToken on practice mode switch
+                        progressRefreshToken = UUID()
                     }
                 }
             }
@@ -1387,6 +1394,11 @@ struct PitchTrackerView: View {
         }
         authManager.loadPitchEvents { events in
             self.pitchEvents = events
+        }
+        // Added per instruction 4: Refresh progress tab token after auto save
+        // Ensure Progress tab reflects the latest practice stats immediately
+        if overlayTab == .progress && sessionManager.currentMode == .practice {
+            progressRefreshToken = UUID()
         }
 
         // Prevent sheet from showing and reset UI state (mirror sheet save reset)
@@ -1516,6 +1528,12 @@ struct PitchTrackerView: View {
                 colorRefreshToken = UUID()
             }
         }
+        // Added per instruction 6: refresh token bump on overlayTab change to .progress in practice mode
+        .onChange(of: overlayTab) { _, newValue in
+            if newValue == .progress && sessionManager.currentMode == .practice {
+                progressRefreshToken = UUID()
+            }
+        }
         .sheet(isPresented: $showGameSheet, onDismiss: {
             // If user canceled without creating/choosing, optionally revert to practice
             if sessionManager.currentMode == .game && !isGame {
@@ -1640,6 +1658,10 @@ struct PitchTrackerView: View {
                     }
                     authManager.loadPitchEvents { events in
                         self.pitchEvents = events
+                    }
+                    // Added per instruction 3: bump progressRefreshToken on Practice save when sheet is shown
+                    if overlayTab == .progress && sessionManager.currentMode == .practice {
+                        progressRefreshToken = UUID()
                     }
 
                     // Reset state
@@ -3837,6 +3859,7 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
 
 
 

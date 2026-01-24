@@ -1035,40 +1035,42 @@ struct PitchResultSheet: View {
                             
                             Spacer()
 
-                            Menu {
-                                // Clear option
-                                if !jerseyFilter.isEmpty {
-                                    Button(role: .destructive) {
-                                        jerseyFilter = ""
-                                    } label: {
-                                        Label("Clear Filter", systemImage: "xmark.circle")
+                            if sessionManager.currentMode == .game {
+                                Menu {
+                                    // Clear option
+                                    if !jerseyFilter.isEmpty {
+                                        Button(role: .destructive) {
+                                            jerseyFilter = ""
+                                        } label: {
+                                            Label("Clear Filter", systemImage: "xmark.circle")
+                                        }
+                                        Divider()
                                     }
-                                    Divider()
-                                }
-                                // Jersey options
-                                ForEach(availableJerseyNumbers, id: \.self) { num in
-                                    Button {
-                                        jerseyFilter = num
-                                    } label: {
-                                        HStack {
-                                            Text("#\(num)")
-                                            if jerseyFilter == num {
-                                                Image(systemName: "checkmark")
+                                    // Jersey options
+                                    ForEach(availableJerseyNumbers, id: \.self) { num in
+                                        Button {
+                                            jerseyFilter = num
+                                        } label: {
+                                            HStack {
+                                                Text("#\(num)")
+                                                if jerseyFilter == num {
+                                                    Image(systemName: "checkmark")
+                                                }
                                             }
                                         }
                                     }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "line.3.horizontal.decrease.circle")
+                                        Text(jerseyFilter.isEmpty ? "#" : "#\(jerseyFilter)")
+                                            .fontWeight(jerseyFilter.isEmpty ? .regular : .semibold)
+                                            .monospacedDigit()
+                                            .frame(minWidth: 24, alignment: .leading)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .clipShape(Capsule())
+                                    .compositingGroup()
                                 }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "line.3.horizontal.decrease.circle")
-                                    Text(jerseyFilter.isEmpty ? "#" : "#\(jerseyFilter)")
-                                        .fontWeight(jerseyFilter.isEmpty ? .regular : .semibold)
-                                        .monospacedDigit()
-                                        .frame(minWidth: 24, alignment: .leading)
-                                }
-                                .padding(.horizontal, 8)
-                                .clipShape(Capsule())
-                                .compositingGroup()
                             }
                         }
                     }
