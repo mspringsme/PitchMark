@@ -2467,23 +2467,10 @@ private struct ProgressSummaryView: View {
     let templates: [PitchTemplate]
     
     @State private var isReset: Bool = false
-    private func normalizeLocationForHitSpot(_ raw: String?) -> String {
-        // Local, calculation-only normalization to compare called vs actual locations.
-        // 1) Trim whitespace/newlines
-        // 2) Uppercase for case-insensitive compare
-        // 3) Collapse internal spaces
-        guard let raw = raw else { return "" }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return "" }
-        let upper = trimmed.uppercased()
-        let collapsed = upper.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        return collapsed
-    }
-
-    private func locationsMatchForHitSpot(called: String?, actual: String?) -> Bool {
-        let c = normalizeLocationForHitSpot(called)
-        let a = normalizeLocationForHitSpot(actual)
-        return !c.isEmpty && c == a
+    
+    private func didHitLocation(_ event: PitchEvent) -> Bool {
+        // Use the shared predicate from the codebase that powers the cards
+        return isLocationMatch(event)
     }
     
     private var practiceEvents: [PitchEvent] {
@@ -2502,24 +2489,19 @@ private struct ProgressSummaryView: View {
     private var ballCount: Int { practiceEvents.filter { $0.isStrike == false }.count }
     private var hitSpotCount: Int {
         practiceEvents.filter { ev in
-            guard let call = ev.calledPitch else { return false }
-            return locationsMatchForHitSpot(called: call.location, actual: ev.location)
+            didHitLocation(ev)
         }.count
     }
-
+    
     private var strikeHitSpotCount: Int {
         practiceEvents.filter { ev in
-            guard ev.isStrike == true else { return false }
-            guard let call = ev.calledPitch else { return false }
-            return locationsMatchForHitSpot(called: call.location, actual: ev.location)
+            (ev.isStrike == true || ev.strikeLooking == true || ev.strikeSwinging == true) && didHitLocation(ev)
         }.count
     }
 
     private var ballHitSpotCount: Int {
         practiceEvents.filter { ev in
-            guard ev.isStrike == false else { return false }
-            guard let call = ev.calledPitch else { return false }
-            return locationsMatchForHitSpot(called: call.location, actual: ev.location)
+            !(ev.isStrike == true || ev.strikeLooking == true || ev.strikeSwinging == true) && didHitLocation(ev)
         }.count
     }
     
@@ -2541,20 +2523,21 @@ private struct ProgressSummaryView: View {
         var dict: [String: (hits: Int, attempts: Int, templateId: String?)] = [:]
         for ev in practiceEvents {
             guard let call = ev.calledPitch else { continue }
+              let hit = didHitLocation(ev)
             let name = ev.pitch
             let tid = ev.templateId
             let key = (name) + "|" + (tid ?? "-")
 
             var current = dict[key] ?? (hits: 0, attempts: 0, templateId: tid)
             current.attempts += 1
-            if locationsMatchForHitSpot(called: call.location, actual: ev.location) {
+            if didHitLocation(ev) {
                 current.hits += 1
             }
             dict[key] = current
         }
 
         // Convert to array and sort by highest success rate, then by attempts
-        let array: [(pitch: String, templateId: String?, templateName: String, hits: Int, attempts: Int, percent: Double)] = dict.map { (key, value) in
+        let mapped: [(pitch: String, templateId: String?, templateName: String, hits: Int, attempts: Int, percent: Double)] = dict.map { (key, value) in
             let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
             let pitchName = parts.first ?? "-"
             let tid = value.templateId
@@ -2562,7 +2545,12 @@ private struct ProgressSummaryView: View {
             let pct = value.attempts > 0 ? Double(value.hits) / Double(value.attempts) : 0.0
             return (pitch: pitchName, templateId: tid, templateName: tname, hits: value.hits, attempts: value.attempts, percent: pct)
         }
-        return array.sorted { lhs, rhs in
+        // Debug summary after mapping to avoid capturing before declaration
+        let debugSummary = mapped.map { item in
+            "\(item.pitch) [t: \(item.templateName)] hits: \(item.hits)/\(item.attempts) pct: \(String(format: "%.2f", item.percent))"
+        }.joined(separator: "\n")
+        print("[Metrics] pitchStats summary:\n\(debugSummary)")
+        return mapped.sorted { lhs, rhs in
             if lhs.percent == rhs.percent { return lhs.attempts > rhs.attempts }
             return lhs.percent > rhs.percent
         }
@@ -2571,18 +2559,26 @@ private struct ProgressSummaryView: View {
     private var pitchRanking: [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
         for ev in practiceEvents {
-            guard let call = ev.calledPitch else { continue }
-            if !locationsMatchForHitSpot(called: call.location, actual: ev.location) { continue }
+            print("[Metrics] Ranking consider id=\(ev.id ?? "-") pitch=\(ev.pitch ?? "-") hasCall=\(ev.calledPitch != nil) didHit=\(didHitLocation(ev))")
+            guard ev.calledPitch != nil else { continue }
+            guard didHitLocation(ev) else { continue }
             let name = ev.pitch
-            if !name.isEmpty {
-                counts[name, default: 0] += 1
-            }
+            guard !name.isEmpty else { continue }
+            print("[Metrics]  Increment ranking for \(name)")
+            counts[name, default: 0] += 1
         }
-        return counts.map { ($0.key, $0.value) }
-            .sorted { lhs, rhs in
-                if lhs.count == rhs.count { return lhs.name < rhs.name }
-                return lhs.count > rhs.count
-            }
+
+        let rankingArray: [(name: String, count: Int)] = counts.map { (key, value) in
+            (name: key, count: value)
+        }
+
+        let summary = rankingArray.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
+        print("[Metrics] pitchRanking counts: \(summary)")
+
+        return rankingArray.sorted { lhs, rhs in
+            if lhs.count == rhs.count { return lhs.name < rhs.name }
+            return lhs.count > rhs.count
+        }
     }
     
     var body: some View {
@@ -3534,7 +3530,7 @@ struct PitchesFacedGridView: View {
     }
 }
 
-private extension View {
+extension View {
     func erasedToAnyView() -> AnyView {
         AnyView(self)
     }
@@ -3842,6 +3838,9 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
+
+
 
 
 

@@ -1005,23 +1005,33 @@ struct PitchResultSheet: View {
         }
     }
 
-    // Basic default filter: show all events, newest first. Adjust as needed.
     private var filteredEvents: [PitchEvent] {
-        // Start with all events
-        let base = allEvents
+        // Start with all events and scope to current mode
+        let modeScoped: [PitchEvent] = allEvents.filter { evt in
+            return evt.mode == sessionManager.currentMode
+        }
+
+        // If in practice mode and we have an active practice session, scope further to that session
+        let practiceScoped: [PitchEvent] = {
+            if sessionManager.currentMode == .practice, let pid = sessionManager.activePracticeId, !pid.isEmpty {
+                return modeScoped.filter { $0.practiceId == pid }
+            } else {
+                return modeScoped
+            }
+        }()
+
         // Apply jersey filter if provided (trimmed and case-insensitive)
         let trimmed = jerseyFilter.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered: [PitchEvent]
-        if trimmed.isEmpty {
-            filtered = base
-        } else {
-            filtered = base.filter { evt in
+        let jerseyScoped: [PitchEvent] = {
+            if trimmed.isEmpty { return practiceScoped }
+            return practiceScoped.filter { evt in
                 guard let jersey = evt.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty else { return false }
                 return jersey.caseInsensitiveCompare(trimmed) == .orderedSame
             }
-        }
+        }()
+
         // Sort newest first
-        return filtered.sorted { (lhs: PitchEvent, rhs: PitchEvent) -> Bool in
+        return jerseyScoped.sorted { (lhs: PitchEvent, rhs: PitchEvent) -> Bool in
             return lhs.timestamp > rhs.timestamp
         }
     }
