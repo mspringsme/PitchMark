@@ -143,8 +143,6 @@ struct PitchTrackerView: View {
     @State private var pitchEvents: [PitchEvent] = []
     @State private var games: [Game] = []
     @State private var showPitchResults = false
-    @State private var showTemplateStatsSheet = false
-    @State private var menuSelectedStatsTemplate: PitchTemplate?
     @State private var showConfirmSheet = false
     @State private var isStrikeSwinging = false
     @State private var isStrikeLooking = false
@@ -1095,28 +1093,6 @@ struct PitchTrackerView: View {
         }
     }
     
-    private var templatesOverlay: some View {
-        Group {
-            let sortedTemplates: [PitchTemplate] = {
-                guard let activeID = selectedTemplate?.id else {
-                    return templates.sorted { $0.name < $1.name }
-                }
-                let others = templates.filter { $0.id != activeID }.sorted { $0.name < $1.name }
-                if let active = templates.first(where: { $0.id == activeID }) {
-                    return [active] + others
-                }
-                return others
-            }()
-            ShowPitchLogTemplates(
-                sortedTemplates: sortedTemplates,
-                onSelectTemplate: { template in
-                    menuSelectedStatsTemplate = template
-                    showTemplateStatsSheet = true
-                }
-            )
-        }
-    }
-    
     private var sessionOverlay: some View {
         Group {
             Button(action: {
@@ -1283,7 +1259,6 @@ struct PitchTrackerView: View {
                 template: selectedTemplate
             )
             .overlay(resetOverlay, alignment: .bottomLeading)
-            .overlay(templatesOverlay, alignment: .bottomTrailing)
             .overlay(sessionOverlay, alignment: .bottom)
 
             batterSideOverlay(SZwidth: SZwidth)
@@ -1703,9 +1678,6 @@ struct PitchTrackerView: View {
                 selectedTemplate: $selectedTemplate
             )
             .environmentObject(authManager)
-        }
-        .sheet(item: $menuSelectedStatsTemplate) { template in
-            TemplateSuccessSheet(template: template)
         }
         .onChange(of: selectedTemplate) { _, newValue in
             // Persist and sync dependent state whenever template changes (from menu or Settings)

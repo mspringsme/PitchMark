@@ -14,8 +14,8 @@
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "3060"
-            endingLineNumber = "3060"
+            startingLineNumber = "3032"
+            endingLineNumber = "3032"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
@@ -30,8 +30,8 @@
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "3055"
-            endingLineNumber = "3055"
+            startingLineNumber = "3027"
+            endingLineNumber = "3027"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
@@ -62,8 +62,8 @@
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "217"
-            endingLineNumber = "217"
+            startingLineNumber = "215"
+            endingLineNumber = "215"
             landmarkName = "PitchTrackerView"
             landmarkType = "14">
          </BreakpointContent>
