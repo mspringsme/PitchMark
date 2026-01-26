@@ -711,6 +711,7 @@ struct PitchTrackerView: View {
                         isPracticeMode: sessionManager.currentMode == .practice
                         
                     )
+                    
                     .transition(.opacity)
                     .padding(.top, 4)
                     .onAppear {
@@ -729,7 +730,8 @@ struct PitchTrackerView: View {
                     }
                 }
             }
-            .padding(.top, -90)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, 16) // tweak this value to taste (e.g., 0–16)
             if showSelectBatterOverlay {
                 VStack {
                     HStack {
@@ -1320,7 +1322,7 @@ struct PitchTrackerView: View {
     private var mainStack: some View {
         VStack(spacing: 4) {
             headerContainer
-            Spacer(minLength: 20)
+            Spacer(minLength: 10)
             contentSectionDimmed
         }
     }
@@ -2972,19 +2974,23 @@ struct ResetPitchButton: View {
 }
 
 struct CodeOrderToggle: View {
-    @Binding var pitchFirst: Bool   // true = Pitch 1st, false = Location 1st
+    @Binding var pitchFirst: Bool
 
     var body: some View {
-        VStack(spacing: 6) {
-            Picker("", selection: $pitchFirst) {
-                Text("Pitch 1st").tag(true)
-                Text("Location 1st").tag(false)
-            }
-            .pickerStyle(.segmented)
-
+        HStack(spacing: 4) {
             Text("Code Order")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+            Picker("", selection: $pitchFirst) {
+                Text("Pitch 1st")
+                    .tag(true)
+
+                Text("Location 1st")
+                    .tag(false)
+            }
+            .controlSize(.mini)
+            .pickerStyle(.segmented)
         }
         .padding(.vertical, 4)
     }
@@ -3067,9 +3073,8 @@ struct CalledPitchView: View {
                     Spacer()
                 }
                 // Assigned codes as chips
-                // Codes as chips (encrypted uses generated call.codes, classic uses assignments)
-                if !displayCodes.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
+                if !displayCodes.isEmpty && (!isPracticeMode || codesEnabled) {
+                       ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(displayCodes, id: \.self) { code in
                                 let shown = reorderedCodeIfNeeded(code)
@@ -3115,33 +3120,45 @@ struct CalledPitchView: View {
                             }
                         }
                         .frame(height: 60)
-                        
-                        
                     }
                     .padding(.top, 2)
                     // Code order toggle (hidden in practice when codes are Off)
                     if !isPracticeMode || codesEnabled {
                         CodeOrderToggle(pitchFirst: $pitchFirst)
                     }
-                    // Practice-only: Codes On/Off toggle
-                    if isPracticeMode {
-                        HStack(spacing: 8) {
-                            Text("Codes:")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Toggle("", isOn: $codesEnabled)
-                                .labelsHidden()
-                            Text(codesEnabled ? "On" : "Off")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.top, 2)
+                    
+                } else {
+                    // Keep CalledPitchView height stable when Codes are turned Off in Practice
+                    if isPracticeMode && !codesEnabled && !displayCodes.isEmpty {
+                        // Reserve the chips area height
+                        Color.clear
+                            .frame(height: 60)
+                            .padding(.top, 2)
+                        // Reserve space for the CodeOrderToggle to prevent layout jump
+                        CodeOrderToggle(pitchFirst: $pitchFirst)
+                            .hidden()
+                    } else if !isEncryptedMode {
+                        Text("No assigned calls for this pitch/location")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 2)
                     }
-                } else if !isEncryptedMode {
-                    Text("No assigned calls for this pitch/location")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 2)
+                }
+                // Practice-only: Codes On/Off toggle
+                if isPracticeMode {
+                    
+                    HStack(spacing: 8) {
+                        Spacer()
+                        Text("Codes:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Toggle("", isOn: $codesEnabled)
+                            .labelsHidden()
+                        Text(codesEnabled ? "On" : "Off")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
                 }
                 
                 
@@ -3173,6 +3190,7 @@ struct CalledPitchView: View {
                 tappedCode = nil
             }
         }
+        
     }
 }
 
