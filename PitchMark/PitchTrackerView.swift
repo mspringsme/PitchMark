@@ -207,6 +207,7 @@ struct PitchTrackerView: View {
         static let storedPracticeSessions = "storedPracticeSessions"
         static let encryptedByGameId = "encryptedByGameId"
         static let encryptedByPracticeId = "encryptedByPracticeId"
+        static let practiceCodesEnabled = "practiceCodesEnabled"
     }
     @State private var isSelecting: Bool = false
     @State private var selectedEventIDs: Set<String> = []
@@ -706,7 +707,8 @@ struct PitchTrackerView: View {
                                 return useEncrypted(for: t)
                             }
                             return false
-                        }()
+                        }(),
+                        isPracticeMode: sessionManager.currentMode == .practice
                         
                     )
                     .transition(.opacity)
@@ -2992,6 +2994,7 @@ struct CalledPitchView: View {
     @State private var showResultOverlay = false
     @State private var selectedActualLocation: String?
     @State private var tappedCode: String?
+    @AppStorage(PitchTrackerView.DefaultsKeys.practiceCodesEnabled) private var codesEnabled: Bool = true
     @Binding var isRecordingResult: Bool
     @Binding var activeCalledPitchId: String?
     @Binding var pitchFirst: Bool
@@ -3000,6 +3003,7 @@ struct CalledPitchView: View {
     let batterSide: BatterSide
     let template: PitchTemplate?
     let isEncryptedMode: Bool
+    let isPracticeMode: Bool
     
     private func reorderedCodeIfNeeded(_ code: String) -> String {
         // When pitchFirst is false (Location 1st), swap first two and last two characters of a 4-char code.
@@ -3115,8 +3119,24 @@ struct CalledPitchView: View {
                         
                     }
                     .padding(.top, 2)
-                    //Toggle (order of codes)
-                    CodeOrderToggle(pitchFirst: $pitchFirst)
+                    // Code order toggle (hidden in practice when codes are Off)
+                    if !isPracticeMode || codesEnabled {
+                        CodeOrderToggle(pitchFirst: $pitchFirst)
+                    }
+                    // Practice-only: Codes On/Off toggle
+                    if isPracticeMode {
+                        HStack(spacing: 8) {
+                            Text("Codes:")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Toggle("", isOn: $codesEnabled)
+                                .labelsHidden()
+                            Text(codesEnabled ? "On" : "Off")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 2)
+                    }
                 } else if !isEncryptedMode {
                     Text("No assigned calls for this pitch/location")
                         .font(.caption)
@@ -3140,6 +3160,19 @@ struct CalledPitchView: View {
         .padding(.horizontal)
         .transition(.opacity)
         .accessibilityElement(children: .combine)
+        .onAppear {
+            if isPracticeMode {
+                // If Codes are Off, allow choosing result without tapping a code first
+                isRecordingResult = !codesEnabled
+            }
+        }
+        .onChange(of: codesEnabled) { _, newValue in
+            if isPracticeMode {
+                // When turning Codes Off, immediately allow result selection; when On, require code tap again
+                isRecordingResult = !newValue
+                tappedCode = nil
+            }
+        }
     }
 }
 
