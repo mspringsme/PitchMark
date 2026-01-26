@@ -1134,6 +1134,42 @@ struct PitchResultSheet: View {
                                         .compositingGroup()
                                 }
                             }
+                            else if sessionManager.currentMode == .practice {
+                                Menu {
+                                    // Clear pitch filter
+                                    if !pitchFilter.isEmpty {
+                                        Button(role: .destructive) {
+                                            pitchFilter = ""
+                                        } label: {
+                                            Label("Clear Pitch Filter", systemImage: "xmark.circle")
+                                        }
+                                        Divider()
+                                    }
+
+                                    // Pitch options with success percentages
+                                    ForEach(availablePitchTypes, id: \.self) { type in
+                                        Button {
+                                            pitchFilter = type
+                                        } label: {
+                                            HStack {
+                                                let pct = pitchTypeSuccessPercent[type]
+                                                Text(pct != nil ? "\(type) (\(pct!)%)" : type)
+                                                if pitchFilter == type {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                    }
+                                } label: {
+                                    let hasActiveFilters = !pitchFilter.isEmpty
+                                    Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                                        .foregroundStyle(hasActiveFilters ? Color.blue : .primary)
+                                        .shadow(color: hasActiveFilters ? Color.blue.opacity(0.35) : .clear, radius: hasActiveFilters ? 6 : 0)
+                                        .imageScale(.medium)
+                                        .clipShape(Capsule())
+                                        .compositingGroup()
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
