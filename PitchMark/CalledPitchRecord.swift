@@ -1106,19 +1106,13 @@ struct PitchResultSheet: View {
                                         }
                                     }
                                 } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "line.3.horizontal.decrease.circle")
-                                        Text(jerseyFilter.isEmpty ? "#" : "#\(jerseyFilter)")
-                                            .fontWeight(jerseyFilter.isEmpty ? .regular : .semibold)
-                                            .monospacedDigit()
-                                        Text("•")
-                                            .foregroundColor(.secondary)
-                                        Text(pitchFilter.isEmpty ? "Pitch" : pitchFilter)
-                                            .fontWeight(pitchFilter.isEmpty ? .regular : .semibold)
-                                            .lineLimit(1)
-                                    }
-                                    .clipShape(Capsule())
-                                    .compositingGroup()
+                                    let hasActiveFilters = !jerseyFilter.isEmpty || !pitchFilter.isEmpty
+                                    Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                                        .foregroundStyle(hasActiveFilters ? Color.blue : .primary)
+                                        .shadow(color: hasActiveFilters ? Color.blue.opacity(0.35) : .clear, radius: hasActiveFilters ? 6 : 0)
+                                        .imageScale(.medium)
+                                        .clipShape(Capsule())
+                                        .compositingGroup()
                                 }
                             }
                         }
