@@ -506,7 +506,7 @@ struct PitchResultCard: View {
         
         let overallSuccessRate: Int = {
             let matchingCalls = allEvents.filter {
-                $0.calledPitch?.pitch == event.calledPitch?.pitch
+                return $0.calledPitch?.pitch == event.calledPitch?.pitch
             }
             let successes = matchingCalls.filter { isFullySuccessful($0) }.count
             let total = matchingCalls.count
@@ -955,6 +955,24 @@ struct PitchResultSheet: View {
             lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
         }
     }
+    
+    private var pitchTypeSuccessPercent: [String: Int] {
+        // Compute overall success rate per called pitch type, mirroring PitchCardView's overallSuccessRate logic
+        let withCalls = allEvents.compactMap { evt -> (String, PitchEvent)? in
+            guard let call = evt.calledPitch else { return nil }
+            return (call.pitch, evt)
+        }
+        let grouped = Dictionary(grouping: withCalls, by: { $0.0 })
+        var result: [String: Int] = [:]
+        for (pitchType, pairs) in grouped {
+            let total = pairs.count
+            // Success uses the same isLocationMatch/isFullySuccessful heuristic used in PitchResultCard
+            let successes = pairs.filter { strictIsLocationMatch($0.1) }.count
+            let pct = total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
+            result[pitchType] = pct
+        }
+        return result
+    }
 
     private var filteredEvents: [PitchEvent] {
         // Start with all events and scope to current mode
@@ -1098,7 +1116,8 @@ struct PitchResultSheet: View {
                                             pitchFilter = type
                                         } label: {
                                             HStack {
-                                                Text(type)
+                                                let pct = pitchTypeSuccessPercent[type]
+                                                Text(pct != nil ? "\(type) (\(pct!)%)" : type)
                                                 if pitchFilter == type {
                                                     Image(systemName: "checkmark")
                                                 }
