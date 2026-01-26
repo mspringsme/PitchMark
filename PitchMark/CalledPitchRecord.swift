@@ -933,7 +933,8 @@ struct PitchResultSheet: View {
     @State private var pendingTemplateSelection: PitchTemplate? = nil
     
     @State private var jerseyFilter: String = ""
-    
+    @State private var pitchFilter: String = ""
+
     private var availableJerseyNumbers: [String] {
         let nums = allEvents.compactMap { $0.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -942,6 +943,16 @@ struct PitchResultSheet: View {
             // Sort numerically when possible, else lexicographically
             if let li = Int(lhs), let ri = Int(rhs) { return li < ri }
             return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
+    
+    private var availablePitchTypes: [String] {
+        let types = allEvents
+            .map { $0.pitch.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let unique = Set(types)
+        return unique.sorted { lhs, rhs in
+            lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
         }
     }
 
@@ -961,17 +972,26 @@ struct PitchResultSheet: View {
         }()
 
         // Apply jersey filter if provided (trimmed and case-insensitive)
-        let trimmed = jerseyFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedJersey = jerseyFilter.trimmingCharacters(in: .whitespacesAndNewlines)
         let jerseyScoped: [PitchEvent] = {
-            if trimmed.isEmpty { return practiceScoped }
+            if trimmedJersey.isEmpty { return practiceScoped }
             return practiceScoped.filter { evt in
                 guard let jersey = evt.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty else { return false }
-                return jersey.caseInsensitiveCompare(trimmed) == .orderedSame
+                return jersey.caseInsensitiveCompare(trimmedJersey) == .orderedSame
+            }
+        }()
+
+        // Apply pitch type filter if provided (trimmed and case-insensitive)
+        let trimmedPitch = pitchFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pitchScoped: [PitchEvent] = {
+            if trimmedPitch.isEmpty { return jerseyScoped }
+            return jerseyScoped.filter { evt in
+                evt.pitch.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(trimmedPitch) == .orderedSame
             }
         }()
 
         // Sort newest first
-        return jerseyScoped.sorted { (lhs: PitchEvent, rhs: PitchEvent) -> Bool in
+        return pitchScoped.sorted { (lhs: PitchEvent, rhs: PitchEvent) -> Bool in
             return lhs.timestamp > rhs.timestamp
         }
     }
@@ -1042,7 +1062,7 @@ struct PitchResultSheet: View {
                                         Button(role: .destructive) {
                                             jerseyFilter = ""
                                         } label: {
-                                            Label("Clear Filter", systemImage: "xmark.circle")
+                                            Label("Clear Jersey Filter", systemImage: "xmark.circle")
                                         }
                                         Divider()
                                     }
@@ -1059,15 +1079,44 @@ struct PitchResultSheet: View {
                                             }
                                         }
                                     }
+
+                                    Divider()
+
+                                    // Clear pitch filter
+                                    if !pitchFilter.isEmpty {
+                                        Button(role: .destructive) {
+                                            pitchFilter = ""
+                                        } label: {
+                                            Label("Clear Pitch Filter", systemImage: "xmark.circle")
+                                        }
+                                        Divider()
+                                    }
+
+                                    // Pitch options
+                                    ForEach(availablePitchTypes, id: \.self) { type in
+                                        Button {
+                                            pitchFilter = type
+                                        } label: {
+                                            HStack {
+                                                Text(type)
+                                                if pitchFilter == type {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                    }
                                 } label: {
-                                    HStack(spacing: 6) {
+                                    HStack(spacing: 4) {
                                         Image(systemName: "line.3.horizontal.decrease.circle")
                                         Text(jerseyFilter.isEmpty ? "#" : "#\(jerseyFilter)")
                                             .fontWeight(jerseyFilter.isEmpty ? .regular : .semibold)
                                             .monospacedDigit()
-                                            .frame(minWidth: 24, alignment: .leading)
+                                        Text("•")
+                                            .foregroundColor(.secondary)
+                                        Text(pitchFilter.isEmpty ? "Pitch" : pitchFilter)
+                                            .fontWeight(pitchFilter.isEmpty ? .regular : .semibold)
+                                            .lineLimit(1)
                                     }
-                                    .padding(.horizontal, 8)
                                     .clipShape(Capsule())
                                     .compositingGroup()
                                 }
