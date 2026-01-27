@@ -977,6 +977,23 @@ struct PitchTrackerView: View {
     private var atBatSidebar: some View {
         if isGame {
             VStack(spacing: 0) {
+                // QR scanner button row
+                HStack(spacing: 0) {
+                    Button(action: {
+                        // TODO: Hook up QR scanning action
+                        NotificationCenter.default.post(name: .init("qrScannerTapped"), object: nil)
+                    }) {
+                        Image(systemName: "qrcode.viewfinder")
+                            .imageScale(.large)
+                            .foregroundStyle(.primary)
+                            .frame(width: 44, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 6)
+                .padding(.top, 6)
+
                 Text("At Bat")
                     .font(.caption)
                     .fontWeight(.semibold)
@@ -3882,6 +3899,7 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
+
 
 
 
