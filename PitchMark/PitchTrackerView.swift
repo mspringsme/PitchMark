@@ -213,6 +213,7 @@ struct PitchTrackerView: View {
     @State private var selectedEventIDs: Set<String> = []
     @State private var localTemplateOverrides: [String: String] = [:]
     @State private var pitchFirst = true
+    @State private var showCodeShareSheet = false
 
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
@@ -454,7 +455,41 @@ struct PitchTrackerView: View {
     }
     
     // MARK: - Game Field Bindings
+    private func buildShareCode() -> String {
+        // Encode minimal session info as a simple URL-like string
+        if isGame, let gid = selectedGameId {
+            let opp = opponentName?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            return "pm://join?type=game&gameId=\(gid)&opponent=\(opp)"
+        } else {
+            let pid = selectedPracticeId ?? "__GENERAL__"
+            let pname = (practiceName ?? "").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+            return "pm://join?type=practice&practiceId=\(pid)&practiceName=\(pname)"
+        }
+    }
 
+    private func consumeShareCode(_ text: String) {
+        // Prefer URL-like string (pm://join?type=...&...)
+        if let url = URL(string: text),
+           let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            var userInfo: [String: Any] = [:]
+            for item in comps.queryItems ?? [] {
+                userInfo[item.name] = item.value
+            }
+            if let type = comps.queryItems?.first(where: { $0.name == "type" })?.value {
+                userInfo["type"] = type
+                NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: userInfo)
+                return
+            }
+        }
+        // Fallback: try JSON object string
+        if let data = text.data(using: .utf8),
+           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let type = dict["type"] as? String {
+            var userInfo = dict
+            userInfo["type"] = type
+            NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: userInfo)
+        }
+    }
     // Tiny factory to reduce type-checker work when creating bindings
     private func intBinding(
         get: @escaping () -> Int,
@@ -980,10 +1015,9 @@ struct PitchTrackerView: View {
                 // QR scanner button row
                 HStack(spacing: 0) {
                     Button(action: {
-                        // TODO: Hook up QR scanning action
-                        NotificationCenter.default.post(name: .init("qrScannerTapped"), object: nil)
+                        showCodeShareSheet = true
                     }) {
-                        Image(systemName: "qrcode.viewfinder")
+                        Image(systemName: "key.sensor.tag.radiowaves.left.and.right.fill")
                             .imageScale(.large)
                             .foregroundStyle(.primary)
                             .frame(width: 44, height: 36)
@@ -1570,6 +1604,13 @@ struct PitchTrackerView: View {
             .presentationDetents([.fraction(0.5)])
             .presentationDragIndicator(.visible)
             .environmentObject(authManager)
+        }
+        .sheet(isPresented: $showCodeShareSheet) {
+            CodeShareSheet(initialCode: buildShareCode()) { code in
+                consumeShareCode(code)
+            }
+            .presentationDetents([.fraction(0.4), .medium])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showPracticeSheet, onDismiss: {
             // If user canceled without creating/choosing, optionally revert to game
@@ -3239,6 +3280,95 @@ struct PitchResultBanner: View {
         .transition(.opacity.combined(with: .move(edge: .top)))
         .animation(.easeInOut(duration: 0.25), value: isRecording)
         .accessibilityLabel(isRecording ? "Choose a pitch result" : "Tap a Code")
+    }
+}
+private struct CodeShareSheet: View {
+    let initialCode: String
+    let onConsume: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var tab: Int = 0 // 0 generate, 1 enter
+    @State private var generated: String
+    @State private var entered: String = ""
+
+    init(initialCode: String, onConsume: @escaping (String) -> Void) {
+        self.initialCode = initialCode
+        self.onConsume = onConsume
+        _generated = State(initialValue: initialCode)
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Picker("Mode", selection: $tab) {
+                    Text("Generate").tag(0)
+                    Text("Enter").tag(1)
+                }
+                .pickerStyle(.segmented)
+
+                if tab == 0 {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Share this code with your partner:")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        TextEditor(text: $generated)
+                            .font(.callout.monospaced())
+                            .frame(minHeight: 80)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            )
+                            .disabled(true)
+
+                        HStack {
+                            Button {
+                                UIPasteboard.general.string = generated
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.bordered)
+
+                            ShareLink(item: generated) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Paste the code from your partner:")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
+                        TextEditor(text: $entered)
+                            .font(.callout.monospaced())
+                            .frame(minHeight: 100)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            )
+
+                        Button {
+                            onConsume(entered.trimmingCharacters(in: .whitespacesAndNewlines))
+                            dismiss()
+                        } label: {
+                            Label("Join", systemImage: "arrow.right.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(entered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding()
+            .navigationTitle("Code Link")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
     }
 }
 
