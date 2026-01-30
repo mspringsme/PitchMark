@@ -67,11 +67,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 struct PitchMarkApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var authManager = AuthManager()
-
+    @StateObject private var codeResolver = CodeSessionResolver()
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(authManager)
+                .onAppear {
+                    // Start listening for code-only notifications
+                    codeResolver.startObserving()
+                }
         }
     }
 }
