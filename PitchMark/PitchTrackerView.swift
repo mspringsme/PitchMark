@@ -457,40 +457,25 @@ struct PitchTrackerView: View {
     
     // MARK: - Game Field Bindings
     private func buildShareCode() -> String {
-        // Encode minimal session info as a simple URL-like string
-        if isGame, let gid = selectedGameId {
-            let opp = opponentName?.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-            return "pm://join?type=game&gameId=\(gid)&opponent=\(opp)"
-        } else {
-            let pid = selectedPracticeId ?? "__GENERAL__"
-            let pname = (practiceName ?? "").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-            return "pm://join?type=practice&practiceId=\(pid)&practiceName=\(pname)"
-        }
+        // Return a random 6-digit numeric code (leading zeros allowed)
+        String(format: "%06d", Int.random(in: 0...999_999))
     }
 
     private func consumeShareCode(_ text: String) {
-        // Prefer URL-like string (pm://join?type=...&...)
-        if let url = URL(string: text),
-           let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-            var userInfo: [String: Any] = [:]
-            for item in comps.queryItems ?? [] {
-                userInfo[item.name] = item.value
-            }
-            if let type = comps.queryItems?.first(where: { $0.name == "type" })?.value {
-                userInfo["type"] = type
-                NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: userInfo)
-                return
-            }
-        }
-        // Fallback: try JSON object string
-        if let data = text.data(using: .utf8),
-           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let type = dict["type"] as? String {
-            var userInfo = dict
-            userInfo["type"] = type
-            NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: userInfo)
-        }
+        // Accept only exactly 6 digits
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isSixDigits = trimmed.count == 6 && trimmed.allSatisfy({ $0.isNumber })
+        guard isSixDigits else { return }
+
+        // Post a notification carrying just the code so some resolver can handle it.
+        // You can decide in your observer what to do (e.g., open game/practice after lookup).
+        NotificationCenter.default.post(
+            name: .gameOrSessionChosen,
+            object: nil,
+            userInfo: ["code": trimmed]
+        )
     }
+    
     // Tiny factory to reduce type-checker work when creating bindings
     private func intBinding(
         get: @escaping () -> Int,
@@ -3325,11 +3310,17 @@ private struct CodeShareSheet: View {
                             .foregroundStyle(.secondary)
                         
                         TextEditor(text: $generated)
-                            .font(.callout.monospaced())
-                            .frame(minHeight: 80)
+                            .font(.system(size: 40, weight: .regular, design: .monospaced)) // Larger, monospaced
+                            .multilineTextAlignment(.center) // Center the text
+                            .frame(minHeight: 100) // Slightly taller for readability
+                            .padding(8) // Padding inside the editor
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color(UIColor.secondarySystemBackground).opacity(0.6))
+                            )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
                             )
                             .disabled(true)
                         
@@ -3353,11 +3344,17 @@ private struct CodeShareSheet: View {
                             .foregroundStyle(.secondary)
                         
                         TextEditor(text: $entered)
-                            .font(.callout.monospaced())
-                            .frame(minHeight: 100)
+                            .font(.system(size: 40, weight: .regular, design: .monospaced)) // Larger, monospaced
+                            .multilineTextAlignment(.center) // Center the text
+                            .frame(minHeight: 120)
+                            .padding(8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color(UIColor.secondarySystemBackground).opacity(0.6))
+                            )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
                             )
                         
                         Button {
