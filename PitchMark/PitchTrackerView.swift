@@ -213,6 +213,8 @@ struct PitchTrackerView: View {
     @State private var localTemplateOverrides: [String: String] = [:]
     @State private var pitchFirst = true
     @State private var showCodeShareSheet = false
+    @State private var showCodeShareModePicker = false
+    @State private var codeShareInitialTab: Int = 0 // 0 = Generate, 1 = Enter
 
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
@@ -1014,7 +1016,7 @@ struct PitchTrackerView: View {
                 // QR scanner button row
                 HStack(spacing: 0) {
                     Button(action: {
-                        showCodeShareSheet = true
+                        showCodeShareModePicker = true
                     }) {
                         Image(systemName: "key.sensor.tag.radiowaves.left.and.right.fill")
                             .imageScale(.large)
@@ -1129,6 +1131,21 @@ struct PitchTrackerView: View {
             .background(.ultraThinMaterial)
             .cornerRadius(10)
             .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
+            .confirmationDialog(
+                "Code Link",
+                isPresented: $showCodeShareModePicker,
+                titleVisibility: .visible
+            ) {
+                Button("Generate Code") {
+                    codeShareInitialTab = 0
+                    showCodeShareSheet = true
+                }
+                Button("Enter Code") {
+                    codeShareInitialTab = 1
+                    showCodeShareSheet = true
+                }
+                Button("Cancel", role: .cancel) { }
+            }
         }
     }
     
@@ -1605,7 +1622,7 @@ struct PitchTrackerView: View {
             .environmentObject(authManager)
         }
         .sheet(isPresented: $showCodeShareSheet) {
-            CodeShareSheet(initialCode: buildShareCode()) { code in
+            CodeShareSheet(initialCode: buildShareCode(), initialTab: codeShareInitialTab) { code in
                 consumeShareCode(code)
             }
             .presentationDetents([.fraction(0.4), .medium])
@@ -3284,33 +3301,29 @@ struct PitchResultBanner: View {
 private struct CodeShareSheet: View {
     let initialCode: String
     let onConsume: (String) -> Void
-
+    let initialTab: Int
     @Environment(\.dismiss) private var dismiss
-    @State private var tab: Int = 0 // 0 generate, 1 enter
+    @State private var tab: Int // 0 generate, 1 enter
     @State private var generated: String
     @State private var entered: String = ""
 
-    init(initialCode: String, onConsume: @escaping (String) -> Void) {
+    init(initialCode: String, initialTab: Int = 0, onConsume: @escaping (String) -> Void) {
         self.initialCode = initialCode
         self.onConsume = onConsume
+        self.initialTab = initialTab
         _generated = State(initialValue: initialCode)
+        _tab = State(initialValue: initialTab)
     }
-
+    
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                Picker("Mode", selection: $tab) {
-                    Text("Generate").tag(0)
-                    Text("Enter").tag(1)
-                }
-                .pickerStyle(.segmented)
-
                 if tab == 0 {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Share this code with your partner:")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-
+                        
                         TextEditor(text: $generated)
                             .font(.callout.monospaced())
                             .frame(minHeight: 80)
@@ -3319,7 +3332,7 @@ private struct CodeShareSheet: View {
                                     .stroke(Color.white.opacity(0.08), lineWidth: 1)
                             )
                             .disabled(true)
-
+                        
                         HStack {
                             Button {
                                 UIPasteboard.general.string = generated
@@ -3327,7 +3340,7 @@ private struct CodeShareSheet: View {
                                 Label("Copy", systemImage: "doc.on.doc")
                             }
                             .buttonStyle(.bordered)
-
+                            
                             ShareLink(item: generated) {
                                 Label("Share", systemImage: "square.and.arrow.up")
                             }
@@ -3338,7 +3351,7 @@ private struct CodeShareSheet: View {
                         Text("Paste the code from your partner:")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-
+                        
                         TextEditor(text: $entered)
                             .font(.callout.monospaced())
                             .frame(minHeight: 100)
@@ -3346,7 +3359,7 @@ private struct CodeShareSheet: View {
                                 RoundedRectangle(cornerRadius: 8)
                                     .stroke(Color.white.opacity(0.08), lineWidth: 1)
                             )
-
+                        
                         Button {
                             onConsume(entered.trimmingCharacters(in: .whitespacesAndNewlines))
                             dismiss()
@@ -3357,7 +3370,7 @@ private struct CodeShareSheet: View {
                         .disabled(entered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
-
+                
                 Spacer(minLength: 0)
             }
             .padding()

@@ -8,6 +8,7 @@
 import SwiftUI
 import FirebaseCore
 import Firebase
+import FirebaseAppCheck
 
 struct RootView: View {
     @EnvironmentObject var authManager: AuthManager
@@ -43,9 +44,20 @@ struct SplashView: View {
     }
 }
 
+
+final class AppCheckDebugProviderFactory: NSObject, AppCheckProviderFactory {
+    func createProvider(with app: FirebaseApp) -> AppCheckProvider? {
+        AppCheckDebugProvider(app: app)
+    }
+}
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+
+        #if DEBUG
+        AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
+        #endif
+
         FirebaseApp.configure()
         return true
     }
