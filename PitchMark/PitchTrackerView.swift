@@ -110,7 +110,6 @@ struct ToggleChip: View {
 }
 
 struct PitchTrackerView: View {
-    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @State private var showSelectBatterOverlay: Bool = false
     @State private var showCodeAssignmentSheet = false
     @State private var pitcherName: String = ""

@@ -63,14 +63,7 @@ struct PitchMarkApp: App {
         }
     }
 }
-//@main
-//struct MyApp: App {
-//    var body: some Scene {
-//        WindowGroup {
-//            PitchImageGridPreview() // ✅ Launches your visual QA grid
-//        }
-//    }
-//}
+
 
 extension UIApplication {
     func endEditing() {
