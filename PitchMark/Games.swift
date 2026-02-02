@@ -45,6 +45,7 @@ struct Game: Identifiable, Codable {
     var jerseyNumbers: [String]
     var batterIds: [String]? = nil
     var createdAt: Date = Date()
+    var participants: [String: Bool] = [:]
     
     var balls: Int
     var strikes: Int
@@ -61,6 +62,7 @@ struct Game: Identifiable, Codable {
         jerseyNumbers: [String],
         batterIds: [String]? = nil,
         createdAt: Date = Date(),
+        participants: [String: Bool] = [:],
         balls: Int = 0,
         strikes: Int = 0,
         hits: Int = 0,
@@ -75,6 +77,7 @@ struct Game: Identifiable, Codable {
         self.jerseyNumbers = jerseyNumbers
         self.batterIds = batterIds
         self.createdAt = createdAt
+        self.participants = participants 
         self.balls = balls
         self.strikes = strikes
         self.hits = hits

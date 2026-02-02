@@ -530,24 +530,44 @@ extension AuthManager {
             print("No signed-in user to save game for.")
             return
         }
+
         let db = Firestore.firestore()
-        let ref = db.collection("users").document(user.uid).collection("games")
-        let doc = (game.id != nil) ? ref.document(game.id!) : ref.document()
+        let gamesRef = db.collection("users").document(user.uid).collection("games")
+        let docRef = (game.id != nil) ? gamesRef.document(game.id!) : gamesRef.document()
         let isNew = (game.id == nil)
+
         do {
             var toSave = game
             if isNew {
-                // Ensure first-time saves start with an empty set/list of jersey numbers
-                toSave.jerseyNumbers = []
+                toSave.jerseyNumbers = []   // keep your existing logic
             }
-            toSave.id = doc.documentID
-            try doc.setData(from: toSave, merge: true) { error in
-                if let error = error { print("Error saving game: \(error)") }
+
+            toSave.id = docRef.documentID
+
+            // ✅ Encode the Game model
+            let encoded = try Firestore.Encoder().encode(toSave)
+
+            // ✅ Add create-only fields (prevents overwriting participants on updates)
+            var data = encoded
+            if isNew {
+                data["ownerUserId"] = user.uid
+                data["participants"] = [user.uid: true]   // ✅ host is always included
+                data["createdAt"] = FieldValue.serverTimestamp()
             }
+
+            docRef.setData(data, merge: true) { error in
+                if let error = error {
+                    print("Error saving game: \(error)")
+                } else {
+                    print("✅ Game saved: \(docRef.documentID)")
+                }
+            }
+
         } catch {
             print("Encoding error saving game: \(error)")
         }
     }
+
 
     func loadGames(completion: @escaping ([Game]) -> Void) {
         guard let user = user else { completion([]); return }
@@ -563,6 +583,32 @@ extension AuthManager {
                 }
                 let games: [Game] = docs.compactMap { try? $0.data(as: Game.self) }
                 completion(games)
+            }
+    }
+    func loadGame(ownerUserId: String, gameId: String, completion: @escaping (Game?) -> Void) {
+        Firestore.firestore()
+            .collection("users").document(ownerUserId)
+            .collection("games").document(gameId)
+            .getDocument { snapshot, error in
+                if let error = error {
+                    print("Error loading game \(gameId) for owner \(ownerUserId): \(error.localizedDescription)")
+                    DispatchQueue.main.async { completion(nil) }
+                    return
+                }
+
+                guard let snapshot = snapshot, snapshot.exists else {
+                    print("Game not found. owner=\(ownerUserId) gameId=\(gameId)")
+                    DispatchQueue.main.async { completion(nil) }
+                    return
+                }
+
+                do {
+                    let game = try snapshot.data(as: Game.self)
+                    DispatchQueue.main.async { completion(game) }
+                } catch {
+                    print("Error decoding game \(gameId): \(error)")
+                    DispatchQueue.main.async { completion(nil) }
+                }
             }
     }
 

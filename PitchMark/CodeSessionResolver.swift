@@ -21,27 +21,43 @@ final class CodeSessionResolver: ObservableObject {
     }
 
     func startObserving() {
-        // Listen for code-only notifications
+        // Prevent accidentally stacking multiple observers if startObserving() is called more than once
+        if let obs = observer {
+            NotificationCenter.default.removeObserver(obs)
+            observer = nil
+        }
+
         observer = NotificationCenter.default.addObserver(
             forName: .gameOrSessionChosen,
             object: nil,
             queue: .main
         ) { [weak self] note in
-            guard let self = self else { return }
-            guard let userInfo = note.userInfo as? [String: Any],
-                  let code = userInfo["code"] as? String else {
-                return
-            }
-            // Validate 6-digit numeric
-            let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-            let isSixDigits = trimmed.count == 6 && trimmed.allSatisfy({ $0.isNumber })
-            guard isSixDigits else {
+            guard let self else { return }
+            guard let userInfo = note.userInfo as? [String: Any] else { return }
+
+            // Ignore already-resolved reposts (extra safety)
+            if (userInfo["resolved"] as? Bool) == true { return }
+
+            // Only handle code-only posts
+            guard userInfo["type"] == nil else { return }
+
+            guard let code = userInfo["code"] as? String else { return }
+            guard let normalized = Self.normalizedSixDigitCode(code) else {
                 print("Resolver: invalid code format: \(code)")
                 return
             }
-            self.resolve(code: trimmed)
+
+            self.resolve(code: normalized)
         }
     }
+
+
+    private static func normalizedSixDigitCode(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count == 6, trimmed.allSatisfy(\.isNumber) else { return nil }
+        return trimmed
+    }
+
 
     private func resolve(code: String) {
         let db = Firestore.firestore()
@@ -55,32 +71,27 @@ final class CodeSessionResolver: ObservableObject {
                 print("Resolver: session not found for code \(code)")
                 return
             }
+            // ✅ Expiration check (optional field)
+            if let expiresAt = data["expiresAt"] as? Timestamp {
+                let expiryDate = expiresAt.dateValue()
+                if expiryDate < Date() {
+                    print("Resolver: session expired for code \(code) at \(expiryDate)")
+                    // Optional cleanup:
+                    // docRef.delete()
+                    return
+                }
+            }
 
-            // Expecting a schema like:
-            // {
-            //   hostUid: String,
-            //   ownerUserId: String, // owner of /users/{ownerUserId}
-            //   type: "game" | "practice",
-            //   gameId?: String,
-            //   opponent?: String,
-            //   practiceId?: String,
-            //   practiceName?: String,
-            //   templateId?: String,
-            //   templateName?: String,
-            //   createdAt: Timestamp,
-            //   expiresAt?: Timestamp
-            // }
             guard let type = data["type"] as? String else {
                 print("Resolver: missing type in session(\(code))")
                 return
             }
             if type == "game" {
                 self?.handleGameSession(data: data)
-            } else if type == "practice" {
-                self?.handlePracticeSession(data: data)
             } else {
-                print("Resolver: unknown session type \(type) for code \(code)")
+                print("Resolver: unsupported session type '\(type)' for code \(code)")
             }
+
         }
     }
 
@@ -103,7 +114,7 @@ final class CodeSessionResolver: ObservableObject {
             .collection("games").document(gameId)
 
         // Update only participants.<uid> = true to satisfy your rules
-        ref.setData(["participants": [currentUid: true]], merge: true) { error in
+        ref.setData(["participants.\(currentUid)": true], merge: true) { error in
             if let error = error {
                 print("Resolver: failed to add participant: \(error)")
                 return
@@ -113,27 +124,14 @@ final class CodeSessionResolver: ObservableObject {
                 name: .gameOrSessionChosen,
                 object: nil,
                 userInfo: [
+                    "resolved": true,
                     "type": "game",
                     "gameId": gameId,
+                    "ownerUserId": ownerUserId,
                     "opponent": opponent as Any
                 ]
             )
+
         }
-    }
-
-    private func handlePracticeSession(data: [String: Any]) {
-        // For cross-device practice, keep guest practice local.
-        // Use practiceName (if present) for a nicer label. Leave practiceId nil so the guest
-        // remains in a "general" practice unless they choose/create one locally.
-        let practiceName = data["practiceName"] as? String
-
-        NotificationCenter.default.post(
-            name: .gameOrSessionChosen,
-            object: nil,
-            userInfo: [
-                "type": "practice",
-                "practiceName": practiceName as Any
-            ]
-        )
     }
 }

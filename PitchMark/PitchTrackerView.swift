@@ -9,6 +9,7 @@ import SwiftUI
 import CoreGraphics
 import FirebaseCore
 import FirebaseFirestore
+import FirebaseAuth
 import UniformTypeIdentifiers
 import UIKit
 
@@ -207,6 +208,7 @@ struct PitchTrackerView: View {
         static let encryptedByGameId = "encryptedByGameId"
         static let encryptedByPracticeId = "encryptedByPracticeId"
         static let practiceCodesEnabled = "practiceCodesEnabled"
+        static let activeGameOwnerUserId = "activeGameOwnerUserId"
     }
     @State private var isSelecting: Bool = false
     @State private var selectedEventIDs: Set<String> = []
@@ -215,6 +217,12 @@ struct PitchTrackerView: View {
     @State private var showCodeShareSheet = false
     @State private var showCodeShareModePicker = false
     @State private var codeShareInitialTab: Int = 0 // 0 = Generate, 1 = Enter
+    @State private var showSelectGameFirstAlert = false
+    @State private var showCodeShareErrorAlert = false
+    @State private var codeShareErrorMessage: String = ""
+    @State private var shareCode: String = ""
+
+
 
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
@@ -462,19 +470,30 @@ struct PitchTrackerView: View {
     }
 
     private func consumeShareCode(_ text: String) {
+        // ✅ Codes are Game Mode only (no silent failure)
+        guard isGame else {
+            codeShareErrorMessage = "Codes can only be used in Game Mode."
+            showCodeShareErrorAlert = true
+            return
+        }
+
         // Accept only exactly 6 digits
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let isSixDigits = trimmed.count == 6 && trimmed.allSatisfy({ $0.isNumber })
-        guard isSixDigits else { return }
+        guard isSixDigits else {
+            codeShareErrorMessage = "Code must be exactly 6 digits."
+            showCodeShareErrorAlert = true
+            return
+        }
 
-        // Post a notification carrying just the code so some resolver can handle it.
-        // You can decide in your observer what to do (e.g., open game/practice after lookup).
+        // Post a notification carrying just the code so the resolver can handle it.
         NotificationCenter.default.post(
             name: .gameOrSessionChosen,
             object: nil,
             userInfo: ["code": trimmed]
         )
     }
+
     
     // Tiny factory to reduce type-checker work when creating bindings
     private func intBinding(
@@ -1122,10 +1141,26 @@ struct PitchTrackerView: View {
                 titleVisibility: .visible
             ) {
                 Button("Generate Code") {
+                    showCodeShareModePicker = false
+
+                    guard let gameId = selectedGameId else {
+                        showSelectGameFirstAlert = true
+                        return
+                    }
+
+                    // ✅ Option A: paste THIS right here
+                    let uid = Auth.auth().currentUser?.uid ?? "nil"
+                    print("Generate Code tapped | currentUid=\(uid) | selectedGameId=\(gameId)")
+
                     codeShareInitialTab = 0
+                    shareCode = buildShareCode()
                     showCodeShareSheet = true
                 }
+
+
+
                 Button("Enter Code") {
+                    showCodeShareModePicker = false
                     codeShareInitialTab = 1
                     showCodeShareSheet = true
                 }
@@ -1607,12 +1642,21 @@ struct PitchTrackerView: View {
             .environmentObject(authManager)
         }
         .sheet(isPresented: $showCodeShareSheet) {
-            CodeShareSheet(initialCode: buildShareCode(), initialTab: codeShareInitialTab) { code in
+            CodeShareSheet(
+                initialCode: shareCode,
+                initialTab: codeShareInitialTab,
+                hostUid: authManager.user?.uid,
+                gameId: selectedGameId,
+                opponent: opponentName,
+                isGame: isGame
+            ) { code in
                 consumeShareCode(code)
             }
             .presentationDetents([.fraction(0.4), .medium])
             .presentationDragIndicator(.visible)
         }
+
+
         .sheet(isPresented: $showPracticeSheet, onDismiss: {
             // If user canceled without creating/choosing, optionally revert to game
             if sessionManager.currentMode == .practice && practiceName == nil && selectedPracticeId == nil {
@@ -1742,6 +1786,17 @@ struct PitchTrackerView: View {
             )
             .environmentObject(authManager)
         }
+        .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Create or choose a game before generating a partner code.")
+        }
+        .alert("Code Link", isPresented: $showCodeShareErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(codeShareErrorMessage)
+        }
+
         .onChange(of: selectedTemplate) { _, newValue in
             // Persist and sync dependent state whenever template changes (from menu or Settings)
             persistSelectedTemplate(newValue)
@@ -1857,48 +1912,72 @@ struct PitchTrackerView: View {
                 defaults.removeObject(forKey: DefaultsKeys.activeGameId)
                 defaults.set("tracker", forKey: DefaultsKeys.lastView)
             } else if type == "game" {
-                if let gid = userInfo["gameId"] as? String {
-                    selectedGameId = gid
-                    // Always load the game to refresh lineup and opponent
-                    authManager.loadGames { games in
-                        if let game = games.first(where: { $0.id == gid }) {
-                            // Prefer provided opponent name, otherwise use stored
-                            if let opp = userInfo["opponent"] as? String {
-                                opponentName = opp
-                            } else {
-                                opponentName = game.opponent
-                            }
-                            if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
-                                jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
-                                    JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
-                                }
-                            } else {
-                                jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
-                            }
-                            selectedBatterId = nil
-                        } else {
-                            // Fallback: still set provided opponent if available
-                            if let opp = userInfo["opponent"] as? String {
-                                opponentName = opp
-                            }
-                        }
-                    }
-                    isGame = true
-                    sessionManager.switchMode(to: .game)
-                    if let t = selectedTemplate {
-                        let fallbackList = availablePitches(for: t)
-                            if useEncrypted(for: t) {
-                                selectedPitches = Set(fallbackList)
-                            } else {
-                                selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
-                            }
-                        colorRefreshToken = UUID()
-                    }
-                    let defaults = UserDefaults.standard
-                    defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
-                    defaults.set(gid, forKey: DefaultsKeys.activeGameId)
-                    defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                guard let gid = userInfo["gameId"] as? String else { return }
+
+                // 🔑 Owner userId is required for partner-join games (host-owned docs).
+                // Fallback to current signed-in user for local game selection flows.
+                let ownerIdFromPayload = userInfo["ownerUserId"] as? String
+                let resolvedOwnerId = ownerIdFromPayload ?? authManager.user?.uid
+
+                guard let ownerUserId = resolvedOwnerId else {
+                    print("❌ Missing ownerUserId and no signed-in user available.")
+                    return
                 }
+
+                selectedGameId = gid
+
+                // ✅ Load the specific game doc (works for host-owned games after joining)
+                authManager.loadGame(ownerUserId: ownerUserId, gameId: gid) { game in
+                    guard let game = game else {
+                        // Fallback: still set provided opponent if available
+                        if let opp = userInfo["opponent"] as? String {
+                            opponentName = opp
+                        }
+                        print("⚠️ Game not found or not readable yet. owner=\(ownerUserId) gameId=\(gid)")
+                        return
+                    }
+
+                    // Prefer provided opponent name, otherwise use stored
+                    if let opp = userInfo["opponent"] as? String {
+                        opponentName = opp
+                    } else {
+                        opponentName = game.opponent
+                    }
+
+                    if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                        jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                            JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                        }
+                    } else {
+                        jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                    }
+
+                    selectedBatterId = nil
+                }
+
+                isGame = true
+                sessionManager.switchMode(to: .game)
+
+                if let t = selectedTemplate {
+                    let fallbackList = availablePitches(for: t)
+                    if useEncrypted(for: t) {
+                        selectedPitches = Set(fallbackList)
+                    } else {
+                        selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                    }
+                    colorRefreshToken = UUID()
+                }
+
+                let defaults = UserDefaults.standard
+                defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+                defaults.set(gid, forKey: DefaultsKeys.activeGameId)
+                defaults.set(ownerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
+
+
+                // ✅ Persist owner id so restore works after relaunch for partner-joined games
+                defaults.set(ownerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
+
+                defaults.set("tracker", forKey: DefaultsKeys.lastView)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionDeleted)) { notification in
@@ -3285,35 +3364,59 @@ struct PitchResultBanner: View {
 }
 private struct CodeShareSheet: View {
     let initialCode: String
-    let onConsume: (String) -> Void
     let initialTab: Int
+    let hostUid: String?
+    let gameId: String?
+    let opponent: String?
+    let isGame: Bool
+
+    let onConsume: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Int // 0 generate, 1 enter
     @State private var generated: String
     @State private var entered: String = ""
+    @State private var didWriteSessionDoc = false
+    @State private var writeErrorMessage: String? = nil
 
-    init(initialCode: String, initialTab: Int = 0, onConsume: @escaping (String) -> Void) {
+
+    init(
+        initialCode: String,
+        initialTab: Int = 0,
+        hostUid: String?,
+        gameId: String?,
+        opponent: String?,
+        isGame: Bool,
+        onConsume: @escaping (String) -> Void
+    ) {
         self.initialCode = initialCode
-        self.onConsume = onConsume
         self.initialTab = initialTab
-        _generated = State(initialValue: initialCode)
+        self.hostUid = hostUid
+        self.gameId = gameId
+        self.opponent = opponent
+        self.isGame = isGame
+        self.onConsume = onConsume
+
+        _generated = State(initialValue: initialTab == 0 ? "" : initialCode)
         _tab = State(initialValue: initialTab)
     }
+
+
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
+
                 if tab == 0 {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Share this code with your partner:")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        
+
                         TextEditor(text: $generated)
-                            .font(.system(size: 40, weight: .regular, design: .monospaced)) // Larger, monospaced
-                            .multilineTextAlignment(.center) // Center the text
-                            .frame(minHeight: 100) // Slightly taller for readability
-                            .padding(8) // Padding inside the editor
+                            .font(.system(size: 40, weight: .regular, design: .monospaced))
+                            .multilineTextAlignment(.center)
+                            .frame(minHeight: 100)
+                            .padding(8)
                             .background(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .fill(Color(UIColor.secondarySystemBackground).opacity(0.6))
@@ -3323,7 +3426,14 @@ private struct CodeShareSheet: View {
                                     .stroke(Color.white.opacity(0.12), lineWidth: 1)
                             )
                             .disabled(true)
-                        
+
+                        if let msg = writeErrorMessage {
+                            Text(msg)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.center)
+                        }
+
                         HStack {
                             Button {
                                 UIPasteboard.general.string = generated
@@ -3331,21 +3441,29 @@ private struct CodeShareSheet: View {
                                 Label("Copy", systemImage: "doc.on.doc")
                             }
                             .buttonStyle(.bordered)
-                            
+
                             ShareLink(item: generated) {
                                 Label("Share", systemImage: "square.and.arrow.up")
                             }
                         }
                     }
+                    .onAppear {
+                        if generated.trimmingCharacters(in: .whitespacesAndNewlines).count != 6 {
+                            generated = ""
+                        }
+                        generateUniqueCodeAndWriteSession()
+                    }
+
+
                 } else {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Paste the code from your partner:")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        
+
                         TextEditor(text: $entered)
-                            .font(.system(size: 40, weight: .regular, design: .monospaced)) // Larger, monospaced
-                            .multilineTextAlignment(.center) // Center the text
+                            .font(.system(size: 40, weight: .regular, design: .monospaced))
+                            .multilineTextAlignment(.center)
                             .frame(minHeight: 120)
                             .padding(8)
                             .background(
@@ -3356,7 +3474,13 @@ private struct CodeShareSheet: View {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .stroke(Color.white.opacity(0.12), lineWidth: 1)
                             )
-                        
+                        if !isGame {
+                            Text("Codes can only be used in Game Mode.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+
                         Button {
                             onConsume(entered.trimmingCharacters(in: .whitespacesAndNewlines))
                             dismiss()
@@ -3364,10 +3488,10 @@ private struct CodeShareSheet: View {
                             Label("Join", systemImage: "arrow.right.circle.fill")
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(entered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!isGame || entered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
-                
+
                 Spacer(minLength: 0)
             }
             .padding()
@@ -3377,8 +3501,109 @@ private struct CodeShareSheet: View {
                     Button("Close") { dismiss() }
                 }
             }
+            // ✅ If user switches tabs while the sheet is open, ensure Generate triggers the write
+            .onChange(of: tab) { _, newValue in
+                if newValue == 0 {
+                    generateUniqueCodeAndWriteSession()
+                }
+            }
         }
     }
+    
+    private func buildShareCode() -> String {
+        String(format: "%06d", Int.random(in: 0...999_999))
+    }
+
+    private func generateUniqueCodeAndWriteSession(maxAttempts: Int = 8) {
+        guard tab == 0 else { return }
+        guard let hostUid = hostUid, let gameId = gameId else {
+            writeErrorMessage = "Select a game first before generating a partner code."
+            return
+        }
+
+        writeErrorMessage = nil
+
+        let db = Firestore.firestore()
+
+        func attempt(_ n: Int) {
+            if n >= maxAttempts {
+                writeErrorMessage = "Could not generate a unique code. Please try again."
+                return
+            }
+
+            let candidate = buildShareCode()
+            db.collection("sessions").document(candidate).getDocument { snap, error in
+                if let error = error {
+                    writeErrorMessage = "Failed checking code availability. \(error.localizedDescription)"
+                    return
+                }
+
+                if snap?.exists != true {
+                    generated = candidate
+                    didWriteSessionDoc = false
+                    writeSessionDocIfNeeded()
+                    return
+                }
+
+                let existingHost = snap?.data()?["hostUid"] as? String
+                if existingHost == hostUid {
+                    generated = candidate
+                    didWriteSessionDoc = false
+                    writeSessionDocIfNeeded()
+                    return
+                }
+
+                attempt(n + 1)
+            }
+        }
+
+        attempt(0)
+    }
+
+    private func writeSessionDocIfNeeded() {
+        // Only relevant for Generate tab
+        guard tab == 0 else { return }
+
+        // Prevent duplicate writes
+        guard !didWriteSessionDoc else { return }
+
+        guard let hostUid = hostUid, let gameId = gameId else {
+            writeErrorMessage = "Select a game first before generating a partner code."
+            return
+        }
+
+        let code = generated.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard code.count == 6 && code.allSatisfy({ $0.isNumber }) else {
+            writeErrorMessage = "Invalid code generated."
+            return
+        }
+
+        let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60)) // 2 hours
+
+        let data: [String: Any] = [
+            "hostUid": hostUid,
+            "ownerUserId": hostUid,
+            "type": "game",
+            "gameId": gameId,
+            "opponent": opponent ?? "",
+            "createdAt": FieldValue.serverTimestamp(),
+            "expiresAt": expires
+        ]
+
+        let db = Firestore.firestore()
+        db.collection("sessions").document(code).setData(data, merge: true) { error in
+            if let error = error {
+                didWriteSessionDoc = false
+                writeErrorMessage = "Failed to activate code. \(error.localizedDescription)"
+                print("❌ session write failed:", error)
+            } else {
+                didWriteSessionDoc = true
+                writeErrorMessage = nil
+                print("✅ session active for code:", code)
+            }
+        }
+    }
+
 }
 
 struct GameSelectionSheet: View {
