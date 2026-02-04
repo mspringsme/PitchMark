@@ -221,9 +221,67 @@ struct PitchTrackerView: View {
     @State private var showCodeShareErrorAlert = false
     @State private var codeShareErrorMessage: String = ""
     @State private var shareCode: String = ""
+    @State private var activeGameOwnerUserId: String? = nil
+    @State private var gameListener: ListenerRegistration? = nil
 
 
+    private var effectiveGameOwnerUserId: String? {
+        if let host = activeGameOwnerUserId, !host.isEmpty { return host }
+        return authManager.user?.uid
+    }
 
+    private func startListeningToActiveGame() {
+        // detach old listener
+        gameListener?.remove()
+        gameListener = nil
+
+        guard isGame,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        let ref = Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+
+        gameListener = ref.addSnapshotListener { snap, err in
+            if let err = err {
+                print("❌ Game listener error:", err)
+                return
+            }
+            guard let snap, snap.exists else {
+                print("⚠️ Game doc missing while listening:", ref.path)
+                return
+            }
+
+            do {
+                let updated = try snap.data(as: Game.self)
+
+                // Update your local state so UI reflects remote edits
+                DispatchQueue.main.async {
+                    if let id = updated.id,
+                       let idx = games.firstIndex(where: { $0.id == id }) {
+                        games[idx] = updated
+                    } else {
+                        games.insert(updated, at: 0)
+                    }
+
+                    opponentName = updated.opponent
+
+                    // keep jerseyCells in sync too
+                    if let ids = updated.batterIds, ids.count == updated.jerseyNumbers.count {
+                        jerseyCells = zip(ids, updated.jerseyNumbers).map { (idStr, num) in
+                            JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                        }
+                    } else {
+                        jerseyCells = updated.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                    }
+                }
+            } catch {
+                print("❌ Failed decoding Game from listener:", error)
+            }
+        }
+    }
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
         // Prefer explicit per-session selection when available
@@ -367,7 +425,6 @@ struct PitchTrackerView: View {
 
             let ordered = pitchOrder.filter { headerList.contains($0) }
             let extras = headerList.filter { !pitchOrder.contains($0) }
-            print("Encrypted headers used:", headerList)
             return ordered + extras
         }
 
@@ -462,7 +519,7 @@ struct PitchTrackerView: View {
         guard let gid = selectedGameId else { return nil }
         return games.first(where: { $0.id == gid })
     }
-    
+
     // MARK: - Game Field Bindings
     private func buildShareCode() -> String {
         // Return a random 6-digit numeric code (leading zeros allowed)
@@ -502,13 +559,28 @@ struct PitchTrackerView: View {
     ) -> Binding<Int> {
         Binding(get: get, set: set)
     }
+    @ViewBuilder
+    private func withGameSync<Content: View>(_ content: Content) -> some View {
+        content
+            .onAppear { startListeningToActiveGame() }
+            .onChange(of: selectedGameId) { _, _ in startListeningToActiveGame() }
+            .onChange(of: activeGameOwnerUserId) { _, _ in startListeningToActiveGame() }
+            .onChange(of: isGame) { _, _ in startListeningToActiveGame() }
+            .onDisappear {
+                gameListener?.remove()
+                gameListener = nil
+            }
+    }
 
     private var inningBinding: Binding<Int> {
         intBinding(
             get: { currentGame?.inning ?? 1 },
             set: { newValue in
                 guard let gid = selectedGameId else { return }
-                authManager.updateGameInning(gameId: gid, inning: newValue)
+                guard let owner = effectiveGameOwnerUserId else { return }
+
+                authManager.updateGameInning(ownerUserId: owner, gameId: gid, inning: newValue)
+
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].inning = newValue
                 }
@@ -516,12 +588,16 @@ struct PitchTrackerView: View {
         )
     }
 
+
     private var hitsBinding: Binding<Int> {
         intBinding(
             get: { currentGame?.hits ?? 0 },
             set: { newValue in
                 guard let gid = selectedGameId else { return }
-                authManager.updateGameHits(gameId: gid, hits: newValue)
+                guard let owner = effectiveGameOwnerUserId else { return }
+
+                authManager.updateGameHits(ownerUserId: owner, gameId: gid, hits: newValue)
+
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].hits = newValue
                 }
@@ -534,7 +610,10 @@ struct PitchTrackerView: View {
             get: { currentGame?.walks ?? 0 },
             set: { newValue in
                 guard let gid = selectedGameId else { return }
-                authManager.updateGameWalks(gameId: gid, walks: newValue)
+                guard let owner = effectiveGameOwnerUserId else { return }
+                //authManager.updateGameWalks(gameId: gid, walks: newValue)
+                authManager.updateGameWalks(ownerUserId: owner, gameId: gid, walks: newValue)
+
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].walks = newValue
                 }
@@ -547,7 +626,10 @@ struct PitchTrackerView: View {
             get: { currentGame?.balls ?? 0 },
             set: { newValue in
                 guard let gid = selectedGameId else { return }
-                authManager.updateGameBalls(gameId: gid, balls: newValue)
+                guard let owner = effectiveGameOwnerUserId else { return }
+                //authManager.updateGameBalls(gameId: gid, balls: newValue)
+                authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: newValue)
+
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].balls = newValue
                 }
@@ -560,7 +642,10 @@ struct PitchTrackerView: View {
             get: { currentGame?.strikes ?? 0 },
             set: { newValue in
                 guard let gid = selectedGameId else { return }
-                authManager.updateGameStrikes(gameId: gid, strikes: newValue)
+                guard let owner = effectiveGameOwnerUserId else { return }
+                //authManager.updateGameStrikes(gameId: gid, strikes: newValue)
+                authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: newValue)
+
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].strikes = newValue
                 }
@@ -573,7 +658,10 @@ struct PitchTrackerView: View {
             get: { currentGame?.us ?? 0 },
             set: { newValue in
                 guard let gid = selectedGameId else { return }
-                authManager.updateGameUs(gameId: gid, us: newValue)
+                guard let owner = effectiveGameOwnerUserId else { return }
+                //authManager.updateGameUs(gameId: gid, us: newValue)
+                authManager.updateGameUs(ownerUserId: owner, gameId: gid, us: newValue)
+
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].us = newValue
                 }
@@ -586,7 +674,10 @@ struct PitchTrackerView: View {
             get: { currentGame?.them ?? 0 },
             set: { newValue in
                 guard let gid = selectedGameId else { return }
-                authManager.updateGameThem(gameId: gid, them: newValue)
+                guard let owner = effectiveGameOwnerUserId else { return }
+                //authManager.updateGameThem(gameId: gid, them: newValue)
+                authManager.updateGameThem(ownerUserId: owner, gameId: gid, them: newValue)
+
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].them = newValue
                 }
@@ -633,177 +724,192 @@ struct PitchTrackerView: View {
     private var cardsAndOverlay: some View {
         ZStack {
             VStack(spacing: 8) {
-                // Top toggle buttons
-                HStack(spacing: 6) {
-                    
-                    Button(action: { overlayTab = .progress }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chart.bar.xaxis")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                            Text("Progress")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        .foregroundColor(overlayTab == .progress ? .black : .black.opacity(0.4))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 8)
-                        .background(overlayTab == .progress ? .ultraThickMaterial : .ultraThinMaterial)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: { overlayTab = .cards }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "square.grid.2x2")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                            Text("Cards")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        .foregroundColor(overlayTab == .cards ? .black : .black.opacity(0.4))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 8)
-                        .background(overlayTab == .cards ? .ultraThickMaterial : .ultraThinMaterial)
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal)
-                .padding(.top, 12)
+                overlayTabsHeader
 
                 Divider()
-                .padding(.top, 5)
-                
-                // Content switches with tab
-                let overlayContent: AnyView = {
-                    switch overlayTab {
-                    case .cards:
-                        if selectedTemplate != nil {
-                            return PitchResultSheet(
-                                allEvents: filteredEvents,
-                                games: games,
-                                templates: templates
-                            )
-                            .environmentObject(authManager)
-                            .environmentObject(sessionManager)
-                            .frame(maxWidth: .infinity, minHeight: 170)
-                            .erasedToAnyView()
-                        } else {
-                            return EmptyView().erasedToAnyView()
-                        }
-                    case .progress:
-                        if sessionManager.currentMode == .practice {
-                            return ProgressSummaryView(
-                                events: pitchEvents,
-                                currentMode: sessionManager.currentMode,
-                                selectedPracticeId: selectedPracticeId,
-                                templates: templates
-                            )
-                            // Added .id(progressRefreshToken) per instruction 2
-                            .id(progressRefreshToken)
-                            .frame(maxWidth: .infinity, minHeight: 170)
-                            .erasedToAnyView()
-                        } else {
-                            return ProgressGameView(
-                                balls: ballsBinding,
-                                strikes: strikesBinding,
-                                inning: inningBinding,
-                                hits: hitsBinding,
-                                walks: walksBinding,
-                                us: usBinding,
-                                them: themBinding,
-                                selectedGameId: $selectedGameId
-                            )
-                            .environmentObject(authManager)
-                            .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
-                            .erasedToAnyView()
-                        }
-                    }
-                }()
+                    .padding(.top, 5)
 
                 overlayContent
-                      .padding(.top, -14)
-                      .frame(maxWidth: .infinity)
-                      .frame(height: 170, alignment: .top)
-                
+                    .padding(.top, -14)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 170, alignment: .top)
             }
             .blur(radius: shouldBlurBackground ? 6 : 0)
             .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
             .transition(.opacity)
-            
-            // Called pitch appears view after a user taps a location
-            Group {
-                if let call = calledPitch {
-                    CalledPitchView(
-                        isRecordingResult: $isRecordingResult,
-                        activeCalledPitchId: $activeCalledPitchId,
-                        pitchFirst: $pitchFirst,
-                        call: call,
-                        pitchCodeAssignments: pitchCodeAssignments,
-                        batterSide: batterSide,
-                        template: selectedTemplate,
-                        isEncryptedMode: {
-                            if let t = selectedTemplate {
-                                return useEncrypted(for: t)
-                            }
-                            return false
-                        }(),
-                        isPracticeMode: sessionManager.currentMode == .practice
-                        
-                    )
-                    
-                    .transition(.opacity)
-                    .padding(.top, 4)
-                    .onAppear {
-                        shouldBlurBackground = true
-                        // If in game mode and no batter is selected, show a brief overlay prompt
-                        if isGame && selectedBatterId == nil {
-                            showSelectBatterOverlay = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                                showSelectBatterOverlay = false
-                            }
-                        }
-                    }
-                    .onDisappear {
-                        shouldBlurBackground = false
-                        showSelectBatterOverlay = false
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .padding(.bottom, 16) // tweak this value to taste (e.g., 0–16)
+
+            calledPitchLayer
+
             if showSelectBatterOverlay {
-                VStack {
-                    HStack {
-                        Spacer()
-                        Text("Select a batter?")
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(
-                                .ultraThinMaterial,
-                                in: Capsule()
-                            )
-                            .overlay(
-                                Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-                        Spacer()
-                    }
-                    Spacer()
-                }
-                .padding(.top, -10) // adjust this to sit above the code chips
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.5), value: showSelectBatterOverlay)
+                selectBatterOverlayView
             }
-            
         }
-        // Make this layer fill the entire screen space and bleed off the edges
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.horizontal, .bottom])
         .background(.regularMaterial)
     }
+
+    private var overlayTabsHeader: some View {
+        HStack(spacing: 6) {
+            OverlayTabButton(
+                title: "Progress",
+                systemImage: "chart.bar.xaxis",
+                isSelected: overlayTab == .progress
+            ) {
+                overlayTab = .progress
+            }
+
+            OverlayTabButton(
+                title: "Cards",
+                systemImage: "square.grid.2x2",
+                isSelected: overlayTab == .cards
+            ) {
+                overlayTab = .cards
+            }
+        }
+        .padding(.horizontal)
+        .padding(.top, 12)
+    }
+    private struct OverlayTabButton: View {
+        let title: String
+        let systemImage: String
+        let isSelected: Bool
+        let action: () -> Void
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 6) {
+                    Image(systemName: systemImage)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                }
+                .foregroundColor(isSelected ? .black : .black.opacity(0.4))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 8)
+                .background(isSelected ? .ultraThickMaterial : .ultraThinMaterial)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+    @ViewBuilder
+    private var overlayContent: some View {
+        switch overlayTab {
+        case .cards:
+            cardsOverlayContent
+
+        case .progress:
+            progressOverlayContent
+        }
+    }
+    @ViewBuilder
+    private var cardsOverlayContent: some View {
+        if selectedTemplate != nil {
+            PitchResultSheet(
+                allEvents: filteredEvents,
+                games: games,
+                templates: templates
+            )
+            .environmentObject(authManager)
+            .environmentObject(sessionManager)
+            .frame(maxWidth: .infinity, minHeight: 170)
+        } else {
+            EmptyView()
+                .frame(maxWidth: .infinity, minHeight: 170)
+        }
+    }
+    private var calledPitchLayer: some View {
+        Group {
+            if let call = calledPitch {
+                CalledPitchView(
+                    isRecordingResult: $isRecordingResult,
+                    activeCalledPitchId: $activeCalledPitchId,
+                    pitchFirst: $pitchFirst,
+                    call: call,
+                    pitchCodeAssignments: pitchCodeAssignments,
+                    batterSide: batterSide,
+                    template: selectedTemplate,
+                    isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
+                    isPracticeMode: sessionManager.currentMode == .practice
+                )
+                .transition(.opacity)
+                .padding(.top, 4)
+                .onAppear { handleCalledPitchAppear() }
+                .onDisappear { handleCalledPitchDisappear() }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, 16)
+    }
+    private func handleCalledPitchAppear() {
+        shouldBlurBackground = true
+
+        if isGame && selectedBatterId == nil {
+            showSelectBatterOverlay = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                showSelectBatterOverlay = false
+            }
+        }
+    }
+    private func handleCalledPitchDisappear() {
+        shouldBlurBackground = false
+        showSelectBatterOverlay = false
+    }
+    private var selectBatterOverlayView: some View {
+        VStack {
+            HStack {
+                Spacer()
+                Text("Select a batter?")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                Spacer()
+            }
+            Spacer()
+        }
+        .padding(.top, -10)
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.5), value: showSelectBatterOverlay)
+    }
+
+    
+    
+    
+    @ViewBuilder
+    private var progressOverlayContent: some View {
+        if sessionManager.currentMode == .practice {
+            ProgressSummaryView(
+                events: pitchEvents,
+                currentMode: sessionManager.currentMode,
+                selectedPracticeId: selectedPracticeId,
+                templates: templates
+            )
+            .id(progressRefreshToken)
+            .frame(maxWidth: .infinity, minHeight: 170)
+        } else {
+            ProgressGameView(
+                ownerUserId: effectiveGameOwnerUserId,
+                balls: ballsBinding,
+                strikes: strikesBinding,
+                inning: inningBinding,
+                hits: hitsBinding,
+                walks: walksBinding,
+                us: usBinding,
+                them: themBinding,
+                selectedGameId: $selectedGameId
+            )
+            .environmentObject(authManager)
+            .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
+        }
+    }
+
 
     private var headerContainer: some View {
         let screen = UIScreen.main.bounds
@@ -1093,9 +1199,18 @@ struct PitchTrackerView: View {
                                         }
 
                                         // Persist lineup if in a selected game
-                                        if let gameId = selectedGameId {
-                                            authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                                        if let gameId = selectedGameId,
+                                           let owner = effectiveGameOwnerUserId {
+                                            authManager.updateGameLineup(
+                                                ownerUserId: owner,
+                                                gameId: gameId,
+                                                jerseyNumbers: jerseyCells.map { $0.jerseyNumber }
+                                            )
+                                        } else {
+                                            print("⚠️ Cannot update lineup: missing selectedGameId or effectiveGameOwnerUserId")
                                         }
+
+
 
                                         // Reset UI state
                                         showAddJerseyPopover = false
@@ -1500,6 +1615,8 @@ struct PitchTrackerView: View {
         let defaults = UserDefaults.standard
         let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
         let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
+        let persistedOwnerId = defaults.string(forKey: DefaultsKeys.activeGameOwnerUserId)
+        self.activeGameOwnerUserId = persistedOwnerId
         let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
         if authManager.isSignedIn && !hasPresentedInitialSettings {
             if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
@@ -1516,6 +1633,8 @@ struct PitchTrackerView: View {
                     isGame = true
                     sessionManager.switchMode(to: .game)
                     selectedGameId = gid
+                    let persistedOwner = defaults.string(forKey: DefaultsKeys.activeGameOwnerUserId)
+                    activeGameOwnerUserId = persistedOwner ?? authManager.user?.uid
                     authManager.loadGames { games in
                         if let game = games.first(where: { $0.id == gid }) {
                             opponentName = game.opponent
@@ -1561,403 +1680,17 @@ struct PitchTrackerView: View {
     }
     
     var body: some View {
-        baseBody.erasedToAnyView()
-        .onChange(of: pendingResultLabel) { _, newValue in
-            handlePendingResultChange(newValue)
-        }
-        .onChange(of: selectedPitches) { _, newValue in
-            if let template = selectedTemplate {
-                persistActivePitches(for: template.id, active: newValue)
+        withGameSync(baseBody)
+            .onChange(of: pendingResultLabel) { _, newValue in
+                handlePendingResultChange(newValue)
             }
-        }
-        .onChange(of: encryptedSelectionByGameId) { _, _ in
-            persistEncryptedSelections()
-            if let t = selectedTemplate {
-                let fallbackList = availablePitches(for: t)
-                if useEncrypted(for: t) {
-                    selectedPitches = Set(fallbackList)
-                } else {
-                    selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
-                }
-                colorRefreshToken = UUID()
-            }
-        }
-        .onChange(of: encryptedSelectionByPracticeId) { _, _ in
-            persistEncryptedSelections()
-            if let t = selectedTemplate {
-                let fallbackList = availablePitches(for: t)
-                if useEncrypted(for: t) {
-                    selectedPitches = Set(fallbackList)
-                } else {
-                    selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
-                }
-                colorRefreshToken = UUID()
-            }
-        }
-        // Added per instruction 6: refresh token bump on overlayTab change to .progress in practice mode
-        .onChange(of: overlayTab) { _, newValue in
-            if newValue == .progress && sessionManager.currentMode == .practice {
-                progressRefreshToken = UUID()
-            }
-        }
-        .sheet(isPresented: $showGameSheet, onDismiss: {
-            // If user canceled without creating/choosing, optionally revert to practice
-            if sessionManager.currentMode == .game && !isGame {
-                sessionManager.switchMode(to: .practice)
-            }
-        }) {
-            GameSelectionSheet(
-                onCreate: { name, date in
-                    let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: jerseyCells.map { $0.jerseyNumber }, batterIds: jerseyCells.map { $0.id.uuidString })
-                    authManager.saveGame(newGame)
-                },
-                onChoose: { gameId in
-                    authManager.loadGames { games in
-                        if let game = games.first(where: { $0.id == gameId }) {
-                            selectedGameId = game.id
-                            opponentName = game.opponent
-                            if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
-                                jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
-                                    JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
-                                }
-                            } else {
-                                jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
-                            }
-                            selectedBatterId = nil
-                        }
-                        isGame = true
-                        // Ensure sessionManager mode sync for button label update
-                        sessionManager.switchMode(to: .game)
-                        showGameSheet = false
-                    }
-                },
-                onCancel: {
-                    // User canceled: preserve any existing game state.
-                    // If no game was active, onDismiss will revert to practice.
-                    showGameSheet = false
-                }
-            )
-            .presentationDetents([.fraction(0.5)])
-            .presentationDragIndicator(.visible)
-            .environmentObject(authManager)
-        }
-        .sheet(isPresented: $showCodeShareSheet) {
-            CodeShareSheet(
-                initialCode: shareCode,
-                initialTab: codeShareInitialTab,
-                hostUid: authManager.user?.uid,
-                gameId: selectedGameId,
-                opponent: opponentName,
-                isGame: isGame
-            ) { code in
-                consumeShareCode(code)
-            }
-            .presentationDetents([.fraction(0.4), .medium])
-            .presentationDragIndicator(.visible)
-        }
-
-
-        .sheet(isPresented: $showPracticeSheet, onDismiss: {
-            // If user canceled without creating/choosing, optionally revert to game
-            if sessionManager.currentMode == .practice && practiceName == nil && selectedPracticeId == nil {
-                // Stay in practice mode but no active session
-            }
-        }) {
-            PracticeSelectionSheet(
-                onCreate: { name, date, templateId, templateName in
-                    var sessions = loadPracticeSessions()
-                    let new = PracticeSession(id: UUID().uuidString, name: name, date: date, templateId: templateId, templateName: templateName)
-                    sessions.append(new)
-                    savePracticeSessions(sessions)
-                },
-                onChoose: { practiceId in
-                    encryptedSelectionByPracticeId[practiceId] = true
-                    if practiceId == "__GENERAL__" {
-                        selectedPracticeId = nil
-                        practiceName = nil
-                        isGame = false
-                        let defaults = UserDefaults.standard
-                        defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
-                        defaults.removeObject(forKey: DefaultsKeys.activeGameId)
-                        persistActivePracticeId(nil)
-                        defaults.set("tracker", forKey: DefaultsKeys.lastView)
-                        sessionManager.switchMode(to: .practice)
-                        showPracticeSheet = false
-                        return
-                    }
-                    let sessions = loadPracticeSessions()
-                    if let session = sessions.first(where: { $0.id == practiceId }) {
-                        selectedPracticeId = session.id
-                        practiceName = session.name
-                        isGame = false
-                        // persist selection
-                        let defaults = UserDefaults.standard
-                        defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
-                        defaults.removeObject(forKey: DefaultsKeys.activeGameId)
-                        persistActivePracticeId(session.id)
-                        defaults.set("tracker", forKey: DefaultsKeys.lastView)
-                        // Ensure sessionManager mode sync for button label update
-                        sessionManager.switchMode(to: .practice)
-                    }
-                    showPracticeSheet = false
-                },
-                onCancel: {
-                    showPracticeSheet = false
-                },
-                currentTemplateId: selectedTemplate?.id.uuidString,
-                currentTemplateName: selectedTemplate?.name,
-                encryptedSelectionByPracticeId: $encryptedSelectionByPracticeId
-            )
-            .presentationDetents([.fraction(0.5)])
-            .presentationDragIndicator(.visible)
-            .environmentObject(authManager)
-        }
-        .sheet(isPresented: confirmSheetBinding) {
-            PitchResultSheetView(
-                isPresented: $showConfirmSheet,
-                isStrikeSwinging: $isStrikeSwinging,
-                isStrikeLooking: $isStrikeLooking,
-                isWildPitch: $isWildPitch,
-                isPassedBall: $isPassedBall,
-                isBall: $isBall,
-                selectedOutcome: $selectedOutcome,
-                selectedDescriptor: $selectedDescriptor,
-                isError: $isError,
-                pendingResultLabel: pendingResultLabel,
-                pitchCall: calledPitch,
-                batterSide: batterSide,
-                selectedTemplateId: selectedTemplate?.id.uuidString,
-                currentMode: sessionManager.currentMode,
-                selectedGameId: selectedGameId,
-                selectedOpponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
-                selectedOpponentBatterId: selectedBatterId?.uuidString,
-                selectedPracticeId: selectedPracticeId,
-                saveAction: { event in
-                    authManager.savePitchEvent(event)
-                    sessionManager.incrementCount()
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        pitchEvents.append(event)
-                    }
-                    authManager.loadPitchEvents { events in
-                        self.pitchEvents = events
-                    }
-                    // Added per instruction 3: bump progressRefreshToken on Practice save when sheet is shown
-                    if overlayTab == .progress && sessionManager.currentMode == .practice {
-                        progressRefreshToken = UUID()
-                    }
-
-                    // Reset state
-                    resultVisualState = event.location
-                    activeCalledPitchId = UUID().uuidString
-                    isRecordingResult = false
-                    selectedPitch = ""
-                    selectedLocation = ""
-                    lastTappedPosition = nil
-                    calledPitch = nil
-                    resultVisualState = nil
-                    actualLocationRecorded = nil
-                    pendingResultLabel = nil
-                    isStrikeSwinging = false
-                    isWildPitch = false
-                    isPassedBall = false
-                    isBall = false
-                    selectedOutcome = nil
-                    selectedDescriptor = nil
-                },
-                template: selectedTemplate
-            )
-        }
-        .sheet(isPresented: $showCodeAssignmentSheet) {
-            CodeAssignmentSettingsView(
-                selectedPitch: $selectedPitch,
-                selectedLocation: $selectedLocation,
-                pitchCodeAssignments: $pitchCodeAssignments,
-                allPitches: allPitches,
-                allLocations: allLocationsFromGrid()
-            )
-            .padding()
-        }
-        .onAppear(perform: handleInitialAppear)
-        .sheet(isPresented: $showSettings) {
-            SettingsView(
-                templates: $templates,
-                allPitches: allPitches,
-                selectedTemplate: $selectedTemplate
-            )
-            .environmentObject(authManager)
-        }
-        .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Create or choose a game before generating a partner code.")
-        }
-        .alert("Code Link", isPresented: $showCodeShareErrorAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(codeShareErrorMessage)
-        }
-
-        .onChange(of: selectedTemplate) { _, newValue in
-            // Persist and sync dependent state whenever template changes (from menu or Settings)
-            persistSelectedTemplate(newValue)
-            if let t = newValue {
-                let fallbackList = availablePitches(for: t)
-                if useEncrypted(for: t) {
-                    selectedPitches = Set(fallbackList)
-                } else {
-                    selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
-                }
-                pitchCodeAssignments = t.codeAssignments
-                // Reset strike zone and called pitch state
-                lastTappedPosition = nil
-                calledPitch = nil
-                // Force chips/strike zone to refresh colors and content
-                colorRefreshToken = UUID()
-            }
-        }
-        .onChange(of: authManager.isSignedIn) { _, signedIn in
-            if signedIn && !hasPresentedInitialSettings {
-                let defaults = UserDefaults.standard
-                let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
-                let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
-                let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
-                if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
-                    showSettings = true
-                    hasPresentedInitialSettings = true
-                    defaults.set("settings", forKey: DefaultsKeys.lastView)
-                } else {
-                    if persistedIsPractice {
-                        isGame = false
-                        sessionManager.switchMode(to: .practice)
-                        restoreActivePracticeSelection()
-                    } else if let gid = persistedGameId {
-                        isGame = true
-                        sessionManager.switchMode(to: .game)
-                        selectedGameId = gid
-                        authManager.loadGames { games in
-                            if let game = games.first(where: { $0.id == gid }) {
-                                opponentName = game.opponent
-                                if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
-                                    jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
-                                        JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
-                                    }
-                                } else {
-                                    jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
-                                }
-                            }
-                        }
-                    }
-                    hasPresentedInitialSettings = true
+            .onChange(of: selectedPitches) { _, newValue in
+                if let template = selectedTemplate {
+                    persistActivePitches(for: template.id, active: newValue)
                 }
             }
-        }
-        .onChange(of: showSettings) { _, showing in
-            if showing {
-                UserDefaults.standard.set("settings", forKey: DefaultsKeys.lastView)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { notification in
-            guard let order = notification.object as? [String] else { return }
-            if let gameId = selectedGameId {
-                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: order)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .pitchColorDidChange)) { _ in
-            // Force chips and strike zone to rebuild with updated colors
-            colorRefreshToken = UUID()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { notification in
-            // Expecting userInfo: ["type": "practice"|"game", "gameId": String?, "opponent": String?]
-            guard let userInfo = notification.userInfo as? [String: Any], let type = userInfo["type"] as? String else { return }
-            self.suppressNextGameSheet = true
-            self.showGameSheet = false
-            if type == "practice" {
-                if let pid = userInfo["practiceId"] as? String {
-                    // Immediately set selection and persist
-                    selectedPracticeId = pid
-                    persistActivePracticeId(pid)
-
-                    let sessions = loadPracticeSessions()
-                    if let session = sessions.first(where: { $0.id == pid }) {
-                        practiceName = session.name
-                    } else if let providedName = userInfo["practiceName"] as? String {
-                        practiceName = providedName
-                    } else {
-                        practiceName = nil
-                    }
-                    // Clear any active game state when switching to practice
-                    selectedGameId = nil
-                    opponentName = nil
-                    jerseyCells = []
-                    selectedBatterId = nil
-                } else if let pname = userInfo["practiceName"] as? String {
-                    practiceName = pname
-                } else {
-                    practiceName = nil
-                    selectedPracticeId = nil
-                }
-                isGame = false
-                sessionManager.switchMode(to: .practice)
-                if let t = selectedTemplate {
-                    let fallbackList = availablePitches(for: t)
-                        if useEncrypted(for: t) {
-                            selectedPitches = Set(fallbackList)
-                        } else {
-                            selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
-                        }
-                    colorRefreshToken = UUID()
-                }
-                let defaults = UserDefaults.standard
-                defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
-                defaults.removeObject(forKey: DefaultsKeys.activeGameId)
-                defaults.set("tracker", forKey: DefaultsKeys.lastView)
-            } else if type == "game" {
-                guard let gid = userInfo["gameId"] as? String else { return }
-
-                // 🔑 Owner userId is required for partner-join games (host-owned docs).
-                // Fallback to current signed-in user for local game selection flows.
-                let ownerIdFromPayload = userInfo["ownerUserId"] as? String
-                let resolvedOwnerId = ownerIdFromPayload ?? authManager.user?.uid
-
-                guard let ownerUserId = resolvedOwnerId else {
-                    print("❌ Missing ownerUserId and no signed-in user available.")
-                    return
-                }
-
-                selectedGameId = gid
-
-                // ✅ Load the specific game doc (works for host-owned games after joining)
-                authManager.loadGame(ownerUserId: ownerUserId, gameId: gid) { game in
-                    guard let game = game else {
-                        // Fallback: still set provided opponent if available
-                        if let opp = userInfo["opponent"] as? String {
-                            opponentName = opp
-                        }
-                        print("⚠️ Game not found or not readable yet. owner=\(ownerUserId) gameId=\(gid)")
-                        return
-                    }
-
-                    // Prefer provided opponent name, otherwise use stored
-                    if let opp = userInfo["opponent"] as? String {
-                        opponentName = opp
-                    } else {
-                        opponentName = game.opponent
-                    }
-
-                    if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
-                        jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
-                            JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
-                        }
-                    } else {
-                        jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
-                    }
-
-                    selectedBatterId = nil
-                }
-
-                isGame = true
-                sessionManager.switchMode(to: .game)
-
+            .onChange(of: encryptedSelectionByGameId) { _, _ in
+                persistEncryptedSelections()
                 if let t = selectedTemplate {
                     let fallbackList = availablePitches(for: t)
                     if useEncrypted(for: t) {
@@ -1967,58 +1700,472 @@ struct PitchTrackerView: View {
                     }
                     colorRefreshToken = UUID()
                 }
-
-                let defaults = UserDefaults.standard
-                defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
-                defaults.set(gid, forKey: DefaultsKeys.activeGameId)
-                defaults.set(ownerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
-
-
-                // ✅ Persist owner id so restore works after relaunch for partner-joined games
-                defaults.set(ownerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
-
-                defaults.set("tracker", forKey: DefaultsKeys.lastView)
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionDeleted)) { notification in
-            guard let userInfo = notification.userInfo as? [String: Any], let type = userInfo["type"] as? String else { return }
-            if type == "game" {
-                if let gid = userInfo["gameId"] as? String, selectedGameId == gid {
-                    // Clear active game selection and UI label
-                    selectedGameId = nil
-                    opponentName = nil
-                    let defaults = DefaultsKeys.self
-                    UserDefaults.standard.removeObject(forKey: defaults.activeGameId)
-                    UserDefaults.standard.set(false, forKey: defaults.activeIsPractice)
-                }
-            } else if type == "practice" {
-                if let pid = userInfo["practiceId"] as? String, selectedPracticeId == pid {
-                    // Clear active practice selection and UI label
-                    selectedPracticeId = nil
-                    practiceName = nil
-                    persistActivePracticeId(nil)
+            .onChange(of: encryptedSelectionByPracticeId) { _, _ in
+                persistEncryptedSelections()
+                if let t = selectedTemplate {
+                    let fallbackList = availablePitches(for: t)
+                    if useEncrypted(for: t) {
+                        selectedPitches = Set(fallbackList)
+                    } else {
+                        selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                    }
+                    colorRefreshToken = UUID()
                 }
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .templateSelectionDidChange)) { note in
-              // If SettingsView sent an explicit templateId, try to resolve it; otherwise just use the current selectedTemplate.
-              if let userInfo = note.userInfo as? [String: Any],
-                 let tid = userInfo["templateId"] as? String,
-                 let resolved = templates.first(where: { $0.id.uuidString == tid }) {
-                  applyTemplate(resolved)
-              } else if let current = selectedTemplate {
-                  // Re-apply to pull in any edits made in the editor and refresh derived state/UI
-                  applyTemplate(current)
-              }
-          }
-        .onReceive(NotificationCenter.default.publisher(for: .practiceProgressReset)) { _ in
-            authManager.loadPitchEvents { events in
-                self.pitchEvents = events
+        // Added per instruction 6: refresh token bump on overlayTab change to .progress in practice mode
+            .onChange(of: overlayTab) { _, newValue in
+                if newValue == .progress && sessionManager.currentMode == .practice {
+                    progressRefreshToken = UUID()
+                }
             }
-        }
-        .overlay(alignment: .bottom) {
-            pitchesFacedOverlay
-        }
+            .sheet(isPresented: $showGameSheet, onDismiss: {
+                // If user canceled without creating/choosing, optionally revert to practice
+                if sessionManager.currentMode == .game && !isGame {
+                    sessionManager.switchMode(to: .practice)
+                }
+            }) {
+                GameSelectionSheet(
+                    onCreate: { name, date in
+                        let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: jerseyCells.map { $0.jerseyNumber }, batterIds: jerseyCells.map { $0.id.uuidString })
+                        authManager.saveGame(newGame)
+                    },
+                    onChoose: { gameId in
+                        authManager.loadGames { games in
+                            if let game = games.first(where: { $0.id == gameId }) {
+                                selectedGameId = game.id
+                                activeGameOwnerUserId = authManager.user?.uid
+                                UserDefaults.standard.set(activeGameOwnerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
+
+                                opponentName = game.opponent
+                                if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                                    jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                                        JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                                    }
+                                } else {
+                                    jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                                }
+                                selectedBatterId = nil
+                            }
+                            isGame = true
+                            // Ensure sessionManager mode sync for button label update
+                            sessionManager.switchMode(to: .game)
+                            showGameSheet = false
+                        }
+                    },
+                    onCancel: {
+                        // User canceled: preserve any existing game state.
+                        // If no game was active, onDismiss will revert to practice.
+                        showGameSheet = false
+                    }
+                )
+                .presentationDetents([.fraction(0.5)])
+                .presentationDragIndicator(.visible)
+                .environmentObject(authManager)
+            }
+            .sheet(isPresented: $showCodeShareSheet) {
+                CodeShareSheet(
+                    initialCode: shareCode,
+                    initialTab: codeShareInitialTab,
+                    hostUid: authManager.user?.uid,
+                    gameId: selectedGameId,
+                    opponent: opponentName,
+                    isGame: isGame
+                ) { code in
+                    consumeShareCode(code)
+                }
+                .presentationDetents([.fraction(0.4), .medium])
+                .presentationDragIndicator(.visible)
+            }
+        
+        
+            .sheet(isPresented: $showPracticeSheet, onDismiss: {
+                // If user canceled without creating/choosing, optionally revert to game
+                if sessionManager.currentMode == .practice && practiceName == nil && selectedPracticeId == nil {
+                    // Stay in practice mode but no active session
+                }
+            }) {
+                PracticeSelectionSheet(
+                    onCreate: { name, date, templateId, templateName in
+                        var sessions = loadPracticeSessions()
+                        let new = PracticeSession(id: UUID().uuidString, name: name, date: date, templateId: templateId, templateName: templateName)
+                        sessions.append(new)
+                        savePracticeSessions(sessions)
+                    },
+                    onChoose: { practiceId in
+                        encryptedSelectionByPracticeId[practiceId] = true
+                        if practiceId == "__GENERAL__" {
+                            selectedPracticeId = nil
+                            practiceName = nil
+                            isGame = false
+                            let defaults = UserDefaults.standard
+                            defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
+                            defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+                            persistActivePracticeId(nil)
+                            defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                            sessionManager.switchMode(to: .practice)
+                            showPracticeSheet = false
+                            return
+                        }
+                        let sessions = loadPracticeSessions()
+                        if let session = sessions.first(where: { $0.id == practiceId }) {
+                            selectedPracticeId = session.id
+                            practiceName = session.name
+                            isGame = false
+                            // persist selection
+                            let defaults = UserDefaults.standard
+                            defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
+                            defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+                            persistActivePracticeId(session.id)
+                            defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                            // Ensure sessionManager mode sync for button label update
+                            sessionManager.switchMode(to: .practice)
+                        }
+                        showPracticeSheet = false
+                    },
+                    onCancel: {
+                        showPracticeSheet = false
+                    },
+                    currentTemplateId: selectedTemplate?.id.uuidString,
+                    currentTemplateName: selectedTemplate?.name,
+                    encryptedSelectionByPracticeId: $encryptedSelectionByPracticeId
+                )
+                .presentationDetents([.fraction(0.5)])
+                .presentationDragIndicator(.visible)
+                .environmentObject(authManager)
+            }
+            .sheet(isPresented: confirmSheetBinding) {
+                PitchResultSheetView(
+                    isPresented: $showConfirmSheet,
+                    isStrikeSwinging: $isStrikeSwinging,
+                    isStrikeLooking: $isStrikeLooking,
+                    isWildPitch: $isWildPitch,
+                    isPassedBall: $isPassedBall,
+                    isBall: $isBall,
+                    selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
+                    isError: $isError,
+                    pendingResultLabel: pendingResultLabel,
+                    pitchCall: calledPitch,
+                    batterSide: batterSide,
+                    selectedTemplateId: selectedTemplate?.id.uuidString,
+                    currentMode: sessionManager.currentMode,
+                    selectedGameId: selectedGameId,
+                    selectedOpponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
+                    selectedOpponentBatterId: selectedBatterId?.uuidString,
+                    selectedPracticeId: selectedPracticeId,
+                    saveAction: { event in
+                        authManager.savePitchEvent(event)
+                        sessionManager.incrementCount()
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            pitchEvents.append(event)
+                        }
+                        authManager.loadPitchEvents { events in
+                            self.pitchEvents = events
+                        }
+                        // Added per instruction 3: bump progressRefreshToken on Practice save when sheet is shown
+                        if overlayTab == .progress && sessionManager.currentMode == .practice {
+                            progressRefreshToken = UUID()
+                        }
+                        
+                        // Reset state
+                        resultVisualState = event.location
+                        activeCalledPitchId = UUID().uuidString
+                        isRecordingResult = false
+                        selectedPitch = ""
+                        selectedLocation = ""
+                        lastTappedPosition = nil
+                        calledPitch = nil
+                        resultVisualState = nil
+                        actualLocationRecorded = nil
+                        pendingResultLabel = nil
+                        isStrikeSwinging = false
+                        isWildPitch = false
+                        isPassedBall = false
+                        isBall = false
+                        selectedOutcome = nil
+                        selectedDescriptor = nil
+                    },
+                    template: selectedTemplate
+                )
+            }
+            .sheet(isPresented: $showCodeAssignmentSheet) {
+                CodeAssignmentSettingsView(
+                    selectedPitch: $selectedPitch,
+                    selectedLocation: $selectedLocation,
+                    pitchCodeAssignments: $pitchCodeAssignments,
+                    allPitches: allPitches,
+                    allLocations: allLocationsFromGrid()
+                )
+                .padding()
+            }
+            .onAppear(perform: handleInitialAppear)
+            .sheet(isPresented: $showSettings) {
+                SettingsView(
+                    templates: $templates,
+                    allPitches: allPitches,
+                    selectedTemplate: $selectedTemplate
+                )
+                .environmentObject(authManager)
+            }
+            .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Create or choose a game before generating a partner code.")
+            }
+            .alert("Code Link", isPresented: $showCodeShareErrorAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(codeShareErrorMessage)
+            }
+        
+            .onChange(of: selectedTemplate) { _, newValue in
+                // Persist and sync dependent state whenever template changes (from menu or Settings)
+                persistSelectedTemplate(newValue)
+                if let t = newValue {
+                    let fallbackList = availablePitches(for: t)
+                    if useEncrypted(for: t) {
+                        selectedPitches = Set(fallbackList)
+                    } else {
+                        selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                    }
+                    pitchCodeAssignments = t.codeAssignments
+                    // Reset strike zone and called pitch state
+                    lastTappedPosition = nil
+                    calledPitch = nil
+                    // Force chips/strike zone to refresh colors and content
+                    colorRefreshToken = UUID()
+                }
+            }
+            .onChange(of: authManager.isSignedIn) { _, signedIn in
+                if signedIn && !hasPresentedInitialSettings {
+                    let defaults = UserDefaults.standard
+                    let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
+                    let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
+                    let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
+                    if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
+                        showSettings = true
+                        hasPresentedInitialSettings = true
+                        defaults.set("settings", forKey: DefaultsKeys.lastView)
+                    } else {
+                        if persistedIsPractice {
+                            isGame = false
+                            sessionManager.switchMode(to: .practice)
+                            restoreActivePracticeSelection()
+                        } else if let gid = persistedGameId {
+                            isGame = true
+                            sessionManager.switchMode(to: .game)
+                            selectedGameId = gid
+                            authManager.loadGames { games in
+                                if let game = games.first(where: { $0.id == gid }) {
+                                    opponentName = game.opponent
+                                    if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                                        jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                                            JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                                        }
+                                    } else {
+                                        jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                                    }
+                                }
+                            }
+                        }
+                        hasPresentedInitialSettings = true
+                    }
+                }
+            }
+            .onChange(of: showSettings) { _, showing in
+                if showing {
+                    UserDefaults.standard.set("settings", forKey: DefaultsKeys.lastView)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { notification in
+                guard let order = notification.object as? [String] else { return }
+                
+                if let gameId = selectedGameId,
+                   let owner = effectiveGameOwnerUserId {
+                    authManager.updateGameLineup(
+                        ownerUserId: owner,
+                        gameId: gameId,
+                        jerseyNumbers: order
+                    )
+                } else {
+                    print("⚠️ Cannot update jersey order: missing gameId or effective owner")
+                }
+            }
+        
+            .onReceive(NotificationCenter.default.publisher(for: .pitchColorDidChange)) { _ in
+                // Force chips and strike zone to rebuild with updated colors
+                colorRefreshToken = UUID()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { notification in
+                // Expecting userInfo: ["type": "practice"|"game", "gameId": String?, "opponent": String?]
+                guard let userInfo = notification.userInfo as? [String: Any], let type = userInfo["type"] as? String else { return }
+                self.suppressNextGameSheet = true
+                self.showGameSheet = false
+                if type == "practice" {
+                    if let pid = userInfo["practiceId"] as? String {
+                        // Immediately set selection and persist
+                        selectedPracticeId = pid
+                        persistActivePracticeId(pid)
+                        
+                        let sessions = loadPracticeSessions()
+                        if let session = sessions.first(where: { $0.id == pid }) {
+                            practiceName = session.name
+                        } else if let providedName = userInfo["practiceName"] as? String {
+                            practiceName = providedName
+                        } else {
+                            practiceName = nil
+                        }
+                        // Clear any active game state when switching to practice
+                        selectedGameId = nil
+                        opponentName = nil
+                        jerseyCells = []
+                        selectedBatterId = nil
+                    } else if let pname = userInfo["practiceName"] as? String {
+                        practiceName = pname
+                    } else {
+                        practiceName = nil
+                        selectedPracticeId = nil
+                    }
+                    isGame = false
+                    sessionManager.switchMode(to: .practice)
+                    if let t = selectedTemplate {
+                        let fallbackList = availablePitches(for: t)
+                        if useEncrypted(for: t) {
+                            selectedPitches = Set(fallbackList)
+                        } else {
+                            selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                        }
+                        colorRefreshToken = UUID()
+                    }
+                    let defaults = UserDefaults.standard
+                    defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
+                    defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+                    defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                } else if type == "game" {
+                    guard let gid = userInfo["gameId"] as? String else { return }
+                    
+                    // 🔑 Owner userId is required for partner-join games (host-owned docs).
+                    // Fallback to current signed-in user for local game selection flows.
+                    let ownerIdFromPayload = userInfo["ownerUserId"] as? String
+                    let resolvedOwnerId = ownerIdFromPayload ?? authManager.user?.uid
+                    
+                    guard let ownerUserId = resolvedOwnerId else {
+                        print("❌ Missing ownerUserId and no signed-in user available.")
+                        return
+                    }
+                    
+                    selectedGameId = gid
+                    if type == "game" {
+                        guard let gid = userInfo["gameId"] as? String else { return }
+                        let ownerUserId = userInfo["ownerUserId"] as? String
+                        
+                        selectedGameId = gid
+                        activeGameOwnerUserId = ownerUserId   // ✅ ADD THIS LINE
+                        
+                        let defaults = UserDefaults.standard
+                        if let ownerUserId {
+                            defaults.set(ownerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
+                        } else {
+                            defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
+                        }
+                        
+                        // (rest of your existing code...)
+                    }
+                    
+                    // ✅ Load the specific game doc (works for host-owned games after joining)
+                    authManager.loadGame(ownerUserId: ownerUserId, gameId: gid) { game in
+                        guard let game = game else {
+                            // Fallback: still set provided opponent if available
+                            if let opp = userInfo["opponent"] as? String {
+                                opponentName = opp
+                            }
+                            print("⚠️ Game not found or not readable yet. owner=\(ownerUserId) gameId=\(gid)")
+                            return
+                        }
+                        
+                        // Prefer provided opponent name, otherwise use stored
+                        if let opp = userInfo["opponent"] as? String {
+                            opponentName = opp
+                        } else {
+                            opponentName = game.opponent
+                        }
+                        
+                        if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                            jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                                JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                            }
+                        } else {
+                            jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                        }
+                        
+                        selectedBatterId = nil
+                    }
+                    
+                    isGame = true
+                    sessionManager.switchMode(to: .game)
+                    
+                    if let t = selectedTemplate {
+                        let fallbackList = availablePitches(for: t)
+                        if useEncrypted(for: t) {
+                            selectedPitches = Set(fallbackList)
+                        } else {
+                            selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                        }
+                        colorRefreshToken = UUID()
+                    }
+                    
+                    let defaults = UserDefaults.standard
+                    defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+                    defaults.set(gid, forKey: DefaultsKeys.activeGameId)
+                    defaults.set(ownerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
+                    
+                    
+                    // ✅ Persist owner id so restore works after relaunch for partner-joined games
+                    defaults.set(ownerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
+                    
+                    defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionDeleted)) { notification in
+                guard let userInfo = notification.userInfo as? [String: Any], let type = userInfo["type"] as? String else { return }
+                if type == "game" {
+                    if let gid = userInfo["gameId"] as? String, selectedGameId == gid {
+                        // Clear active game selection and UI label
+                        selectedGameId = nil
+                        opponentName = nil
+                        let defaults = DefaultsKeys.self
+                        UserDefaults.standard.removeObject(forKey: defaults.activeGameId)
+                        UserDefaults.standard.set(false, forKey: defaults.activeIsPractice)
+                    }
+                } else if type == "practice" {
+                    if let pid = userInfo["practiceId"] as? String, selectedPracticeId == pid {
+                        // Clear active practice selection and UI label
+                        selectedPracticeId = nil
+                        practiceName = nil
+                        persistActivePracticeId(nil)
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .templateSelectionDidChange)) { note in
+                // If SettingsView sent an explicit templateId, try to resolve it; otherwise just use the current selectedTemplate.
+                if let userInfo = note.userInfo as? [String: Any],
+                   let tid = userInfo["templateId"] as? String,
+                   let resolved = templates.first(where: { $0.id.uuidString == tid }) {
+                    applyTemplate(resolved)
+                } else if let current = selectedTemplate {
+                    // Re-apply to pull in any edits made in the editor and refresh derived state/UI
+                    applyTemplate(current)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .practiceProgressReset)) { _ in
+                authManager.loadPitchEvents { events in
+                    self.pitchEvents = events
+                }
+            }
+            .overlay(alignment: .bottom) {
+                pitchesFacedOverlay
+            }
     }
     
     private var pitchesFacedOverlay: some View {
@@ -2090,6 +2237,7 @@ struct PitchTrackerView: View {
 }
 
 private struct ProgressGameView: View {
+    let ownerUserId: String?
     @Binding var balls: Int
     @Binding var strikes: Int
     @Binding var inning: Int
@@ -2162,20 +2310,24 @@ private struct ProgressGameView: View {
             let newCount = newValue.filter { $0 }.count
             if balls != newCount {
                 balls = newCount
-                if let gid = selectedGameId {
-                    authManager.updateGameBalls(gameId: gid, balls: newCount)
+
+                withOwnerAndGame { owner, gid in
+                    authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: newCount)
                 }
             }
         }
+
         .onChange(of: strikeToggles) { _, newValue in
             let newCount = newValue.filter { $0 }.count
             if strikes != newCount {
                 strikes = newCount
-                if let gid = selectedGameId {
-                    authManager.updateGameStrikes(gameId: gid, strikes: newCount)
+
+                withOwnerAndGame { owner, gid in
+                    authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: newCount)
                 }
             }
         }
+
         .onChange(of: balls) { _, newValue in
             let clamped = max(0, min(3, newValue))
             ballToggles = (0..<3).map { $0 < clamped }
@@ -2186,20 +2338,29 @@ private struct ProgressGameView: View {
         }
         .onChange(of: selectedGameId) { _, newGameId in
             guard let gid = newGameId else { return }
-            authManager.loadGames { games in
-                if let game = games.first(where: { $0.id == gid }) {
-                    let newBalls = max(0, min(3, game.balls ?? 0))
-                    let newStrikes = max(0, min(2, game.strikes ?? 0))
-                    balls = newBalls
-                    strikes = newStrikes
-                    ballToggles = (0..<3).map { $0 < newBalls }
-                    strikeToggles = (0..<2).map { $0 < newStrikes }
-                }
+            guard let owner = ownerUserId, !owner.isEmpty else { return }
+
+            authManager.loadGame(ownerUserId: owner, gameId: gid) { game in
+                guard let game else { return }
+
+                let newBalls = max(0, min(3, game.balls ?? 0))
+                let newStrikes = max(0, min(2, game.strikes ?? 0))
+
+                balls = newBalls
+                strikes = newStrikes
+
+                ballToggles = (0..<3).map { $0 < newBalls }
+                strikeToggles = (0..<2).map { $0 < newStrikes }
             }
         }
     }
 
     // MARK: - Helpers
+    private func withOwnerAndGame(_ action: (_ owner: String, _ gameId: String) -> Void) {
+        guard let owner = ownerUserId, !owner.isEmpty else { return }
+        guard let gid = selectedGameId, !gid.isEmpty else { return }
+        action(owner, gid)
+    }
 
     private func ballBinding(index: Int) -> Binding<Bool> {
         Binding(
@@ -2716,6 +2877,8 @@ private struct ProgressSummaryView: View {
         }
     }
     
+
+    
     var body: some View {
         VStack(alignment: .center, spacing: 8) {
             // Centered table with flanking metric stacks
@@ -2948,10 +3111,10 @@ struct JerseyRow: View {
                                     let item = jerseyCells.remove(at: idx)
                                     jerseyCells.insert(item, at: idx - 1)
                                 }
-                                if let gameId = selectedGameId {
-                                    authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                                }
-                                NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
+                                NotificationCenter.default.post(
+                                    name: .jerseyOrderChanged,
+                                    object: jerseyCells.map { $0.jerseyNumber }
+                                )
                             }
                         } label: {
                             Label("Move Up", systemImage: "arrow.up")
@@ -2973,10 +3136,10 @@ struct JerseyRow: View {
                                     let item = jerseyCells.remove(at: idx)
                                     jerseyCells.insert(item, at: idx + 1)
                                 }
-                                if let gameId = selectedGameId {
-                                    authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
-                                }
-                                NotificationCenter.default.post(name: .jerseyOrderChanged, object: jerseyCells.map { $0.jerseyNumber })
+                                NotificationCenter.default.post(
+                                    name: .jerseyOrderChanged,
+                                    object: jerseyCells.map { $0.jerseyNumber }
+                                )
                             }
                         } label: {
                             Label("Move Down", systemImage: "arrow.down")
@@ -3016,7 +3179,9 @@ struct JerseyRow: View {
                         if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
                             jerseyCells.remove(at: idx)
                             if let gameId = selectedGameId {
-                                authManager.updateGameLineup(gameId: gameId, jerseyNumbers: jerseyCells.map { $0.jerseyNumber })
+                                if let gameId = selectedGameId {
+                                    
+                                }
                             }
                             if selectedBatterId == cell.id {
                                 selectedBatterId = nil
@@ -3522,6 +3687,7 @@ private struct CodeShareSheet: View {
         }
 
         writeErrorMessage = nil
+        print("🧩 Generate start | uid=\(Auth.auth().currentUser?.uid ?? "nil") | hostUid=\(hostUid) | gameId=\(gameId)")
 
         let db = Firestore.firestore()
 
@@ -3532,6 +3698,8 @@ private struct CodeShareSheet: View {
             }
 
             let candidate = buildShareCode()
+            print("🧩 Checking candidate=\(candidate) | uid=\(Auth.auth().currentUser?.uid ?? "nil")")
+
             db.collection("sessions").document(candidate).getDocument { snap, error in
                 if let error = error {
                     writeErrorMessage = "Failed checking code availability. \(error.localizedDescription)"
@@ -3578,28 +3746,59 @@ private struct CodeShareSheet: View {
             return
         }
 
-        let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60)) // 2 hours
-
-        let data: [String: Any] = [
-            "hostUid": hostUid,
-            "ownerUserId": hostUid,
-            "type": "game",
-            "gameId": gameId,
-            "opponent": opponent ?? "",
-            "createdAt": FieldValue.serverTimestamp(),
-            "expiresAt": expires
-        ]
+        let currentUid = Auth.auth().currentUser?.uid ?? "nil"
+        print("🧩 Writing session requested | code=\(code) | currentUid=\(currentUid) | hostUid=\(hostUid) | gameId=\(gameId)")
 
         let db = Firestore.firestore()
-        db.collection("sessions").document(code).setData(data, merge: true) { error in
-            if let error = error {
-                didWriteSessionDoc = false
-                writeErrorMessage = "Failed to activate code. \(error.localizedDescription)"
-                print("❌ session write failed:", error)
-            } else {
-                didWriteSessionDoc = true
-                writeErrorMessage = nil
-                print("✅ session active for code:", code)
+
+        // ✅ Precheck: confirm the game doc exists where the joiner will write
+        let gameRef = db.collection("users")
+            .document(hostUid)
+            .collection("games")
+            .document(gameId)
+
+        gameRef.getDocument { snap, err in
+            if let err = err {
+                self.writeErrorMessage = "Could not verify game exists. \(err.localizedDescription)"
+                print("🧷 Precheck game getDocument error:", err)
+                return
+            }
+
+            let exists = (snap?.exists == true)
+            let keys = snap?.data()?.keys.sorted() ?? []
+            let participantsAny = snap?.data()?["participants"]
+
+            print("🧷 Precheck game exists=\(exists) path=\(gameRef.path) keys=\(keys) participants=\(String(describing: participantsAny))")
+
+            guard exists else {
+                self.writeErrorMessage = "That game isn't saved to Firestore yet. Open the game and hit Save, then try generating a code again."
+                print("❌ Precheck failed: game doc missing at \(gameRef.path)")
+                return
+            }
+
+            // ✅ Now write the session doc
+            let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60)) // 2 hours
+
+            let data: [String: Any] = [
+                "hostUid": hostUid,
+                "ownerUserId": hostUid,
+                "type": "game",
+                "gameId": gameId,
+                "opponent": self.opponent ?? "",
+                "createdAt": FieldValue.serverTimestamp(),
+                "expiresAt": expires
+            ]
+
+            db.collection("sessions").document(code).setData(data, merge: true) { error in
+                if let error = error {
+                    self.didWriteSessionDoc = false
+                    self.writeErrorMessage = "Failed to activate code. \(error.localizedDescription)"
+                    print("❌ session write failed:", error)
+                } else {
+                    self.didWriteSessionDoc = true
+                    self.writeErrorMessage = nil
+                    print("✅ session active for code:", code)
+                }
             }
         }
     }

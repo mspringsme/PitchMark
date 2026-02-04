@@ -108,18 +108,17 @@ final class CodeSessionResolver: ObservableObject {
             return
         }
 
-        // Add self as participant to the owner's game doc
         let ref = Firestore.firestore()
             .collection("users").document(ownerUserId)
             .collection("games").document(gameId)
 
-        // Update only participants.<uid> = true to satisfy your rules
-        ref.setData(["participants.\(currentUid)": true], merge: true) { error in
+        // ✅ Update a single field: participants.<uid> = true
+        ref.updateData(["participants.\(currentUid)": true]) { error in
             if let error = error {
                 print("Resolver: failed to add participant: \(error)")
                 return
             }
-            // Repost enriched selection for PitchTrackerView
+
             NotificationCenter.default.post(
                 name: .gameOrSessionChosen,
                 object: nil,
@@ -131,7 +130,7 @@ final class CodeSessionResolver: ObservableObject {
                     "opponent": opponent as Any
                 ]
             )
-
         }
     }
+
 }
