@@ -715,5 +715,40 @@ extension AuthManager {
             if let error = error { print("Error updating game counts: \(error)") }
         }
     }
+    
+    func setPendingPitch(
+            ownerUserId: String,
+            gameId: String,
+            pending: Game.PendingPitch
+        ) {
+            let ref = Firestore.firestore()
+                .collection("users").document(ownerUserId)
+                .collection("games").document(gameId)
+
+            do {
+                let pendingData = try Firestore.Encoder().encode(pending)
+                ref.updateData([
+                    "pending": pendingData
+                ]) { err in
+                    if let err { print("❌ setPendingPitch failed:", err) }
+                }
+            } catch {
+                print("❌ setPendingPitch encode failed:", error)
+            }
+        }
+
+        func clearPendingPitch(ownerUserId: String, gameId: String) {
+            let ref = Firestore.firestore()
+                .collection("users").document(ownerUserId)
+                .collection("games").document(gameId)
+
+            // easiest: delete the whole pending map
+            ref.updateData([
+                "pending": FieldValue.delete()
+            ]) { err in
+                if let err { print("❌ clearPendingPitch failed:", err) }
+            }
+        }
+
 }
 

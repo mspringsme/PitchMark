@@ -230,6 +230,91 @@ struct PitchTrackerView: View {
         return authManager.user?.uid
     }
 
+    private var isOwnerForActiveGame: Bool {
+        guard let me = authManager.user?.uid,
+              let owner = effectiveGameOwnerUserId else { return false }
+        return me == owner
+    }
+
+    private var canInitiateCall: Bool {
+        // Practice: always allowed. Game: owner only.
+        return !isGame || isOwnerForActiveGame
+    }
+
+    private func handleSetCalledPitch(_ newCall: PitchCall?) {
+        calledPitch = newCall
+
+        guard isGame,
+              isOwnerForActiveGame,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        // If owner cleared the call, clear pending too.
+        guard let newCall else {
+            authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+            return
+        }
+
+        let callId = UUID().uuidString
+        activeCalledPitchId = callId
+        isRecordingResult = false
+
+        let pending = Game.PendingPitch(
+            isActive: true,
+            id: callId,
+            label: newCall.location,
+            pitch: newCall.pitch,
+            location: newCall.location,
+            batterSide: batterSide == .left ? "left" : "right",
+            createdAt: Date(),
+            createdByUid: owner,
+            isStrike: newCall.isStrike
+        )
+
+
+        authManager.setPendingPitch(ownerUserId: owner, gameId: gid, pending: pending)
+    }
+    private func applyPendingFromGame(_ updated: Game) {
+        // Only relevant in game mode
+        guard isGame else { return }
+
+        // ✅ Critical: never overwrite the owner's local calledPitch (it contains real codes)
+        guard !isOwnerForActiveGame else { return }
+
+        // If there's an active pending pitch, mirror it locally for the joiner UI
+        if let p = updated.pending,
+           p.isActive == true,
+           let pitch = p.pitch,
+           let loc = p.location {
+            
+            pendingResultLabel = (p.label ?? loc)
+            print("🔆 pendingResultLabel from Firestore=", pendingResultLabel ?? "nil")
+
+
+            let call = PitchCall(
+                pitch: pitch,
+                location: loc,
+                isStrike: p.isStrike ?? true,
+                codes: [] // joiner never sees codes
+            )
+
+            calledPitch = call
+            activeCalledPitchId = p.id
+            isRecordingResult = true
+            
+            pendingResultLabel = p.label
+            return
+        }
+
+        // No pending pitch: clear joiner "waiting" UI
+        pendingResultLabel = nil
+        calledPitch = nil
+        activeCalledPitchId = nil
+        isRecordingResult = false
+    }
+
+
     private func startListeningToActiveGame() {
         // detach old listener
         gameListener?.remove()
@@ -262,6 +347,7 @@ struct PitchTrackerView: View {
                     if let id = updated.id,
                        let idx = games.firstIndex(where: { $0.id == id }) {
                         games[idx] = updated
+                        
                     } else {
                         games.insert(updated, at: 0)
                     }
@@ -276,6 +362,8 @@ struct PitchTrackerView: View {
                     } else {
                         jerseyCells = updated.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
                     }
+                    
+                    applyPendingFromGame(updated)
                 }
             } catch {
                 print("❌ Failed decoding Game from listener:", error)
@@ -745,7 +833,7 @@ struct PitchTrackerView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .ignoresSafeArea(edges: [.horizontal, .bottom])
+        .ignoresSafeArea(edges: [.horizontal])   // ✅ CHANGED (removed .bottom)
         .background(.regularMaterial)
     }
 
@@ -841,8 +929,8 @@ struct PitchTrackerView: View {
                 .onDisappear { handleCalledPitchDisappear() }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, alignment: .bottom)  // ✅ remove maxHeight: .infinity
+        .safeAreaPadding(.bottom, 12)                    // ✅ respects home indicator
     }
     private func handleCalledPitchAppear() {
         shouldBlurBackground = true
@@ -1387,6 +1475,7 @@ struct PitchTrackerView: View {
         let isEncryptedMode: Bool
         let colorRefreshToken: UUID
         let template: PitchTemplate?
+        let canInitiateCall: Bool
 
         var body: some View {
             VStack {
@@ -1413,7 +1502,8 @@ struct PitchTrackerView: View {
                     showResultConfirmation: $showResultConfirmation,
                     showConfirmSheet: showConfirmSheet,
                     isEncryptedMode: isEncryptedMode,
-                    template: template
+                    template: template,
+                    canInitiateCall: canInitiateCall
                 )
                 .id(colorRefreshToken)
             }
@@ -1440,7 +1530,7 @@ struct PitchTrackerView: View {
                 lastTappedPosition: lastTappedPosition,
                 setLastTapped: { lastTappedPosition = $0 },
                 calledPitch: calledPitch,
-                setCalledPitch: { calledPitch = $0 },
+                setCalledPitch: { handleSetCalledPitch($0) },
                 selectedPitches: effectivePitchesForStrikeZone,
                 gameIsActive: gameIsActive,
                 selectedPitch: selectedPitch,
@@ -1462,7 +1552,8 @@ struct PitchTrackerView: View {
                     return false
                 }(),
                 colorRefreshToken: colorRefreshToken,
-                template: selectedTemplate
+                template: selectedTemplate,
+                canInitiateCall: canInitiateCall
             )
             .overlay(resetOverlay, alignment: .bottomLeading)
             .overlay(sessionOverlay, alignment: .bottom)
@@ -1856,6 +1947,11 @@ struct PitchTrackerView: View {
                     selectedPracticeId: selectedPracticeId,
                     saveAction: { event in
                         authManager.savePitchEvent(event)
+                        if isGame,
+                           let gid = selectedGameId,
+                           let owner = effectiveGameOwnerUserId {
+                            authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+                        }
                         sessionManager.incrementCount()
                         withAnimation(.easeInOut(duration: 0.3)) {
                             pitchEvents.append(event)
@@ -2163,9 +2259,10 @@ struct PitchTrackerView: View {
                     self.pitchEvents = events
                 }
             }
-            .overlay(alignment: .bottom) {
+            .safeAreaInset(edge: .bottom) {
                 pitchesFacedOverlay
             }
+
     }
     
     private var pitchesFacedOverlay: some View {

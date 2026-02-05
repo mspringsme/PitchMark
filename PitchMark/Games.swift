@@ -39,52 +39,65 @@ let sampleJerseyCells: [JerseyCell] = [
 ]
 
 struct Game: Identifiable, Codable {
+    // Firestore doc id
     @DocumentID var id: String?
+
+    // Core
     var opponent: String
     var date: Date
-    var jerseyNumbers: [String]
-    var batterIds: [String]? = nil
     var createdAt: Date = Date()
-    var participants: [String: Bool] = [:]
-    
-    var balls: Int
-    var strikes: Int
-    var hits: Int
-    var walks: Int
-    var inning: Int
-    var us: Int
-    var them: Int
 
+    // Lineup / participants
+    var jerseyNumbers: [String] = []
+    var batterIds: [String]? = nil
+    var participants: [String: Bool] = [:]
+
+    // Scoreboard
+    var balls: Int = 0
+    var strikes: Int = 0
+    var hits: Int = 0
+    var walks: Int = 0
+    var inning: Int = 1
+    var us: Int = 0
+    var them: Int = 0
+
+    // Shared “pending pitch” state (owner sets; joiner reads; joiner can clear)
+    var pending: PendingPitch? = nil
+
+    // MARK: - Nested types
+
+    struct PendingPitch: Codable, Equatable {
+        var isActive: Bool = false
+        var id: String? = nil              // UUID string for correlation
+        var label: String? = nil           // whatever you use to highlight UI
+        var pitch: String? = nil           // called pitch name
+        var location: String? = nil        // called location token/string
+        var batterSide: String? = nil      // "L"/"R" or however you store it
+        var createdAt: Date? = nil         // optional: when it was initiated
+        var createdByUid: String? = nil    // optional: owner uid
+        var isStrike: Bool? = nil
+
+    }
+
+    // MARK: - Convenience
+
+    var hasActivePendingPitch: Bool {
+        pending?.isActive == true
+    }
+
+    // Minimal init (only what you truly need to create a new game)
     init(
         id: String? = nil,
         opponent: String,
         date: Date,
         jerseyNumbers: [String],
-        batterIds: [String]? = nil,
-        createdAt: Date = Date(),
-        participants: [String: Bool] = [:],
-        balls: Int = 0,
-        strikes: Int = 0,
-        hits: Int = 0,
-        walks: Int = 0,
-        inning: Int = 1,
-        us: Int = 0,
-        them: Int = 0
+        batterIds: [String]? = nil
     ) {
         self.id = id
         self.opponent = opponent
         self.date = date
         self.jerseyNumbers = jerseyNumbers
         self.batterIds = batterIds
-        self.createdAt = createdAt
-        self.participants = participants 
-        self.balls = balls
-        self.strikes = strikes
-        self.hits = hits
-        self.walks = walks
-        self.inning = inning
-        self.us = us
-        self.them = them
     }
 }
 

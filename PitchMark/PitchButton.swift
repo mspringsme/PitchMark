@@ -32,6 +32,7 @@ private struct PitchButtonView: View {
     let showConfirmSheet: Binding<Bool>
     let isEncryptedMode: Bool
     let template: PitchTemplate?
+    let canInitiateCall: Bool
 
     @State private var showMenuSheet = false
 
@@ -84,6 +85,7 @@ private struct PitchButtonView: View {
                     .frame(width: buttonSize, height: buttonSize)
             } else if isRecordingResult {
                 Button(action: {
+                    print("🔆 fullLabel=", fullLabel)
                     pendingResultLabel.wrappedValue = fullLabel
                     showConfirmSheet.wrappedValue = true
                 }) {
@@ -103,10 +105,91 @@ private struct PitchButtonView: View {
                 .buttonStyle(.plain)
 
             } else {
-                Button(action: {
-                    showMenuSheet = true
-                }) {
-                    ZStack {
+                Group {
+                    if canInitiateCall {
+                        Button(action: {
+                            showMenuSheet = true
+                        }) {
+                            ZStack {
+                                StrikeZoneButtonLabel(
+                                    isStrike: location.isStrike,
+                                    isSelected: isSelected,
+                                    fullLabel: fullLabel,
+                                    segmentColors: segmentColors,
+                                    buttonSize: buttonSize,
+                                    isRecordingResult: isRecordingResult,
+                                    actualLocationRecorded: actualLocationRecorded,
+                                    calledPitchLocation: calledPitchLocation,
+                                    pendingResultLabel: pendingResultLabel.wrappedValue,
+                                    outlineOnly: shouldOutline
+                                )
+                            }
+                            .padding(10)
+                            .compositingGroup()
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .sheet(isPresented: $showMenuSheet) {
+                            VStack(spacing: 12) {
+                                HStack {
+                                    Spacer(minLength: 0)
+                                    HStack(spacing: 6) {
+                                        Text(location.isStrike ? "Strike:  " : "Ball:  ")
+                                            .font(.title)
+                                            .fontWeight(.bold)
+                                            .foregroundStyle(.secondary)
+                                        Text(labelManager.adjustedLabel(from: location.label))
+                                            .font(.title)
+                                            .fontWeight(.bold)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .fixedSize()
+                                    Spacer(minLength: 0)
+                                }
+                                .multilineTextAlignment(.center)
+
+                                HStack {
+                                    Spacer(minLength: 0)
+                                    PitchMenuContent(
+                                        adjustedLabel: adjustedLabel,
+                                        tappedPoint: tappedPoint,
+                                        location: location,
+                                        setLastTapped: setLastTapped,
+                                        setCalledPitch: setCalledPitch,
+                                        selectedPitches: selectedPitches,
+                                        pitchCodeAssignments: pitchCodeAssignments,
+                                        lastTappedPosition: lastTappedPosition,
+                                        calledPitch: calledPitch,
+                                        setSelectedPitch: setSelectedPitch,
+                                        isEncryptedMode: isEncryptedMode,
+                                        generateEncryptedCodes: { selectedPitch, gridKind, columnIndex, rowIndex in
+                                            if let template = template {
+                                                return EncryptedCodeGenerator.generateCalls(
+                                                    template: template,
+                                                    selectedPitch: selectedPitch,
+                                                    gridKind: gridKind,
+                                                    columnIndex: columnIndex,
+                                                    rowIndex: rowIndex
+                                                )
+                                            }
+                                            return []
+                                        },
+                                        onSelection: {
+                                            showMenuSheet = false
+                                        }
+                                    )
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.bottom, 8)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .presentationDetents([.fraction(0.6), .medium])
+                            .presentationDragIndicator(.visible)
+                        }
+
+                    } else {
+                        // Joiner: no pitch-selection menu
                         StrikeZoneButtonLabel(
                             isStrike: location.isStrike,
                             isSelected: isSelected,
@@ -119,69 +202,9 @@ private struct PitchButtonView: View {
                             pendingResultLabel: pendingResultLabel.wrappedValue,
                             outlineOnly: shouldOutline
                         )
+                        .padding(10)
+                        .compositingGroup()
                     }
-                    .padding(10)
-                    .compositingGroup()
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .sheet(isPresented: $showMenuSheet) {
-                    VStack(spacing: 12) {
-                        HStack {
-                            Spacer(minLength: 0)
-                            HStack(spacing: 6) {
-                                Text(location.isStrike ? "Strike:  " : "Ball:  ")
-                                    .font(.title)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.secondary)
-                                Text(labelManager.adjustedLabel(from: location.label))
-                                    .font(.title)
-                                    .fontWeight(.bold)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .fixedSize()
-                            Spacer(minLength: 0)
-                        }
-                        .multilineTextAlignment(.center)
-
-                        HStack {
-                            Spacer(minLength: 0)
-                            PitchMenuContent(
-                                adjustedLabel: adjustedLabel,
-                                tappedPoint: tappedPoint,
-                                location: location,
-                                setLastTapped: setLastTapped,
-                                setCalledPitch: setCalledPitch,
-                                selectedPitches: selectedPitches,
-                                pitchCodeAssignments: isEncryptedMode ? [] : pitchCodeAssignments,
-                                lastTappedPosition: lastTappedPosition,
-                                calledPitch: calledPitch,
-                                setSelectedPitch: setSelectedPitch,
-                                isEncryptedMode: isEncryptedMode,
-                                generateEncryptedCodes: { selectedPitch, gridKind, columnIndex, rowIndex in
-                                    if let template = template {
-                                        return EncryptedCodeGenerator.generateCalls(
-                                            template: template,
-                                            selectedPitch: selectedPitch,
-                                            gridKind: gridKind,
-                                            columnIndex: columnIndex,
-                                            rowIndex: rowIndex
-                                        )
-                                    }
-                                    return []
-                                },
-                                onSelection: {
-                                    showMenuSheet = false
-                                }
-                            )
-                            .fixedSize(horizontal: true, vertical: false)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.bottom, 8)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .presentationDetents([.fraction(0.6), .medium])
-                    .presentationDragIndicator(.visible)
                 }
             }
         }
@@ -215,7 +238,8 @@ func pitchButton(
     pendingResultLabel: Binding<String?>,
     showConfirmSheet: Binding<Bool>,
     isEncryptedMode: Bool,
-    template: PitchTemplate?
+    template: PitchTemplate?,
+    canInitiateCall: Bool
 ) -> some View {
     PitchButtonView(
         x: x,
@@ -242,7 +266,8 @@ func pitchButton(
         pendingResultLabel: pendingResultLabel,
         showConfirmSheet: showConfirmSheet,
         isEncryptedMode: isEncryptedMode,
-        template: template
+        template: template,
+        canInitiateCall: canInitiateCall
     )
 }
 
