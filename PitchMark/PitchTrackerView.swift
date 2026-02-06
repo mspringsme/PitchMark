@@ -259,11 +259,14 @@ struct PitchTrackerView: View {
         let callId = UUID().uuidString
         activeCalledPitchId = callId
         isRecordingResult = false
+        
+        let prefix = newCall.isStrike ? "Strike" : "Ball"
+        let fullLabel = "\(prefix) \(newCall.location)"
 
         let pending = Game.PendingPitch(
             isActive: true,
             id: callId,
-            label: newCall.location,
+            label: fullLabel,
             pitch: newCall.pitch,
             location: newCall.location,
             batterSide: batterSide == .left ? "left" : "right",
