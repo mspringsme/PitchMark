@@ -520,6 +520,59 @@ class AuthManager: ObservableObject {
         }
     }
     
+    func updateGameSelectedBatter(ownerUserId: String?, gameId: String, selectedBatterId: String?) {
+        guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId, debugTag: "updateGameSelectedBatter") else { return }
+
+        ref.updateData([
+            "selectedBatterId": selectedBatterId as Any
+        ]) { error in
+            if let error = error {
+                print("❌ Error updating selectedBatterId:", error)
+            }
+        }
+    }
+
+    func migrateBatterIdsIfMissing(ownerUserId: String?, gameId: String) {
+        guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId, debugTag: "migrateBatterIdsIfMissing") else { return }
+
+        let db = Firestore.firestore()
+        db.runTransaction({ (transaction, errorPointer) -> Any? in
+            let snap: DocumentSnapshot
+            do {
+                snap = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+
+            let data = snap.data() ?? [:]
+            let jerseyNumbers = data["jerseyNumbers"] as? [String] ?? []
+            let existingIds = data["batterIds"] as? [String]
+
+            // If already present and aligned, do nothing
+            if let existingIds, existingIds.count == jerseyNumbers.count, !existingIds.isEmpty {
+                return nil
+            }
+
+            // Only migrate if there are jerseys
+            guard !jerseyNumbers.isEmpty else { return nil }
+
+            let newIds = jerseyNumbers.map { _ in UUID().uuidString }
+
+            transaction.updateData([
+                "batterIds": newIds
+            ], forDocument: ref)
+
+            return nil
+        }) { _, error in
+            if let error = error {
+                print("❌ migrateBatterIdsIfMissing failed:", error)
+            } else {
+                print("✅ migrateBatterIdsIfMissing complete (or already migrated)")
+            }
+        }
+    }
+
 }
 
 extension AuthManager {
@@ -566,13 +619,21 @@ extension AuthManager {
         }
     }
 
-    private func gameDocRef(ownerUserId: String?, gameId: String) -> DocumentReference? {
+    // ✅ Always writes to the host-owned game doc when ownerUserId is provided.
+    // Adds a log so you can instantly see if a participant is writing to their own tree by mistake.
+    private func gameDocRef(ownerUserId: String?, gameId: String, debugTag: String = "") -> DocumentReference? {
         guard let currentUid = user?.uid else { return nil }
         let owner = ownerUserId ?? currentUid
-        return Firestore.firestore()
+        let ref = Firestore.firestore()
             .collection("users").document(owner)
             .collection("games").document(gameId)
+
+        if !debugTag.isEmpty {
+            print("🧭 \(debugTag) | currentUid=\(currentUid) ownerUserId=\(ownerUserId ?? "nil") -> path=\(ref.path)")
+        }
+        return ref
     }
+
 
     func loadGames(completion: @escaping ([Game]) -> Void) {
         guard let user = user else { completion([]); return }
@@ -618,12 +679,21 @@ extension AuthManager {
             }
     }
 
-    func updateGameLineup(ownerUserId: String?, gameId: String, jerseyNumbers: [String]) {
+    func updateGameLineup(ownerUserId: String?, gameId: String, jerseyNumbers: [String], batterIds: [String]) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
-        ref.updateData(["jerseyNumbers": jerseyNumbers]) { error in
+        guard jerseyNumbers.count == batterIds.count else {
+            print("❌ Lineup mismatch: jerseyNumbers=\(jerseyNumbers.count) batterIds=\(batterIds.count)")
+            return
+        }
+
+        ref.updateData([
+            "jerseyNumbers": jerseyNumbers,
+            "batterIds": batterIds
+        ]) { error in
             if let error = error { print("Error updating lineup: \(error)") }
         }
     }
+
 
     func deleteGame(gameId: String) {
         guard let user = user else { return }
@@ -749,6 +819,28 @@ extension AuthManager {
                 if let err { print("❌ clearPendingPitch failed:", err) }
             }
         }
+    
+    func updateGameSelectedBatter(ownerUserId: String, gameId: String, selectedBatterId: String?, selectedBatterJersey: String?) {
+        let db = Firestore.firestore()
+        let ref = db.collection("users")
+            .document(ownerUserId)
+            .collection("games")
+            .document(gameId)
+
+        var data: [String: Any] = [
+            "selectedBatterId": selectedBatterId as Any? ?? NSNull(),
+            "selectedBatterJersey": selectedBatterJersey as Any? ?? NSNull()
+        ]
+        // If you prefer to remove fields when nil, use FieldValue.delete()
+        if selectedBatterId == nil { data["selectedBatterId"] = FieldValue.delete() }
+        if selectedBatterJersey == nil { data["selectedBatterJersey"] = FieldValue.delete() }
+
+        ref.setData(data, merge: true) { error in
+            if let error = error {
+                print("❌ Failed to update selected batter: \(error)")
+            }
+        }
+    }
 
 }
 

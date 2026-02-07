@@ -359,11 +359,34 @@ struct PitchTrackerView: View {
 
                     // keep jerseyCells in sync too
                     if let ids = updated.batterIds, ids.count == updated.jerseyNumbers.count {
-                        jerseyCells = zip(ids, updated.jerseyNumbers).map { (idStr, num) in
-                            JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                        jerseyCells = zip(ids, updated.jerseyNumbers).map {
+                            JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
                         }
                     } else {
-                        jerseyCells = updated.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                        // Build a temporary local list so UI still shows something immediately
+                        let tempIds = updated.jerseyNumbers.map { _ in UUID().uuidString }
+                        jerseyCells = zip(tempIds, updated.jerseyNumbers).map {
+                            JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
+                        }
+
+                        // ✅ One-time migrate via transaction (prevents owner/participant races)
+                        authManager.migrateBatterIdsIfMissing(ownerUserId: owner, gameId: gid)
+                    }
+
+                    // ✅ If selected batter no longer exists, clear it
+                    if let sb = self.selectedBatterId,
+                       !jerseyCells.contains(where: { $0.id == sb }) {
+                        self.selectedBatterId = nil
+                    }
+
+
+                    
+                    // Sync selected batter from Firestore to local state (both owner and participant)
+                    if let selectedIdString = updated.selectedBatterId,
+                       let selectedUUID = UUID(uuidString: selectedIdString) {
+                        self.selectedBatterId = selectedUUID
+                    } else {
+                        self.selectedBatterId = nil
                     }
                     
                     applyPendingFromGame(updated)
@@ -1250,6 +1273,7 @@ struct PitchTrackerView: View {
                                 newJerseyNumber: $newJerseyNumber,
                                 showAddJerseyPopover: $showAddJerseyPopover,
                                 selectedGameId: selectedGameId,
+                                effectiveGameOwnerUserId: effectiveGameOwnerUserId,
                                 pitchesFacedBatterId: $pitchesFacedBatterId,
                                 isReordering: $isReorderingMode
                             )
@@ -1295,8 +1319,10 @@ struct PitchTrackerView: View {
                                             authManager.updateGameLineup(
                                                 ownerUserId: owner,
                                                 gameId: gameId,
-                                                jerseyNumbers: jerseyCells.map { $0.jerseyNumber }
+                                                jerseyNumbers: jerseyCells.map { $0.jerseyNumber },
+                                                batterIds: jerseyCells.map { $0.id.uuidString }
                                             )
+
                                         } else {
                                             print("⚠️ Cannot update lineup: missing selectedGameId or effectiveGameOwnerUserId")
                                         }
@@ -1837,8 +1863,19 @@ struct PitchTrackerView: View {
                                         JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
                                     }
                                 } else {
-                                    jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                                    // show temporary cells immediately
+                                    let tempIds = game.jerseyNumbers.map { _ in UUID().uuidString }
+                                    jerseyCells = zip(tempIds, game.jerseyNumbers).map {
+                                        JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
+                                    }
+
+                                    // trigger one-time migration
+                                    if let owner = activeGameOwnerUserId ?? authManager.user?.uid,
+                                       let gid = game.id {
+                                        authManager.migrateBatterIdsIfMissing(ownerUserId: owner, gameId: gid)
+                                    }
                                 }
+
                                 selectedBatterId = nil
                             }
                             isGame = true
@@ -2078,19 +2115,23 @@ struct PitchTrackerView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { notification in
-                guard let order = notification.object as? [String] else { return }
-                
+                guard let payload = notification.object as? [[String: String]] else { return }
+                let numbers = payload.compactMap { $0["num"] }
+                let ids = payload.compactMap { $0["id"] }
+
+                guard numbers.count == ids.count else { return }
+
                 if let gameId = selectedGameId,
                    let owner = effectiveGameOwnerUserId {
                     authManager.updateGameLineup(
                         ownerUserId: owner,
                         gameId: gameId,
-                        jerseyNumbers: order
+                        jerseyNumbers: numbers,
+                        batterIds: ids
                     )
-                } else {
-                    print("⚠️ Cannot update jersey order: missing gameId or effective owner")
                 }
             }
+
         
             .onReceive(NotificationCenter.default.publisher(for: .pitchColorDidChange)) { _ in
                 // Force chips and strike zone to rebuild with updated colors
@@ -2159,15 +2200,20 @@ struct PitchTrackerView: View {
                         guard let gid = userInfo["gameId"] as? String else { return }
                         let ownerUserId = userInfo["ownerUserId"] as? String
                         
-                        selectedGameId = gid
-                        activeGameOwnerUserId = ownerUserId   // ✅ ADD THIS LINE
-                        
+                        // Set and persist the host's ownerUserId for this game immediately
+                        activeGameOwnerUserId = ownerUserId
                         let defaults = UserDefaults.standard
                         if let ownerUserId {
                             defaults.set(ownerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
                         } else {
                             defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
                         }
+
+                        // Ensure the game id is set before listening
+                        selectedGameId = gid
+
+                        // Restart listener now that both gameId and owner id are known
+                        startListeningToActiveGame()
                         
                         // (rest of your existing code...)
                     }
@@ -3103,8 +3149,9 @@ private struct JerseyDropDelegate: DropDelegate {
         // Persist new order if possible
         // We need access to AuthManager and selectedGameId from the environment/scope.
         // Since DropDelegate is not a view, we post a notification with the new order.
-        let order = items.map { $0.jerseyNumber }
-        NotificationCenter.default.post(name: .jerseyOrderChanged, object: order)
+        let payload = items.map { ["id": $0.id.uuidString, "num": $0.jerseyNumber] }
+        NotificationCenter.default.post(name: .jerseyOrderChanged, object: payload)
+
         return true
     }
 }
@@ -3118,6 +3165,7 @@ struct JerseyRow: View {
     @Binding var newJerseyNumber: String
     @Binding var showAddJerseyPopover: Bool
     let selectedGameId: String?
+    let effectiveGameOwnerUserId: String?
     @Binding var pitchesFacedBatterId: UUID?
     @Binding var isReordering: Bool
 
@@ -3139,11 +3187,7 @@ struct JerseyRow: View {
             .foregroundColor(selectedBatterId == cell.id ? .white : .primary)
             .onTapGesture {
                 guard !isReordering else { return }
-                if selectedBatterId == cell.id {
-                    selectedBatterId = nil
-                } else {
-                    selectedBatterId = cell.id
-                }
+                syncSelection(selectedBatterId == cell.id ? nil : cell.id)
             }
             .onLongPressGesture {
                 selectedBatterId = cell.id
@@ -3295,6 +3339,51 @@ struct JerseyRow: View {
                 }
             }
     }
+    private func syncSelection(_ nextSelection: UUID?) {
+        selectedBatterId = nextSelection
+
+        guard
+            let gameId = selectedGameId,
+            let owner = effectiveGameOwnerUserId,
+            !owner.isEmpty
+        else {
+            print("⚠️ Cannot sync selected batter: missing selectedGameId or effectiveGameOwnerUserId")
+            return
+        }
+
+        authManager.updateGameSelectedBatter(
+            ownerUserId: owner,
+            gameId: gameId,
+            selectedBatterId: nextSelection?.uuidString,
+            selectedBatterJersey: nextSelection == nil ? nil : cell.jerseyNumber
+        )
+    }
+
+    private func selectJersey(_ cell: JerseyCell) {
+        guard !isReordering else { return }
+
+        // Toggle behavior
+        let nextSelection: UUID? = (selectedBatterId == cell.id) ? nil : cell.id
+        selectedBatterId = nextSelection
+
+        guard
+            let gid = selectedGameId,
+            let owner = effectiveGameOwnerUserId,
+            !owner.isEmpty
+        else {
+            print("⚠️ selectJersey: missing gameId/owner")
+            return
+        }
+
+        authManager.updateGameSelectedBatter(
+            ownerUserId: owner,
+            gameId: gid,
+            selectedBatterId: nextSelection?.uuidString,
+            selectedBatterJersey: nextSelection == nil ? nil : cell.jerseyNumber
+        )
+    }
+
+
 }
 
 struct JiggleEffect: ViewModifier {

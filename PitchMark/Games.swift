@@ -51,7 +51,9 @@ struct Game: Identifiable, Codable {
     var jerseyNumbers: [String] = []
     var batterIds: [String]? = nil
     var participants: [String: Bool] = [:]
-
+    var selectedBatterId: String? = nil
+    var selectedBatterJersey: String? = nil
+    
     // Scoreboard
     var balls: Int = 0
     var strikes: Int = 0

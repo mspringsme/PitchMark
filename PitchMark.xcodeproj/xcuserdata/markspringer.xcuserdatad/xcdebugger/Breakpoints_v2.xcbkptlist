@@ -30,9 +30,9 @@
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "385"
-            endingLineNumber = "385"
-            landmarkName = "currentTemplateVersionLabel"
+            startingLineNumber = "544"
+            endingLineNumber = "544"
+            landmarkName = "effectivePitchesForStrikeZone"
             landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>
@@ -64,22 +64,6 @@
             endingColumnNumber = "9223372036854775807"
             startingLineNumber = "507"
             endingLineNumber = "507"
-            landmarkName = "body"
-            landmarkType = "24">
-         </BreakpointContent>
-      </BreakpointProxy>
-      <BreakpointProxy
-         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
-         <BreakpointContent
-            uuid = "6B57C69A-1B05-49E2-9C45-F6B6BF178C7E"
-            shouldBeEnabled = "Yes"
-            ignoreCount = "0"
-            continueAfterRunningActions = "No"
-            filePath = "PitchMark/PitchTrackerView.swift"
-            startingColumnNumber = "9223372036854775807"
-            endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "2099"
-            endingLineNumber = "2099"
             landmarkName = "body"
             landmarkType = "24">
          </BreakpointContent>
