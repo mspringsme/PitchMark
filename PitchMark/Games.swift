@@ -65,6 +65,7 @@ struct Game: Identifiable, Codable {
 
     // Shared “pending pitch” state (owner sets; joiner reads; joiner can clear)
     var pending: PendingPitch? = nil
+    var templateName: String? = nil
 
     // MARK: - Nested types
 

@@ -109,6 +109,23 @@ struct ToggleChip: View {
             }
     }
 }
+// ✅ Move game-sync wrapping into a View extension (faster to type-check)
+private extension View {
+    func withGameSync(
+        start: @escaping () -> Void,
+        stop: @escaping () -> Void,
+        gameId: String?,
+        ownerId: String?,
+        isGame: Bool
+    ) -> some View {
+        self
+            .onAppear { start() }
+            .onChange(of: gameId) { _, _ in start() }
+            .onChange(of: ownerId) { _, _ in start() }
+            .onChange(of: isGame) { _, _ in start() }
+            .onDisappear { stop() }
+    }
+}
 
 struct PitchTrackerView: View {
     @State private var showSelectBatterOverlay: Bool = false
@@ -158,7 +175,9 @@ struct PitchTrackerView: View {
     @State private var showGameSheet = false
     @State private var opponentName: String? = nil
     @State private var selectedGameId: String? = nil
-    
+    // Participant overlay state
+    @State private var showParticipantOverlay: Bool = false
+    @State private var ownerTemplateName: String? = nil
     @State private var showPracticeSheet = false
     @State private var practiceName: String? = nil
     @State private var selectedPracticeId: String? = nil
@@ -356,7 +375,17 @@ struct PitchTrackerView: View {
                     }
 
                     opponentName = updated.opponent
+                    // Capture host template name if present on game, else fall back to selectedTemplate
+                    if let tmplName = updated.templateName, !tmplName.isEmpty {
+                        ownerTemplateName = tmplName
+                    } else {
+                        ownerTemplateName = selectedTemplate?.name
+                    }
 
+                    // Show participant overlay when a non-owner joins a game
+                    if isGame && !isOwnerForActiveGame {
+                        showParticipantOverlay = true
+                    }
                     // keep jerseyCells in sync too
                     if let ids = updated.batterIds, ids.count == updated.jerseyNumbers.count {
                         jerseyCells = zip(ids, updated.jerseyNumbers).map {
@@ -395,6 +424,26 @@ struct PitchTrackerView: View {
                 print("❌ Failed decoding Game from listener:", error)
             }
         }
+    }
+    private func disconnectFromGame() {
+        // Stop listening and clear active game selection for this device
+        gameListener?.remove()
+        gameListener = nil
+        selectedGameId = nil
+        opponentName = nil
+        selectedBatterId = nil
+        jerseyCells = []
+        showParticipantOverlay = false
+
+        // Persist leaving game
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+        defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
+        defaults.set("tracker", forKey: DefaultsKeys.lastView)
+
+        // Switch to practice mode locally
+        isGame = false
+        sessionManager.switchMode(to: .practice)
     }
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
@@ -673,18 +722,7 @@ struct PitchTrackerView: View {
     ) -> Binding<Int> {
         Binding(get: get, set: set)
     }
-    @ViewBuilder
-    private func withGameSync<Content: View>(_ content: Content) -> some View {
-        content
-            .onAppear { startListeningToActiveGame() }
-            .onChange(of: selectedGameId) { _, _ in startListeningToActiveGame() }
-            .onChange(of: activeGameOwnerUserId) { _, _ in startListeningToActiveGame() }
-            .onChange(of: isGame) { _, _ in startListeningToActiveGame() }
-            .onDisappear {
-                gameListener?.remove()
-                gameListener = nil
-            }
-    }
+    
 
     private var inningBinding: Binding<Int> {
         intBinding(
@@ -1047,6 +1085,56 @@ struct PitchTrackerView: View {
         .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         .padding(.horizontal)
         .padding(.top, 8)
+    }
+    
+    private var participantHeaderOverlay: some View {
+        Group {
+            if showParticipantOverlay && isGame && !isOwnerForActiveGame {
+                VStack(spacing: 8) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Game in progress")
+                                .font(.headline.weight(.semibold))
+                            if let tname = ownerTemplateName, !tname.isEmpty {
+                                Text("Template: \(tname)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Button(role: .destructive) {
+                            disconnectFromGame()
+                        } label: {
+                            Label("Disconnect", systemImage: "xmark.circle.fill")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+
+                    // Spacer to visually cover the chips area
+                    Color.clear
+                        .frame(height: 48)
+                        .padding(.bottom, 6)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: UIScreen.main.bounds.height * 0.15)
+                .background(
+                    .ultraThickMaterial,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 2)
+                .padding(.horizontal)
+                .padding(.top, 8)
+                .transition(.opacity)
+                .allowsHitTesting(true)
+            }
+        }
     }
     
     private var contentSection: some View {
@@ -1642,10 +1730,15 @@ struct PitchTrackerView: View {
     }
 
     private var mainStack: some View {
-        VStack(spacing: 4) {
-            headerContainer
-            Spacer(minLength: 10)
-            contentSectionDimmed
+        ZStack(alignment: .top) {
+            VStack(spacing: 4) {
+                headerContainer
+                Spacer(minLength: 10)
+                contentSectionDimmed
+            }
+            // Overlay on top of the header controls for participants
+            participantHeaderOverlay
+                .allowsHitTesting(true)
         }
     }
     
@@ -1800,45 +1893,65 @@ struct PitchTrackerView: View {
     }
     
     var body: some View {
-        withGameSync(baseBody)
-            .onChange(of: pendingResultLabel) { _, newValue in
-                handlePendingResultChange(newValue)
-            }
-            .onChange(of: selectedPitches) { _, newValue in
-                if let template = selectedTemplate {
-                    persistActivePitches(for: template.id, active: newValue)
+        // 1) isolate the game-sync wrapper
+        let synced = baseBody.withGameSync(
+            start: startListeningToActiveGame,
+            stop: {
+                gameListener?.remove()
+                gameListener = nil
+            },
+            gameId: selectedGameId,
+            ownerId: activeGameOwnerUserId,
+            isGame: isGame
+        )
+
+        // 2) cap the generic explosion (usually what fixes the timeout)
+        let root = AnyView(synced)
+
+        // 3) group the onChange modifiers
+        let withChanges = AnyView(
+            root
+                .onChange(of: pendingResultLabel) { _, newValue in
+                    handlePendingResultChange(newValue)
                 }
-            }
-            .onChange(of: encryptedSelectionByGameId) { _, _ in
-                persistEncryptedSelections()
-                if let t = selectedTemplate {
-                    let fallbackList = availablePitches(for: t)
-                    if useEncrypted(for: t) {
-                        selectedPitches = Set(fallbackList)
-                    } else {
-                        selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                .onChange(of: selectedPitches) { _, newValue in
+                    if let template = selectedTemplate {
+                        persistActivePitches(for: template.id, active: newValue)
                     }
-                    colorRefreshToken = UUID()
                 }
-            }
-            .onChange(of: encryptedSelectionByPracticeId) { _, _ in
-                persistEncryptedSelections()
-                if let t = selectedTemplate {
-                    let fallbackList = availablePitches(for: t)
-                    if useEncrypted(for: t) {
-                        selectedPitches = Set(fallbackList)
-                    } else {
-                        selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                .onChange(of: encryptedSelectionByGameId) { _, _ in
+                    persistEncryptedSelections()
+                    if let t = selectedTemplate {
+                        let fallbackList = availablePitches(for: t)
+                        if useEncrypted(for: t) {
+                            selectedPitches = Set(fallbackList)
+                        } else {
+                            selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                        }
+                        colorRefreshToken = UUID()
                     }
-                    colorRefreshToken = UUID()
                 }
-            }
-        // Added per instruction 6: refresh token bump on overlayTab change to .progress in practice mode
-            .onChange(of: overlayTab) { _, newValue in
-                if newValue == .progress && sessionManager.currentMode == .practice {
-                    progressRefreshToken = UUID()
+                .onChange(of: encryptedSelectionByPracticeId) { _, _ in
+                    persistEncryptedSelections()
+                    if let t = selectedTemplate {
+                        let fallbackList = availablePitches(for: t)
+                        if useEncrypted(for: t) {
+                            selectedPitches = Set(fallbackList)
+                        } else {
+                            selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
+                        }
+                        colorRefreshToken = UUID()
+                    }
                 }
-            }
+                .onChange(of: overlayTab) { _, newValue in
+                    if newValue == .progress && sessionManager.currentMode == .practice {
+                        progressRefreshToken = UUID()
+                    }
+                }
+        )
+
+        // 4) IMPORTANT: continue your existing sheets/alerts off this
+        return withChanges
             .sheet(isPresented: $showGameSheet, onDismiss: {
                 // If user canceled without creating/choosing, optionally revert to practice
                 if sessionManager.currentMode == .game && !isGame {
@@ -1877,6 +1990,8 @@ struct PitchTrackerView: View {
                                 }
 
                                 selectedBatterId = nil
+                                ownerTemplateName = selectedTemplate?.name
+                                showParticipantOverlay = !isOwnerForActiveGame
                             }
                             isGame = true
                             // Ensure sessionManager mode sync for button label update
@@ -2114,6 +2229,16 @@ struct PitchTrackerView: View {
                     UserDefaults.standard.set("settings", forKey: DefaultsKeys.lastView)
                 }
             }
+            .onChange(of: isGame) { _, newValue in
+                if newValue == false {
+                    showParticipantOverlay = false
+                }
+            }
+            .onChange(of: activeGameOwnerUserId) { _, _ in
+                if isOwnerForActiveGame {
+                    showParticipantOverlay = false
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .jerseyOrderChanged)) { notification in
                 guard let payload = notification.object as? [[String: String]] else { return }
                 let numbers = payload.compactMap { $0["num"] }
@@ -2249,7 +2374,8 @@ struct PitchTrackerView: View {
                     
                     isGame = true
                     sessionManager.switchMode(to: .game)
-                    
+                    ownerTemplateName = selectedTemplate?.name
+                    showParticipantOverlay = !isOwnerForActiveGame
                     if let t = selectedTemplate {
                         let fallbackList = availablePitches(for: t)
                         if useEncrypted(for: t) {
