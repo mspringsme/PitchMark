@@ -242,7 +242,7 @@ struct PitchTrackerView: View {
     @State private var shareCode: String = ""
     @State private var activeGameOwnerUserId: String? = nil
     @State private var gameListener: ListenerRegistration? = nil
-
+    @State private var lastObservedResultSelectionId: String? = nil
 
     private var effectiveGameOwnerUserId: String? {
         if let host = activeGameOwnerUserId, !host.isEmpty { return host }
@@ -272,6 +272,7 @@ struct PitchTrackerView: View {
         // If owner cleared the call, clear pending too.
         guard let newCall else {
             authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+            clearResultSelection()
             return
         }
 
@@ -335,7 +336,30 @@ struct PitchTrackerView: View {
         activeCalledPitchId = nil
         isRecordingResult = false
     }
+    private func writeResultSelection(label: String?) {
+        guard isGame,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
 
+        let db = Firestore.firestore()
+        let payload: [String: Any] = [
+            "id": UUID().uuidString,
+            "label": label ?? "",
+            "createdAt": FieldValue.serverTimestamp(),
+            "createdByUid": authManager.user?.uid ?? ""
+        ]
+
+        db.collection("users")
+            .document(owner)
+            .collection("games")
+            .document(gid)
+            .setData(["resultSelection": payload], merge: true)
+    }
+
+    private func clearResultSelection() {
+        writeResultSelection(label: "")
+    }
 
     private func startListeningToActiveGame() {
         // detach old listener
@@ -419,6 +443,35 @@ struct PitchTrackerView: View {
                     }
                     
                     applyPendingFromGame(updated)
+                    // Mirror result selection changes across devices (owner <-> participant)
+                    if let raw = snap.data()?["resultSelection"] as? [String: Any],
+                       let selId = raw["id"] as? String,
+                       lastObservedResultSelectionId != selId {
+
+                        lastObservedResultSelectionId = selId
+
+                        let label = (raw["label"] as? String) ?? ""
+                        let createdBy = (raw["createdByUid"] as? String) ?? ""
+                        let me = authManager.user?.uid ?? ""
+
+                        // Only act on selections not authored by me
+                        if createdBy != me {
+                            // Empty label means reset
+                            if label.isEmpty {
+                                pendingResultLabel = nil
+                                isRecordingResult = false
+                                calledPitch = nil
+                                activeCalledPitchId = nil
+                            } else {
+                                // Mirror selection to participant UI (or owner if participant selected)
+                                pendingResultLabel = label
+                                // If the participant has selected a result while a call is active, allow confirm UI to proceed
+                                if calledPitch != nil {
+                                    isRecordingResult = true
+                                }
+                            }
+                        }
+                    }
                 }
             } catch {
                 print("❌ Failed decoding Game from listener:", error)
@@ -434,6 +487,7 @@ struct PitchTrackerView: View {
         selectedBatterId = nil
         jerseyCells = []
         showParticipantOverlay = false
+        lastObservedResultSelectionId = nil
 
         // Persist leaving game
         let defaults = UserDefaults.standard
@@ -1091,7 +1145,7 @@ struct PitchTrackerView: View {
         Group {
             if showParticipantOverlay && isGame && !isOwnerForActiveGame {
                 VStack(spacing: 8) {
-                    Spacer() // push content down
+                    Spacer()
 
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
@@ -1113,10 +1167,8 @@ struct PitchTrackerView: View {
                         .buttonStyle(.bordered)
                     }
                     .padding(.horizontal)
-                    // remove .padding(.top, 8) so it centers cleanly
-                    // .padding(.top, 8)
 
-                    Spacer() // push content up from bottom
+                    Spacer()
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: UIScreen.main.bounds.height * 0.15)
@@ -1500,6 +1552,11 @@ struct PitchTrackerView: View {
                 resultVisualState = nil
                 actualLocationRecorded = nil
                 pendingResultLabel = nil
+
+                // NEW: broadcast reset to participant (Game mode)
+                if isGame {
+                    writeResultSelection(label: nil)
+                }
             }
         }
     }
@@ -1744,8 +1801,16 @@ struct PitchTrackerView: View {
     
     // MARK: - Change Handlers
     private func handlePendingResultChange(_ newValue: String?) {
-        // Auto-save in Practice mode without presenting the PitchResultSheetView
+        // Auto-save in Practice, notify owner in Game (participant side)
         guard newValue != nil else { return }
+
+        // If participant in game mode, notify owner and return
+        if sessionManager.currentMode == .game, !isOwnerForActiveGame {
+            writeResultSelection(label: newValue)
+            return
+        }
+
+        // Practice: existing auto-save path
         guard sessionManager.currentMode == .practice else { return }
         guard let pitchCall = calledPitch, let label = pendingResultLabel else { return }
 
@@ -2107,6 +2172,10 @@ struct PitchTrackerView: View {
                            let owner = effectiveGameOwnerUserId {
                             authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
                         }
+
+                        // NEW: Notify participant of the chosen result
+                        writeResultSelection(label: event.location)
+
                         sessionManager.incrementCount()
                         withAnimation(.easeInOut(duration: 0.3)) {
                             pitchEvents.append(event)

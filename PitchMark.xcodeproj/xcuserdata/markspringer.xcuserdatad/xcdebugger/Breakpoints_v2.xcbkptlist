@@ -30,8 +30,8 @@
             filePath = "PitchMark/PitchTrackerView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "593"
-            endingLineNumber = "593"
+            startingLineNumber = "647"
+            endingLineNumber = "647"
             landmarkName = "availablePitches(for:)"
             landmarkType = "7">
          </BreakpointContent>
