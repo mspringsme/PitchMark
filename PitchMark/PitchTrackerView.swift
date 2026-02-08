@@ -1091,6 +1091,8 @@ struct PitchTrackerView: View {
         Group {
             if showParticipantOverlay && isGame && !isOwnerForActiveGame {
                 VStack(spacing: 8) {
+                    Spacer() // push content down
+
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Game in progress")
@@ -1111,12 +1113,10 @@ struct PitchTrackerView: View {
                         .buttonStyle(.bordered)
                     }
                     .padding(.horizontal)
-                    .padding(.top, 8)
+                    // remove .padding(.top, 8) so it centers cleanly
+                    // .padding(.top, 8)
 
-                    // Spacer to visually cover the chips area
-                    Color.clear
-                        .frame(height: 48)
-                        .padding(.bottom, 6)
+                    Spacer() // push content up from bottom
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: UIScreen.main.bounds.height * 0.15)
