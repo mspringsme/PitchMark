@@ -302,40 +302,39 @@ struct PitchTrackerView: View {
         // Only relevant in game mode
         guard isGame else { return }
 
-        // ✅ Critical: never overwrite the owner's local calledPitch (it contains real codes)
+        // Never overwrite the owner's local calledPitch (it contains real codes)
         guard !isOwnerForActiveGame else { return }
 
-        // If there's an active pending pitch, mirror it locally for the joiner UI
-        if let p = updated.pending,
-           p.isActive == true,
-           let pitch = p.pitch,
-           let loc = p.location {
-            
-            pendingResultLabel = (p.label ?? loc)
-            print("🔆 pendingResultLabel from Firestore=", pendingResultLabel ?? "nil")
-
-
-            let call = PitchCall(
-                pitch: pitch,
-                location: loc,
-                isStrike: p.isStrike ?? true,
-                codes: [] // joiner never sees codes
-            )
-
-            calledPitch = call
-            activeCalledPitchId = p.id
-            isRecordingResult = true
-            
-            pendingResultLabel = p.label
+        // If there's no active pending pitch, clear joiner "waiting" UI
+        guard
+            let pending = updated.pending,
+            pending.isActive == true,
+            let pitch = pending.pitch,
+            let loc = pending.location
+        else {
+            pendingResultLabel = nil
+            calledPitch = nil
+            activeCalledPitchId = nil
+            isRecordingResult = false
             return
         }
 
-        // No pending pitch: clear joiner "waiting" UI
-        pendingResultLabel = nil
-        calledPitch = nil
-        activeCalledPitchId = nil
-        isRecordingResult = false
+        // Mirror pending pitch locally for the joiner UI
+        let resolvedLabel = pending.label ?? loc
+        pendingResultLabel = resolvedLabel
+        print("🔆 pendingResultLabel from Firestore=", resolvedLabel)
+
+        calledPitch = PitchCall(
+            pitch: pitch,
+            location: loc,
+            isStrike: pending.isStrike ?? true,
+            codes: [] // joiner never sees codes
+        )
+
+        activeCalledPitchId = pending.id
+        isRecordingResult = true
     }
+
     private func writeResultSelection(label: String?) {
         guard isGame,
               let gid = selectedGameId,
@@ -347,7 +346,8 @@ struct PitchTrackerView: View {
             "id": UUID().uuidString,
             "label": label ?? "",
             "createdAt": FieldValue.serverTimestamp(),
-            "createdByUid": authManager.user?.uid ?? ""
+            "createdByUid": authManager.user?.uid ?? "",
+            "callId": activeCalledPitchId ?? ""
         ]
 
         db.collection("users")
@@ -453,11 +453,15 @@ struct PitchTrackerView: View {
                         let label = (raw["label"] as? String) ?? ""
                         let createdBy = (raw["createdByUid"] as? String) ?? ""
                         let me = authManager.user?.uid ?? ""
+                        let incomingCallId = raw["callId"] as? String
 
                         // Only act on selections not authored by me
                         if createdBy != me {
-                            // Empty label means reset
+                            // Only respond to selections that match the currently active call
+                            guard incomingCallId == activeCalledPitchId else { return }
+
                             if label.isEmpty {
+                                // Reset for this call
                                 pendingResultLabel = nil
                                 isRecordingResult = false
                                 calledPitch = nil
@@ -465,6 +469,32 @@ struct PitchTrackerView: View {
                             } else {
                                 // Mirror selection to participant UI (or owner if participant selected)
                                 pendingResultLabel = label
+
+                                // If I'm the owner and a participant just saved a result, dismiss CalledPitchView and reset strike zone
+                                if isOwnerForActiveGame {
+                                    if let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
+                                        authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+                                    }
+                                    // Reset local UI state on owner
+                                    showConfirmSheet = false
+                                    resultVisualState = label
+                                    activeCalledPitchId = UUID().uuidString
+                                    isRecordingResult = false
+                                    selectedPitch = ""
+                                    selectedLocation = ""
+                                    lastTappedPosition = nil
+                                    calledPitch = nil
+                                    resultVisualState = nil
+                                    actualLocationRecorded = nil
+                                    pendingResultLabel = nil
+                                    isStrikeSwinging = false
+                                    isWildPitch = false
+                                    isPassedBall = false
+                                    isBall = false
+                                    selectedOutcome = nil
+                                    selectedDescriptor = nil
+                                }
+
                                 // If the participant has selected a result while a call is active, allow confirm UI to proceed
                                 if calledPitch != nil {
                                     isRecordingResult = true
@@ -1804,9 +1834,14 @@ struct PitchTrackerView: View {
         // Auto-save in Practice, notify owner in Game (participant side)
         guard newValue != nil else { return }
 
-        // If participant in game mode, notify owner and return
         if sessionManager.currentMode == .game, !isOwnerForActiveGame {
-            writeResultSelection(label: newValue)
+            guard let value = newValue, !value.isEmpty else { return }
+
+            // ✅ Only send after the participant actually starts confirming a result
+            // (prevents echoing the incoming pending label back to the owner)
+            guard showConfirmSheet || showResultConfirmation else { return }
+
+            writeResultSelection(label: value)
             return
         }
 
