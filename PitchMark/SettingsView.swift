@@ -11,6 +11,12 @@ struct SettingsView: View {
     @Binding var templates: [PitchTemplate]
     let allPitches: [String]
     @Binding var selectedTemplate: PitchTemplate? // ✅ Add this line
+    @Binding var codeShareInitialTab: Int
+    @Binding var showCodeShareSheet: Bool
+    @Binding var shareCode: String
+    @Binding var codeShareSheetID: UUID
+    @Binding var showCodeShareModePicker: Bool
+    
     @EnvironmentObject var authManager: AuthManager
     @State private var showSignOutConfirmation = false
     @State private var templatePendingDeletion: PitchTemplate?
@@ -295,7 +301,12 @@ struct SettingsView: View {
                     },
                     onCancel: {
                         showGameChooser = false
-                    }
+                    },
+                    codeShareInitialTab: $codeShareInitialTab,
+                    showCodeShareSheet: $showCodeShareSheet,
+                    shareCode: $shareCode,                 // ✅ ADD
+                    codeShareSheetID: $codeShareSheetID,
+                    showCodeShareModePicker: $showCodeShareModePicker
                 )
                 .presentationDetents([.fraction(0.5)])
                 .presentationDragIndicator(.visible)
@@ -403,6 +414,11 @@ private struct SettingsPreviewContainer: View {
     ]
 
     @State private var selectedTemplate: PitchTemplate? = nil
+    @State private var codeShareInitialTab: Int = 0
+    @State private var showCodeShareSheet: Bool = false
+    @State private var shareCode: String = ""
+    @State private var codeShareSheetID: UUID = UUID()
+    @State private var showCodeShareModePicker: Bool = false
 
     private let allPitches: [String] = ["FB", "SL", "CH", "CB", "SI", "CT"]
 
@@ -410,7 +426,12 @@ private struct SettingsPreviewContainer: View {
         SettingsView(
             templates: $templates,
             allPitches: allPitches,
-            selectedTemplate: $selectedTemplate
+            selectedTemplate: $selectedTemplate,
+            codeShareInitialTab: $codeShareInitialTab,
+            showCodeShareSheet: $showCodeShareSheet,
+            shareCode: $shareCode,                 // ✅ ADD
+            codeShareSheetID: $codeShareSheetID,    // ✅ ADD
+            showCodeShareModePicker: $showCodeShareModePicker
         )
         .environmentObject(AuthManager())
     }
