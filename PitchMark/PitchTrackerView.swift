@@ -245,6 +245,54 @@ struct PitchTrackerView: View {
     @State private var gameListener: ListenerRegistration? = nil
     @State private var lastObservedResultSelectionId: String? = nil
     @State private var codeShareSheetID = UUID()
+    // MARK: - Startup gating (prevents sheet-flash on launch)
+
+    private enum StartupPhase { case launching, ready }
+
+    @State private var startupPhase: StartupPhase = .launching
+    @State private var isRestoringState = false
+
+    private func dismissAllTopLevelSheets() {
+        showSettings = false
+        showGameSheet = false
+        showPracticeSheet = false
+        showCodeShareSheet = false
+        showCodeAssignmentSheet = false
+        // NOTE: do NOT touch confirmSheetBinding/showConfirmSheet here unless you truly want to cancel it.
+    }
+
+    private func presentExclusive(settings: Bool = false, game: Bool = false, practice: Bool = false) {
+        dismissAllTopLevelSheets()
+        if settings { showSettings = true }
+        else if game { showGameSheet = true }
+        else if practice { showPracticeSheet = true }
+    }
+
+    /// Call once after boot to choose exactly one initial sheet (if needed)
+    private func presentInitialSheetIfNeeded() {
+        guard authManager.isSignedIn else { return }
+        guard startupPhase == .ready else { return }
+
+        // 1) If no template, push user to Settings first
+        if selectedTemplate == nil {
+            presentExclusive(settings: true)
+            return
+        }
+
+        // 2) If mode is game and no game selected, open game picker
+        if sessionManager.currentMode == .game, selectedGameId == nil {
+            presentExclusive(game: true)
+            return
+        }
+
+        // 3) If mode is practice and no practice selected, open practice picker
+        if sessionManager.currentMode == .practice, selectedPracticeId == nil {
+            presentExclusive(practice: true)
+            return
+        }
+
+        // Otherwise: nothing needed; user can use PitchTrackerView immediately.
+    }
 
     private var effectiveGameOwnerUserId: String? {
         if let host = activeGameOwnerUserId, !host.isEmpty { return host }
@@ -376,11 +424,7 @@ struct PitchTrackerView: View {
         let ref = Firestore.firestore()
             .collection("users").document(owner)
             .collection("games").document(gid)
-        // ✅ Seed batterSide field once when owner starts listening
-        if isOwnerForActiveGame {
-            let sideString = (batterSide == .left) ? "left" : "right"
-            ref.updateData(["batterSide": sideString])
-        }
+
 
         gameListener = ref.addSnapshotListener { snap, err in
             if let err = err {
@@ -406,15 +450,19 @@ struct PitchTrackerView: View {
                     }
 
                     opponentName = updated.opponent
-                    // ✅ Sync batter side from OWNER -> PARTICIPANT UI
-                    if !isOwnerForActiveGame {
-                        let rawSide = snap.data()?["batterSide"] as? String
-                        if rawSide == "left" {
-                            batterSide = .left
-                        } else if rawSide == "right" {
-                            batterSide = .right
+                    let rawSide = snap.data()?["batterSide"] as? String
+                    if rawSide == "left", batterSide != .left {
+                        batterSide = .left
+                    } else if rawSide == "right", batterSide != .right {
+                        batterSide = .right
+                    } else if rawSide == nil {
+                        // Optional: if missing, seed once (owner only)
+                        if isOwnerForActiveGame {
+                            let sideString = (batterSide == .left) ? "left" : "right"
+                            ref.updateData(["batterSide": sideString])
                         }
                     }
+
 
                     // Capture host template name if present on game, else fall back to selectedTemplate
                     // ✅ Prefer raw Firestore field, then decoded model
@@ -598,9 +646,8 @@ struct PitchTrackerView: View {
         UserDefaults.standard.set(side == .left ? "left" : "right", forKey: DefaultsKeys.lastBatterSide)
     }
     private func pushBatterSideToActiveGame(_ side: BatterSide) {
-        // Only the owner should broadcast batter side to participants
+        // ✅ Allow BOTH owner and participant to update batterSide
         guard isGame,
-              isOwnerForActiveGame,
               let gid = selectedGameId,
               let owner = effectiveGameOwnerUserId
         else { return }
@@ -610,7 +657,11 @@ struct PitchTrackerView: View {
         Firestore.firestore()
             .collection("users").document(owner)
             .collection("games").document(gid)
-            .updateData(["batterSide": sideString]) { err in
+            .updateData([
+                "batterSide": sideString,
+                "batterSideUpdatedAt": FieldValue.serverTimestamp(),
+                "batterSideUpdatedBy": authManager.user?.uid ?? ""
+            ]) { err in
                 if let err = err {
                     print("❌ update batterSide:", err.localizedDescription)
                 } else {
@@ -619,12 +670,16 @@ struct PitchTrackerView: View {
             }
     }
 
+
     private func persistMode(_ mode: PitchMode) {
         UserDefaults.standard.set(mode.rawValue, forKey: DefaultsKeys.lastMode)
     }
 
     private func restorePersistedState(loadedTemplates: [PitchTemplate]) {
         let defaults = UserDefaults.standard
+
+        isRestoringState = true
+
         // Restore template
         if let idString = defaults.string(forKey: DefaultsKeys.lastTemplateId),
            let template = loadedTemplates.first(where: { $0.id.uuidString == idString }) {
@@ -632,17 +687,29 @@ struct PitchTrackerView: View {
             selectedPitches = loadActivePitches(for: template.id, fallback: availablePitches(for: template))
             pitchCodeAssignments = template.codeAssignments
         }
+
         // Restore batter side
         if let sideString = defaults.string(forKey: DefaultsKeys.lastBatterSide) {
             batterSide = (sideString == "left") ? .left : .right
         }
-        // Restore mode
+
+        // Restore mode WITHOUT firing your sheet-presenting onChange logic
         if let modeString = defaults.string(forKey: DefaultsKeys.lastMode),
            let restoredMode = PitchMode(rawValue: modeString) {
+
+            // This prevents the segmented picker onChange from presenting a sheet while restoring.
+            suppressNextGameSheet = true
+
             sessionManager.switchMode(to: restoredMode)
             isGame = (restoredMode == .game)
         }
+
+        // Release the gate on the next runloop tick
+        DispatchQueue.main.async {
+            self.isRestoringState = false
+        }
     }
+
     
     // MARK: - Active Pitches Overrides (per-template)
     private func persistActivePitches(for templateId: UUID, active: Set<String>) {
@@ -1820,28 +1887,37 @@ struct PitchTrackerView: View {
                 .frame(width: 180)     // <- adjust this to taste
                 .fixedSize(horizontal: true, vertical: false)
                 .onChange(of: sessionManager.currentMode) { _, newValue in
+                    // HARD GATES: never present sheets during app boot or while restoring persisted state
+                    if startupPhase != .ready || isRestoringState {
+                        sessionManager.switchMode(to: newValue)
+                        persistMode(newValue)
+                        isGame = (newValue == .game)
+                        return
+                    }
+
                     sessionManager.switchMode(to: newValue)
                     persistMode(newValue)
+
                     if newValue == .game {
                         if suppressNextGameSheet {
                             suppressNextGameSheet = false
                             isGame = true
                         } else {
-                            showGameSheet = true
+                            isGame = true
+                            presentExclusive(game: true)
                         }
                     } else {
                         // Practice mode
                         isGame = false
                         if suppressNextGameSheet {
                             suppressNextGameSheet = false
-                            // Do not present because a selection was already made
                         } else {
-                            showPracticeSheet = true
+                            presentExclusive(practice: true)
                         }
-                        // Added per instruction 5: bump progressRefreshToken on practice mode switch
                         progressRefreshToken = UUID()
                     }
                 }
+
             }
             Spacer()
         }
@@ -1965,6 +2041,8 @@ struct PitchTrackerView: View {
     
     private func handleInitialAppear() {
         // Decide initial landing: Settings first unless an active game/session was in progress and tracker was last
+        startupPhase = .launching
+
         let defaults = UserDefaults.standard
         let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
         let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
@@ -1973,9 +2051,13 @@ struct PitchTrackerView: View {
         let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
         if authManager.isSignedIn && !hasPresentedInitialSettings {
             if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
-                showSettings = true
                 hasPresentedInitialSettings = true
                 defaults.set("settings", forKey: DefaultsKeys.lastView)
+                // Defer actual presentation until boot is finished
+                DispatchQueue.main.async {
+                    if self.startupPhase == .ready { self.presentExclusive(settings: true) }
+                }
+
             } else {
                 // Restore active session to tracker
                 if persistedIsPractice {
@@ -2030,6 +2112,11 @@ struct PitchTrackerView: View {
             }
             loadEncryptedSelections()
         }
+        DispatchQueue.main.async {
+            self.startupPhase = .ready
+            self.presentInitialSheetIfNeeded()
+        }
+
     }
     
     private var pitchesFacedOverlay: some View {
