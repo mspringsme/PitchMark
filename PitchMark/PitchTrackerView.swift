@@ -402,11 +402,17 @@ struct PitchTrackerView: View {
 
                     opponentName = updated.opponent
                     // Capture host template name if present on game, else fall back to selectedTemplate
-                    if let tmplName = updated.templateName, !tmplName.isEmpty {
+                    // ✅ Prefer raw Firestore field, then decoded model
+                    let rawTemplate = snap.data()?["templateName"] as? String
+
+                    if let rawTemplate, !rawTemplate.isEmpty {
+                        ownerTemplateName = rawTemplate
+                    } else if let tmplName = updated.templateName, !tmplName.isEmpty {
                         ownerTemplateName = tmplName
                     } else {
-                        ownerTemplateName = selectedTemplate?.name
+                        ownerTemplateName = nil
                     }
+
 
                     // Show participant overlay when a non-owner joins a game
                     if isGame && !isOwnerForActiveGame {
