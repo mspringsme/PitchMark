@@ -2372,7 +2372,28 @@ struct PitchTrackerView: View {
                 Text(codeShareErrorMessage)
             }
             .onAppear(perform: handleInitialAppear)
-            // keep the rest of your .onChange/.onReceive chain AFTER this exactly as-is
+            .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
+                guard let info = note.userInfo as? [String: Any] else { return }
+
+                // Ignore the initial code-only notification
+                if info["type"] == nil { return }
+
+                let type = info["type"] as? String
+
+                if type == "game" {
+                    guard let gid = info["gameId"] as? String else { return }
+
+                    let owner = (info["ownerUserId"] as? String)
+                        ?? authManager.user?.uid
+
+                    print("✅ Resolver received game:", gid, "owner:", owner ?? "nil")
+
+                    activeGameOwnerUserId = owner
+                    selectedGameId = gid
+                }
+            }
+
+
             .eraseToAnyView()
     }
 
