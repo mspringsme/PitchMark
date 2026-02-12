@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 struct SettingsView: View {
     @Binding var templates: [PitchTemplate]
@@ -289,6 +290,14 @@ struct SettingsView: View {
                                     "templateId": tmpl.id.uuidString
                                 ]
                             )
+                            
+                            if let ownerUid = authManager.user?.uid {
+                                    authManager.updateGameTemplateName(
+                                        ownerUserId: ownerUid,
+                                        gameId: gameId,
+                                        templateName: tmpl.name
+                                    )
+                                }
                         }
                         var opponent: String? = nil
                         authManager.loadGames { games in

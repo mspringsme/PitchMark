@@ -573,6 +573,22 @@ class AuthManager: ObservableObject {
         }
     }
 
+    func updateGameTemplateName(ownerUserId: String, gameId: String, templateName: String) {
+        let ref = Firestore.firestore()
+            .collection("users").document(ownerUserId)
+            .collection("games").document(gameId)
+
+        ref.updateData([
+            "templateName": templateName
+        ]) { err in
+            if let err = err {
+                print("❌ updateGameTemplateName:", err.localizedDescription)
+            } else {
+                print("✅ Game.templateName updated:", templateName)
+            }
+        }
+    }
+
 }
 
 extension AuthManager {
