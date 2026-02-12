@@ -78,8 +78,7 @@ struct Game: Identifiable, Codable {
         var batterSide: String? = nil      // "L"/"R" or however you store it
         var createdAt: Date? = nil         // optional: when it was initiated
         var createdByUid: String? = nil    // optional: owner uid
-        var isStrike: Bool? = nil
-
+        var isStrike: Bool? = nil  // "L" or "R"
     }
 
     // MARK: - Convenience

@@ -376,6 +376,11 @@ struct PitchTrackerView: View {
         let ref = Firestore.firestore()
             .collection("users").document(owner)
             .collection("games").document(gid)
+        // ✅ Seed batterSide field once when owner starts listening
+        if isOwnerForActiveGame {
+            let sideString = (batterSide == .left) ? "left" : "right"
+            ref.updateData(["batterSide": sideString])
+        }
 
         gameListener = ref.addSnapshotListener { snap, err in
             if let err = err {
@@ -401,6 +406,16 @@ struct PitchTrackerView: View {
                     }
 
                     opponentName = updated.opponent
+                    // ✅ Sync batter side from OWNER -> PARTICIPANT UI
+                    if !isOwnerForActiveGame {
+                        let rawSide = snap.data()?["batterSide"] as? String
+                        if rawSide == "left" {
+                            batterSide = .left
+                        } else if rawSide == "right" {
+                            batterSide = .right
+                        }
+                    }
+
                     // Capture host template name if present on game, else fall back to selectedTemplate
                     // ✅ Prefer raw Firestore field, then decoded model
                     let rawTemplate = snap.data()?["templateName"] as? String
@@ -581,6 +596,27 @@ struct PitchTrackerView: View {
 
     private func persistBatterSide(_ side: BatterSide) {
         UserDefaults.standard.set(side == .left ? "left" : "right", forKey: DefaultsKeys.lastBatterSide)
+    }
+    private func pushBatterSideToActiveGame(_ side: BatterSide) {
+        // Only the owner should broadcast batter side to participants
+        guard isGame,
+              isOwnerForActiveGame,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        let sideString = (side == .left) ? "left" : "right"
+
+        Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+            .updateData(["batterSide": sideString]) { err in
+                if let err = err {
+                    print("❌ update batterSide:", err.localizedDescription)
+                } else {
+                    print("✅ batterSide updated:", sideString)
+                }
+            }
     }
 
     private func persistMode(_ mode: PitchMode) {
@@ -1627,6 +1663,7 @@ struct PitchTrackerView: View {
             Button(action: {
                 withAnimation { batterSide = .left }
                 persistBatterSide(.left)
+                pushBatterSideToActiveGame(.left)
             }) {
                 Image("rightBatterIcon")
                     .resizable()
@@ -1641,6 +1678,7 @@ struct PitchTrackerView: View {
             Button(action: {
                 withAnimation { batterSide = .right }
                 persistBatterSide(.right)
+                pushBatterSideToActiveGame(.right)
             }) {
                 Image("leftBatterIcon")
                     .resizable()
