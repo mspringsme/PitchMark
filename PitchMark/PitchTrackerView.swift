@@ -1152,6 +1152,18 @@ struct PitchTrackerView: View {
         }
     }
 
+//    private func presentJoinByCode() {
+//        // Ensure we're in Game Mode, but do NOT force the local game picker sheet
+//        suppressNextGameSheet = true
+//        isGame = true
+//        sessionManager.switchMode(to: .game)
+//
+//        // Open Code sheet directly on "Enter Code"
+//        codeShareInitialTab = 1
+//        shareCode = ""
+//        codeShareSheetID = UUID()
+//        showCodeShareSheet = true
+//    }
 
     private func consumeShareCode(_ text: String) {
         // ✅ Codes are Game Mode only (no silent failure)
@@ -1697,6 +1709,8 @@ struct PitchTrackerView: View {
             .disabled(templates.isEmpty)
 
             Spacer()
+            
+
             // ✅ Session connect/disconnect button (owner only)
             if isGame && isOwnerForActiveGame {
                 Button {
@@ -2344,7 +2358,7 @@ struct PitchTrackerView: View {
         self.activeGameOwnerUserId = persistedOwnerId
         let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
         if authManager.isSignedIn && !hasPresentedInitialSettings {
-            if lastViewPref == "settings" || (persistedGameId == nil && persistedIsPractice == false) {
+            if lastViewPref == "settings" {
                 hasPresentedInitialSettings = true
                 defaults.set("settings", forKey: DefaultsKeys.lastView)
                 // Defer actual presentation until boot is finished
@@ -4243,8 +4257,15 @@ private struct CodeShareSheet: View {
         self.isGame = isGame
         self.onConsume = onConsume
 
-        _generated = State(initialValue: initialTab == 0 ? initialCode : "")
-        _tab = State(initialValue: initialTab)
+        let effectiveTab: Int = {
+            // If we don't have enough info to generate a code, always open on Enter Code
+            if initialTab == 0 && (hostUid == nil || gameId == nil) { return 1 }
+            return initialTab
+        }()
+
+        _generated = State(initialValue: effectiveTab == 0 ? initialCode : "")
+        _tab = State(initialValue: effectiveTab)
+
     }
 
 
@@ -4575,28 +4596,15 @@ struct GameSelectionSheet: View {
                         dismiss()
                     }
                 }
-
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
-                        Spacer()
-                        Button {
-                            dismiss()
-                            DispatchQueue.main.async {
-                                showCodeShareModePicker = true
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "key.viewfinder")
-                                Text("Join")
-                            }
-                        }
                         Spacer()
                         Button {
                             showAddGamePopover = true
                         } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "plus.circle.fill")
-                                Text("Add")
+                                Text("New Game")
                             }
                         }
                         Spacer()

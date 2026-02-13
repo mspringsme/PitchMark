@@ -70,6 +70,24 @@ struct SettingsView: View {
         }
     }
     
+    private func joinByCodeFromSettings() {
+        // set the tab first
+        showCodeShareModePicker = false
+        codeShareInitialTab = 1
+        shareCode = ""
+        codeShareSheetID = UUID()
+
+        // dismiss settings, then present after a small delay
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            showCodeShareSheet = true
+        }
+    }
+
+
+
+
+    
     @ViewBuilder
     private var templatesHeader: some View {
         HStack{
@@ -184,6 +202,38 @@ struct SettingsView: View {
                 
                 VStack(alignment: .leading, spacing: 20) {
                     Color.clear.frame(height: 24)
+                    // ✅ Quick Join (no local game/template selection needed)
+                    Button {
+                        joinByCodeFromSettings()
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "key.viewfinder")
+                                .font(.system(size: 22, weight: .semibold))
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Join by Code")
+                                    .font(.headline)
+                                Text("Enter a 6-digit code from the host")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 12)
+                        .padding(.horizontal, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color(.secondarySystemBackground))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal)
+
                     // 🔹 Templates Header
                     templatesHeader
 
