@@ -444,33 +444,35 @@ struct PitchTrackerView: View {
                 print("⚠️ Game doc missing while listening:", ref.path)
                 return
             }
-            // ✅ Detect whether a non-owner participant is connected
-            let ownerUid = effectiveGameOwnerUserId ?? authManager.user?.uid ?? ""
-            let participants = snap.data()?["participants"] as? [String: Bool] ?? [:]
-            let hasPartner = participants.contains { (uid, isOn) in
-                uid != ownerUid && isOn == true
-            }
-            if partnerConnected != hasPartner {
-                partnerConnected = hasPartner
-            }
-            // ✅ Participant auto-reset if owner removed us
-            if !isOwnerForActiveGame {
-                let myUid = authManager.user?.uid ?? ""
-
-                // If we are no longer in participants, owner disconnected us
-                if participants[myUid] != true {
-                    print("🔌 Participant removed by owner — disconnecting locally")
-                    disconnectFromGame()
-                    return
-                }
-            }
-
-
             do {
                 let updated = try snap.data(as: Game.self)
 
                 // Update your local state so UI reflects remote edits
                 DispatchQueue.main.async {
+                    // ✅ Always read participants on main thread
+                    let participants = snap.data()?["participants"] as? [String: Bool] ?? [:]
+                    let ownerUid = self.effectiveGameOwnerUserId ?? self.authManager.user?.uid ?? ""
+
+                    // ✅ Owner: button should reflect whether ANY non-owner participant is present
+                    if self.isOwnerForActiveGame {
+                        let hasPartner = participants.contains { (uid, isOn) in
+                            uid != ownerUid && isOn == true
+                        }
+                        if self.partnerConnected != hasPartner {
+                            self.partnerConnected = hasPartner
+                        }
+                    } else {
+                        // Participant: if we were removed, reset UI (but not during join handshake)
+                        if !self.isJoiningSession {
+                            let myUid = self.authManager.user?.uid ?? ""
+                            if participants[myUid] != true {
+                                print("🔌 Participant removed by owner — forcing local reset")
+                                self.disconnectFromGame(notifyHost: false)   // (we add this param below)
+                                return
+                            }
+                        }
+                    }
+
                     if let id = updated.id,
                        let idx = games.firstIndex(where: { $0.id == id }) {
                         games[idx] = updated
@@ -637,14 +639,14 @@ struct PitchTrackerView: View {
             }
         }
     }
-    private func disconnectFromGame() {
-        // ✅ Capture these BEFORE clearing state
+    private func disconnectFromGame(notifyHost: Bool = true) {
+        // ✅ Capture BEFORE clearing state
         let uid = authManager.user?.uid ?? ""
         let ownerUid = effectiveGameOwnerUserId ?? activeGameOwnerUserId ?? ""
         let gid = selectedGameId ?? ""
 
-        // ✅ Tell Firestore we left (so owner UI updates)
-        if !uid.isEmpty, !ownerUid.isEmpty, !gid.isEmpty {
+        // ✅ Only notify host when this device voluntarily disconnects
+        if notifyHost, !uid.isEmpty, !ownerUid.isEmpty, !gid.isEmpty {
             Firestore.firestore()
                 .collection("users").document(ownerUid)
                 .collection("games").document(gid)
@@ -662,6 +664,7 @@ struct PitchTrackerView: View {
         // Stop listening and clear active game selection for this device
         gameListener?.remove()
         gameListener = nil
+
         selectedGameId = nil
         opponentName = nil
         selectedBatterId = nil
@@ -678,12 +681,8 @@ struct PitchTrackerView: View {
         // Switch to practice mode locally
         isGame = false
         sessionManager.switchMode(to: .practice)
-        Firestore.firestore()
-          .collection("users").document(ownerUid)
-          .collection("games").document(gid)
-          .updateData(["participants.\(uid)": FieldValue.delete()])
-
     }
+
 
     private func stopHeartbeat() {
         heartbeatTimer?.invalidate()
@@ -2813,8 +2812,9 @@ struct PitchTrackerView: View {
                           let gid = selectedGameId
                     else { return }
 
-                    // ✅ Immediate visible change
-                    let codeToClose = activeSessionCode
+                    let codeToClose = activeSessionCode  // ✅ capture BEFORE clearing
+
+                    // ✅ immediate UI flip on owner
                     sessionActive = false
                     partnerConnected = false
                     showParticipantOverlay = false
@@ -2824,6 +2824,7 @@ struct PitchTrackerView: View {
 
                     endActiveSession(ownerUid: owner, gameId: gid, code: codeToClose)
                 }
+
 
 
                 Button("Cancel", role: .cancel) {
