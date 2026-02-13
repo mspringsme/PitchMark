@@ -145,6 +145,7 @@ struct PitchTrackerView: View {
     @State private var showProfile = false
     @State private var templates: [PitchTemplate] = []
     @EnvironmentObject var authManager: AuthManager
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showProfileSheet = false
     @State private var showSignOutConfirmation = false
     @State private var selectedTemplate: PitchTemplate? = nil
@@ -251,6 +252,14 @@ struct PitchTrackerView: View {
 
     @State private var startupPhase: StartupPhase = .launching
     @State private var isRestoringState = false
+    @State private var activeSessionCode: String? = nil
+    @State private var sessionActive: Bool = false
+    @State private var sessionExpiresAt: Date? = nil
+
+    @State private var showEndSessionConfirm = false
+    @State private var heartbeatTimer: Timer? = nil
+    @State private var partnerConnected: Bool = false
+    @State private var isJoiningSession: Bool = false
 
     private func dismissAllTopLevelSheets() {
         showSettings = false
@@ -435,6 +444,16 @@ struct PitchTrackerView: View {
                 print("⚠️ Game doc missing while listening:", ref.path)
                 return
             }
+            // ✅ Detect whether a non-owner participant is connected
+            let ownerUid = effectiveGameOwnerUserId ?? authManager.user?.uid ?? ""
+            let participants = snap.data()?["participants"] as? [String: Bool] ?? [:]
+            let hasPartner = participants.contains { (uid, isOn) in
+                uid != ownerUid && isOn == true
+            }
+            if partnerConnected != hasPartner {
+                partnerConnected = hasPartner
+            }
+
 
             do {
                 let updated = try snap.data(as: Game.self)
@@ -450,6 +469,33 @@ struct PitchTrackerView: View {
                     }
 
                     opponentName = updated.opponent
+                    // ✅ Session status fields (owner+participant read)
+                    let rawActive = snap.data()?["sessionActive"] as? Bool
+                    self.sessionActive = rawActive ?? false
+
+                    self.activeSessionCode = snap.data()?["activeSessionCode"] as? String
+
+                    if let ts = snap.data()?["sessionExpiresAt"] as? Timestamp {
+                        self.sessionExpiresAt = ts.dateValue()
+                    } else {
+                        self.sessionExpiresAt = nil
+                    }
+
+                    // ✅ Participant auto-reset if owner ended/left
+                    self.handleSessionStatusFromGameDoc(isOwner: isOwnerForActiveGame)
+
+                    // ✅ Owner heartbeat (keeps session alive while owner is in app)
+                    if isOwnerForActiveGame,
+                       self.sessionActive,
+                       let code = self.activeSessionCode,
+                       let gid = self.selectedGameId,
+                       let owner = self.effectiveGameOwnerUserId
+                    {
+                        self.startHeartbeatIfNeeded(ownerUid: owner, gameId: gid, code: code)
+                    } else {
+                        self.stopHeartbeat()
+                    }
+
                     let rawSide = snap.data()?["batterSide"] as? String
                     if rawSide == "left", batterSide != .left {
                         batterSide = .left
@@ -514,6 +560,7 @@ struct PitchTrackerView: View {
                     }
                     
                     applyPendingFromGame(updated)
+                    
                     // Mirror result selection changes across devices (owner <-> participant)
                     if let raw = snap.data()?["resultSelection"] as? [String: Any],
                        let selId = raw["id"] as? String,
@@ -580,6 +627,27 @@ struct PitchTrackerView: View {
         }
     }
     private func disconnectFromGame() {
+        // ✅ Capture these BEFORE clearing state
+        let uid = authManager.user?.uid ?? ""
+        let ownerUid = effectiveGameOwnerUserId ?? activeGameOwnerUserId ?? ""
+        let gid = selectedGameId ?? ""
+
+        // ✅ Tell Firestore we left (so owner UI updates)
+        if !uid.isEmpty, !ownerUid.isEmpty, !gid.isEmpty {
+            Firestore.firestore()
+                .collection("users").document(ownerUid)
+                .collection("games").document(gid)
+                .updateData([
+                    "participants.\(uid)": FieldValue.delete()
+                ]) { err in
+                    if let err = err {
+                        print("❌ Failed to remove participant:", err.localizedDescription)
+                    } else {
+                        print("✅ Participant removed from game participants")
+                    }
+                }
+        }
+
         // Stop listening and clear active game selection for this device
         gameListener?.remove()
         gameListener = nil
@@ -599,7 +667,118 @@ struct PitchTrackerView: View {
         // Switch to practice mode locally
         isGame = false
         sessionManager.switchMode(to: .practice)
+        Firestore.firestore()
+          .collection("users").document(ownerUid)
+          .collection("games").document(gid)
+          .updateData(["participants.\(uid)": FieldValue.delete()])
+
     }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+    }
+
+    private func startHeartbeatIfNeeded(ownerUid: String, gameId: String, code: String) {
+        stopHeartbeat()
+
+        // Keep session alive with a short rolling expiry.
+        // If owner app dies, it will stop extending and participant will auto-reset.
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { _ in
+            let db = Firestore.firestore()
+            let newExpiry = Timestamp(date: Date().addingTimeInterval(90)) // 90s rolling TTL
+
+            db.collection("sessions").document(code).setData([
+                "expiresAt": newExpiry,
+                "lastSeenAt": FieldValue.serverTimestamp()
+            ], merge: true)
+
+            db.collection("users").document(ownerUid)
+                .collection("games").document(gameId)
+                .setData(["sessionExpiresAt": newExpiry], merge: true)
+        }
+    }
+
+    private func endActiveSession(ownerUid: String, gameId: String, code: String?, resetUI: Bool = true) {
+        stopHeartbeat()
+
+        let db = Firestore.firestore()
+        let gameRef = db.collection("users").document(ownerUid).collection("games").document(gameId)
+
+        gameRef.setData([
+            "sessionActive": false,
+            "activeSessionCode": FieldValue.delete(),
+            "sessionExpiresAt": FieldValue.delete()
+        ], merge: true)
+
+        if let code, !code.isEmpty {
+            db.collection("sessions").document(code).delete()
+        }
+
+        db.runTransaction({ txn, errPtr in
+            let snap: DocumentSnapshot
+            do { snap = try txn.getDocument(gameRef) }
+            catch { errPtr?.pointee = error as NSError; return nil }
+
+            let data = snap.data() ?? [:]
+            let participants = data["participants"] as? [String: Bool] ?? [:]
+            var updates: [String: Any] = [:]
+
+            for uid in participants.keys where uid != ownerUid {
+                updates["participants.\(uid)"] = FieldValue.delete()
+            }
+            if !updates.isEmpty { txn.updateData(updates, forDocument: gameRef) }
+            return nil
+        }) { _, error in
+            if let error { print("❌ endActiveSession transaction error:", error) }
+            else { print("✅ Session ended and participants removed") }
+        }
+
+        guard resetUI else { return }   // ✅ NEW
+
+        DispatchQueue.main.async {
+            showParticipantOverlay = false
+            showConfirmSheet = false
+            calledPitch = nil
+            activeCalledPitchId = nil
+            pendingResultLabel = nil
+            isRecordingResult = false
+            selectedPitch = ""
+            selectedLocation = ""
+            lastTappedPosition = nil
+            resultVisualState = nil
+            actualLocationRecorded = nil
+            isStrikeSwinging = false
+            isWildPitch = false
+            isPassedBall = false
+            isBall = false
+            selectedOutcome = nil
+            selectedDescriptor = nil
+        }
+    }
+
+
+    private func handleSessionStatusFromGameDoc(isOwner: Bool) {
+        // Auto reset ONLY for participant
+        guard !isOwner else { return }
+        guard !isJoiningSession else { return }
+
+
+        // If owner ended session OR cleared code => disconnect/reset participant UI
+        if sessionActive == false || activeSessionCode == nil {
+            print("🔌 Participant: session ended by owner")
+            disconnectFromGame()
+            return
+        }
+
+        // If expired => disconnect/reset participant UI
+        if let expiresAt = sessionExpiresAt, expiresAt < Date() {
+            print("🔌 Participant: session expired (owner likely left)")
+            disconnectFromGame()
+            return
+        }
+    }
+
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
         // Prefer explicit per-session selection when available
@@ -883,6 +1062,97 @@ struct PitchTrackerView: View {
         // Return a random 6-digit numeric code (leading zeros allowed)
         String(format: "%06d", Int.random(in: 0...999_999))
     }
+    private func resolveAndJoinSession(code: String) {
+        DispatchQueue.main.async {
+            self.isJoiningSession = true
+        }
+
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Validate
+        guard trimmed.count == 6, trimmed.allSatisfy({ $0.isNumber }) else {
+            DispatchQueue.main.async {
+                self.codeShareErrorMessage = "Code must be exactly 6 digits."
+                self.showCodeShareErrorAlert = true
+                self.isJoiningSession = false
+            }
+            return
+        }
+
+        let db = Firestore.firestore()
+
+        db.collection("sessions").document(trimmed).getDocument { snap, err in
+            if let err {
+                DispatchQueue.main.async {
+                    self.codeShareErrorMessage = "Could not verify code. \(err.localizedDescription)"
+                    self.showCodeShareErrorAlert = true
+                    self.isJoiningSession = false
+                }
+                return
+            }
+
+            guard let snap, snap.exists, let data = snap.data() else {
+                DispatchQueue.main.async {
+                    self.codeShareErrorMessage = "That code is not valid."
+                    self.showCodeShareErrorAlert = true
+                    self.isJoiningSession = false
+                }
+                return
+            }
+
+            let hostUid = data["hostUid"] as? String
+            let gameId  = data["gameId"] as? String
+
+            if let expiresAt = data["expiresAt"] as? Timestamp,
+               expiresAt.dateValue() < Date() {
+                DispatchQueue.main.async {
+                    self.codeShareErrorMessage = "That code has expired."
+                    self.showCodeShareErrorAlert = true
+                    self.isJoiningSession = false
+                }
+                return
+            }
+
+            guard let hostUid, !hostUid.isEmpty,
+                  let gameId, !gameId.isEmpty else {
+                DispatchQueue.main.async {
+                    self.codeShareErrorMessage = "Code is missing host/game info."
+                    self.showCodeShareErrorAlert = true
+                    self.isJoiningSession = false
+                }
+                return
+            }
+
+            // ✅ Mark participant as connected on the host game doc (drives owner UI)
+            let myUid = self.authManager.user?.uid ?? ""
+            if !myUid.isEmpty {
+                db.collection("users").document(hostUid)
+                    .collection("games").document(gameId)
+                    .setData(["participants": [myUid: true]], merge: true)
+            }
+
+            // ✅ Switch into game mode on main thread
+            DispatchQueue.main.async {
+                // set these first
+                self.activeGameOwnerUserId = hostUid
+                self.selectedGameId = gameId
+
+                // then set game mode flags
+                self.isGame = true
+                self.suppressNextGameSheet = true
+                self.sessionManager.switchMode(to: .game)
+
+                self.showParticipantOverlay = true
+                self.showCodeShareSheet = false
+
+                // IMPORTANT: keep joining gate true long enough to suppress sheet onDismiss fallbacks
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    self.isJoiningSession = false
+                }
+            }
+        }
+    }
+
 
     private func consumeShareCode(_ text: String) {
         // ✅ Codes are Game Mode only (no silent failure)
@@ -1326,7 +1596,8 @@ struct PitchTrackerView: View {
             }
         }
     }
-    
+
+
     private var contentSection: some View {
         Group {
             batterAndModeBar
@@ -1427,6 +1698,25 @@ struct PitchTrackerView: View {
             .disabled(templates.isEmpty)
 
             Spacer()
+            // ✅ Session connect/disconnect button (owner only)
+            if isGame && isOwnerForActiveGame {
+                Button {
+                    // If a partner is currently connected, this button is "disconnect partner"
+                    if partnerConnected {
+                        showEndSessionConfirm = true
+                    } else {
+                        // No partner connected -> start / share code flow
+                        showCodeShareSheet = true
+                    }
+                } label: {
+                    Image(systemName: partnerConnected ? "waveform.badge.checkmark" : "waveform.badge.xmark")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(partnerConnected ? .green : .red)
+                        .frame(width: 44, height: 44)
+
+                }
+            }
+
 
             Button(action: {
                 showSettings = true
@@ -1888,6 +2178,7 @@ struct PitchTrackerView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .onChange(of: sessionManager.currentMode) { _, newValue in
                     // HARD GATES: never present sheets during app boot or while restoring persisted state
+                    if isJoiningSession { return }
                     if startupPhase != .ready || isRestoringState {
                         sessionManager.switchMode(to: newValue)
                         persistMode(newValue)
@@ -1939,11 +2230,15 @@ struct PitchTrackerView: View {
                 Spacer(minLength: 10)
                 contentSectionDimmed
             }
-            // Overlay on top of the header controls for participants
-            participantHeaderOverlay
-                .allowsHitTesting(true)
+
+            // Top overlays (only one should show based on your conditions)
+            ZStack(alignment: .top) {
+                participantHeaderOverlay
+            }
+            .allowsHitTesting(true)
         }
     }
+
     
     // MARK: - Change Handlers
     private func handlePendingResultChange(_ newValue: String?) {
@@ -2460,11 +2755,16 @@ struct PitchTrackerView: View {
 
         let v2 = v1
             .sheet(isPresented: $showGameSheet, onDismiss: {
-                if sessionManager.currentMode == .game && !isGame {
+                guard !isJoiningSession else { return }
+
+                // ✅ Only force practice if there is no game selected
+                if sessionManager.currentMode == .game && selectedGameId == nil {
                     sessionManager.switchMode(to: .practice)
+                    isGame = false
                 }
             }) { gameSheetView }
             .eraseToAnyView()
+
 
         let v3 = v2
             .sheet(isPresented: $showCodeShareSheet) { codeShareSheetView }
@@ -2502,30 +2802,70 @@ struct PitchTrackerView: View {
             } message: {
                 Text(codeShareErrorMessage)
             }
+            .confirmationDialog(
+                "Disconnect partner?",
+                isPresented: $showEndSessionConfirm,
+                titleVisibility: .visible
+            ) {
+                // ✅ THIS is where your Button("Disconnect"... ) goes
+                Button("Disconnect", role: .destructive) {
+                    guard let owner = effectiveGameOwnerUserId,
+                          let gid = selectedGameId
+                    else { return }
+
+                    // Immediate visible change (hide overlay right away)
+                    sessionActive = false
+                    activeSessionCode = nil
+                    sessionExpiresAt = nil
+                    showEndSessionConfirm = false
+
+                    endActiveSession(ownerUid: owner, gameId: gid, code: activeSessionCode) // resetUI defaults to true
+                }
+
+                Button("Cancel", role: .cancel) {
+                    showEndSessionConfirm = false
+                }
+            } message: {
+                Text("This will end the share session and reset your partner’s device.")
+            }
             .onAppear(perform: handleInitialAppear)
-            .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
-                guard let info = note.userInfo as? [String: Any] else { return }
 
-                // Ignore the initial code-only notification
-                if info["type"] == nil { return }
+            .onChange(of: scenePhase) { _, phase in
+                guard isGame, isOwnerForActiveGame else { return }
+                guard let owner = effectiveGameOwnerUserId,
+                      let gid = selectedGameId
+                else { return }
 
-                let type = info["type"] as? String
-
-                if type == "game" {
-                    guard let gid = info["gameId"] as? String else { return }
-
-                    let owner = (info["ownerUserId"] as? String)
-                        ?? authManager.user?.uid
-
-                    print("✅ Resolver received game:", gid, "owner:", owner ?? "nil")
-
-                    activeGameOwnerUserId = owner
-                    selectedGameId = gid
+                if phase != .active, sessionActive {
+                    // ✅ end session in Firestore, don't bother resetting UI while backgrounding
+                    endActiveSession(ownerUid: owner, gameId: gid, code: activeSessionCode, resetUI: false)
                 }
             }
 
 
+            .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
+                guard let info = note.userInfo as? [String: Any] else { return }
+
+                // ✅ Handle "choose game" events (you already have this)
+                if let type = info["type"] as? String, type == "game" {
+                    guard let gid = info["gameId"] as? String else { return }
+
+                    let owner = (info["ownerUserId"] as? String) ?? authManager.user?.uid
+                    print("✅ Resolver received game:", gid, "owner:", owner ?? "nil")
+
+                    activeGameOwnerUserId = owner
+                    selectedGameId = gid
+                    return
+                }
+
+                // ✅ Handle "join via code" events (this was being ignored before)
+                if let code = info["code"] as? String {
+                    resolveAndJoinSession(code: code)
+                    return
+                }
+            }
             .eraseToAnyView()
+
     }
 
 }
@@ -4136,6 +4476,13 @@ private struct CodeShareSheet: View {
                 } else {
                     self.didWriteSessionDoc = true
                     self.writeErrorMessage = nil
+                    // ✅ Also mark the host game doc as having an active session
+                    gameRef.setData([
+                        "sessionActive": true,
+                        "activeSessionCode": code,
+                        "sessionExpiresAt": expires
+                    ], merge: true)
+
                     print("✅ session active for code:", code)
                 }
             }
