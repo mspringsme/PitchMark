@@ -453,6 +453,17 @@ struct PitchTrackerView: View {
             if partnerConnected != hasPartner {
                 partnerConnected = hasPartner
             }
+            // ✅ Participant auto-reset if owner removed us
+            if !isOwnerForActiveGame {
+                let myUid = authManager.user?.uid ?? ""
+
+                // If we are no longer in participants, owner disconnected us
+                if participants[myUid] != true {
+                    print("🔌 Participant removed by owner — disconnecting locally")
+                    disconnectFromGame()
+                    return
+                }
+            }
 
 
             do {
@@ -705,36 +716,24 @@ struct PitchTrackerView: View {
         let db = Firestore.firestore()
         let gameRef = db.collection("users").document(ownerUid).collection("games").document(gameId)
 
+        // 1) Mark session off
         gameRef.setData([
             "sessionActive": false,
             "activeSessionCode": FieldValue.delete(),
             "sessionExpiresAt": FieldValue.delete()
         ], merge: true)
 
+        // 2) Delete session doc
         if let code, !code.isEmpty {
             db.collection("sessions").document(code).delete()
         }
 
-        db.runTransaction({ txn, errPtr in
-            let snap: DocumentSnapshot
-            do { snap = try txn.getDocument(gameRef) }
-            catch { errPtr?.pointee = error as NSError; return nil }
+        // ✅ 3) Clear participants immediately (simple + reliable)
+        gameRef.setData([
+            "participants": [:]
+        ], merge: true)
 
-            let data = snap.data() ?? [:]
-            let participants = data["participants"] as? [String: Bool] ?? [:]
-            var updates: [String: Any] = [:]
-
-            for uid in participants.keys where uid != ownerUid {
-                updates["participants.\(uid)"] = FieldValue.delete()
-            }
-            if !updates.isEmpty { txn.updateData(updates, forDocument: gameRef) }
-            return nil
-        }) { _, error in
-            if let error { print("❌ endActiveSession transaction error:", error) }
-            else { print("✅ Session ended and participants removed") }
-        }
-
-        guard resetUI else { return }   // ✅ NEW
+        guard resetUI else { return }
 
         DispatchQueue.main.async {
             showParticipantOverlay = false
@@ -756,6 +755,7 @@ struct PitchTrackerView: View {
             selectedDescriptor = nil
         }
     }
+
 
 
     private func handleSessionStatusFromGameDoc(isOwner: Bool) {
@@ -2813,14 +2813,18 @@ struct PitchTrackerView: View {
                           let gid = selectedGameId
                     else { return }
 
-                    // Immediate visible change (hide overlay right away)
+                    // ✅ Immediate visible change
+                    let codeToClose = activeSessionCode
                     sessionActive = false
+                    partnerConnected = false
+                    showParticipantOverlay = false
                     activeSessionCode = nil
                     sessionExpiresAt = nil
                     showEndSessionConfirm = false
 
-                    endActiveSession(ownerUid: owner, gameId: gid, code: activeSessionCode) // resetUI defaults to true
+                    endActiveSession(ownerUid: owner, gameId: gid, code: codeToClose)
                 }
+
 
                 Button("Cancel", role: .cancel) {
                     showEndSessionConfirm = false
