@@ -375,8 +375,11 @@ struct PitchTrackerView: View {
             calledPitch = nil
             activeCalledPitchId = nil
             isRecordingResult = false
+            lastTappedPosition = nil   // ✅ add
             return
         }
+
+
 
         // Mirror pending pitch locally for the joiner UI
         let resolvedLabel = pending.label ?? loc
@@ -573,7 +576,20 @@ struct PitchTrackerView: View {
                     }
                     
                     applyPendingFromGame(updated)
-                    
+                    // ✅ Owner: if participant cleared pending, dismiss CalledPitchView reliably
+                    if self.isOwnerForActiveGame {
+                        let hasPending = (updated.pending?.isActive == true)
+                        if !hasPending {
+                            if self.calledPitch != nil || self.isRecordingResult || self.activeCalledPitchId != nil {
+                                self.calledPitch = nil
+                                self.isRecordingResult = false
+                                self.activeCalledPitchId = nil
+                                self.pendingResultLabel = nil
+                                self.showConfirmSheet = false
+                            }
+                        }
+                    }
+
                     // Mirror result selection changes across devices (owner <-> participant)
                     if let raw = snap.data()?["resultSelection"] as? [String: Any],
                        let selId = raw["id"] as? String,
@@ -609,7 +625,7 @@ struct PitchTrackerView: View {
                                     // Reset local UI state on owner
                                     showConfirmSheet = false
                                     resultVisualState = label
-                                    activeCalledPitchId = UUID().uuidString
+                                    activeCalledPitchId = nil
                                     isRecordingResult = false
                                     selectedPitch = ""
                                     selectedLocation = ""
@@ -639,6 +655,22 @@ struct PitchTrackerView: View {
             }
         }
     }
+
+    private func resetCallAndResultUIState() {
+        lastTappedPosition = nil
+        calledPitch = nil
+        activeCalledPitchId = nil
+        pendingResultLabel = nil
+        showConfirmSheet = false
+        showResultConfirmation = false
+        isRecordingResult = false
+        selectedPitch = ""
+        selectedLocation = ""
+        resultVisualState = nil
+        actualLocationRecorded = nil
+    }
+
+
     private func disconnectFromGame(notifyHost: Bool = true) {
         // ✅ Capture BEFORE clearing state
         let uid = authManager.user?.uid ?? ""
@@ -1122,48 +1154,57 @@ struct PitchTrackerView: View {
                 return
             }
 
-            // ✅ Mark participant as connected on the host game doc (drives owner UI)
             let myUid = self.authManager.user?.uid ?? ""
-            if !myUid.isEmpty {
-                db.collection("users").document(hostUid)
-                    .collection("games").document(gameId)
-                    .setData(["participants": [myUid: true]], merge: true)
+            guard !myUid.isEmpty else {
+                DispatchQueue.main.async {
+                    self.codeShareErrorMessage = "Not signed in."
+                    self.showCodeShareErrorAlert = true
+                    self.isJoiningSession = false
+                }
+                return
             }
 
-            // ✅ Switch into game mode on main thread
-            DispatchQueue.main.async {
-                // set these first
-                self.activeGameOwnerUserId = hostUid
-                self.selectedGameId = gameId
+            // ✅ IMPORTANT: join first, and ONLY after success switch mode / start listeners
+            let gameRef = db.collection("users").document(hostUid)
+                .collection("games").document(gameId)
 
-                // then set game mode flags
-                self.isGame = true
-                self.suppressNextGameSheet = true
-                self.sessionManager.switchMode(to: .game)
+            gameRef.updateData(["participants.\(myUid)": true]) { err in
+                if let err = err {
+                    DispatchQueue.main.async {
+                        self.codeShareErrorMessage = "Could not join game. \(err.localizedDescription)"
+                        self.showCodeShareErrorAlert = true
+                        self.isJoiningSession = false
+                    }
+                    return
+                }
 
-                self.showParticipantOverlay = true
-                self.showCodeShareSheet = false
+                DispatchQueue.main.async {
+                    // ✅ Prevent stale UI (random strikezone highlight, stale pending labels, etc.)
+                    self.resetCallAndResultUIState()
 
-                // IMPORTANT: keep joining gate true long enough to suppress sheet onDismiss fallbacks
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    self.isJoiningSession = false
+                    // set these first
+                    self.activeGameOwnerUserId = hostUid
+                    self.selectedGameId = gameId
+
+                    // then set game mode flags
+                    self.isGame = true
+                    self.suppressNextGameSheet = true
+                    self.sessionManager.switchMode(to: .game)
+
+                    self.showParticipantOverlay = true
+                    self.showCodeShareSheet = false
+
+                    // ✅ Start listeners AFTER join is confirmed
+                    self.startListeningToActiveGame()
+
+                    // IMPORTANT: keep joining gate true long enough to suppress sheet onDismiss fallbacks
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        self.isJoiningSession = false
+                    }
                 }
             }
         }
     }
-
-//    private func presentJoinByCode() {
-//        // Ensure we're in Game Mode, but do NOT force the local game picker sheet
-//        suppressNextGameSheet = true
-//        isGame = true
-//        sessionManager.switchMode(to: .game)
-//
-//        // Open Code sheet directly on "Enter Code"
-//        codeShareInitialTab = 1
-//        shareCode = ""
-//        codeShareSheetID = UUID()
-//        showCodeShareSheet = true
-//    }
 
     private func consumeShareCode(_ text: String) {
         // ✅ Codes are Game Mode only (no silent failure)
@@ -2322,7 +2363,7 @@ struct PitchTrackerView: View {
         // Prevent sheet from showing and reset UI state (mirror sheet save reset)
         showConfirmSheet = false
         resultVisualState = event.location
-        activeCalledPitchId = UUID().uuidString
+        activeCalledPitchId = nil
         isRecordingResult = false
         selectedPitch = ""
         selectedLocation = ""
@@ -2646,7 +2687,12 @@ struct PitchTrackerView: View {
             selectedOpponentBatterId: selectedBatterId?.uuidString,
             selectedPracticeId: selectedPracticeId,
             saveAction: { event in
-                authManager.savePitchEvent(event)
+                if isGame, let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
+                    authManager.saveGamePitchEvent(ownerUserId: owner, gameId: gid, event: event)
+                } else {
+                    authManager.savePitchEvent(event)
+                }
+
                 if isGame,
                    let gid = selectedGameId,
                    let owner = effectiveGameOwnerUserId {
@@ -2667,7 +2713,7 @@ struct PitchTrackerView: View {
                 }
 
                 resultVisualState = event.location
-                activeCalledPitchId = UUID().uuidString
+                activeCalledPitchId = nil
                 isRecordingResult = false
                 selectedPitch = ""
                 selectedLocation = ""

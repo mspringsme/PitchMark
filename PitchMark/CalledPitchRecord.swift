@@ -1352,6 +1352,8 @@ struct PitchEvent: Codable, Identifiable {
     var opponentJersey: String?
     var opponentBatterId: String?
     var practiceId: String?
+    
+    var createdByUid: String?
 }
 
 extension PitchEvent: Hashable {

@@ -588,6 +588,33 @@ class AuthManager: ObservableObject {
             }
         }
     }
+    
+    func saveGamePitchEvent(ownerUserId: String, gameId: String, event: PitchEvent) {
+        let db = Firestore.firestore()
+        let ref = db.collection("users")
+            .document(ownerUserId)
+            .collection("games")
+            .document(gameId)
+            .collection("pitchEvents")
+            .document()
+
+        do {
+            // Ensure required fields exist for rules
+            var enriched = event
+            enriched.gameId = gameId
+            enriched.createdByUid = Auth.auth().currentUser?.uid
+
+            try ref.setData(from: enriched) { err in
+                if let err = err {
+                    print("❌ saveGamePitchEvent failed:", err.localizedDescription)
+                } else {
+                    print("✅ Game pitch event saved.")
+                }
+            }
+        } catch {
+            print("❌ saveGamePitchEvent encode failed:", error.localizedDescription)
+        }
+    }
 
 }
 
