@@ -270,7 +270,7 @@ struct PitchResultSheetView: View {
         }
 
         let event = PitchEvent(
-            id: UUID().uuidString,
+            id: nil,
             timestamp: Date(),
             pitch: pitchCall.pitch,
             location: label,

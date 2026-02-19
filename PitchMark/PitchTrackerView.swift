@@ -244,6 +244,8 @@ struct PitchTrackerView: View {
     @State private var shareCode: String = ""
     @State private var activeGameOwnerUserId: String? = nil
     @State private var gameListener: ListenerRegistration? = nil
+    @State private var gamePitchEventsListener: ListenerRegistration? = nil
+    @State private var gamePitchEvents: [PitchEvent] = []
     @State private var lastObservedResultSelectionId: String? = nil
     @State private var codeShareSheetID = UUID()
     // MARK: - Startup gating (prevents sheet-flash on launch)
@@ -421,6 +423,38 @@ struct PitchTrackerView: View {
 
     private func clearResultSelection() {
         writeResultSelection(label: "")
+    }
+    private func startListeningToGamePitchEvents() {
+        // remove old listener
+        gamePitchEventsListener?.remove()
+        gamePitchEventsListener = nil
+
+        guard isGame,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        let ref = Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+
+        gamePitchEventsListener = ref.addSnapshotListener { snap, err in
+            if let err = err {
+                print("❌ Game pitchEvents listener error:", err.localizedDescription)
+                return
+            }
+            guard let docs = snap?.documents else { return }
+
+            let events: [PitchEvent] = docs.compactMap { doc in
+                try? doc.data(as: PitchEvent.self)
+            }
+
+            DispatchQueue.main.async {
+                self.gamePitchEvents = events
+            }
+        }
     }
 
     private func startListeningToActiveGame() {
@@ -654,6 +688,8 @@ struct PitchTrackerView: View {
                 print("❌ Failed decoding Game from listener:", error)
             }
         }
+        startListeningToGamePitchEvents()
+
     }
 
     private func resetCallAndResultUIState() {
@@ -798,14 +834,14 @@ struct PitchTrackerView: View {
         // If owner ended session OR cleared code => disconnect/reset participant UI
         if sessionActive == false || activeSessionCode == nil {
             print("🔌 Participant: session ended by owner")
-            disconnectFromGame()
+            disconnectFromGame(notifyHost: false)
             return
         }
 
         // If expired => disconnect/reset participant UI
         if let expiresAt = sessionExpiresAt, expiresAt < Date() {
             print("🔌 Participant: session expired (owner likely left)")
-            disconnectFromGame()
+            disconnectFromGame(notifyHost: false)
             return
         }
     }
@@ -827,9 +863,8 @@ struct PitchTrackerView: View {
     }
 
     private var filteredEvents: [PitchEvent] {
-        if isGame, let gid = selectedGameId {
-            return pitchEvents.filter { $0.gameId == gid }
-                .sorted { $0.timestamp > $1.timestamp }
+        if isGame {
+            return gamePitchEvents.sorted { $0.timestamp > $1.timestamp }
         } else if !isGame {
             if let pid = selectedPracticeId {
                 return pitchEvents.filter { $0.practiceId == pid }
@@ -1619,7 +1654,7 @@ struct PitchTrackerView: View {
                         }
                         Spacer()
                         Button(role: .destructive) {
-                            disconnectFromGame()
+                            disconnectFromGame(notifyHost: false)
                         } label: {
                             Label("Disconnect", systemImage: "xmark.circle.fill")
                                 .labelStyle(.titleAndIcon)
@@ -2316,7 +2351,7 @@ struct PitchTrackerView: View {
 
         // Build minimal practice event
         let event = PitchEvent(
-            id: UUID().uuidString,
+            id: nil,
             timestamp: Date(),
             pitch: pitchCall.pitch,
             location: label,
