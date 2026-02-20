@@ -2055,7 +2055,8 @@ struct PitchTrackerView: View {
     
     private var resetOverlay: some View {
         Group {
-            ResetPitchButton() {
+            ResetPitchButton {
+                // ✅ 1) Reset owner local UI
                 isRecordingResult = false
                 selectedPitch = ""
                 selectedLocation = ""
@@ -2065,11 +2066,21 @@ struct PitchTrackerView: View {
                 actualLocationRecorded = nil
                 pendingResultLabel = nil
 
-                // NEW: broadcast reset to participant (Game mode)
-                if isGame {
+                // ✅ 2) Broadcast reset to participant by clearing SHARED pending + resultSelection
+                if isGame,
+                   let gid = selectedGameId,
+                   let owner = effectiveGameOwnerUserId,
+                   !owner.isEmpty,
+                   isOwnerForActiveGame
+                {
+                    // Clear the pending pitch so participant UI resets immediately
+                    authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+
+                    // Clear any resultSelection helper field too (optional but good)
                     writeResultSelection(label: nil)
                 }
             }
+
         }
     }
     
