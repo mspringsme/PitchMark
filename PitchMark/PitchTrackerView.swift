@@ -621,6 +621,26 @@ struct PitchTrackerView: View {
                             self.partnerConnected = ownerOnline
                         }
                     }
+                    // ✅ Owner: if participant saved the pitch, they clear pending.
+                    // When pending disappears, dismiss CalledPitchView + reset strike zone for next pitch.
+                    if self.isGame && self.isOwnerForActiveGame {
+                        let pendingActive = (updated.pending?.isActive == true)
+
+                        // If we currently have an active call showing, and pending is no longer active → reset
+                        if self.activeCalledPitchId != nil && !pendingActive {
+                            print("✅ Pending cleared remotely — resetting owner UI for next pitch")
+
+                            // Hide CalledPitchView and clear strike-zone selection state
+                            self.resetCallAndResultUIState()
+
+                            // Optional: also clear any lingering result selection doc state
+                            self.clearResultSelection()
+                        }
+                    }
+
+                    // ✅ Participant: mirror pending to their UI
+                    self.applyPendingFromGame(updated)
+
                     // ✅ 1) Keep a local copy of the active game so UI bindings have data
                     var normalized = updated
                     normalized.id = gid
