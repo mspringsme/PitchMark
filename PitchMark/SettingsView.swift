@@ -349,14 +349,19 @@ struct SettingsView: View {
                                     )
                                 }
                         }
-                        var opponent: String? = nil
-                        authManager.loadGames { games in
-                            if let g = games.first(where: { $0.id == gameId }) {
-                                opponent = g.opponent
-                            }
-                            NotificationCenter.default.post(name: .gameOrSessionChosen, object: nil, userInfo: ["type": "game", "gameId": gameId, "opponent": opponent as Any])
-                        }
+                        // ✅ Post immediately to avoid async race that can snap back to practice
+                        let ownerUid = authManager.user?.uid ?? ""
+                        NotificationCenter.default.post(
+                            name: .gameOrSessionChosen,
+                            object: nil,
+                            userInfo: [
+                                "type": "game",
+                                "gameId": gameId,
+                                "ownerUserId": ownerUid
+                            ]
+                        )
                         dismiss()
+
                     },
                     onCancel: {
                         showGameChooser = false

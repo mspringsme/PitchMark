@@ -261,6 +261,7 @@ struct PitchTrackerView: View {
     @State private var showEndSessionConfirm = false
     @State private var heartbeatTimer: Timer? = nil
     @State private var partnerConnected: Bool = false
+    @State private var presenceTimer: Timer? = nil
     @State private var isJoiningSession: Bool = false
 
     private func dismissAllTopLevelSheets() {
@@ -303,6 +304,93 @@ struct PitchTrackerView: View {
         }
 
         // Otherwise: nothing needed; user can use PitchTrackerView immediately.
+    }
+    
+    private func stopPresenceHeartbeat() {
+        presenceTimer?.invalidate()
+        presenceTimer = nil
+    }
+
+    private func writePresenceOnce(ownerUid: String, gameId: String) {
+        guard let myUid = authManager.user?.uid, !myUid.isEmpty else { return }
+
+        let gameRef = Firestore.firestore()
+            .collection("users").document(ownerUid)
+            .collection("games").document(gameId)
+
+        gameRef.updateData([
+            "participantsLastSeen.\(myUid)": FieldValue.serverTimestamp()
+        ]) { err in
+            if let err = err {
+                print("❌ presence heartbeat write failed:", err.localizedDescription)
+            }
+        }
+    }
+
+    private func startPresenceHeartbeatIfNeeded(ownerUid: String, gameId: String) {
+        stopPresenceHeartbeat()
+
+        // write immediately so UI doesn't wait 15s
+        writePresenceOnce(ownerUid: ownerUid, gameId: gameId)
+
+        presenceTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
+            writePresenceOnce(ownerUid: ownerUid, gameId: gameId)
+        }
+    }
+    
+    private func hydrateChosenGameUI(ownerUid: String, gameId: String) {
+        let ref = Firestore.firestore()
+            .collection("users").document(ownerUid)
+            .collection("games").document(gameId)
+
+        ref.getDocument { snap, err in
+            if let err = err {
+                print("❌ hydrateChosenGameUI getDocument error:", err)
+                return
+            }
+            guard let snap, snap.exists else {
+                print("⚠️ hydrateChosenGameUI missing game doc:", ref.path)
+                return
+            }
+
+            do {
+                let game = try snap.data(as: Game.self)
+
+                DispatchQueue.main.async {
+                    // ✅ IDs + owner (keep these consistent)
+                    self.selectedGameId = game.id ?? gameId
+                    self.activeGameOwnerUserId = ownerUid
+
+                    // ✅ This is what makes the button stop showing plain "Game"
+                    self.opponentName = game.opponent
+
+                    // ✅ Build jersey cells (mirror your onChoose logic)
+                    if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                        self.jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                            JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                        }
+                    } else {
+                        // show temporary cells immediately
+                        let tempIds = game.jerseyNumbers.map { _ in UUID().uuidString }
+                        self.jerseyCells = zip(tempIds, game.jerseyNumbers).map {
+                            JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
+                        }
+
+                        // trigger one-time migration (same as your sheet path)
+                        let gid = game.id ?? gameId
+                        self.authManager.migrateBatterIdsIfMissing(ownerUserId: ownerUid, gameId: gid)
+                    }
+
+                    // ✅ Match your existing selection side-effects
+                    self.selectedBatterId = nil
+                    self.ownerTemplateName = self.selectedTemplate?.name
+                    self.showParticipantOverlay = !self.isOwnerForActiveGame
+                }
+
+            } catch {
+                print("❌ hydrateChosenGameUI decode error:", error)
+            }
+        }
     }
 
     private var effectiveGameOwnerUserId: String? {
@@ -486,204 +574,76 @@ struct PitchTrackerView: View {
 
                 // Update your local state so UI reflects remote edits
                 DispatchQueue.main.async {
-                    // ✅ Always read participants on main thread
-                    let participants = snap.data()?["participants"] as? [String: Bool] ?? [:]
+                    let data = snap.data() ?? [:]
+
+                    let participants = data["participants"] as? [String: Bool] ?? [:]
+                    let lastSeenMap = data["participantsLastSeen"] as? [String: Timestamp] ?? [:]
+
                     let ownerUid = self.effectiveGameOwnerUserId ?? self.authManager.user?.uid ?? ""
-
-                    // ✅ Owner: button should reflect whether ANY non-owner participant is present
-                    if self.isOwnerForActiveGame {
-                        let hasPartner = participants.contains { (uid, isOn) in
-                            uid != ownerUid && isOn == true
-                        }
-                        if self.partnerConnected != hasPartner {
-                            self.partnerConnected = hasPartner
-                        }
-                    } else {
-                        // Participant: if we were removed, reset UI (but not during join handshake)
-                        if !self.isJoiningSession {
-                            let myUid = self.authManager.user?.uid ?? ""
-                            if participants[myUid] != true {
-                                print("🔌 Participant removed by owner — forcing local reset")
-                                self.disconnectFromGame(notifyHost: false)   // (we add this param below)
-                                return
-                            }
-                        }
-                    }
-
-                    if let id = updated.id,
-                       let idx = games.firstIndex(where: { $0.id == id }) {
-                        games[idx] = updated
-                        
-                    } else {
-                        games.insert(updated, at: 0)
-                    }
-
-                    opponentName = updated.opponent
-                    // ✅ Session status fields (owner+participant read)
-                    let rawActive = snap.data()?["sessionActive"] as? Bool
-                    self.sessionActive = rawActive ?? false
-
-                    self.activeSessionCode = snap.data()?["activeSessionCode"] as? String
-
-                    if let ts = snap.data()?["sessionExpiresAt"] as? Timestamp {
-                        self.sessionExpiresAt = ts.dateValue()
-                    } else {
-                        self.sessionExpiresAt = nil
-                    }
-
-                    // ✅ Participant auto-reset if owner ended/left
-                    self.handleSessionStatusFromGameDoc(isOwner: isOwnerForActiveGame)
-
-                    // ✅ Owner heartbeat (keeps session alive while owner is in app)
-                    if isOwnerForActiveGame,
-                       self.sessionActive,
-                       let code = self.activeSessionCode,
-                       let gid = self.selectedGameId,
-                       let owner = self.effectiveGameOwnerUserId
-                    {
-                        self.startHeartbeatIfNeeded(ownerUid: owner, gameId: gid, code: code)
-                    } else {
-                        self.stopHeartbeat()
-                    }
-
-                    let rawSide = snap.data()?["batterSide"] as? String
-                    if rawSide == "left", batterSide != .left {
-                        batterSide = .left
-                    } else if rawSide == "right", batterSide != .right {
-                        batterSide = .right
-                    } else if rawSide == nil {
-                        // Optional: if missing, seed once (owner only)
-                        if isOwnerForActiveGame {
-                            let sideString = (batterSide == .left) ? "left" : "right"
-                            ref.updateData(["batterSide": sideString])
-                        }
-                    }
-
-
-                    // Capture host template name if present on game, else fall back to selectedTemplate
-                    // ✅ Prefer raw Firestore field, then decoded model
-                    let rawTemplate = snap.data()?["templateName"] as? String
-
-                    if let rawTemplate, !rawTemplate.isEmpty {
-                        ownerTemplateName = rawTemplate
-                    } else if let tmplName = updated.templateName, !tmplName.isEmpty {
-                        ownerTemplateName = tmplName
-                    } else {
-                        ownerTemplateName = nil
-                    }
-
-
-                    // Show participant overlay when a non-owner joins a game
-                    if isGame && !isOwnerForActiveGame {
-                        showParticipantOverlay = true
-                    }
-                    // keep jerseyCells in sync too
-                    if let ids = updated.batterIds, ids.count == updated.jerseyNumbers.count {
-                        jerseyCells = zip(ids, updated.jerseyNumbers).map {
-                            JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
-                        }
-                    } else {
-                        // Build a temporary local list so UI still shows something immediately
-                        let tempIds = updated.jerseyNumbers.map { _ in UUID().uuidString }
-                        jerseyCells = zip(tempIds, updated.jerseyNumbers).map {
-                            JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
-                        }
-
-                        // ✅ One-time migrate via transaction (prevents owner/participant races)
-                        authManager.migrateBatterIdsIfMissing(ownerUserId: owner, gameId: gid)
-                    }
-
-                    // ✅ If selected batter no longer exists, clear it
-                    if let sb = self.selectedBatterId,
-                       !jerseyCells.contains(where: { $0.id == sb }) {
-                        self.selectedBatterId = nil
-                    }
-
-
                     
-                    // Sync selected batter from Firestore to local state (both owner and participant)
-                    if let selectedIdString = updated.selectedBatterId,
-                       let selectedUUID = UUID(uuidString: selectedIdString) {
-                        self.selectedBatterId = selectedUUID
-                    } else {
-                        self.selectedBatterId = nil
+                    let now = Date()
+
+                    // Consider someone "online" if we saw a heartbeat within this window
+                    let onlineWindow: TimeInterval = 40
+
+                    func isOnline(_ uid: String) -> Bool {
+                        guard let ts = lastSeenMap[uid]?.dateValue() else { return false }
+                        return now.timeIntervalSince(ts) <= onlineWindow
                     }
-                    
-                    applyPendingFromGame(updated)
-                    // ✅ Owner: if participant cleared pending, dismiss CalledPitchView reliably
+
                     if self.isOwnerForActiveGame {
-                        let hasPending = (updated.pending?.isActive == true)
-                        if !hasPending {
-                            if self.calledPitch != nil || self.isRecordingResult || self.activeCalledPitchId != nil {
-                                self.calledPitch = nil
-                                self.isRecordingResult = false
-                                self.activeCalledPitchId = nil
-                                self.pendingResultLabel = nil
-                                self.showConfirmSheet = false
-                            }
+                        // Owner: any NON-owner participant currently online?
+                        let onlineParticipantExists = participants
+                            .filter { $0.key != ownerUid && $0.value == true }
+                            .contains { isOnline($0.key) }
+
+                        if self.partnerConnected != onlineParticipantExists {
+                            print("👥 Owner sees participant online:", onlineParticipantExists)
+                            self.partnerConnected = onlineParticipantExists
+                        }
+
+                    } else {
+                        // Participant: is owner online?
+                        let ownerOnline = isOnline(ownerUid)
+
+                        if self.partnerConnected != ownerOnline {
+                            print("👥 Participant sees owner online:", ownerOnline)
+                            self.partnerConnected = ownerOnline
+                        }
+                    }
+                    // ✅ 1) Keep a local copy of the active game so UI bindings have data
+                    var normalized = updated
+                    normalized.id = gid
+
+                    if let idx = self.games.firstIndex(where: { $0.id == gid }) {
+                        self.games[idx] = normalized
+                    } else {
+                        self.games.append(normalized)
+                    }
+
+                    // ✅ 2) Ensure the top "Game" label has an opponent immediately
+                    if self.opponentName != normalized.opponent {
+                        self.opponentName = normalized.opponent
+                    }
+
+                    // ✅ 3) Sync selected batter (owner writes; participant must reflect)
+                    if let sel = normalized.selectedBatterId, let uuid = UUID(uuidString: sel) {
+                        if self.selectedBatterId != uuid {
+                            self.selectedBatterId = uuid
+                        }
+                    } else {
+                        // if owner cleared selection
+                        // (only clear if you're not actively picking locally)
+                        if !self.isOwnerForActiveGame {
+                            self.selectedBatterId = nil
                         }
                     }
 
-                    // Mirror result selection changes across devices (owner <-> participant)
-                    if let raw = snap.data()?["resultSelection"] as? [String: Any],
-                       let selId = raw["id"] as? String,
-                       lastObservedResultSelectionId != selId {
+                    // ✅ 4) Critical: apply pending pitch state so participant sees owner calls
+                    self.applyPendingFromGame(normalized)
 
-                        lastObservedResultSelectionId = selId
-
-                        let label = (raw["label"] as? String) ?? ""
-                        let createdBy = (raw["createdByUid"] as? String) ?? ""
-                        let me = authManager.user?.uid ?? ""
-                        let incomingCallId = raw["callId"] as? String
-
-                        // Only act on selections not authored by me
-                        if createdBy != me {
-                            // Only respond to selections that match the currently active call
-                            guard incomingCallId == activeCalledPitchId else { return }
-
-                            if label.isEmpty {
-                                // Reset for this call
-                                pendingResultLabel = nil
-                                isRecordingResult = false
-                                calledPitch = nil
-                                activeCalledPitchId = nil
-                            } else {
-                                // Mirror selection to participant UI (or owner if participant selected)
-                                pendingResultLabel = label
-
-                                // If I'm the owner and a participant just saved a result, dismiss CalledPitchView and reset strike zone
-                                if isOwnerForActiveGame {
-                                    if let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
-                                        authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
-                                    }
-                                    // Reset local UI state on owner
-                                    showConfirmSheet = false
-                                    resultVisualState = label
-                                    activeCalledPitchId = nil
-                                    isRecordingResult = false
-                                    selectedPitch = ""
-                                    selectedLocation = ""
-                                    lastTappedPosition = nil
-                                    calledPitch = nil
-                                    resultVisualState = nil
-                                    actualLocationRecorded = nil
-                                    pendingResultLabel = nil
-                                    isStrikeSwinging = false
-                                    isWildPitch = false
-                                    isPassedBall = false
-                                    isBall = false
-                                    selectedOutcome = nil
-                                    selectedDescriptor = nil
-                                }
-
-                                // If the participant has selected a result while a call is active, allow confirm UI to proceed
-                                if calledPitch != nil {
-                                    isRecordingResult = true
-                                }
-                            }
-                        }
-                    }
                 }
+
             } catch {
                 print("❌ Failed decoding Game from listener:", error)
             }
@@ -1242,15 +1202,10 @@ struct PitchTrackerView: View {
     }
 
     private func consumeShareCode(_ text: String) {
-        // ✅ Codes are Game Mode only (no silent failure)
-        guard isGame else {
-            codeShareErrorMessage = "Codes can only be used in Game Mode."
-            showCodeShareErrorAlert = true
-            return
-        }
+        // ✅ Joining by code must work from ANY mode (practice/game/settings)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Accept only exactly 6 digits
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let isSixDigits = trimmed.count == 6 && trimmed.allSatisfy({ $0.isNumber })
         guard isSixDigits else {
             codeShareErrorMessage = "Code must be exactly 6 digits."
@@ -1258,13 +1213,14 @@ struct PitchTrackerView: View {
             return
         }
 
-        // Post a notification carrying just the code so the resolver can handle it.
+        // Let resolver handle switching to game mode after successful join.
         NotificationCenter.default.post(
             name: .gameOrSessionChosen,
             object: nil,
             userInfo: ["code": trimmed]
         )
     }
+
 
     
     // Tiny factory to reduce type-checker work when creating bindings
@@ -2845,6 +2801,22 @@ struct PitchTrackerView: View {
                     progressRefreshToken = UUID()
                 }
             }
+            .onChange(of: scenePhase) { _, phase in
+                guard let gid = selectedGameId,
+                      let owner = effectiveGameOwnerUserId
+                else { return }
+
+                switch phase {
+                case .active:
+                    if sessionActive {
+                        startPresenceHeartbeatIfNeeded(ownerUid: owner, gameId: gid)
+                    }
+                default:
+                    // stop timer when background/inactive
+                    stopPresenceHeartbeat()
+                }
+            }
+
             .eraseToAnyView()
 
         let v2 = v1
@@ -2946,25 +2918,55 @@ struct PitchTrackerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
                 guard let info = note.userInfo as? [String: Any] else { return }
 
-                // ✅ Handle "choose game" events (you already have this)
+                // ✅ Handle "choose game" (Launch → Select Game flow)
                 if let type = info["type"] as? String, type == "game" {
                     guard let gid = info["gameId"] as? String else { return }
 
                     let owner = (info["ownerUserId"] as? String) ?? authManager.user?.uid
-                    print("✅ Resolver received game:", gid, "owner:", owner ?? "nil")
+                    let ownerUid = owner ?? (authManager.user?.uid ?? "")
+                    guard !ownerUid.isEmpty else { return }
 
-                    activeGameOwnerUserId = owner
-                    selectedGameId = gid
+                    print("✅ Resolver received game:", gid, "owner:", ownerUid)
+                    // If the sender already knew the opponent name, reflect it immediately
+                    if let opp = info["opponent"] as? String {
+                        self.opponentName = opp
+                    }
+
+                    // 🔴 Clear any stale practice UI state before switching
+                    self.resetCallAndResultUIState()
+
+                    // ✅ Set IDs first
+                    self.activeGameOwnerUserId = ownerUid
+                    self.selectedGameId = gid
+
+                    // ✅ Set IDs first
+                    self.activeGameOwnerUserId = ownerUid
+                    self.selectedGameId = gid
+
+                    // ✅ Force GAME mode (order matters!)
+                    self.suppressNextGameSheet = true
+                    self.isGame = true
+                    self.sessionManager.switchMode(to: .game)
+
+                    // ✅ Hydrate UI state (opponentName/jerseys) so the game is "activated"
+                    self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: gid)
+
+                    // ✅ Start syncing
+                    self.startListeningToActiveGame()
+
                     return
+
                 }
 
-                // ✅ Handle "join via code" events (this was being ignored before)
+
+                // ✅ Handle "join via code"
                 if let code = info["code"] as? String {
                     resolveAndJoinSession(code: code)
                     return
                 }
             }
             .eraseToAnyView()
+
 
     }
 
@@ -4348,9 +4350,14 @@ private struct CodeShareSheet: View {
         _tab = State(initialValue: effectiveTab)
 
     }
+    private var enteredDigits: String {
+        entered.filter { $0.isNumber }
+    }
 
+    private var isJoinEnabled: Bool {
+        enteredDigits.count == 6
+    }
 
-    
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
@@ -4425,21 +4432,31 @@ private struct CodeShareSheet: View {
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                                     .stroke(Color.white.opacity(0.12), lineWidth: 1)
                             )
-                        if !isGame {
-                            Text("Codes can only be used in Game Mode.")
+                            .onChange(of: entered) { _, newValue in
+                                let digits = newValue.filter { $0.isNumber }
+                                let capped = String(digits.prefix(6))
+                                if capped != newValue {
+                                    entered = capped
+                                }
+                            }
+
+                        // ✅ Only warn on the Generate tab. Enter Code must work from any mode.
+                        if tab == 0 && !isGame {
+                            Text("Generate Codes requires Game Mode (select a game first).")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                         }
 
+
                         Button {
-                            onConsume(entered.trimmingCharacters(in: .whitespacesAndNewlines))
+                            onConsume(enteredDigits)   // ✅ always 6 digits, no whitespace
                             dismiss()
                         } label: {
                             Label("Join", systemImage: "arrow.right.circle.fill")
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!isGame || entered.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!isJoinEnabled)
                     }
                 }
 
