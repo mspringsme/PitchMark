@@ -1892,22 +1892,6 @@ struct PitchTrackerView: View {
     private var atBatSidebar: some View {
         if isGame {
             VStack(spacing: 0) {
-                // QR scanner button row
-                HStack(spacing: 0) {
-                    Button(action: {
-                        showCodeShareModePicker = true
-                    }) {
-                        Image(systemName: "key.sensor.tag.radiowaves.left.and.right.fill")
-                            .imageScale(.large)
-                            .foregroundStyle(.primary)
-                            .frame(width: 44, height: 36)
-                    }
-                    .buttonStyle(.plain)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 6)
-                .padding(.top, 6)
-
                 Text("At Bat")
                     .font(.caption)
                     .fontWeight(.semibold)
@@ -2022,34 +2006,6 @@ struct PitchTrackerView: View {
             .background(.ultraThinMaterial)
             .cornerRadius(10)
             .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
-            .confirmationDialog(
-                "Code Link",
-                isPresented: $showCodeShareModePicker,
-                titleVisibility: .visible
-            ) {
-                Button("Generate Code") {
-                    showCodeShareModePicker = false
-
-                    guard let gameId = selectedGameId else {
-                        showSelectGameFirstAlert = true
-                        return
-                    }
-
-                    let uid = Auth.auth().currentUser?.uid ?? "nil"
-                    print("Generate Code tapped | currentUid=\(uid) | selectedGameId=\(gameId)")
-
-                    codeShareInitialTab = 0
-                    shareCode = buildShareCode()
-                    showCodeShareSheet = true
-                }
-                Button("Enter Code") {
-                    showCodeShareModePicker = false
-                    codeShareInitialTab = 1
-                    shareCode = ""
-                    showCodeShareSheet = true
-                }
-                Button("Cancel", role: .cancel) { }
-            }
         }
     }
     
@@ -2261,53 +2217,88 @@ struct PitchTrackerView: View {
         }
         .frame(width: SZwidth, height: 390)
     }
-    
-    private var batterAndModeBar: some View {
-        HStack {
-            Spacer()
-            VStack {
-                Picker("Mode", selection: $sessionManager.currentMode) {
-                    Text("Practice").tag(PitchMode.practice)
-                    Text("Game").tag(PitchMode.game)
-                }
-                .pickerStyle(.segmented)
-                .controlSize(.small)   // optional, makes it feel more compact
-                .frame(width: 180)     // <- adjust this to taste
-                .fixedSize(horizontal: true, vertical: false)
-                .onChange(of: sessionManager.currentMode) { _, newValue in
-                    // HARD GATES: never present sheets during app boot or while restoring persisted state
-                    if isJoiningSession { return }
-                    if startupPhase != .ready || isRestoringState {
-                        sessionManager.switchMode(to: newValue)
-                        persistMode(newValue)
-                        isGame = (newValue == .game)
-                        return
-                    }
+    private var codeLinkButton: some View {
+        Button {
+            showCodeShareModePicker = true
+        } label: {
+            Image(systemName: "key.sensor.tag.radiowaves.left.and.right.fill")
+                .imageScale(.large)
+                .foregroundStyle(.primary)
+                .frame(width: 40, height: 32)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Code Link")
+        // ✅ Attach the dialog HERE so it anchors to THIS button
+        .confirmationDialog(
+            "Code Link",
+            isPresented: $showCodeShareModePicker,
+            titleVisibility: .visible
+        ) {
+            Button("Generate Code") {
+                codeShareInitialTab = 0
+                showCodeShareSheet = true
+            }
+            Button("Enter Code") {
+                codeShareInitialTab = 1
+                showCodeShareSheet = true
+            }
+            Button("Cancel", role: .cancel) { }
+        }
+    }
 
+
+    private var batterAndModeBar: some View {
+        HStack(spacing: 10) {
+            Spacer()
+
+            Picker("Mode", selection: $sessionManager.currentMode) {
+                Text("Practice").tag(PitchMode.practice)
+                Text("Game").tag(PitchMode.game)
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.small)
+            .frame(width: 180)
+            .fixedSize(horizontal: true, vertical: false)
+            .onChange(of: sessionManager.currentMode) { _, newValue in
+                // HARD GATES: never present sheets during app boot or while restoring persisted state
+                if isJoiningSession { return }
+                if startupPhase != .ready || isRestoringState {
                     sessionManager.switchMode(to: newValue)
                     persistMode(newValue)
-
-                    if newValue == .game {
-                        if suppressNextGameSheet {
-                            suppressNextGameSheet = false
-                            isGame = true
-                        } else {
-                            isGame = true
-                            presentExclusive(game: true)
-                        }
-                    } else {
-                        // Practice mode
-                        isGame = false
-                        if suppressNextGameSheet {
-                            suppressNextGameSheet = false
-                        } else {
-                            presentExclusive(practice: true)
-                        }
-                        progressRefreshToken = UUID()
-                    }
+                    isGame = (newValue == .game)
+                    return
                 }
 
+                sessionManager.switchMode(to: newValue)
+                persistMode(newValue)
+
+                if newValue == .game {
+                    if suppressNextGameSheet {
+                        suppressNextGameSheet = false
+                        isGame = true
+                    } else {
+                        isGame = true
+                        presentExclusive(game: true)
+                    }
+                } else {
+                    // Practice mode
+                    isGame = false
+                    if suppressNextGameSheet {
+                        suppressNextGameSheet = false
+                    } else {
+                        presentExclusive(practice: true)
+                    }
+                    progressRefreshToken = UUID()
+                }
             }
+
+            // ✅ Moved button: just right of the Practice/Game toggle
+            
+            codeLinkButton
+
             Spacer()
         }
         .frame(maxWidth: .infinity)
@@ -2315,6 +2306,7 @@ struct PitchTrackerView: View {
         .padding(.bottom, 6)
         .padding(.top, 14)
     }
+
 
     private var backgroundView: some View {
         Color.appBrandBackground
