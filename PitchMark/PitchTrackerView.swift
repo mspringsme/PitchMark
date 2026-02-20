@@ -3992,28 +3992,27 @@ struct JerseyRow: View {
     }
 
     private func selectJersey(_ cell: JerseyCell) {
-        guard !isReordering else { return }
+        // ✅ Optimistic UI
+        selectedBatterId = cell.id
 
-        // Toggle behavior
-        let nextSelection: UUID? = (selectedBatterId == cell.id) ? nil : cell.id
-        selectedBatterId = nextSelection
-
-        guard
-            let gid = selectedGameId,
-            let owner = effectiveGameOwnerUserId,
-            !owner.isEmpty
+        guard let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId,
+              !owner.isEmpty
         else {
             print("⚠️ selectJersey: missing gameId/owner")
             return
         }
 
-        authManager.updateGameSelectedBatter(
-            ownerUserId: owner,
-            gameId: gid,
-            selectedBatterId: nextSelection?.uuidString,
-            selectedBatterJersey: nextSelection == nil ? nil : cell.jerseyNumber
-        )
+        // ✅ Write to the OWNER's game doc so both devices share the same selection
+        Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+            .setData([
+                "selectedBatterId": cell.id.uuidString,
+                "selectedBatterJersey": cell.jerseyNumber
+            ], merge: true)
     }
+
 
 
 }
