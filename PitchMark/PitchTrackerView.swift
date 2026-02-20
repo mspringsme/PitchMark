@@ -575,6 +575,16 @@ struct PitchTrackerView: View {
                 // Update your local state so UI reflects remote edits
                 DispatchQueue.main.async {
                     let data = snap.data() ?? [:]
+                    // ✅ Sync batter side live from Firestore (owner or participant can change it)
+                    if let remote = data["batterSide"] as? String {
+                        let desired: BatterSide = (remote == "left") ? .left : .right
+
+                        if self.batterSide != desired {
+                            withAnimation { self.batterSide = desired }
+                            self.persistBatterSide(desired)   // keep UserDefaults consistent too
+                            print("🔁 Applied remote batterSide:", remote)
+                        }
+                    }
 
                     let participants = data["participants"] as? [String: Bool] ?? [:]
                     let lastSeenMap = data["participantsLastSeen"] as? [String: Timestamp] ?? [:]
