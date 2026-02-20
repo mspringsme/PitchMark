@@ -443,18 +443,16 @@ struct PitchTrackerView: View {
             createdByUid: owner,
             isStrike: newCall.isStrike
         )
-
-
         authManager.setPendingPitch(ownerUserId: owner, gameId: gid, pending: pending)
     }
-    private func applyPendingFromGame(_ updated: Game) {
+    func applyPendingFromGame(_ updated: Game) {
         // Only relevant in game mode
         guard isGame else { return }
 
         // Never overwrite the owner's local calledPitch (it contains real codes)
         guard !isOwnerForActiveGame else { return }
 
-        // If there's no active pending pitch, clear joiner "waiting" UI
+        // If there's no active pending pitch, clear joiner UI
         guard
             let pending = updated.pending,
             pending.isActive == true,
@@ -465,16 +463,29 @@ struct PitchTrackerView: View {
             calledPitch = nil
             activeCalledPitchId = nil
             isRecordingResult = false
-            lastTappedPosition = nil   // ✅ add
+            lastTappedPosition = nil
+            showConfirmSheet = false
             return
         }
 
+        // ✅ If this is a NEW pending pitch, reset local result-selection state
+        if activeCalledPitchId != pending.id {
+            pendingResultLabel = nil
+            showConfirmSheet = false
+            lastTappedPosition = nil
+        }
 
-
-        // Mirror pending pitch locally for the joiner UI
+        // Mirror pending pitch locally for joiner UI
         let resolvedLabel = pending.label ?? loc
-        pendingResultLabel = resolvedLabel
-        print("🔆 pendingResultLabel from Firestore=", resolvedLabel)
+
+        // ✅ CRITICAL: do NOT overwrite participant's chosen actual location while they are confirming/saving
+        if !showConfirmSheet && pendingResultLabel == nil {
+            pendingResultLabel = resolvedLabel
+            print("🔆 pendingResultLabel seeded from Firestore=", resolvedLabel)
+        } else {
+            // Keep whatever the participant selected
+            // print("🔆 keeping local pendingResultLabel=", pendingResultLabel ?? "nil")
+        }
 
         calledPitch = PitchCall(
             pitch: pitch,
@@ -486,6 +497,7 @@ struct PitchTrackerView: View {
         activeCalledPitchId = pending.id
         isRecordingResult = true
     }
+
 
     private func writeResultSelection(label: String?) {
         guard isGame,
