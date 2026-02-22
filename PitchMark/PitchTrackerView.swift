@@ -263,7 +263,54 @@ struct PitchTrackerView: View {
     @State private var partnerConnected: Bool = false
     @State private var presenceTimer: Timer? = nil
     @State private var isJoiningSession: Bool = false
+    @State private var lastNonOwnerParticipantCount: Int = 0
+    @State private var lastPresenceWriteAt: Date? = nil
+    @State private var presenceTargetOwner: String = ""
+    @State private var presenceTargetGame: String = ""
+    @State private var pendingRestoreGameId: String? = nil
 
+    private func startPresenceHeartbeat() {
+        stopPresenceHeartbeat()
+
+        // Fire immediately + every 15s
+        presenceTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
+            writePresenceHeartbeat()
+        }
+        writePresenceHeartbeat()
+    }
+
+    private func stopPresenceHeartbeat() {
+        presenceTimer?.invalidate()
+        presenceTimer = nil
+    }
+
+    private func writePresenceHeartbeat() {
+        guard isGame,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId,
+              !owner.isEmpty
+        else { return }
+
+        let uid = authManager.user?.uid ?? ""
+        guard !uid.isEmpty else { return }
+
+        // Throttle (extra safety)
+        if let last = lastPresenceWriteAt, Date().timeIntervalSince(last) < 8 { return }
+        lastPresenceWriteAt = Date()
+
+        let ref = Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+
+        ref.updateData([
+            "participants.\(uid)": true,
+            "participantsLastSeen.\(uid)": Timestamp(date: Date())
+        ]) { err in
+            if let err { print("❌ heartbeat update failed:", err) }
+        }
+    }
+
+    
     private func dismissAllTopLevelSheets() {
         showSettings = false
         showGameSheet = false
@@ -305,11 +352,6 @@ struct PitchTrackerView: View {
 
         // Otherwise: nothing needed; user can use PitchTrackerView immediately.
     }
-    
-    private func stopPresenceHeartbeat() {
-        presenceTimer?.invalidate()
-        presenceTimer = nil
-    }
 
     private func writePresenceOnce(ownerUid: String, gameId: String) {
         guard let myUid = authManager.user?.uid, !myUid.isEmpty else { return }
@@ -328,6 +370,14 @@ struct PitchTrackerView: View {
     }
 
     private func startPresenceHeartbeatIfNeeded(ownerUid: String, gameId: String) {
+        // ✅ Don’t restart if already targeting the same game
+        if presenceTargetOwner == ownerUid && presenceTargetGame == gameId && presenceTimer != nil {
+            return
+        }
+
+        presenceTargetOwner = ownerUid
+        presenceTargetGame = gameId
+
         stopPresenceHeartbeat()
 
         // write immediately so UI doesn't wait 15s
@@ -337,8 +387,42 @@ struct PitchTrackerView: View {
             writePresenceOnce(ownerUid: ownerUid, gameId: gameId)
         }
     }
+
     
     private func hydrateChosenGameUI(ownerUid: String, gameId: String) {
+        // ✅ FAST PATH: use local cached games immediately (no network)
+        if let local = self.games.first(where: { ($0.id ?? "") == gameId }) {
+            // IDs + owner
+            self.selectedGameId = local.id ?? gameId
+            self.activeGameOwnerUserId = ownerUid
+
+            // Make the "Game" button show opponent immediately
+            self.opponentName = local.opponent
+
+            // Build jersey cells
+            if let ids = local.batterIds, ids.count == local.jerseyNumbers.count {
+                self.jerseyCells = zip(ids, local.jerseyNumbers).map { (idStr, num) in
+                    JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                }
+            } else {
+                // Temporary cells immediately, then migrate in background
+                let tempIds = local.jerseyNumbers.map { _ in UUID().uuidString }
+                self.jerseyCells = zip(tempIds, local.jerseyNumbers).map {
+                    JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
+                }
+                let gid = local.id ?? gameId
+                self.authManager.migrateBatterIdsIfMissing(ownerUserId: ownerUid, gameId: gid)
+            }
+
+            // Match your existing selection side-effects
+            self.selectedBatterId = nil
+            self.ownerTemplateName = self.selectedTemplate?.name
+            self.showParticipantOverlay = !self.isOwnerForActiveGame
+
+            return
+        }
+
+        // ✅ SLOW FALLBACK: only if the game wasn't already in memory (rare)
         let ref = Firestore.firestore()
             .collection("users").document(ownerUid)
             .collection("games").document(gameId)
@@ -353,45 +437,38 @@ struct PitchTrackerView: View {
                 return
             }
 
-            do {
-                let game = try snap.data(as: Game.self)
+            DispatchQueue.main.async {
+                do {
+                    let game = try snap.data(as: Game.self)
 
-                DispatchQueue.main.async {
-                    // ✅ IDs + owner (keep these consistent)
                     self.selectedGameId = game.id ?? gameId
                     self.activeGameOwnerUserId = ownerUid
-
-                    // ✅ This is what makes the button stop showing plain "Game"
                     self.opponentName = game.opponent
 
-                    // ✅ Build jersey cells (mirror your onChoose logic)
                     if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
                         self.jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
                             JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
                         }
                     } else {
-                        // show temporary cells immediately
                         let tempIds = game.jerseyNumbers.map { _ in UUID().uuidString }
                         self.jerseyCells = zip(tempIds, game.jerseyNumbers).map {
                             JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
                         }
-
-                        // trigger one-time migration (same as your sheet path)
                         let gid = game.id ?? gameId
                         self.authManager.migrateBatterIdsIfMissing(ownerUserId: ownerUid, gameId: gid)
                     }
 
-                    // ✅ Match your existing selection side-effects
                     self.selectedBatterId = nil
                     self.ownerTemplateName = self.selectedTemplate?.name
                     self.showParticipantOverlay = !self.isOwnerForActiveGame
-                }
 
-            } catch {
-                print("❌ hydrateChosenGameUI decode error:", error)
+                } catch {
+                    print("❌ hydrateChosenGameUI decode error:", error)
+                }
             }
         }
     }
+
 
     private var effectiveGameOwnerUserId: String? {
         if let host = activeGameOwnerUserId, !host.isEmpty { return host }
@@ -604,6 +681,7 @@ struct PitchTrackerView: View {
                     let ownerUid = self.effectiveGameOwnerUserId ?? self.authManager.user?.uid ?? ""
                     
                     let now = Date()
+                    
 
                     // Consider someone "online" if we saw a heartbeat within this window
                     let onlineWindow: TimeInterval = 40
@@ -614,25 +692,48 @@ struct PitchTrackerView: View {
                     }
 
                     if self.isOwnerForActiveGame {
-                        // Owner: any NON-owner participant currently online?
+                        // Count non-owner participants that are marked joined
+                        let nonOwnerCount = participants
+                            .filter { $0.key != ownerUid && $0.value == true }
+                            .count
+
+                        // Online = lastSeen within the window
                         let onlineParticipantExists = participants
                             .filter { $0.key != ownerUid && $0.value == true }
                             .contains { isOnline($0.key) }
 
+                        // Track transitions
+                        let joinedTransition = (self.lastNonOwnerParticipantCount == 0 && nonOwnerCount > 0)
+                        self.lastNonOwnerParticipantCount = nonOwnerCount
+
+                        let wasConnected = self.partnerConnected
                         if self.partnerConnected != onlineParticipantExists {
                             print("👥 Owner sees participant online:", onlineParticipantExists)
                             self.partnerConnected = onlineParticipantExists
                         }
+                        let becameOnline = (!wasConnected && onlineParticipantExists)
 
+                        // ✅ Only dismiss when they JUST joined or JUST became online
+                        if joinedTransition || becameOnline {
+                            if self.showCodeShareSheet {
+                                print("✅ Participant joined/online — dismissing CodeShareSheet on owner")
+                                self.showCodeShareSheet = false
+                            }
+                            if self.showCodeShareModePicker {
+                                self.showCodeShareModePicker = false
+                            }
+                        }
                     } else {
                         // Participant: is owner online?
                         let ownerOnline = isOnline(ownerUid)
-
                         if self.partnerConnected != ownerOnline {
                             print("👥 Participant sees owner online:", ownerOnline)
                             self.partnerConnected = ownerOnline
                         }
                     }
+
+
+                    
                     // ✅ Owner: if participant saved the pitch, they clear pending.
                     // When pending disappears, dismiss CalledPitchView + reset strike zone for next pitch.
                     if self.isGame && self.isOwnerForActiveGame {
@@ -649,9 +750,6 @@ struct PitchTrackerView: View {
                             self.clearResultSelection()
                         }
                     }
-
-                    // ✅ Participant: mirror pending to their UI
-                    self.applyPendingFromGame(updated)
 
                     // ✅ 1) Keep a local copy of the active game so UI bindings have data
                     var normalized = updated
@@ -1149,8 +1247,29 @@ struct PitchTrackerView: View {
 
         let db = Firestore.firestore()
 
-        db.collection("sessions").document(trimmed).getDocument { snap, err in
+        let docRef = db.collection("sessions").document(trimmed)
+
+        var didFinish = false
+        var listener: ListenerRegistration? = nil
+
+        // ✅ Timeout so we don’t wait forever
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0) {
+            guard !didFinish else { return }
+            didFinish = true
+            listener?.remove()
+
+            self.codeShareErrorMessage = "That code isn’t active yet. Ask the host to generate again and try once more."
+            self.showCodeShareErrorAlert = true
+            self.isJoiningSession = false
+        }
+
+        // ✅ Listen briefly for the session doc to appear
+        listener = docRef.addSnapshotListener { snap, err in
+            if didFinish { return }
+
             if let err {
+                didFinish = true
+                listener?.remove()
                 DispatchQueue.main.async {
                     self.codeShareErrorMessage = "Could not verify code. \(err.localizedDescription)"
                     self.showCodeShareErrorAlert = true
@@ -1160,13 +1279,13 @@ struct PitchTrackerView: View {
             }
 
             guard let snap, snap.exists, let data = snap.data() else {
-                DispatchQueue.main.async {
-                    self.codeShareErrorMessage = "That code is not valid."
-                    self.showCodeShareErrorAlert = true
-                    self.isJoiningSession = false
-                }
+                // Not created yet — keep waiting until timeout
                 return
             }
+
+            // ✅ We have the session doc now
+            didFinish = true
+            listener?.remove()
 
             let hostUid = data["hostUid"] as? String
             let gameId  = data["gameId"] as? String
@@ -1201,7 +1320,7 @@ struct PitchTrackerView: View {
                 return
             }
 
-            // ✅ IMPORTANT: join first, and ONLY after success switch mode / start listeners
+            // ✅ Join game doc
             let gameRef = db.collection("users").document(hostUid)
                 .collection("games").document(gameId)
 
@@ -1216,14 +1335,10 @@ struct PitchTrackerView: View {
                 }
 
                 DispatchQueue.main.async {
-                    // ✅ Prevent stale UI (random strikezone highlight, stale pending labels, etc.)
                     self.resetCallAndResultUIState()
-
-                    // set these first
                     self.activeGameOwnerUserId = hostUid
                     self.selectedGameId = gameId
 
-                    // then set game mode flags
                     self.isGame = true
                     self.suppressNextGameSheet = true
                     self.sessionManager.switchMode(to: .game)
@@ -1231,16 +1346,15 @@ struct PitchTrackerView: View {
                     self.showParticipantOverlay = true
                     self.showCodeShareSheet = false
 
-                    // ✅ Start listeners AFTER join is confirmed
                     self.startListeningToActiveGame()
 
-                    // IMPORTANT: keep joining gate true long enough to suppress sheet onDismiss fallbacks
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                         self.isJoiningSession = false
                     }
                 }
             }
         }
+
     }
 
     private func consumeShareCode(_ text: String) {
@@ -2425,84 +2539,127 @@ struct PitchTrackerView: View {
     }
     
     private func handleInitialAppear() {
-        // Decide initial landing: Settings first unless an active game/session was in progress and tracker was last
+        // If we aren't signed in yet, do NOT mark anything as presented.
+        // We'll be called again when sign-in completes.
+        guard authManager.isSignedIn else {
+            print("⏳ handleInitialAppear: not signed in yet — deferring boot flow")
+            startupPhase = .ready
+            return
+        }
+
+        // If we've already presented the initial sheets once, don't do it again.
+        // (But we can still refresh loaders below if you want; keeping it tight here.)
+        if hasPresentedInitialSettings {
+            // Still ensure we have data if somehow empty
+            if templates.isEmpty {
+                authManager.loadTemplates { loaded in
+                    self.templates = loaded
+                    if self.selectedTemplate == nil { self.selectedTemplate = loaded.first }
+                }
+            }
+            if games.isEmpty {
+                authManager.loadGames { loaded in
+                    self.games = loaded
+                }
+            }
+            return
+        }
+
         startupPhase = .launching
 
         let defaults = UserDefaults.standard
         let lastViewPref = defaults.string(forKey: DefaultsKeys.lastView)
+
         let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
         let persistedOwnerId = defaults.string(forKey: DefaultsKeys.activeGameOwnerUserId)
-        self.activeGameOwnerUserId = persistedOwnerId
         let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
-        if authManager.isSignedIn && !hasPresentedInitialSettings {
-            if lastViewPref == "settings" {
-                hasPresentedInitialSettings = true
-                defaults.set("settings", forKey: DefaultsKeys.lastView)
-                // Defer actual presentation until boot is finished
-                DispatchQueue.main.async {
-                    if self.startupPhase == .ready { self.presentExclusive(settings: true) }
+
+        self.activeGameOwnerUserId = persistedOwnerId
+
+        // Mark as presented NOW that we know we're signed in
+        hasPresentedInitialSettings = true
+
+        // -----------------------------------------
+        // Decide initial mode WITHOUT loading games
+        // -----------------------------------------
+
+        if lastViewPref == "settings" {
+            defaults.set("settings", forKey: DefaultsKeys.lastView)
+
+            // We'll present settings after startupPhase becomes .ready (below)
+            // so this doesn't race other boot steps.
+
+        } else if persistedIsPractice {
+            isGame = false
+            sessionManager.switchMode(to: .practice)
+            restoreActivePracticeSelection()
+
+        } else if let gid = persistedGameId {
+            isGame = true
+            sessionManager.switchMode(to: .game)
+
+            selectedGameId = gid
+            activeGameOwnerUserId = persistedOwnerId ?? authManager.user?.uid
+
+            // Defer hydration until loadGames returns
+            pendingRestoreGameId = gid
+        }
+
+        // -----------------------------------------
+        // Normal loaders (run exactly once)
+        // -----------------------------------------
+
+        authManager.loadTemplates { loadedTemplates in
+            self.templates = loadedTemplates
+            if self.selectedTemplate == nil {
+                self.selectedTemplate = loadedTemplates.first
+            }
+        }
+
+        authManager.loadGames { loadedGames in
+            self.games = loadedGames
+
+            // Apply deferred restore (if needed)
+            if let gid = self.pendingRestoreGameId,
+               let game = loadedGames.first(where: { $0.id == gid }) {
+
+                print("🔁 Applying deferred restore for game:", gid)
+
+                self.opponentName = game.opponent
+
+                if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
+                    self.jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
+                        JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                    }
+                } else {
+                    self.jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
                 }
 
-            } else {
-                // Restore active session to tracker
-                if persistedIsPractice {
-                    isGame = false
-                    sessionManager.switchMode(to: .practice)
-                    restoreActivePracticeSelection()
-                } else if let gid = persistedGameId {
-                    isGame = true
-                    sessionManager.switchMode(to: .game)
-                    selectedGameId = gid
-                    let persistedOwner = defaults.string(forKey: DefaultsKeys.activeGameOwnerUserId)
-                    activeGameOwnerUserId = persistedOwner ?? authManager.user?.uid
-                    authManager.loadGames { games in
-                        if let game = games.first(where: { $0.id == gid }) {
-                            opponentName = game.opponent
-                            if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
-                                jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
-                                    JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
-                                }
-                            } else {
-                                jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
-                            }
-                        }
-                    }
-                }
-                hasPresentedInitialSettings = true
+                self.pendingRestoreGameId = nil
             }
         }
-        
-        if authManager.isSignedIn {
-            authManager.loadTemplates { loadedTemplates in
-                self.templates = loadedTemplates
-                // 💾 Restore last used template and settings
-                restorePersistedState(loadedTemplates: loadedTemplates)
-            }
-            
-            authManager.loadPitchEvents { events in
-                self.pitchEvents = events
-                if !events.isEmpty {
-                }
-                self.showPitchResults = true
-            }
-            
-            authManager.loadGames { loadedGames in
-                self.games = loadedGames
-                // Set default encryptedSelectionByGameId to true for all loaded games with id
-                for game in loadedGames {
-                    if let id = game.id {
-                        encryptedSelectionByGameId[id] = true
-                    }
-                }
-            }
-            loadEncryptedSelections()
-        }
+
+        // -----------------------------------------
+        // Startup complete + initial sheet
+        // -----------------------------------------
+
         DispatchQueue.main.async {
             self.startupPhase = .ready
-            self.presentInitialSheetIfNeeded()
-        }
 
+            // Present settings if that was the last view preference
+            if lastViewPref == "settings" {
+                self.presentExclusive(settings: true)
+            } else {
+                // If no active restored session, show the normal chooser sheet
+                // (this keeps your previous behavior: "Settings first unless active session")
+                if !persistedIsPractice && persistedGameId == nil {
+                    self.presentInitialSheetIfNeeded()
+                }
+            }
+        }
     }
+
+
     
     private var pitchesFacedOverlay: some View {
         Group {
@@ -2583,39 +2740,18 @@ struct PitchTrackerView: View {
                 authManager.saveGame(newGame)
             },
             onChoose: { gameId in
-                authManager.loadGames { games in
-                    if let game = games.first(where: { $0.id == gameId }) {
-                        selectedGameId = game.id
-                        activeGameOwnerUserId = authManager.user?.uid
-                        UserDefaults.standard.set(activeGameOwnerUserId, forKey: DefaultsKeys.activeGameOwnerUserId)
+                let ownerUid = authManager.user?.uid ?? ""
+                activeGameOwnerUserId = ownerUid
+                selectedGameId = gameId
 
-                        opponentName = game.opponent
-                        if let ids = game.batterIds, ids.count == game.jerseyNumbers.count {
-                            jerseyCells = zip(ids, game.jerseyNumbers).map { (idStr, num) in
-                                JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
-                            }
-                        } else {
-                            // show temporary cells immediately
-                            let tempIds = game.jerseyNumbers.map { _ in UUID().uuidString }
-                            jerseyCells = zip(tempIds, game.jerseyNumbers).map {
-                                JerseyCell(id: UUID(uuidString: $0.0) ?? UUID(), jerseyNumber: $0.1)
-                            }
+                isGame = true
+                sessionManager.switchMode(to: .game)
+                suppressNextGameSheet = true
 
-                            // trigger one-time migration
-                            if let owner = activeGameOwnerUserId ?? authManager.user?.uid,
-                               let gid = game.id {
-                                authManager.migrateBatterIdsIfMissing(ownerUserId: owner, gameId: gid)
-                            }
-                        }
+                hydrateChosenGameUI(ownerUid: ownerUid, gameId: gameId)
+                startListeningToActiveGame()
 
-                        selectedBatterId = nil
-                        ownerTemplateName = selectedTemplate?.name
-                        showParticipantOverlay = !isOwnerForActiveGame
-                    }
-                    isGame = true
-                    sessionManager.switchMode(to: .game)
-                    showGameSheet = false
-                }
+                showGameSheet = false
             },
             onCancel: {
                 showGameSheet = false
@@ -2624,12 +2760,14 @@ struct PitchTrackerView: View {
             showCodeShareSheet: $showCodeShareSheet,
             shareCode: $shareCode,
             codeShareSheetID: $codeShareSheetID,
-            showCodeShareModePicker: $showCodeShareModePicker
+            showCodeShareModePicker: $showCodeShareModePicker,
+            // ✅ these must be last because your init expects it
+            games: $games,
         )
         .presentationDetents([.fraction(0.5)])
         .presentationDragIndicator(.visible)
-        .environmentObject(authManager)
     }
+
 
     @ViewBuilder private var codeShareSheetView: some View {
         CodeShareSheet(
@@ -2783,6 +2921,7 @@ struct PitchTrackerView: View {
     @ViewBuilder private var settingsSheetView: some View {
         SettingsView(
               templates: $templates,
+              games: $games,
               allPitches: allPitches,
               selectedTemplate: $selectedTemplate,
               codeShareInitialTab: $codeShareInitialTab,
@@ -2945,7 +3084,16 @@ struct PitchTrackerView: View {
             } message: {
                 Text("This will end the share session and reset your partner’s device.")
             }
-            .onAppear(perform: handleInitialAppear)
+            .onAppear {
+                handleInitialAppear()
+            }
+            .onChange(of: authManager.isSignedIn) { _, newValue in
+                if newValue {
+                    // ✅ If sign-in/restore completes AFTER first appear,
+                    // rerun the boot flow so games/templates load and initial sheets can present.
+                    handleInitialAppear()
+                }
+            }
 
             .onChange(of: scenePhase) { _, phase in
                 guard isGame, isOwnerForActiveGame else { return }
@@ -2983,6 +3131,8 @@ struct PitchTrackerView: View {
                     // ✅ Set IDs first
                     self.activeGameOwnerUserId = ownerUid
                     self.selectedGameId = gid
+                    
+                    self.lastNonOwnerParticipantCount = 0
 
                     // ✅ Set IDs first
                     self.activeGameOwnerUserId = ownerUid
@@ -2993,11 +3143,11 @@ struct PitchTrackerView: View {
                     self.isGame = true
                     self.sessionManager.switchMode(to: .game)
 
-                    // ✅ Hydrate UI state (opponentName/jerseys) so the game is "activated"
-                    self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: gid)
+                    DispatchQueue.main.async {
+                        self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: gid)
+                        self.startListeningToActiveGame()
+                    }
 
-                    // ✅ Start syncing
-                    self.startListeningToActiveGame()
 
                     return
 
@@ -3011,8 +3161,6 @@ struct PitchTrackerView: View {
                 }
             }
             .eraseToAnyView()
-
-
     }
 
 }
@@ -4412,20 +4560,20 @@ private struct CodeShareSheet: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        TextEditor(text: $generated)
-                            .font(.system(size: 40, weight: .regular, design: .monospaced))
-                            .multilineTextAlignment(.center)
-                            .frame(minHeight: 100)
-                            .padding(8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color(UIColor.secondarySystemBackground).opacity(0.6))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                            .disabled(true)
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color(UIColor.secondarySystemBackground).opacity(0.6))
+
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+
+                            Text(generated.isEmpty ? "Generating…" : generated)
+                                .font(.system(size: 40, weight: .regular, design: .monospaced))
+                                .foregroundStyle(generated.isEmpty ? .secondary : .primary)
+                                .frame(maxWidth: .infinity, minHeight: 100)
+                        }
+                        .frame(minHeight: 100)
+
 
                         if let msg = writeErrorMessage {
                             Text(msg)
@@ -4536,8 +4684,6 @@ private struct CodeShareSheet: View {
         writeErrorMessage = nil
         print("🧩 Generate start | uid=\(Auth.auth().currentUser?.uid ?? "nil") | hostUid=\(hostUid) | gameId=\(gameId)")
 
-        let db = Firestore.firestore()
-
         func attempt(_ n: Int) {
             if n >= maxAttempts {
                 writeErrorMessage = "Could not generate a unique code. Please try again."
@@ -4545,29 +4691,18 @@ private struct CodeShareSheet: View {
             }
 
             let candidate = buildShareCode()
-            print("🧩 Checking candidate=\(candidate) | uid=\(Auth.auth().currentUser?.uid ?? "nil")")
+            generated = candidate              // ✅ show instantly (no blank)
+            didWriteSessionDoc = false
 
-            db.collection("sessions").document(candidate).getDocument { snap, error in
-                if let error = error {
-                    writeErrorMessage = "Failed checking code availability. \(error.localizedDescription)"
-                    return
+            print("🧩 Trying candidate=\(candidate) | uid=\(Auth.auth().currentUser?.uid ?? "nil")")
+
+            writeSessionDocIfNeeded { success, errorMessage in
+                if success { return }
+
+                // Retry collisions / transient failures
+                if let msg = errorMessage {
+                    self.writeErrorMessage = msg
                 }
-
-                if snap?.exists != true {
-                    generated = candidate
-                    didWriteSessionDoc = false
-                    writeSessionDocIfNeeded()
-                    return
-                }
-
-                let existingHost = snap?.data()?["hostUid"] as? String
-                if existingHost == hostUid {
-                    generated = candidate
-                    didWriteSessionDoc = false
-                    writeSessionDocIfNeeded()
-                    return
-                }
-
                 attempt(n + 1)
             }
         }
@@ -4575,21 +4710,24 @@ private struct CodeShareSheet: View {
         attempt(0)
     }
 
-    private func writeSessionDocIfNeeded() {
+
+    private func writeSessionDocIfNeeded(completion: @escaping (_ success: Bool, _ retryMessage: String?) -> Void) {
         // Only relevant for Generate tab
-        guard tab == 0 else { return }
+        guard tab == 0 else { completion(false, nil); return }
 
         // Prevent duplicate writes
-        guard !didWriteSessionDoc else { return }
+        guard !didWriteSessionDoc else { completion(true, nil); return }
 
         guard let hostUid = hostUid, let gameId = gameId else {
             writeErrorMessage = "Select a game first before generating a partner code."
+            completion(false, nil)
             return
         }
 
         let code = generated.trimmingCharacters(in: .whitespacesAndNewlines)
         guard code.count == 6 && code.allSatisfy({ $0.isNumber }) else {
             writeErrorMessage = "Invalid code generated."
+            completion(false, nil)
             return
         }
 
@@ -4598,64 +4736,50 @@ private struct CodeShareSheet: View {
 
         let db = Firestore.firestore()
 
-        // ✅ Precheck: confirm the game doc exists where the joiner will write
-        let gameRef = db.collection("users")
-            .document(hostUid)
-            .collection("games")
-            .document(gameId)
+        let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60)) // 2 hours
 
-        gameRef.getDocument { snap, err in
-            if let err = err {
-                self.writeErrorMessage = "Could not verify game exists. \(err.localizedDescription)"
-                print("🧷 Precheck game getDocument error:", err)
+        let data: [String: Any] = [
+            "hostUid": hostUid,
+            "ownerUserId": hostUid,
+            "type": "game",
+            "gameId": gameId,
+            "opponent": self.opponent ?? "",
+            "createdAt": FieldValue.serverTimestamp(),
+            "expiresAt": expires
+        ]
+
+        // ✅ Write immediately (no availability read)
+        db.collection("sessions").document(code).setData(data, merge: true) { error in
+            if let error = error {
+                self.didWriteSessionDoc = false
+                print("❌ session write failed:", error)
+
+                // Most common failure: doc exists for someone else → permission denied.
+                // Tell generator to retry quickly with a new code.
+                completion(false, "Trying another code…")
                 return
             }
 
-            let exists = (snap?.exists == true)
-            let keys = snap?.data()?.keys.sorted() ?? []
-            let participantsAny = snap?.data()?["participants"]
+            self.didWriteSessionDoc = true
+            self.writeErrorMessage = nil
 
-            print("🧷 Precheck game exists=\(exists) path=\(gameRef.path) keys=\(keys) participants=\(String(describing: participantsAny))")
+            // Non-blocking marker on game doc (optional)
+            let gameRef = db.collection("users")
+                .document(hostUid)
+                .collection("games")
+                .document(gameId)
 
-            guard exists else {
-                self.writeErrorMessage = "That game isn't saved to Firestore yet. Open the game and hit Save, then try generating a code again."
-                print("❌ Precheck failed: game doc missing at \(gameRef.path)")
-                return
-            }
+            gameRef.setData([
+                "sessionActive": true,
+                "activeSessionCode": code,
+                "sessionExpiresAt": expires
+            ], merge: true)
 
-            // ✅ Now write the session doc
-            let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60)) // 2 hours
-
-            let data: [String: Any] = [
-                "hostUid": hostUid,
-                "ownerUserId": hostUid,
-                "type": "game",
-                "gameId": gameId,
-                "opponent": self.opponent ?? "",
-                "createdAt": FieldValue.serverTimestamp(),
-                "expiresAt": expires
-            ]
-
-            db.collection("sessions").document(code).setData(data, merge: true) { error in
-                if let error = error {
-                    self.didWriteSessionDoc = false
-                    self.writeErrorMessage = "Failed to activate code. \(error.localizedDescription)"
-                    print("❌ session write failed:", error)
-                } else {
-                    self.didWriteSessionDoc = true
-                    self.writeErrorMessage = nil
-                    // ✅ Also mark the host game doc as having an active session
-                    gameRef.setData([
-                        "sessionActive": true,
-                        "activeSessionCode": code,
-                        "sessionExpiresAt": expires
-                    ], merge: true)
-
-                    print("✅ session active for code:", code)
-                }
-            }
+            print("✅ session active for code:", code)
+            completion(true, nil)
         }
     }
+
 
 }
 
@@ -4668,7 +4792,7 @@ struct GameSelectionSheet: View {
     @Binding var shareCode: String
     @Binding var codeShareSheetID: UUID
     @Binding var showCodeShareModePicker: Bool
-    @State private var games: [Game] = []
+    @Binding var games: [Game]
     @State private var showAddGamePopover: Bool = false
     @State private var newOpponentName: String = ""
     @State private var newGameDate: Date = Date()
@@ -4683,6 +4807,10 @@ struct GameSelectionSheet: View {
         NavigationStack {
             List {
                 if games.isEmpty {
+                    Text("No games yet. Tap “New Game” to create one.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 12)
                 } else {
                     Section() {
                         ForEach(games) { game in
@@ -4728,6 +4856,11 @@ struct GameSelectionSheet: View {
                             }
                         }
                     }
+                }
+            }
+            .refreshable {
+                authManager.loadGames { loaded in
+                    self.games = loaded
                 }
             }
             .navigationTitle("Games")
@@ -4806,12 +4939,6 @@ struct GameSelectionSheet: View {
                 }
             }
         )
-        
-        .onAppear {
-            authManager.loadGames { loadedGames in
-                self.games = loadedGames
-            }
-        }
         
     }
 

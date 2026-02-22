@@ -679,21 +679,39 @@ extension AuthManager {
 
 
     func loadGames(completion: @escaping ([Game]) -> Void) {
-        guard let user = user else { completion([]); return }
-        Firestore.firestore()
+        guard let user = user else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
+
+        let query = Firestore.firestore()
             .collection("users").document(user.uid)
             .collection("games")
             .order(by: "date", descending: true)
-            .getDocuments { snapshot, error in
-                guard let docs = snapshot?.documents, error == nil else {
-                    print("Error loading games: \(error?.localizedDescription ?? "Unknown")")
-                    completion([])
-                    return
-                }
-                let games: [Game] = docs.compactMap { try? $0.data(as: Game.self) }
-                completion(games)
+
+        // ✅ 1) Cache first (instant UI, like you used to see)
+        query.getDocuments(source: .cache) { snapshot, _ in
+            let docs = snapshot?.documents ?? []
+            DispatchQueue.main.async {
+                let cached: [Game] = docs.compactMap { try? $0.data(as: Game.self) }
+                completion(cached)
             }
+        }
+
+        // ✅ 2) Server refresh (updates when network returns)
+        query.getDocuments { snapshot, error in
+            guard let docs = snapshot?.documents, error == nil else {
+                print("Error loading games (server): \(error?.localizedDescription ?? "Unknown")")
+                return
+            }
+            DispatchQueue.main.async {
+                let fresh: [Game] = docs.compactMap { try? $0.data(as: Game.self) }
+                completion(fresh)
+            }
+        }
     }
+
+
     
     func loadGame(ownerUserId: String, gameId: String, completion: @escaping (Game?) -> Void) {
         Firestore.firestore()

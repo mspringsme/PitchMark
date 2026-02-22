@@ -10,6 +10,7 @@ import FirebaseAuth
 
 struct SettingsView: View {
     @Binding var templates: [PitchTemplate]
+    @Binding var games: [Game]
     let allPitches: [String]
     @Binding var selectedTemplate: PitchTemplate? // ✅ Add this line
     @Binding var codeShareInitialTab: Int
@@ -340,16 +341,16 @@ struct SettingsView: View {
                                     "templateId": tmpl.id.uuidString
                                 ]
                             )
-                            
+
                             if let ownerUid = authManager.user?.uid {
-                                    authManager.updateGameTemplateName(
-                                        ownerUserId: ownerUid,
-                                        gameId: gameId,
-                                        templateName: tmpl.name
-                                    )
-                                }
+                                authManager.updateGameTemplateName(
+                                    ownerUserId: ownerUid,
+                                    gameId: gameId,
+                                    templateName: tmpl.name
+                                )
+                            }
                         }
-                        // ✅ Post immediately to avoid async race that can snap back to practice
+
                         let ownerUid = authManager.user?.uid ?? ""
                         NotificationCenter.default.post(
                             name: .gameOrSessionChosen,
@@ -361,17 +362,18 @@ struct SettingsView: View {
                             ]
                         )
                         dismiss()
-
                     },
                     onCancel: {
                         showGameChooser = false
                     },
                     codeShareInitialTab: $codeShareInitialTab,
                     showCodeShareSheet: $showCodeShareSheet,
-                    shareCode: $shareCode,                 // ✅ ADD
+                    shareCode: $shareCode,
                     codeShareSheetID: $codeShareSheetID,
-                    showCodeShareModePicker: $showCodeShareModePicker
+                    showCodeShareModePicker: $showCodeShareModePicker,
+                    games: $games,
                 )
+
                 .presentationDetents([.fraction(0.5)])
                 .presentationDragIndicator(.visible)
                 .environmentObject(authManager)
@@ -476,19 +478,20 @@ private struct SettingsPreviewContainer: View {
             codeAssignments: []
         )
     ]
-
     @State private var selectedTemplate: PitchTemplate? = nil
     @State private var codeShareInitialTab: Int = 0
     @State private var showCodeShareSheet: Bool = false
     @State private var shareCode: String = ""
     @State private var codeShareSheetID: UUID = UUID()
     @State private var showCodeShareModePicker: Bool = false
+    @State private var games: [Game] = []
 
     private let allPitches: [String] = ["FB", "SL", "CH", "CB", "SI", "CT"]
 
     var body: some View {
         SettingsView(
             templates: $templates,
+            games: $games,
             allPitches: allPitches,
             selectedTemplate: $selectedTemplate,
             codeShareInitialTab: $codeShareInitialTab,
