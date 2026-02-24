@@ -189,6 +189,7 @@ struct PitchTrackerView: View {
     @State private var showAddJerseyPopover = false
     @State private var newJerseyNumber: String = ""
     @State private var selectedBatterId: UUID? = nil
+    @State private var selectedBatterJersey: String? = nil
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
@@ -256,6 +257,15 @@ struct PitchTrackerView: View {
     @State private var isRestoringState = false
     @State private var activeSessionCode: String? = nil
     @State private var sessionActive: Bool = false
+    // ✅ Live-room mirrored scoreboard fields (used when activeLiveId != nil)
+    @State private var balls: Int = 0
+    @State private var strikes: Int = 0
+    @State private var inning: Int = 1
+    @State private var hits: Int = 0
+    @State private var walks: Int = 0
+    @State private var us: Int = 0
+    @State private var them: Int = 0
+
     @State private var sessionExpiresAt: Date? = nil
 
     @State private var showEndSessionConfirm = false
@@ -489,18 +499,23 @@ struct PitchTrackerView: View {
     private func handleSetCalledPitch(_ newCall: PitchCall?) {
         calledPitch = newCall
 
-        guard isGame,
-              isOwnerForActiveGame,
-              let gid = selectedGameId,
-              let owner = effectiveGameOwnerUserId
-        else { return }
+        guard isGame, isOwnerForActiveGame else { return }
+
 
         // If owner cleared the call, clear pending too.
         guard let newCall else {
-            authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
-            clearResultSelection()
+            if let liveId = activeLiveId {
+                LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                    "pending": FieldValue.delete(),
+                    "resultSelection": FieldValue.delete()
+                ])
+            } else if let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
+                authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+                clearResultSelection()
+            }
             return
         }
+
 
         let callId = UUID().uuidString
         activeCalledPitchId = callId
@@ -517,11 +532,77 @@ struct PitchTrackerView: View {
             location: newCall.location,
             batterSide: batterSide == .left ? "left" : "right",
             createdAt: Date(),
-            createdByUid: owner,
+            createdByUid: authManager.user?.uid ?? "",
             isStrike: newCall.isStrike
         )
-        authManager.setPendingPitch(ownerUserId: owner, gameId: gid, pending: pending)
+        guard let liveId = activeLiveId else {
+            print("⚠️ No activeLiveId — refusing to write pending to legacy game doc.")
+            return
+        }
+
+        do {
+            let pendingData = try Firestore.Encoder().encode(pending)
+            LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                "pending": pendingData
+            ]) { err in
+                if let err { print("❌ pending update error:", err.localizedDescription) }
+            }
+        } catch {
+            print("❌ encode pending failed:", error)
+        }
+
+
     }
+    private func applyPendingFromLiveData(_ data: [String: Any]) {
+        guard isGame else { return }
+        guard !isOwnerForActiveGame else { return } // owner already has full call with codes
+
+        guard let pending = data["pending"] as? [String: Any],
+              (pending["isActive"] as? Bool) == true,
+              let pitch = pending["pitch"] as? String,
+              let loc = pending["location"] as? String
+        else {
+            // no pending: clear joiner UI
+            pendingResultLabel = nil
+            calledPitch = nil
+            activeCalledPitchId = nil
+            isRecordingResult = false
+            return
+        }
+
+        let callId = pending["id"] as? String
+        let label = (pending["label"] as? String) ?? loc
+
+        // Only seed if the joiner isn't already mid-confirm
+        if !showConfirmSheet && pendingResultLabel == nil {
+            pendingResultLabel = label
+        }
+
+        calledPitch = PitchCall(
+            pitch: pitch,
+            location: loc,
+            isStrike: (pending["isStrike"] as? Bool) ?? true,
+            codes: [] // joiner never sees codes
+        )
+
+        activeCalledPitchId = callId
+        isRecordingResult = true
+    }
+
+    private func applyResultSelectionFromLiveData(_ data: [String: Any]) {
+        guard isGame else { return }
+
+        guard let sel = data["resultSelection"] as? [String: Any] else { return }
+        let label = (sel["label"] as? String) ?? ""
+
+        // If you already have a local "resultSelection" UI variable, set it here.
+        // If not, this is still useful because your existing UI reads pendingResultLabel etc.
+        if !label.isEmpty {
+            // Optionally: keep a local var if you have one
+            // self.lastResultSelectionLabel = label
+        }
+    }
+
     func applyPendingFromGame(_ updated: Game) {
         // Only relevant in game mode
         guard isGame else { return }
@@ -577,12 +658,8 @@ struct PitchTrackerView: View {
 
 
     private func writeResultSelection(label: String?) {
-        guard isGame,
-              let gid = selectedGameId,
-              let owner = effectiveGameOwnerUserId
-        else { return }
+        guard isGame else { return }
 
-        let db = Firestore.firestore()
         let payload: [String: Any] = [
             "id": UUID().uuidString,
             "label": label ?? "",
@@ -591,16 +668,104 @@ struct PitchTrackerView: View {
             "callId": activeCalledPitchId ?? ""
         ]
 
-        db.collection("users")
-            .document(owner)
-            .collection("games")
-            .document(gid)
+        if let liveId = activeLiveId {
+            LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                "resultSelection": payload
+            ])
+            return
+        }
+
+        // Legacy fallback (keep only while transitioning)
+        guard let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
             .setData(["resultSelection": payload], merge: true)
     }
+
 
     private func clearResultSelection() {
         writeResultSelection(label: "")
     }
+    private func startListeningToLivePitchEvents(liveId: String) {
+        gamePitchEventsListener?.remove()
+        gamePitchEventsListener = nil
+
+        let ref = Firestore.firestore()
+            .collection("liveGames").document(liveId)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+
+        gamePitchEventsListener = ref.addSnapshotListener { snap, err in
+            if let err = err {
+                print("❌ Live pitchEvents listener error:", err.localizedDescription)
+                return
+            }
+            guard let docs = snap?.documents else { return }
+
+            let events: [PitchEvent] = docs.compactMap { doc in
+                try? doc.data(as: PitchEvent.self)
+            }
+
+            DispatchQueue.main.async {
+                self.gamePitchEvents = events
+            }
+        }
+    }
+    private func startListeningToActiveGame() {
+        gameListener?.remove()
+        gameListener = nil
+
+        guard isGame,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        let ref = Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+
+        gameListener = ref.addSnapshotListener { snap, err in
+            if let err = err {
+                print("❌ Game listener error:", err.localizedDescription)
+                return
+            }
+            guard let snap, snap.exists else {
+                print("⚠️ Game doc missing while listening:", ref.path)
+                return
+            }
+
+            do {
+                let updated = try snap.data(as: Game.self)
+                DispatchQueue.main.async {
+                    // Keep games[] in sync so currentGame works
+                    if let idx = self.games.firstIndex(where: { $0.id == gid }) {
+                        self.games[idx] = updated
+                    } else {
+                        self.games.append(updated)
+                    }
+
+                    // If not in live mode, you can optionally mirror into local UI state
+                    // (ONLY needed if your UI depends on these @State vars outside live mode)
+                    if self.activeLiveId == nil {
+                        self.balls = updated.balls
+                        self.strikes = updated.strikes
+                        self.inning = updated.inning
+                        self.hits = updated.hits
+                        self.walks = updated.walks
+                        self.us = updated.us
+                        self.them = updated.them
+                    }
+                }
+            } catch {
+                print("❌ decode Game failed:", error)
+            }
+        }
+    }
+
     private func startListeningToGamePitchEvents() {
         // remove old listener
         gamePitchEventsListener?.remove()
@@ -634,163 +799,70 @@ struct PitchTrackerView: View {
         }
     }
 
-    private func startListeningToActiveGame() {
-        // detach old listener
-        gameListener?.remove()
-        gameListener = nil
+    @State private var liveListener: ListenerRegistration? = nil
+    @State private var activeLiveId: String? = nil
 
-        guard isGame,
-              let gid = selectedGameId,
-              let owner = effectiveGameOwnerUserId
-        else { return }
+    private func startListeningToLiveGame(liveId: String) {
+        liveListener?.remove()
+        liveListener = nil
 
-        let ref = Firestore.firestore()
-            .collection("users").document(owner)
-            .collection("games").document(gid)
+        activeLiveId = liveId
+        startListeningToLivePitchEvents(liveId: liveId)
 
-
-        gameListener = ref.addSnapshotListener { snap, err in
-            if let err = err {
-                print("❌ Game listener error:", err)
+        let ref = Firestore.firestore().collection("liveGames").document(liveId)
+        liveListener = ref.addSnapshotListener { snap, err in
+            if let err {
+                print("❌ Live listener error:", err)
                 return
             }
-            guard let snap, snap.exists else {
-                print("⚠️ Game doc missing while listening:", ref.path)
+            guard let snap, snap.exists, let data = snap.data() else {
+                print("⚠️ Live game doc missing:", ref.path)
                 return
             }
-            do {
-                let updated = try snap.data(as: Game.self)
 
-                // Update your local state so UI reflects remote edits
-                DispatchQueue.main.async {
-                    let data = snap.data() ?? [:]
-                    // ✅ Sync batter side live from Firestore (owner or participant can change it)
-                    if let remote = data["batterSide"] as? String {
-                        let desired: BatterSide = (remote == "left") ? .left : .right
+            DispatchQueue.main.async {
+                // ✅ Use existing value as fallback (prevents partial writes from zeroing fields)
+                self.balls   = data["balls"]   as? Int ?? self.balls
+                self.strikes = data["strikes"] as? Int ?? self.strikes
+                self.inning  = data["inning"]  as? Int ?? self.inning
+                self.hits    = data["hits"]    as? Int ?? self.hits
+                self.walks   = data["walks"]   as? Int ?? self.walks
+                self.us      = data["us"]      as? Int ?? self.us
+                self.them    = data["them"]    as? Int ?? self.them
 
-                        if self.batterSide != desired {
-                            withAnimation { self.batterSide = desired }
-                            self.persistBatterSide(desired)   // keep UserDefaults consistent too
-                            print("🔁 Applied remote batterSide:", remote)
-                        }
-                    }
-
-                    let participants = data["participants"] as? [String: Bool] ?? [:]
-                    let lastSeenMap = data["participantsLastSeen"] as? [String: Timestamp] ?? [:]
-
-                    let ownerUid = self.effectiveGameOwnerUserId ?? self.authManager.user?.uid ?? ""
-                    
-                    let now = Date()
-                    
-
-                    // Consider someone "online" if we saw a heartbeat within this window
-                    let onlineWindow: TimeInterval = 40
-
-                    func isOnline(_ uid: String) -> Bool {
-                        guard let ts = lastSeenMap[uid]?.dateValue() else { return false }
-                        return now.timeIntervalSince(ts) <= onlineWindow
-                    }
-
-                    if self.isOwnerForActiveGame {
-                        // Count non-owner participants that are marked joined
-                        let nonOwnerCount = participants
-                            .filter { $0.key != ownerUid && $0.value == true }
-                            .count
-
-                        // Online = lastSeen within the window
-                        let onlineParticipantExists = participants
-                            .filter { $0.key != ownerUid && $0.value == true }
-                            .contains { isOnline($0.key) }
-
-                        // Track transitions
-                        let joinedTransition = (self.lastNonOwnerParticipantCount == 0 && nonOwnerCount > 0)
-                        self.lastNonOwnerParticipantCount = nonOwnerCount
-
-                        let wasConnected = self.partnerConnected
-                        if self.partnerConnected != onlineParticipantExists {
-                            print("👥 Owner sees participant online:", onlineParticipantExists)
-                            self.partnerConnected = onlineParticipantExists
-                        }
-                        let becameOnline = (!wasConnected && onlineParticipantExists)
-
-                        // ✅ Only dismiss when they JUST joined or JUST became online
-                        if joinedTransition || becameOnline {
-                            if self.showCodeShareSheet {
-                                print("✅ Participant joined/online — dismissing CodeShareSheet on owner")
-                                self.showCodeShareSheet = false
-                            }
-                            if self.showCodeShareModePicker {
-                                self.showCodeShareModePicker = false
-                            }
-                        }
-                    } else {
-                        // Participant: is owner online?
-                        let ownerOnline = isOnline(ownerUid)
-                        if self.partnerConnected != ownerOnline {
-                            print("👥 Participant sees owner online:", ownerOnline)
-                            self.partnerConnected = ownerOnline
-                        }
-                    }
-
-
-                    
-                    // ✅ Owner: if participant saved the pitch, they clear pending.
-                    // When pending disappears, dismiss CalledPitchView + reset strike zone for next pitch.
-                    if self.isGame && self.isOwnerForActiveGame {
-                        let pendingActive = (updated.pending?.isActive == true)
-
-                        // If we currently have an active call showing, and pending is no longer active → reset
-                        if self.activeCalledPitchId != nil && !pendingActive {
-                            print("✅ Pending cleared remotely — resetting owner UI for next pitch")
-
-                            // Hide CalledPitchView and clear strike-zone selection state
-                            self.resetCallAndResultUIState()
-
-                            // Optional: also clear any lingering result selection doc state
-                            self.clearResultSelection()
-                        }
-                    }
-
-                    // ✅ 1) Keep a local copy of the active game so UI bindings have data
-                    var normalized = updated
-                    normalized.id = gid
-
-                    if let idx = self.games.firstIndex(where: { $0.id == gid }) {
-                        self.games[idx] = normalized
-                    } else {
-                        self.games.append(normalized)
-                    }
-
-                    // ✅ 2) Ensure the top "Game" label has an opponent immediately
-                    if self.opponentName != normalized.opponent {
-                        self.opponentName = normalized.opponent
-                    }
-
-                    // ✅ 3) Sync selected batter (owner writes; participant must reflect)
-                    if let sel = normalized.selectedBatterId, let uuid = UUID(uuidString: sel) {
-                        if self.selectedBatterId != uuid {
-                            self.selectedBatterId = uuid
-                        }
-                    } else {
-                        // if owner cleared selection
-                        // (only clear if you're not actively picking locally)
-                        if !self.isOwnerForActiveGame {
-                            self.selectedBatterId = nil
-                        }
-                    }
-
-                    // ✅ 4) Critical: apply pending pitch state so participant sees owner calls
-                    self.applyPendingFromGame(normalized)
-
+                if let sideRaw = data["batterSide"] as? String,
+                   let parsed = BatterSide(rawValue: sideRaw) {
+                    self.batterSide = parsed
                 }
 
-            } catch {
-                print("❌ Failed decoding Game from listener:", error)
+                self.selectedBatterId = data["selectedBatterId"] as? UUID
+                self.selectedBatterJersey = data["selectedBatterJersey"] as? String
+
+                let status = (data["status"] as? String) ?? "active"
+                self.sessionActive = (status == "active")
+
+                // ✅ keep owner identity in sync (needed for isOwnerForActiveGame)
+                if let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty {
+                    self.activeGameOwnerUserId = ownerUid
+                }
+
+                // ✅ Apply pending/result ONLY while active
+                if self.sessionActive {
+                    if !self.isOwnerForActiveGame || !self.showConfirmSheet {
+                        self.applyPendingFromLiveData(data)
+                    }
+                    self.applyResultSelectionFromLiveData(data)
+                } else {
+                    // clear stuck UI if ended
+                    self.pendingResultLabel = nil
+                    self.calledPitch = nil
+                    self.activeCalledPitchId = nil
+                    self.isRecordingResult = false
+                }
             }
         }
-        startListeningToGamePitchEvents()
-
     }
+
 
     private func resetCallAndResultUIState() {
         lastTappedPosition = nil
@@ -808,6 +880,34 @@ struct PitchTrackerView: View {
 
 
     private func disconnectFromGame(notifyHost: Bool = true) {
+        if let liveId = activeLiveId {
+            // stop listeners
+            liveListener?.remove()
+            liveListener = nil
+            gamePitchEventsListener?.remove()
+            gamePitchEventsListener = nil
+
+            // stop heartbeat
+            stopHeartbeat()
+
+            // clear presence doc (optional)
+            let uid = authManager.user?.uid ?? ""
+            if !uid.isEmpty {
+                Firestore.firestore()
+                    .collection("liveGames").document(liveId)
+                    .collection("participants").document(uid)
+                    .delete()
+            }
+
+            activeLiveId = nil
+            UserDefaults.standard.removeObject(forKey: "activeLiveId")
+
+            // return to practice
+            isGame = false
+            sessionManager.switchMode(to: .practice)
+            return
+        }
+
         // ✅ Capture BEFORE clearing state
         let uid = authManager.user?.uid ?? ""
         let ownerUid = effectiveGameOwnerUserId ?? activeGameOwnerUserId ?? ""
@@ -857,27 +957,31 @@ struct PitchTrackerView: View {
         heartbeatTimer = nil
     }
 
-    private func startHeartbeatIfNeeded(ownerUid: String, gameId: String, code: String) {
+    private func startLivePresenceHeartbeat(liveId: String) {
         stopHeartbeat()
 
-        // Keep session alive with a short rolling expiry.
-        // If owner app dies, it will stop extending and participant will auto-reset.
+        guard let myUid = authManager.user?.uid, !myUid.isEmpty else { return }
+
+        // ✅ Create/update presence doc every 25s
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 25, repeats: true) { _ in
             let db = Firestore.firestore()
-            let newExpiry = Timestamp(date: Date().addingTimeInterval(90)) // 90s rolling TTL
+            let ref = db.collection("liveGames").document(liveId)
+                .collection("participants").document(myUid)
 
-            db.collection("sessions").document(code).setData([
-                "expiresAt": newExpiry,
-                "lastSeenAt": FieldValue.serverTimestamp()
+            ref.setData([
+                "uid": myUid,
+                "lastSeenAt": FieldValue.serverTimestamp(),
+                "joinedAt": FieldValue.serverTimestamp() // ok to re-write; server keeps latest
             ], merge: true)
-
-            db.collection("users").document(ownerUid)
-                .collection("games").document(gameId)
-                .setData(["sessionExpiresAt": newExpiry], merge: true)
         }
+
+        // fire once immediately so presence shows up right away
+        heartbeatTimer?.fire()
     }
 
+
     private func endActiveSession(ownerUid: String, gameId: String, code: String?, resetUI: Bool = true) {
+        if activeLiveId != nil { return }
         stopHeartbeat()
 
         let db = Firestore.firestore()
@@ -890,10 +994,6 @@ struct PitchTrackerView: View {
             "sessionExpiresAt": FieldValue.delete()
         ], merge: true)
 
-        // 2) Delete session doc
-        if let code, !code.isEmpty {
-            db.collection("sessions").document(code).delete()
-        }
 
         // ✅ 3) Clear participants immediately (simple + reliable)
         gameRef.setData([
@@ -1228,137 +1328,8 @@ struct PitchTrackerView: View {
         // Return a random 6-digit numeric code (leading zeros allowed)
         String(format: "%06d", Int.random(in: 0...999_999))
     }
-    private func resolveAndJoinSession(code: String) {
-        DispatchQueue.main.async {
-            self.isJoiningSession = true
-        }
-
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Validate
-        guard trimmed.count == 6, trimmed.allSatisfy({ $0.isNumber }) else {
-            DispatchQueue.main.async {
-                self.codeShareErrorMessage = "Code must be exactly 6 digits."
-                self.showCodeShareErrorAlert = true
-                self.isJoiningSession = false
-            }
-            return
-        }
-
-        let db = Firestore.firestore()
-
-        let docRef = db.collection("sessions").document(trimmed)
-
-        var didFinish = false
-        var listener: ListenerRegistration? = nil
-
-        // ✅ Timeout so we don’t wait forever
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30.0) {
-            guard !didFinish else { return }
-            didFinish = true
-            listener?.remove()
-
-            self.codeShareErrorMessage = "That code isn’t active yet. Ask the host to generate again and try once more."
-            self.showCodeShareErrorAlert = true
-            self.isJoiningSession = false
-        }
-
-        // ✅ Listen briefly for the session doc to appear
-        listener = docRef.addSnapshotListener { snap, err in
-            if didFinish { return }
-
-            if let err {
-                didFinish = true
-                listener?.remove()
-                DispatchQueue.main.async {
-                    self.codeShareErrorMessage = "Could not verify code. \(err.localizedDescription)"
-                    self.showCodeShareErrorAlert = true
-                    self.isJoiningSession = false
-                }
-                return
-            }
-
-            guard let snap, snap.exists, let data = snap.data() else {
-                // Not created yet — keep waiting until timeout
-                return
-            }
-
-            // ✅ We have the session doc now
-            didFinish = true
-            listener?.remove()
-
-            let hostUid = data["hostUid"] as? String
-            let gameId  = data["gameId"] as? String
-
-            if let expiresAt = data["expiresAt"] as? Timestamp,
-               expiresAt.dateValue() < Date() {
-                DispatchQueue.main.async {
-                    self.codeShareErrorMessage = "That code has expired."
-                    self.showCodeShareErrorAlert = true
-                    self.isJoiningSession = false
-                }
-                return
-            }
-
-            guard let hostUid, !hostUid.isEmpty,
-                  let gameId, !gameId.isEmpty else {
-                DispatchQueue.main.async {
-                    self.codeShareErrorMessage = "Code is missing host/game info."
-                    self.showCodeShareErrorAlert = true
-                    self.isJoiningSession = false
-                }
-                return
-            }
-
-            let myUid = self.authManager.user?.uid ?? ""
-            guard !myUid.isEmpty else {
-                DispatchQueue.main.async {
-                    self.codeShareErrorMessage = "Not signed in."
-                    self.showCodeShareErrorAlert = true
-                    self.isJoiningSession = false
-                }
-                return
-            }
-
-            // ✅ Join game doc
-            let gameRef = db.collection("users").document(hostUid)
-                .collection("games").document(gameId)
-
-            gameRef.updateData(["participants.\(myUid)": true]) { err in
-                if let err = err {
-                    DispatchQueue.main.async {
-                        self.codeShareErrorMessage = "Could not join game. \(err.localizedDescription)"
-                        self.showCodeShareErrorAlert = true
-                        self.isJoiningSession = false
-                    }
-                    return
-                }
-
-                DispatchQueue.main.async {
-                    self.resetCallAndResultUIState()
-                    self.activeGameOwnerUserId = hostUid
-                    self.selectedGameId = gameId
-
-                    self.isGame = true
-                    self.suppressNextGameSheet = true
-                    self.sessionManager.switchMode(to: .game)
-
-                    self.showParticipantOverlay = true
-                    self.showCodeShareSheet = false
-
-                    self.startListeningToActiveGame()
-
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        self.isJoiningSession = false
-                    }
-                }
-            }
-        }
-
-    }
 
     private func consumeShareCode(_ text: String) {
-        // ✅ Joining by code must work from ANY mode (practice/game/settings)
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Accept only exactly 6 digits
@@ -1369,13 +1340,35 @@ struct PitchTrackerView: View {
             return
         }
 
-        // Let resolver handle switching to game mode after successful join.
-        NotificationCenter.default.post(
-            name: .gameOrSessionChosen,
-            object: nil,
-            userInfo: ["code": trimmed]
-        )
+        isJoiningSession = true
+        codeShareErrorMessage = ""
+
+        LiveGameService.shared.joinLiveGame(code: trimmed) { result in
+            DispatchQueue.main.async {
+                self.isJoiningSession = false
+
+                switch result {
+                case .success(let liveId):
+                    NotificationCenter.default.post(
+                        name: .gameOrSessionChosen,
+                        object: nil,
+                        userInfo: [
+                            "type": "liveGame",
+                            "liveId": liveId
+                        ]
+                    )
+
+
+                    self.showCodeShareSheet = false
+
+                case .failure(let err):
+                    self.codeShareErrorMessage = err.localizedDescription
+                    self.showCodeShareErrorAlert = true
+                }
+            }
+        }
     }
+
 
 
     
@@ -1387,14 +1380,25 @@ struct PitchTrackerView: View {
         Binding(get: get, set: set)
     }
     
+    private func updateSharedCounts(_ fields: [String: Any]) {
+        if let liveId = activeLiveId {
+            LiveGameService.shared.updateLiveFields(liveId: liveId, fields: fields)
+            return
+        }
+    }
 
     private var inningBinding: Binding<Int> {
         intBinding(
-            get: { currentGame?.inning ?? 1 },
+            get: { activeLiveId != nil ? inning : (currentGame?.inning ?? 1) },
             set: { newValue in
+                if let liveId = activeLiveId {
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["inning": newValue])
+                    inning = newValue
+                    return
+                }
+
                 guard let gid = selectedGameId else { return }
                 guard let owner = effectiveGameOwnerUserId else { return }
-
                 authManager.updateGameInning(ownerUserId: owner, gameId: gid, inning: newValue)
 
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
@@ -1407,11 +1411,16 @@ struct PitchTrackerView: View {
 
     private var hitsBinding: Binding<Int> {
         intBinding(
-            get: { currentGame?.hits ?? 0 },
+            get: { activeLiveId != nil ? hits : (currentGame?.hits ?? 0) },
             set: { newValue in
+                if let liveId = activeLiveId {
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["hits": newValue])
+                    hits = newValue
+                    return
+                }
+
                 guard let gid = selectedGameId else { return }
                 guard let owner = effectiveGameOwnerUserId else { return }
-
                 authManager.updateGameHits(ownerUserId: owner, gameId: gid, hits: newValue)
 
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
@@ -1421,13 +1430,19 @@ struct PitchTrackerView: View {
         )
     }
 
+    
     private var walksBinding: Binding<Int> {
         intBinding(
-            get: { currentGame?.walks ?? 0 },
+            get: { activeLiveId != nil ? walks : (currentGame?.walks ?? 0) },
             set: { newValue in
+                if let liveId = activeLiveId {
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["walks": newValue])
+                    walks = newValue
+                    return
+                }
+
                 guard let gid = selectedGameId else { return }
                 guard let owner = effectiveGameOwnerUserId else { return }
-                //authManager.updateGameWalks(gameId: gid, walks: newValue)
                 authManager.updateGameWalks(ownerUserId: owner, gameId: gid, walks: newValue)
 
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
@@ -1439,11 +1454,16 @@ struct PitchTrackerView: View {
 
     private var ballsBinding: Binding<Int> {
         intBinding(
-            get: { currentGame?.balls ?? 0 },
+            get: { activeLiveId != nil ? balls : (currentGame?.balls ?? 0) },
             set: { newValue in
+                if let liveId = activeLiveId {
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["balls": newValue])
+                    balls = newValue
+                    return
+                }
+
                 guard let gid = selectedGameId else { return }
                 guard let owner = effectiveGameOwnerUserId else { return }
-                //authManager.updateGameBalls(gameId: gid, balls: newValue)
                 authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: newValue)
 
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
@@ -1455,11 +1475,16 @@ struct PitchTrackerView: View {
 
     private var strikesBinding: Binding<Int> {
         intBinding(
-            get: { currentGame?.strikes ?? 0 },
+            get: { activeLiveId != nil ? strikes : (currentGame?.strikes ?? 0) },
             set: { newValue in
+                if let liveId = activeLiveId {
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["strikes": newValue])
+                    strikes = newValue
+                    return
+                }
+
                 guard let gid = selectedGameId else { return }
                 guard let owner = effectiveGameOwnerUserId else { return }
-                //authManager.updateGameStrikes(gameId: gid, strikes: newValue)
                 authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: newValue)
 
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
@@ -1471,11 +1496,16 @@ struct PitchTrackerView: View {
 
     private var usBinding: Binding<Int> {
         intBinding(
-            get: { currentGame?.us ?? 0 },
+            get: { activeLiveId != nil ? us : (currentGame?.us ?? 0) },
             set: { newValue in
+                if let liveId = activeLiveId {
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["us": newValue])
+                    us = newValue
+                    return
+                }
+
                 guard let gid = selectedGameId else { return }
                 guard let owner = effectiveGameOwnerUserId else { return }
-                //authManager.updateGameUs(gameId: gid, us: newValue)
                 authManager.updateGameUs(ownerUserId: owner, gameId: gid, us: newValue)
 
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
@@ -1487,11 +1517,16 @@ struct PitchTrackerView: View {
 
     private var themBinding: Binding<Int> {
         intBinding(
-            get: { currentGame?.them ?? 0 },
+            get: { activeLiveId != nil ? them : (currentGame?.them ?? 0) },
             set: { newValue in
+                if let liveId = activeLiveId {
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["them": newValue])
+                    them = newValue
+                    return
+                }
+
                 guard let gid = selectedGameId else { return }
                 guard let owner = effectiveGameOwnerUserId else { return }
-                //authManager.updateGameThem(gameId: gid, them: newValue)
                 authManager.updateGameThem(ownerUserId: owner, gameId: gid, them: newValue)
 
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
@@ -2573,6 +2608,26 @@ struct PitchTrackerView: View {
         let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
         let persistedOwnerId = defaults.string(forKey: DefaultsKeys.activeGameOwnerUserId)
         let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
+        // ✅ Restore LIVE session if one was active
+        var didRestoreLiveSession = false
+        if let persistedLiveId = defaults.string(forKey: "activeLiveId"),
+           !persistedLiveId.isEmpty {
+
+            didRestoreLiveSession = true
+            print("🔁 Restoring live session:", persistedLiveId)
+
+            self.activeLiveId = persistedLiveId
+            self.startLivePresenceHeartbeat(liveId: persistedLiveId)
+
+            self.isGame = true
+            self.sessionManager.switchMode(to: .game)
+
+            DispatchQueue.main.async {
+                self.startListeningToLiveGame(liveId: persistedLiveId)
+                self.startListeningToLivePitchEvents(liveId: persistedLiveId)
+            }
+        }
+
 
         self.activeGameOwnerUserId = persistedOwnerId
 
@@ -2610,6 +2665,7 @@ struct PitchTrackerView: View {
         // -----------------------------------------
 
         authManager.loadTemplates { loadedTemplates in
+            print("✅ Loaded templates:", loadedTemplates.count)
             self.templates = loadedTemplates
             if self.selectedTemplate == nil {
                 self.selectedTemplate = loadedTemplates.first
@@ -2646,21 +2702,24 @@ struct PitchTrackerView: View {
         DispatchQueue.main.async {
             self.startupPhase = .ready
 
+            // If we restored a live session, do NOT present any initial chooser sheets.
+            if didRestoreLiveSession {
+                return
+            }
+
             // Present settings if that was the last view preference
             if lastViewPref == "settings" {
                 self.presentExclusive(settings: true)
             } else {
                 // If no active restored session, show the normal chooser sheet
-                // (this keeps your previous behavior: "Settings first unless active session")
                 if !persistedIsPractice && persistedGameId == nil {
                     self.presentInitialSheetIfNeeded()
                 }
             }
         }
+
     }
 
-
-    
     private var pitchesFacedOverlay: some View {
         Group {
             if let batterId = pitchesFacedBatterId {
@@ -2768,7 +2827,6 @@ struct PitchTrackerView: View {
         .presentationDragIndicator(.visible)
     }
 
-
     @ViewBuilder private var codeShareSheetView: some View {
         CodeShareSheet(
             initialCode: shareCode,
@@ -2861,16 +2919,29 @@ struct PitchTrackerView: View {
             selectedOpponentBatterId: selectedBatterId?.uuidString,
             selectedPracticeId: selectedPracticeId,
             saveAction: { event in
-                if isGame, let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
-                    authManager.saveGamePitchEvent(ownerUserId: owner, gameId: gid, event: event)
-                } else {
-                    authManager.savePitchEvent(event)
-                }
+                if isGame, let liveId = activeLiveId {
+                    // ✅ Live: save to shared room
+                    let uid = authManager.user?.uid ?? ""
+                    do {
+                        var eventData = try Firestore.Encoder().encode(event)
+                        eventData["createdByUid"] = uid
+                        eventData["timestamp"] = FieldValue.serverTimestamp()
+                        LiveGameService.shared.addLivePitchEvent(liveId: liveId, eventData: eventData)
 
-                if isGame,
-                   let gid = selectedGameId,
-                   let owner = effectiveGameOwnerUserId {
+                        // clear pending in live doc
+                        LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                            "pending": FieldValue.delete()
+                        ])
+                    } catch {
+                        print("❌ encode event failed:", error)
+                    }
+                } else if isGame, let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
+                    // Legacy fallback
+                    authManager.saveGamePitchEvent(ownerUserId: owner, gameId: gid, event: event)
                     authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+                } else {
+                    // Practice
+                    authManager.savePitchEvent(event)
                 }
 
                 writeResultSelection(label: event.location)
@@ -3101,7 +3172,7 @@ struct PitchTrackerView: View {
                       let gid = selectedGameId
                 else { return }
 
-                if phase != .active, sessionActive {
+                if phase != .active, sessionActive, activeLiveId == nil {
                     // ✅ end session in Firestore, don't bother resetting UI while backgrounding
                     endActiveSession(ownerUid: owner, gameId: gid, code: activeSessionCode, resetUI: false)
                 }
@@ -3110,6 +3181,40 @@ struct PitchTrackerView: View {
 
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
                 guard let info = note.userInfo as? [String: Any] else { return }
+
+                if let type = info["type"] as? String, type == "liveGame" {
+                    guard let liveId = info["liveId"] as? String else { return }
+
+                    // 🔴 Clear any stale practice/game UI state before switching
+                    self.resetCallAndResultUIState()
+
+                    // ✅ Set in-memory live session id FIRST (this is what your writes check)
+                    self.activeLiveId = liveId
+                    self.startLivePresenceHeartbeat(liveId: liveId)
+
+                    // (Optional but recommended) If the notification includes ownerUid, set it
+                    if let ownerUid = info["ownerUid"] as? String, !ownerUid.isEmpty {
+                        self.activeGameOwnerUserId = ownerUid
+                    }
+
+                    // Persist
+                    let defaults = UserDefaults.standard
+                    defaults.set(liveId, forKey: "activeLiveId")
+                    defaults.set(false, forKey: "activeIsPractice")
+                    defaults.set("tracker", forKey: DefaultsKeys.lastView)
+
+                    // ✅ Force GAME mode (order matters)
+                    self.suppressNextGameSheet = true
+                    self.isGame = true
+                    self.sessionManager.switchMode(to: .game)
+
+                    // ✅ Start listeners
+                    self.startListeningToLiveGame(liveId: liveId)
+                    self.startListeningToLivePitchEvents(liveId: liveId)
+
+                    return
+                }
+
 
                 // ✅ Handle "choose game" (Launch → Select Game flow)
                 if let type = info["type"] as? String, type == "game" {
@@ -3151,13 +3256,6 @@ struct PitchTrackerView: View {
 
                     return
 
-                }
-
-
-                // ✅ Handle "join via code"
-                if let code = info["code"] as? String {
-                    resolveAndJoinSession(code: code)
-                    return
                 }
             }
             .eraseToAnyView()
@@ -4567,7 +4665,7 @@ private struct CodeShareSheet: View {
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .stroke(Color.white.opacity(0.12), lineWidth: 1)
 
-                            Text(generated.isEmpty ? "Generating…" : generated)
+                            Text(isGenerating ? "Generating…" : (writeErrorMessage?.isEmpty == false ? "Failed" : (generated.isEmpty ? "—" : generated)))
                                 .font(.system(size: 40, weight: .regular, design: .monospaced))
                                 .foregroundStyle(generated.isEmpty ? .secondary : .primary)
                                 .frame(maxWidth: .infinity, minHeight: 100)
@@ -4600,7 +4698,7 @@ private struct CodeShareSheet: View {
                             generated = ""
                         }
                         if tab == 0 {
-                            generateUniqueCodeAndWriteSession()
+                            generateLiveGameAndCode()
                         }
                     }
 
@@ -4642,11 +4740,30 @@ private struct CodeShareSheet: View {
 
 
                         Button {
-                            onConsume(enteredDigits)   // ✅ always 6 digits, no whitespace
-                            dismiss()
+                            let code = enteredDigits
+                            LiveGameService.shared.joinLiveGame(code: code) { result in
+                                DispatchQueue.main.async {
+                                    switch result {
+                                    case .success(let liveId):
+                                        NotificationCenter.default.post(
+                                            name: .gameOrSessionChosen,
+                                            object: nil,
+                                            userInfo: [
+                                                "resolved": true,
+                                                "type": "liveGame",
+                                                "liveId": liveId
+                                            ]
+                                        )
+                                        dismiss()
+                                    case .failure(let err):
+                                        writeErrorMessage = err.localizedDescription
+                                    }
+                                }
+                            }
                         } label: {
                             Label("Join", systemImage: "arrow.right.circle.fill")
                         }
+
                         .buttonStyle(.borderedProminent)
                         .disabled(!isJoinEnabled)
                     }
@@ -4664,7 +4781,7 @@ private struct CodeShareSheet: View {
             // ✅ If user switches tabs while the sheet is open, ensure Generate triggers the write
             .onChange(of: tab) { _, newValue in
                 if newValue == 0 {
-                    generateUniqueCodeAndWriteSession()
+                    generateLiveGameAndCode()
                 }
             }
         }
@@ -4674,111 +4791,61 @@ private struct CodeShareSheet: View {
         String(format: "%06d", Int.random(in: 0...999_999))
     }
 
-    private func generateUniqueCodeAndWriteSession(maxAttempts: Int = 8) {
+    
+
+
+
+
+    @State private var isGenerating: Bool = false
+
+    private func generateLiveGameAndCode() {
         guard tab == 0 else { return }
         guard let hostUid = hostUid, let gameId = gameId else {
             writeErrorMessage = "Select a game first before generating a partner code."
             return
         }
 
+        isGenerating = true
+        print("🧩 Generate tapped | gameId=\(gameId) hostUid=\(hostUid) isGame=\(isGame)")
         writeErrorMessage = nil
-        print("🧩 Generate start | uid=\(Auth.auth().currentUser?.uid ?? "nil") | hostUid=\(hostUid) | gameId=\(gameId)")
+        generated = ""
 
-        func attempt(_ n: Int) {
-            if n >= maxAttempts {
-                writeErrorMessage = "Could not generate a unique code. Please try again."
-                return
-            }
+        // NOTE: hostUid is still passed in from your view.
+        // We’re no longer writing into /users/{hostUid}/... from the participant.
+        LiveGameService.shared.createLiveGameAndJoinCode(
+            ownerGameId: gameId,
+            opponent: opponent ?? "",
+            templateName: nil
+        ) { result in
+            DispatchQueue.main.async {
+                self.isGenerating = false
+                switch result {
+                case .success(let tuple):
+                    print("✅ Generated code=\(tuple.code) liveId=\(tuple.liveId)")
+                    self.generated = tuple.code
 
-            let candidate = buildShareCode()
-            generated = candidate              // ✅ show instantly (no blank)
-            didWriteSessionDoc = false
+                    // Tell the parent to switch into the live session
+                    // We pass the LIVE ID now (not the 6-digit code)
+                    NotificationCenter.default.post(
+                        name: .gameOrSessionChosen,
+                        object: nil,
+                        userInfo: [
+                            "resolved": true,
+                            "type": "liveGame",
+                            "liveId": tuple.liveId
+                        ]
+                    )
 
-            print("🧩 Trying candidate=\(candidate) | uid=\(Auth.auth().currentUser?.uid ?? "nil")")
-
-            writeSessionDocIfNeeded { success, errorMessage in
-                if success { return }
-
-                // Retry collisions / transient failures
-                if let msg = errorMessage {
-                    self.writeErrorMessage = msg
+                case .failure(let err):
+                    print("❌ Generate failed:", err.localizedDescription)
+                    self.writeErrorMessage = err.localizedDescription
                 }
-                attempt(n + 1)
             }
         }
-
-        attempt(0)
     }
 
 
-    private func writeSessionDocIfNeeded(completion: @escaping (_ success: Bool, _ retryMessage: String?) -> Void) {
-        // Only relevant for Generate tab
-        guard tab == 0 else { completion(false, nil); return }
 
-        // Prevent duplicate writes
-        guard !didWriteSessionDoc else { completion(true, nil); return }
-
-        guard let hostUid = hostUid, let gameId = gameId else {
-            writeErrorMessage = "Select a game first before generating a partner code."
-            completion(false, nil)
-            return
-        }
-
-        let code = generated.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard code.count == 6 && code.allSatisfy({ $0.isNumber }) else {
-            writeErrorMessage = "Invalid code generated."
-            completion(false, nil)
-            return
-        }
-
-        let currentUid = Auth.auth().currentUser?.uid ?? "nil"
-        print("🧩 Writing session requested | code=\(code) | currentUid=\(currentUid) | hostUid=\(hostUid) | gameId=\(gameId)")
-
-        let db = Firestore.firestore()
-
-        let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60)) // 2 hours
-
-        let data: [String: Any] = [
-            "hostUid": hostUid,
-            "ownerUserId": hostUid,
-            "type": "game",
-            "gameId": gameId,
-            "opponent": self.opponent ?? "",
-            "createdAt": FieldValue.serverTimestamp(),
-            "expiresAt": expires
-        ]
-
-        // ✅ Write immediately (no availability read)
-        db.collection("sessions").document(code).setData(data, merge: true) { error in
-            if let error = error {
-                self.didWriteSessionDoc = false
-                print("❌ session write failed:", error)
-
-                // Most common failure: doc exists for someone else → permission denied.
-                // Tell generator to retry quickly with a new code.
-                completion(false, "Trying another code…")
-                return
-            }
-
-            self.didWriteSessionDoc = true
-            self.writeErrorMessage = nil
-
-            // Non-blocking marker on game doc (optional)
-            let gameRef = db.collection("users")
-                .document(hostUid)
-                .collection("games")
-                .document(gameId)
-
-            gameRef.setData([
-                "sessionActive": true,
-                "activeSessionCode": code,
-                "sessionExpiresAt": expires
-            ], merge: true)
-
-            print("✅ session active for code:", code)
-            completion(true, nil)
-        }
-    }
 
 
 }

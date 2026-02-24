@@ -771,25 +771,23 @@ struct TemplateEditorView: View {
                 }
                 .padding(.horizontal)
                 .task {
-                    // Load latest template by ID
-                    authManager.loadTemplate(id: templateID.uuidString) { loaded in
-                        guard let t = loaded else { return }
-                        // Basic fields
-                        DispatchQueue.main.async {
-                            self.name = t.name
-                            self.codeAssignments = t.codeAssignments
-                            self.selectedPitches = Self.loadActivePitches(for: t.id, fallback: t.pitches)
-                            self.customPitches = t.pitches.filter { !pitchOrder.contains($0) }
-                            self.initialPitchGridHeaders = t.pitchGridHeaders
-                            self.initialPitchGridValues = t.pitchGridValues
-                            // Update location grids via coordinator
-                            if t.strikeTopRow.count == 3 { self.topRowCoordinator.strikeTopRow = t.strikeTopRow }
-                            if t.ballsTopRow.count == 3 { self.topRowCoordinator.ballsTopRow = t.ballsTopRow }
-                            if t.strikeRows.count == 4 { self.topRowCoordinator.strikeRows = t.strikeRows }
-                            if t.ballsRows.count == 4 { self.topRowCoordinator.ballsRows = t.ballsRows }
-                        }
-                    }
+                    let loaded = await authManager.loadTemplate(id: templateID.uuidString)
+                    guard let t = loaded else { return }
+
+                    // already on main actor because the async loader returns via MainActor.run
+                    self.name = t.name
+                    self.codeAssignments = t.codeAssignments
+                    self.selectedPitches = Self.loadActivePitches(for: t.id, fallback: t.pitches)
+                    self.customPitches = t.pitches.filter { !pitchOrder.contains($0) }
+                    self.initialPitchGridHeaders = t.pitchGridHeaders
+                    self.initialPitchGridValues = t.pitchGridValues
+
+                    if t.strikeTopRow.count == 3 { self.topRowCoordinator.strikeTopRow = t.strikeTopRow }
+                    if t.ballsTopRow.count == 3 { self.topRowCoordinator.ballsTopRow = t.ballsTopRow }
+                    if t.strikeRows.count == 4 { self.topRowCoordinator.strikeRows = t.strikeRows }
+                    if t.ballsRows.count == 4 { self.topRowCoordinator.ballsRows = t.ballsRows }
                 }
+
             }
             .interactiveDismissDisabled(true)
             .toolbar {

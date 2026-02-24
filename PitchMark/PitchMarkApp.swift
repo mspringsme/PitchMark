@@ -7,7 +7,6 @@
 
 import SwiftUI
 import FirebaseCore
-import Firebase
 import FirebaseAppCheck
 
 struct RootView: View {
@@ -44,38 +43,45 @@ struct SplashView: View {
     }
 }
 
-
-final class AppCheckDebugProviderFactory: NSObject, AppCheckProviderFactory {
-    func createProvider(with app: FirebaseApp) -> AppCheckProvider? {
-        AppCheckDebugProvider(app: app)
-    }
-}
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
 
+        // ✅ Set provider factory BEFORE configuring Firebase
         #if DEBUG
         AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
         #endif
 
+        // ✅ Configure Firebase BEFORE touching AppCheck.appCheck()
         FirebaseApp.configure()
+
+        FirebaseConfiguration.shared.setLoggerLevel(.warning)
+
+        // ✅ Now it's safe to request an App Check token (prints debug token)
+        #if DEBUG
+        AppCheck.appCheck().token(forcingRefresh: true) { token, error in
+            if let error = error {
+                print("❌ AppCheck token error:", error.localizedDescription)
+            } else {
+                print("✅ AppCheck token:", token?.token ?? "nil")
+            }
+        }
+        #endif
+
         return true
     }
 }
 
+
 @main
 struct PitchMarkApp: App {
-    @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
     @StateObject private var authManager = AuthManager()
-    @StateObject private var codeResolver = CodeSessionResolver()
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(authManager)
-                .onAppear {
-                    // Start listening for code-only notifications
-                    codeResolver.startObserving()
-                }
         }
     }
 }
