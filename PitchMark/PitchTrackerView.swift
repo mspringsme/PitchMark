@@ -129,6 +129,7 @@ private extension View {
 }
 
 struct PitchTrackerView: View {
+    @State private var uiConnected: Bool = false
     @State private var showSelectBatterOverlay: Bool = false
     @State private var showCodeAssignmentSheet = false
     @State private var pitcherName: String = ""
@@ -255,8 +256,7 @@ struct PitchTrackerView: View {
 
     @State private var startupPhase: StartupPhase = .launching
     @State private var isRestoringState = false
-    @State private var activeSessionCode: String? = nil
-    @State private var sessionActive: Bool = false
+
     // ✅ Live-room mirrored scoreboard fields (used when activeLiveId != nil)
     @State private var balls: Int = 0
     @State private var strikes: Int = 0
@@ -265,62 +265,10 @@ struct PitchTrackerView: View {
     @State private var walks: Int = 0
     @State private var us: Int = 0
     @State private var them: Int = 0
-
-    @State private var sessionExpiresAt: Date? = nil
-
-    @State private var showEndSessionConfirm = false
     @State private var heartbeatTimer: Timer? = nil
-    @State private var partnerConnected: Bool = false
-    @State private var presenceTimer: Timer? = nil
     @State private var isJoiningSession: Bool = false
-    @State private var lastNonOwnerParticipantCount: Int = 0
-    @State private var lastPresenceWriteAt: Date? = nil
-    @State private var presenceTargetOwner: String = ""
-    @State private var presenceTargetGame: String = ""
     @State private var pendingRestoreGameId: String? = nil
 
-    private func startPresenceHeartbeat() {
-        stopPresenceHeartbeat()
-
-        // Fire immediately + every 15s
-        presenceTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
-            writePresenceHeartbeat()
-        }
-        writePresenceHeartbeat()
-    }
-
-    private func stopPresenceHeartbeat() {
-        presenceTimer?.invalidate()
-        presenceTimer = nil
-    }
-
-    private func writePresenceHeartbeat() {
-        guard isGame,
-              let gid = selectedGameId,
-              let owner = effectiveGameOwnerUserId,
-              !owner.isEmpty
-        else { return }
-
-        let uid = authManager.user?.uid ?? ""
-        guard !uid.isEmpty else { return }
-
-        // Throttle (extra safety)
-        if let last = lastPresenceWriteAt, Date().timeIntervalSince(last) < 8 { return }
-        lastPresenceWriteAt = Date()
-
-        let ref = Firestore.firestore()
-            .collection("users").document(owner)
-            .collection("games").document(gid)
-
-        ref.updateData([
-            "participants.\(uid)": true,
-            "participantsLastSeen.\(uid)": Timestamp(date: Date())
-        ]) { err in
-            if let err { print("❌ heartbeat update failed:", err) }
-        }
-    }
-
-    
     private func dismissAllTopLevelSheets() {
         showSettings = false
         showGameSheet = false
@@ -362,43 +310,7 @@ struct PitchTrackerView: View {
 
         // Otherwise: nothing needed; user can use PitchTrackerView immediately.
     }
-
-    private func writePresenceOnce(ownerUid: String, gameId: String) {
-        guard let myUid = authManager.user?.uid, !myUid.isEmpty else { return }
-
-        let gameRef = Firestore.firestore()
-            .collection("users").document(ownerUid)
-            .collection("games").document(gameId)
-
-        gameRef.updateData([
-            "participantsLastSeen.\(myUid)": FieldValue.serverTimestamp()
-        ]) { err in
-            if let err = err {
-                print("❌ presence heartbeat write failed:", err.localizedDescription)
-            }
-        }
-    }
-
-    private func startPresenceHeartbeatIfNeeded(ownerUid: String, gameId: String) {
-        // ✅ Don’t restart if already targeting the same game
-        if presenceTargetOwner == ownerUid && presenceTargetGame == gameId && presenceTimer != nil {
-            return
-        }
-
-        presenceTargetOwner = ownerUid
-        presenceTargetGame = gameId
-
-        stopPresenceHeartbeat()
-
-        // write immediately so UI doesn't wait 15s
-        writePresenceOnce(ownerUid: ownerUid, gameId: gameId)
-
-        presenceTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
-            writePresenceOnce(ownerUid: ownerUid, gameId: gameId)
-        }
-    }
-
-    
+ 
     private func hydrateChosenGameUI(ownerUid: String, gameId: String) {
         // ✅ FAST PATH: use local cached games immediately (no network)
         if let local = self.games.first(where: { ($0.id ?? "") == gameId }) {
@@ -478,7 +390,6 @@ struct PitchTrackerView: View {
             }
         }
     }
-
 
     private var effectiveGameOwnerUserId: String? {
         if let host = activeGameOwnerUserId, !host.isEmpty { return host }
@@ -739,6 +650,7 @@ struct PitchTrackerView: View {
         }
     }
     private func startListeningToActiveGame() {
+        if activeLiveId != nil && !isOwnerForActiveGame { return }
         gameListener?.remove()
         gameListener = nil
 
@@ -825,6 +737,7 @@ struct PitchTrackerView: View {
     @State private var liveListener: ListenerRegistration? = nil
     @State private var activeLiveId: String? = nil
     @State private var didHydrateLineupFromLive: Bool = false
+    @State private var participantsListener: ListenerRegistration? = nil
 
     private func startListeningToLiveGame(liveId: String) {
         liveListener?.remove()
@@ -832,6 +745,7 @@ struct PitchTrackerView: View {
 
         activeLiveId = liveId
         startListeningToLivePitchEvents(liveId: liveId)
+        startListeningToLiveParticipants(liveId: liveId)
 
         let ref = Firestore.firestore().collection("liveGames").document(liveId)
         liveListener = ref.addSnapshotListener { snap, err in
@@ -885,7 +799,6 @@ struct PitchTrackerView: View {
 
 
                 let status = (data["status"] as? String) ?? "active"
-                self.sessionActive = (status == "active")
 
                 // ✅ keep owner identity in sync (needed for isOwnerForActiveGame)
                 if let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty {
@@ -939,8 +852,18 @@ struct PitchTrackerView: View {
                 }
 
 
-                // ✅ Apply pending/result ONLY while active
-                if self.sessionActive {
+                // ✅ Apply pending/result ONLY while LIVE is active
+                let liveStatus = (data["status"] as? String) ?? "active"
+                let notExpired: Bool = {
+                    if let exp = data["expiresAt"] as? Timestamp {
+                        return exp.dateValue() > Date()
+                    }
+                    return true
+                }()
+
+                let liveIsActive = (activeLiveId != nil) && (liveStatus == "active") && notExpired
+
+                if liveIsActive {
                     if self.isOwnerForActiveGame {
                         // Owner: dismiss CalledPitchView when participant clears pending (i.e., after saving)
                         self.syncOwnerCallStateFromLiveData(data)
@@ -950,18 +873,49 @@ struct PitchTrackerView: View {
                     }
                     self.applyResultSelectionFromLiveData(data)
                 } else {
-
-                    // clear stuck UI if ended
+                    // clear stuck UI if ended/expired
                     self.pendingResultLabel = nil
                     self.calledPitch = nil
                     self.activeCalledPitchId = nil
                     self.isRecordingResult = false
                 }
+
             }
         }
     }
-    
+    private func startListeningToLiveParticipants(liveId: String) {
+        participantsListener?.remove()
+        participantsListener = nil
 
+        let ref = Firestore.firestore()
+            .collection("liveGames").document(liveId)
+            .collection("participants")
+
+        participantsListener = ref.addSnapshotListener { snap, err in
+            if let err {
+                print("❌ Live participants listener error:", err.localizedDescription)
+                DispatchQueue.main.async { self.uiConnected = false }
+                return
+            }
+
+            let docs = snap?.documents ?? []
+            let myUid = self.authManager.user?.uid ?? ""
+            let now = Date()
+            let onlineWindow: TimeInterval = 40 // > 25s heartbeat
+
+            // Connected = we see at least one *other* device recently
+            let otherRecent = docs.contains { d in
+                let uid = d.documentID
+                guard uid != myUid else { return false }
+                guard let ts = d.data()["lastSeenAt"] as? Timestamp else { return true }
+                return now.timeIntervalSince(ts.dateValue()) <= onlineWindow
+            }
+
+            DispatchQueue.main.async {
+                self.uiConnected = (self.activeLiveId != nil) && otherRecent
+            }
+        }
+    }
     private func resetCallAndResultUIState() {
         lastTappedPosition = nil
         calledPitch = nil
@@ -976,7 +930,6 @@ struct PitchTrackerView: View {
         actualLocationRecorded = nil
     }
 
-
     private func disconnectFromGame(notifyHost: Bool = true) {
         if let liveId = activeLiveId {
             // stop listeners
@@ -987,6 +940,9 @@ struct PitchTrackerView: View {
 
             // stop heartbeat
             stopHeartbeat()
+            participantsListener?.remove()
+            participantsListener = nil
+            uiConnected = false
 
             // clear presence doc (optional)
             let uid = authManager.user?.uid ?? ""
@@ -1075,73 +1031,6 @@ struct PitchTrackerView: View {
 
         // fire once immediately so presence shows up right away
         heartbeatTimer?.fire()
-    }
-
-
-    private func endActiveSession(ownerUid: String, gameId: String, code: String?, resetUI: Bool = true) {
-        if activeLiveId != nil { return }
-        stopHeartbeat()
-
-        let db = Firestore.firestore()
-        let gameRef = db.collection("users").document(ownerUid).collection("games").document(gameId)
-
-        // 1) Mark session off
-        gameRef.setData([
-            "sessionActive": false,
-            "activeSessionCode": FieldValue.delete(),
-            "sessionExpiresAt": FieldValue.delete()
-        ], merge: true)
-
-
-        // ✅ 3) Clear participants immediately (simple + reliable)
-        gameRef.setData([
-            "participants": [:]
-        ], merge: true)
-
-        guard resetUI else { return }
-
-        DispatchQueue.main.async {
-            showParticipantOverlay = false
-            showConfirmSheet = false
-            calledPitch = nil
-            activeCalledPitchId = nil
-            pendingResultLabel = nil
-            isRecordingResult = false
-            selectedPitch = ""
-            selectedLocation = ""
-            lastTappedPosition = nil
-            resultVisualState = nil
-            actualLocationRecorded = nil
-            isStrikeSwinging = false
-            isWildPitch = false
-            isPassedBall = false
-            isBall = false
-            selectedOutcome = nil
-            selectedDescriptor = nil
-        }
-    }
-
-
-
-    private func handleSessionStatusFromGameDoc(isOwner: Bool) {
-        // Auto reset ONLY for participant
-        guard !isOwner else { return }
-        guard !isJoiningSession else { return }
-
-
-        // If owner ended session OR cleared code => disconnect/reset participant UI
-        if sessionActive == false || activeSessionCode == nil {
-            print("🔌 Participant: session ended by owner")
-            disconnectFromGame(notifyHost: false)
-            return
-        }
-
-        // If expired => disconnect/reset participant UI
-        if let expiresAt = sessionExpiresAt, expiresAt < Date() {
-            print("🔌 Participant: session expired (owner likely left)")
-            disconnectFromGame(notifyHost: false)
-            return
-        }
     }
 
     // MARK: - Template Version Indicator
@@ -2031,27 +1920,6 @@ struct PitchTrackerView: View {
 
             Spacer()
             
-
-            // ✅ Session connect/disconnect button (owner only)
-            if isGame && isOwnerForActiveGame {
-                Button {
-                    // If a partner is currently connected, this button is "disconnect partner"
-                    if partnerConnected {
-                        showEndSessionConfirm = true
-                    } else {
-                        // No partner connected -> start / share code flow
-                        showCodeShareSheet = true
-                    }
-                } label: {
-                    Image(systemName: partnerConnected ? "waveform.badge.checkmark" : "waveform.badge.xmark")
-                        .font(.system(size: 26, weight: .semibold))
-                        .foregroundStyle(partnerConnected ? .green : .red)
-                        .frame(width: 44, height: 44)
-
-                }
-            }
-
-
             Button(action: {
                 showSettings = true
             }) {
@@ -2489,7 +2357,7 @@ struct PitchTrackerView: View {
         } label: {
             Image(systemName: "key.sensor.tag.radiowaves.left.and.right.fill")
                 .imageScale(.large)
-                .foregroundStyle(.primary)
+                .foregroundStyle(uiConnected ? .green : .red)
                 .frame(width: 40, height: 32)
                 .background(.ultraThinMaterial)
                 .clipShape(Capsule())
@@ -3188,22 +3056,6 @@ struct PitchTrackerView: View {
                     progressRefreshToken = UUID()
                 }
             }
-            .onChange(of: scenePhase) { _, phase in
-                guard let gid = selectedGameId,
-                      let owner = effectiveGameOwnerUserId
-                else { return }
-
-                switch phase {
-                case .active:
-                    if sessionActive {
-                        startPresenceHeartbeatIfNeeded(ownerUid: owner, gameId: gid)
-                    }
-                default:
-                    // stop timer when background/inactive
-                    stopPresenceHeartbeat()
-                }
-            }
-
             .eraseToAnyView()
 
         let v2 = v1
@@ -3255,38 +3107,6 @@ struct PitchTrackerView: View {
             } message: {
                 Text(codeShareErrorMessage)
             }
-            .confirmationDialog(
-                "Disconnect partner?",
-                isPresented: $showEndSessionConfirm,
-                titleVisibility: .visible
-            ) {
-                // ✅ THIS is where your Button("Disconnect"... ) goes
-                Button("Disconnect", role: .destructive) {
-                    guard let owner = effectiveGameOwnerUserId,
-                          let gid = selectedGameId
-                    else { return }
-
-                    let codeToClose = activeSessionCode  // ✅ capture BEFORE clearing
-
-                    // ✅ immediate UI flip on owner
-                    sessionActive = false
-                    partnerConnected = false
-                    showParticipantOverlay = false
-                    activeSessionCode = nil
-                    sessionExpiresAt = nil
-                    showEndSessionConfirm = false
-
-                    endActiveSession(ownerUid: owner, gameId: gid, code: codeToClose)
-                }
-
-
-
-                Button("Cancel", role: .cancel) {
-                    showEndSessionConfirm = false
-                }
-            } message: {
-                Text("This will end the share session and reset your partner’s device.")
-            }
             .onAppear {
                 handleInitialAppear()
             }
@@ -3297,20 +3117,6 @@ struct PitchTrackerView: View {
                     handleInitialAppear()
                 }
             }
-
-            .onChange(of: scenePhase) { _, phase in
-                guard isGame, isOwnerForActiveGame else { return }
-                guard let owner = effectiveGameOwnerUserId,
-                      let gid = selectedGameId
-                else { return }
-
-                if phase != .active, sessionActive, activeLiveId == nil {
-                    // ✅ end session in Firestore, don't bother resetting UI while backgrounding
-                    endActiveSession(ownerUid: owner, gameId: gid, code: activeSessionCode, resetUI: false)
-                }
-            }
-
-
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
                 guard let info = note.userInfo as? [String: Any] else { return }
 
@@ -3379,8 +3185,6 @@ struct PitchTrackerView: View {
                     defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
                     defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
                     defaults.set("tracker", forKey: DefaultsKeys.lastView)
-
-                    self.lastNonOwnerParticipantCount = 0
 
                     // ✅ Force GAME mode (order matters!)
                     self.suppressNextGameSheet = true
