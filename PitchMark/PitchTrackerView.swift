@@ -602,6 +602,29 @@ struct PitchTrackerView: View {
             // self.lastResultSelectionLabel = label
         }
     }
+    /// Owner-side: keep CalledPitchView in sync with the shared live doc.
+    /// When the participant saves, they delete `pending` from /liveGames/{liveId},
+    /// so the owner should dismiss their CalledPitchView automatically.
+    private func syncOwnerCallStateFromLiveData(_ data: [String: Any]) {
+        guard isGame, isOwnerForActiveGame else { return }
+
+        let pending = data["pending"] as? [String: Any]
+        let isActive = (pending?["isActive"] as? Bool) == true
+        let pendingId = pending?["id"] as? String
+
+        // If pending is gone (or inactive), the participant has saved/canceled — dismiss owner's call UI.
+        if !isActive {
+            if calledPitch != nil || activeCalledPitchId != nil || isRecordingResult || pendingResultLabel != nil {
+                resetCallAndResultUIState()
+            }
+            return
+        }
+
+        // If live doc is pointing at a different callId than we're showing, reset to avoid a stuck overlay.
+        if let pendingId, let activeCalledPitchId, pendingId != activeCalledPitchId {
+            resetCallAndResultUIState()
+        }
+    }
 
     func applyPendingFromGame(_ updated: Game) {
         // Only relevant in game mode
@@ -801,6 +824,7 @@ struct PitchTrackerView: View {
 
     @State private var liveListener: ListenerRegistration? = nil
     @State private var activeLiveId: String? = nil
+    @State private var didHydrateLineupFromLive: Bool = false
 
     private func startListeningToLiveGame(liveId: String) {
         liveListener?.remove()
@@ -829,14 +853,36 @@ struct PitchTrackerView: View {
                 self.walks   = data["walks"]   as? Int ?? self.walks
                 self.us      = data["us"]      as? Int ?? self.us
                 self.them    = data["them"]    as? Int ?? self.them
+                // ✅ FIX: restore opponent label for the Game button in LIVE mode
+                if let opp = data["opponent"] as? String, !opp.isEmpty {
+                    self.opponentName = opp
+                    UserDefaults.standard.set(opp, forKey: "activeOpponentName")
+                }
 
                 if let sideRaw = data["batterSide"] as? String,
                    let parsed = BatterSide(rawValue: sideRaw) {
                     self.batterSide = parsed
                 }
 
-                self.selectedBatterId = data["selectedBatterId"] as? UUID
-                self.selectedBatterJersey = data["selectedBatterJersey"] as? String
+                // ✅ selected batter comes over Firestore as STRING uuid
+                if let idStr = data["selectedBatterId"] as? String, let uuid = UUID(uuidString: idStr) {
+                    self.selectedBatterId = uuid
+                } else if data.keys.contains("selectedBatterId") == false {
+                    // Field missing: keep existing selection (prevents flicker / needing 2 taps)
+                    // (Do nothing)
+                } else {
+                    // Field explicitly present but not valid → clear
+                    self.selectedBatterId = nil
+                }
+
+                if let jersey = data["selectedBatterJersey"] as? String {
+                    self.selectedBatterJersey = jersey
+                } else if data.keys.contains("selectedBatterJersey") == false {
+                    // keep existing to avoid UI flicker
+                } else {
+                    self.selectedBatterJersey = nil
+                }
+
 
                 let status = (data["status"] as? String) ?? "active"
                 self.sessionActive = (status == "active")
@@ -845,14 +891,66 @@ struct PitchTrackerView: View {
                 if let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty {
                     self.activeGameOwnerUserId = ownerUid
                 }
+                // ✅ LIVE LINEUP: Prefer jerseyNumbers/batterIds directly from live doc
+                if let jerseys = data["jerseyNumbers"] as? [String], !jerseys.isEmpty {
+                    let ids = (data["batterIds"] as? [String]) ?? []
+
+                    // Build cells every snapshot so owner instantly reflects participant changes
+                    if ids.count == jerseys.count, !ids.isEmpty {
+                        self.jerseyCells = zip(ids, jerseys).map { (idStr, num) in
+                            JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                        }
+                    } else {
+                        // Safe fallback if ids missing/mismatched
+                        self.jerseyCells = jerseys.map { JerseyCell(id: UUID(), jerseyNumber: $0) }
+                    }
+
+                    self.didHydrateLineupFromLive = true
+                }
+
+                // ✅ Keep selectedGameId in sync for other downstream UI, and provide fallback hydration
+                if let ownerGameId = data["ownerGameId"] as? String, !ownerGameId.isEmpty {
+
+                    // Keep selectedGameId in sync (useful for other game-based actions)
+                    if self.selectedGameId != ownerGameId {
+                        self.selectedGameId = ownerGameId
+
+                        // Persist so relaunch restores correctly
+                        let defaults = UserDefaults.standard
+                        defaults.set(ownerGameId, forKey: DefaultsKeys.activeGameId)
+                        if let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty {
+                            defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
+                        }
+                        defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+                        defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                    }
+
+                    // Fallback: if live doc DOESN’T have lineup yet, hydrate from owner's game doc
+                    if (data["jerseyNumbers"] as? [String])?.isEmpty ?? true {
+                        if !self.didHydrateLineupFromLive || self.jerseyCells.isEmpty {
+                            let ownerUid = (data["ownerUid"] as? String) ?? (self.effectiveGameOwnerUserId ?? "")
+                            if !ownerUid.isEmpty {
+                                self.didHydrateLineupFromLive = true
+                                self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: ownerGameId)
+                                self.startListeningToActiveGame()
+                            }
+                        }
+                    }
+                }
+
 
                 // ✅ Apply pending/result ONLY while active
                 if self.sessionActive {
-                    if !self.isOwnerForActiveGame || !self.showConfirmSheet {
+                    if self.isOwnerForActiveGame {
+                        // Owner: dismiss CalledPitchView when participant clears pending (i.e., after saving)
+                        self.syncOwnerCallStateFromLiveData(data)
+                    } else if !self.showConfirmSheet {
+                        // Participant: reflect owner's pending pitch, but don't clobber UI mid-confirm
                         self.applyPendingFromLiveData(data)
                     }
                     self.applyResultSelectionFromLiveData(data)
                 } else {
+
                     // clear stuck UI if ended
                     self.pendingResultLabel = nil
                     self.calledPitch = nil
@@ -862,7 +960,7 @@ struct PitchTrackerView: View {
             }
         }
     }
-
+    
 
     private func resetCallAndResultUIState() {
         lastTappedPosition = nil
@@ -2062,6 +2160,7 @@ struct PitchTrackerView: View {
                                 showAddJerseyPopover: $showAddJerseyPopover,
                                 selectedGameId: selectedGameId,
                                 effectiveGameOwnerUserId: effectiveGameOwnerUserId,
+                                activeLiveId: activeLiveId,
                                 pitchesFacedBatterId: $pitchesFacedBatterId,
                                 isReordering: $isReorderingMode
                             )
@@ -2090,40 +2189,58 @@ struct PitchTrackerView: View {
                                     Button("Save") {
                                         let trimmed = newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
                                         guard !trimmed.isEmpty else { return }
+
                                         let normalized = normalizeJersey(trimmed) ?? trimmed
 
-                                        if let editing = editingCell, let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
-                                            // Edit existing cell
+                                        // 1) Apply local change (edit vs add)
+                                        if let editing = editingCell,
+                                           let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
                                             jerseyCells[idx].jerseyNumber = normalized
                                         } else {
-                                            // Add new cell
+                                            // Add new cell (keep UUID stable across devices by storing batterIds)
                                             let newCell = JerseyCell(jerseyNumber: normalized)
                                             jerseyCells.append(newCell)
                                         }
 
-                                        // Persist lineup if in a selected game
-                                        if let gameId = selectedGameId,
-                                           let owner = effectiveGameOwnerUserId {
-                                            authManager.updateGameLineup(
-                                                ownerUserId: owner,
-                                                gameId: gameId,
-                                                jerseyNumbers: jerseyCells.map { $0.jerseyNumber },
-                                                batterIds: jerseyCells.map { $0.id.uuidString }
-                                            )
+                                        // 2) Persist lineup (single source of truth)
+                                        func persistLineup(jerseyCells: [JerseyCell]) {
+                                            let jerseys = jerseyCells.map { $0.jerseyNumber }
+                                            let batterIds = jerseyCells.map { $0.id.uuidString }
 
-                                        } else {
-                                            print("⚠️ Cannot update lineup: missing selectedGameId or effectiveGameOwnerUserId")
+                                            if let liveId = activeLiveId, !liveId.isEmpty {
+                                                // LIVE session: write to liveGames so owner + participant both update
+                                                LiveGameService.shared.updateLiveFields(
+                                                    liveId: liveId,
+                                                    fields: [
+                                                        "jerseyNumbers": jerseys,
+                                                        "batterIds": batterIds
+                                                    ]
+                                                )
+                                            } else if let gameId = selectedGameId,
+                                                      let owner = effectiveGameOwnerUserId,
+                                                      !owner.isEmpty {
+                                                // Non-live: update owner's game doc
+                                                authManager.updateGameLineup(
+                                                    ownerUserId: owner,
+                                                    gameId: gameId,
+                                                    jerseyNumbers: jerseys,
+                                                    batterIds: batterIds
+                                                )
+                                            } else {
+                                                print("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                                            }
                                         }
 
+                                        persistLineup(jerseyCells: jerseyCells)
 
-
-                                        // Reset UI state
+                                        // 3) Reset UI state
                                         showAddJerseyPopover = false
                                         jerseyInputFocused = false
                                         newJerseyNumber = ""
                                         editingCell = nil
                                     }
                                     .disabled(newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
                                 }
                             }
                         }
@@ -2621,6 +2738,10 @@ struct PitchTrackerView: View {
 
             self.isGame = true
             self.sessionManager.switchMode(to: .game)
+            // ✅ Show the last known opponent immediately while live doc loads
+            if let cachedOpp = defaults.string(forKey: "activeOpponentName"), !cachedOpp.isEmpty {
+                self.opponentName = cachedOpp
+            }
 
             DispatchQueue.main.async {
                 self.startListeningToLiveGame(liveId: persistedLiveId)
@@ -2800,6 +2921,8 @@ struct PitchTrackerView: View {
             },
             onChoose: { gameId in
                 let ownerUid = authManager.user?.uid ?? ""
+
+                // ✅ Runtime state
                 activeGameOwnerUserId = ownerUid
                 selectedGameId = gameId
 
@@ -2807,11 +2930,20 @@ struct PitchTrackerView: View {
                 sessionManager.switchMode(to: .game)
                 suppressNextGameSheet = true
 
+                // ✅ Persist "active game" so relaunch restores correctly
+                let defaults = UserDefaults.standard
+                defaults.set(gameId, forKey: DefaultsKeys.activeGameId)
+                defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
+                defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+                defaults.removeObject(forKey: DefaultsKeys.activePracticeId)   // optional safety
+                defaults.set("tracker", forKey: DefaultsKeys.lastView)
+
                 hydrateChosenGameUI(ownerUid: ownerUid, gameId: gameId)
                 startListeningToActiveGame()
 
                 showGameSheet = false
             },
+
             onCancel: {
                 showGameSheet = false
             },
@@ -3202,6 +3334,11 @@ struct PitchTrackerView: View {
                     defaults.set(liveId, forKey: "activeLiveId")
                     defaults.set(false, forKey: "activeIsPractice")
                     defaults.set("tracker", forKey: DefaultsKeys.lastView)
+                    // ✅ Persist opponent label if provided
+                    if let opp = info["opponent"] as? String, !opp.isEmpty {
+                        self.opponentName = opp
+                        defaults.set(opp, forKey: "activeOpponentName")
+                    }
 
                     // ✅ Force GAME mode (order matters)
                     self.suppressNextGameSheet = true
@@ -3236,12 +3373,14 @@ struct PitchTrackerView: View {
                     // ✅ Set IDs first
                     self.activeGameOwnerUserId = ownerUid
                     self.selectedGameId = gid
-                    
-                    self.lastNonOwnerParticipantCount = 0
+                    // ✅ Persist active game selection
+                    let defaults = UserDefaults.standard
+                    defaults.set(gid, forKey: DefaultsKeys.activeGameId)
+                    defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
+                    defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+                    defaults.set("tracker", forKey: DefaultsKeys.lastView)
 
-                    // ✅ Set IDs first
-                    self.activeGameOwnerUserId = ownerUid
-                    self.selectedGameId = gid
+                    self.lastNonOwnerParticipantCount = 0
 
                     // ✅ Force GAME mode (order matters!)
                     self.suppressNextGameSheet = true
@@ -4047,6 +4186,7 @@ struct JerseyRow: View {
     @Binding var showAddJerseyPopover: Bool
     let selectedGameId: String?
     let effectiveGameOwnerUserId: String?
+    let activeLiveId: String?
     @Binding var pitchesFacedBatterId: UUID?
     @Binding var isReordering: Bool
 
@@ -4140,6 +4280,16 @@ struct JerseyRow: View {
                                     name: .jerseyOrderChanged,
                                     object: jerseyCells.map { $0.jerseyNumber }
                                 )
+                                let jerseys = jerseyCells.map { $0.jerseyNumber }
+                                let batterIds = jerseyCells.map { $0.id.uuidString }
+
+                                if let liveId = activeLiveId, !liveId.isEmpty {
+                                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                                        "jerseyNumbers": jerseys,
+                                        "batterIds": batterIds
+                                    ])
+                                }
+
                             }
                         } label: {
                             Label("Move Up", systemImage: "arrow.up")
@@ -4165,6 +4315,16 @@ struct JerseyRow: View {
                                     name: .jerseyOrderChanged,
                                     object: jerseyCells.map { $0.jerseyNumber }
                                 )
+                                let jerseys = jerseyCells.map { $0.jerseyNumber }
+                                let batterIds = jerseyCells.map { $0.id.uuidString }
+
+                                if let liveId = activeLiveId, !liveId.isEmpty {
+                                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                                        "jerseyNumbers": jerseys,
+                                        "batterIds": batterIds
+                                    ])
+                                }
+
                             }
                         } label: {
                             Label("Move Down", systemImage: "arrow.down")
@@ -4201,19 +4361,57 @@ struct JerseyRow: View {
                     titleVisibility: .visible
                 ) {
                     Button("Delete", role: .destructive) {
-                        if let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) {
-                            jerseyCells.remove(at: idx)
-                            if let gameId = selectedGameId {
-                                if let gameId = selectedGameId {
-                                    
-                                }
-                            }
-                            if selectedBatterId == cell.id {
-                                selectedBatterId = nil
-                            }
+                        guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else {
+                            showActionsSheet = false
+                            return
                         }
+
+                        // 1) Update local UI immediately
+                        let removedId = jerseyCells[idx].id
+                        jerseyCells.remove(at: idx)
+
+                        if selectedBatterId == removedId {
+                            selectedBatterId = nil
+                            pitchesFacedBatterId = nil
+                        }
+
+                        // 2) Persist lineup so BOTH devices update
+                        let jerseys = jerseyCells.map { $0.jerseyNumber }
+                        let batterIds = jerseyCells.map { $0.id.uuidString }
+
+                        if let liveId = activeLiveId, !liveId.isEmpty {
+                            // LIVE: write to liveGames (two-way)
+                            LiveGameService.shared.updateLiveFields(
+                                liveId: liveId,
+                                fields: [
+                                    "jerseyNumbers": jerseys,
+                                    "batterIds": batterIds
+                                ]
+                            )
+
+                            // Optional: if you also want to clear live selected batter when deleted
+                            // (only needed if you store selectedBatterId on live doc)
+                            // LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                            //     "selectedBatterId": FieldValue.delete(),
+                            //     "selectedBatterJersey": FieldValue.delete()
+                            // ])
+                        } else if let gameId = selectedGameId,
+                                  let owner = effectiveGameOwnerUserId,
+                                  !owner.isEmpty {
+                            // NON-LIVE: update owner's game doc
+                            authManager.updateGameLineup(
+                                ownerUserId: owner,
+                                gameId: gameId,
+                                jerseyNumbers: jerseys,
+                                batterIds: batterIds
+                            )
+                        } else {
+                            print("⚠️ Cannot persist delete: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                        }
+
                         showActionsSheet = false
                     }
+
                     Button("Cancel", role: .cancel) { }
                 } message: {
                     Text("This will remove this batter from the lineup.")
@@ -4221,8 +4419,24 @@ struct JerseyRow: View {
             }
     }
     private func syncSelection(_ nextSelection: UUID?) {
+        // ✅ optimistic UI
         selectedBatterId = nextSelection
 
+        // ✅ LIVE MODE: write to liveGames so both devices reflect selection
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            var fields: [String: Any] = [:]
+            if let nextSelection {
+                fields["selectedBatterId"] = nextSelection.uuidString
+                fields["selectedBatterJersey"] = cell.jerseyNumber
+            } else {
+                fields["selectedBatterId"] = FieldValue.delete()
+                fields["selectedBatterJersey"] = FieldValue.delete()
+            }
+            LiveGameService.shared.updateLiveFields(liveId: liveId, fields: fields)
+            return
+        }
+
+        // ✅ NON-LIVE: write to owner's game doc as before
         guard
             let gameId = selectedGameId,
             let owner = effectiveGameOwnerUserId,
@@ -4239,6 +4453,7 @@ struct JerseyRow: View {
             selectedBatterJersey: nextSelection == nil ? nil : cell.jerseyNumber
         )
     }
+
 
     private func selectJersey(_ cell: JerseyCell) {
         // ✅ Optimistic UI

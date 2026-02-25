@@ -5,10 +5,11 @@
 //  Created by Mark Springer on 2/22/26.
 //
 
-
 import Foundation
 import FirebaseAuth
 import FirebaseFirestore
+
+// MARK: - Firestore Models
 
 struct JoinCodeDoc: Codable {
     let liveId: String
@@ -29,7 +30,7 @@ struct LiveGameDoc: Codable {
 
     var createdAt: Timestamp?
     var expiresAt: Timestamp?
-    var status: String // "active" | "ended"
+    var status: String  // "active" | "ended"
 
     // --- Shared live state (mirror what your UI needs) ---
     var balls: Int
@@ -40,14 +41,13 @@ struct LiveGameDoc: Codable {
     var us: Int
     var them: Int
 
-    var batterSide: String?              // "L" / "R" (or your enum rawValue)
+    var batterSide: String?              // "L" / "R"
     var batterSideUpdatedAt: Timestamp?
     var batterSideUpdatedBy: String?
 
     var selectedBatterId: String?
     var selectedBatterJersey: String?
 
-    // “pending” / “resultSelection” can stay if your UI needs them
     var pending: [String: AnyCodable]?
     var resultSelection: String?
 }
@@ -55,6 +55,7 @@ struct LiveGameDoc: Codable {
 struct AnyCodable: Codable {
     let value: Any
     init(_ value: Any) { self.value = value }
+
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if let s = try? c.decode(String.self) { value = s; return }
@@ -65,6 +66,7 @@ struct AnyCodable: Codable {
         if let a = try? c.decode([AnyCodable].self) { value = a; return }
         value = NSNull()
     }
+
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         switch value {
@@ -79,13 +81,99 @@ struct AnyCodable: Codable {
     }
 }
 
+// MARK: - LiveGameService
+
 final class LiveGameService {
     static let shared = LiveGameService()
     private init() {}
 
     private let db = Firestore.firestore()
+    private let logPrefix = "🧩 LiveGameService"
+
+    // MARK: Firestore Paths / Keys
+
+    private enum Col {
+        static let liveGames = "liveGames"
+        static let joinCodes = "joinCodes"
+        static let participants = "participants"
+        static let pitchEvents = "pitchEvents"
+        static let users = "users"
+        static let games = "games"
+    }
+
+    private enum Key {
+        static let liveId = "liveId"
+        static let ownerUid = "ownerUid"
+        static let ownerGameId = "ownerGameId"
+        static let opponent = "opponent"
+        static let templateName = "templateName"
+
+        static let createdAt = "createdAt"
+        static let expiresAt = "expiresAt"
+        static let status = "status"
+
+        static let balls = "balls"
+        static let strikes = "strikes"
+        static let inning = "inning"
+        static let hits = "hits"
+        static let walks = "walks"
+        static let us = "us"
+        static let them = "them"
+
+        static let uid = "uid"
+        static let joinedAt = "joinedAt"
+        static let lastSeenAt = "lastSeenAt"
+    }
+
+    private enum LiveStatus {
+        static let active = "active"
+        static let ended = "ended"
+    }
+
+    // MARK: Errors (typed, but still convertible to NSError if needed)
+
+    private enum LiveGameError: LocalizedError {
+        case notSignedIn
+        case timeout
+        case joinCodeNotFound
+        case joinCodeExpired
+        case malformedJoinCode
+        case couldNotGenerateUniqueCode
+
+        var errorDescription: String? {
+            switch self {
+            case .notSignedIn:
+                return "Not signed in"
+            case .timeout:
+                return "Timed out generating code. Check network/App Check and try again."
+            case .joinCodeNotFound:
+                return "Code not found"
+            case .joinCodeExpired:
+                return "Code expired"
+            case .malformedJoinCode:
+                return "Malformed code document"
+            case .couldNotGenerateUniqueCode:
+                return "Could not generate a unique code. Try again."
+            }
+        }
+
+        var nsError: NSError {
+            let (domain, code): (String, Int) = {
+                switch self {
+                case .notSignedIn: return ("Auth", 401)
+                case .timeout: return ("LiveGame", 408)
+                case .joinCodeNotFound: return ("JoinCode", 404)
+                case .joinCodeExpired: return ("JoinCode", 410)
+                case .malformedJoinCode: return ("JoinCode", 422)
+                case .couldNotGenerateUniqueCode: return ("JoinCode", 500)
+                }
+            }()
+            return NSError(domain: domain, code: code, userInfo: [NSLocalizedDescriptionKey: errorDescription ?? "Error"])
+        }
+    }
 
     // MARK: - Owner: create live room + join code
+
     func createLiveGameAndJoinCode(
         ownerGameId: String,
         opponent: String,
@@ -93,71 +181,66 @@ final class LiveGameService {
         completion: @escaping (Result<(liveId: String, code: String), Error>) -> Void
     ) {
         guard let ownerUid = Auth.auth().currentUser?.uid else {
-            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            completion(.failure(LiveGameError.notSignedIn.nsError))
             return
         }
 
-        let liveRef = db.collection("liveGames").document()
+        let liveRef = db.collection(Col.liveGames).document()
         let liveId = liveRef.documentID
-
         let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60))
 
-        let liveData: [String: Any] = [
-            "ownerUid": ownerUid,
-            "ownerGameId": ownerGameId,
-            "opponent": opponent,
-            "templateName": templateName as Any,
-            "createdAt": FieldValue.serverTimestamp(),
-            "expiresAt": expires,
-            "status": "active",
-            "balls": 0,
-            "strikes": 0,
-            "inning": 1,
-            "hits": 0,
-            "walks": 0,
-            "us": 0,
-            "them": 0
-        ]
+        let liveData = makeLiveGamePayload(
+            ownerUid: ownerUid,
+            ownerGameId: ownerGameId,
+            opponent: opponent,
+            templateName: templateName,
+            expires: expires
+        )
 
-        print("🧩 createLiveGameAndJoinCode: writing liveGames/\(liveId) as uid=\(ownerUid)")
+        logCreateLiveStart(liveId: liveId, ownerUid: ownerUid, liveRef: liveRef)
+
+        let finishOnce = finishOnceWrapper(completion)
 
         // ✅ Hard timeout so the UI never hangs forever
-        var finished = false
-        let timeoutWork = DispatchWorkItem {
-            guard !finished else { return }
-            finished = true
-            print("❌ createLiveGameAndJoinCode TIMEOUT after 20s (no Firestore callback) liveId=\(liveId)")
-            completion(.failure(NSError(domain: "LiveGame", code: 408, userInfo: [NSLocalizedDescriptionKey: "Timed out generating code. Check network/App Check and try again."])))
+        let gate = CompletionGate()
+        let timeoutWork = DispatchWorkItem { [weak gate] in
+            guard let gate else { return }
+            guard gate.tryFinish() else { return }
+            print("❌ \(self.logPrefix) createLiveGameAndJoinCode TIMEOUT after 20s (no Firestore callback) liveId=\(liveId)")
+            finishOnce(.failure(LiveGameError.timeout.nsError))
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeoutWork)
-        print("🧩 About to write:", liveRef.path)
-        print("🧩 joinCodes collection:", db.collection("joinCodes").path)
-        print("🧩 joinCodes ownerUid:", ownerUid)
-
 
         liveRef.setData(liveData, merge: false) { [weak self] err in
-            // ✅ Always log when callback fires (even after timeout)
-            print("🧩 liveGames setData callback fired for \(liveRef.path) finished=\(finished) err=\(err?.localizedDescription ?? "nil")")
+            guard let self else { return }
 
-            if finished {
-                print("⚠️ Callback arrived AFTER timeout; ignoring because UI already failed.")
+            self.logLiveSetDataCallback(liveRef: liveRef, timedOutOrFinished: gate.isFinished, err: err)
+
+            // If timeout already fired, do nothing.
+            guard gate.tryFinish() else {
+                print("⚠️ \(self.logPrefix) Callback arrived AFTER timeout; ignoring.")
                 return
             }
 
-            finished = true
             timeoutWork.cancel()
 
             if let err {
-                print("❌ liveGames setData failed:", err.localizedDescription)
-                completion(.failure(err))
+                print("❌ \(self.logPrefix) liveGames setData failed:", err.localizedDescription)
+                finishOnce(.failure(err))
                 return
             }
 
-            print("✅ liveGames setData succeeded liveId=\(liveId). Creating join code…")
-            self?.createUniqueJoinCode(liveId: liveId, ownerUid: ownerUid, expiresAt: expires, completion: completion)
+            print("✅ \(self.logPrefix) liveGames setData succeeded liveId=\(liveId). Creating join code…")
+            self.createUniqueJoinCode(
+                liveId: liveId,
+                ownerUid: ownerUid,
+                expiresAt: expires,
+                completion: finishOnce
+            )
         }
     }
 
+    // MARK: - Join Code Generation (transaction)
 
     private func createUniqueJoinCode(
         liveId: String,
@@ -170,12 +253,12 @@ final class LiveGameService {
 
         func attempt(_ n: Int) {
             if n >= maxAttempts {
-                completion(.failure(NSError(domain: "JoinCode", code: 500, userInfo: [NSLocalizedDescriptionKey: "Could not generate a unique code. Try again."])))
+                completion(.failure(LiveGameError.couldNotGenerateUniqueCode.nsError))
                 return
             }
 
             let code = makeCode()
-            let codeRef = db.collection("joinCodes").document(code)
+            let codeRef = db.collection(Col.joinCodes).document(code)
 
             db.runTransaction({ txn, errPtr -> Any? in
                 do {
@@ -185,10 +268,10 @@ final class LiveGameService {
                         return nil
                     }
                     txn.setData([
-                        "liveId": liveId,
-                        "ownerUid": ownerUid,
-                        "expiresAt": expiresAt,
-                        "createdAt": FieldValue.serverTimestamp()
+                        Key.liveId: liveId,
+                        Key.ownerUid: ownerUid,
+                        Key.expiresAt: expiresAt,
+                        Key.createdAt: FieldValue.serverTimestamp()
                     ], forDocument: codeRef, merge: false)
                     return nil
                 } catch let e as NSError {
@@ -197,9 +280,9 @@ final class LiveGameService {
                 }
             }) { _, error in
                 if let nsError = error as NSError? {
-                    print("❌ joinCodes transaction failed domain=\(nsError.domain) code=\(nsError.code) msg=\(nsError.localizedDescription)")
+                    print("❌ \(self.logPrefix) joinCodes transaction failed domain=\(nsError.domain) code=\(nsError.code) msg=\(nsError.localizedDescription)")
 
-                    if nsError.domain == "JoinCode" && nsError.code == 409 {
+                    if nsError.domain == "JoinCode", nsError.code == 409 {
                         attempt(n + 1)
                         return
                     }
@@ -208,42 +291,46 @@ final class LiveGameService {
                     return
                 }
 
-                print("✅ joinCodes transaction succeeded code=\(code) liveId=\(liveId)")
+                print("✅ \(self.logPrefix) joinCodes transaction succeeded code=\(code) liveId=\(liveId)")
                 completion(.success((liveId: liveId, code: code)))
             }
         }
+
         attempt(0)
     }
 
     // MARK: - Participant: resolve code + join live room
+
     func joinLiveGame(
         code: String,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         guard let uid = Auth.auth().currentUser?.uid else {
-            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            completion(.failure(LiveGameError.notSignedIn.nsError))
             return
         }
 
-        let codeRef = db.collection("joinCodes").document(code)
+        let codeRef = db.collection(Col.joinCodes).document(code)
         codeRef.getDocument { [weak self] snap, err in
+            guard let self else { return }
+
             if let err { completion(.failure(err)); return }
             guard let snap, snap.exists, let data = snap.data() else {
-                completion(.failure(NSError(domain: "JoinCode", code: 404, userInfo: [NSLocalizedDescriptionKey: "Code not found"])))
+                completion(.failure(LiveGameError.joinCodeNotFound.nsError))
                 return
             }
 
-            if let expiresAt = data["expiresAt"] as? Timestamp, expiresAt.dateValue() < Date() {
-                completion(.failure(NSError(domain: "JoinCode", code: 410, userInfo: [NSLocalizedDescriptionKey: "Code expired"])))
+            if let expiresAt = data[Key.expiresAt] as? Timestamp, expiresAt.dateValue() < Date() {
+                completion(.failure(LiveGameError.joinCodeExpired.nsError))
                 return
             }
 
-            guard let liveId = data["liveId"] as? String else {
-                completion(.failure(NSError(domain: "JoinCode", code: 422, userInfo: [NSLocalizedDescriptionKey: "Malformed code document"])))
+            guard let liveId = data[Key.liveId] as? String else {
+                completion(.failure(LiveGameError.malformedJoinCode.nsError))
                 return
             }
 
-            self?.upsertPresence(liveId: liveId, uid: uid) { result in
+            self.upsertPresence(liveId: liveId, uid: uid) { result in
                 switch result {
                 case .success:
                     completion(.success(liveId))
@@ -254,31 +341,34 @@ final class LiveGameService {
         }
     }
 
+    // MARK: - Presence
+
     private func upsertPresence(
         liveId: String,
         uid: String,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        let presenceRef = db.collection("liveGames").document(liveId)
-            .collection("participants").document(uid)
+        let presenceRef = db.collection(Col.liveGames).document(liveId)
+            .collection(Col.participants).document(uid)
 
         presenceRef.setData([
-            "uid": uid,
-            "joinedAt": FieldValue.serverTimestamp(),
-            "lastSeenAt": FieldValue.serverTimestamp()
+            Key.uid: uid,
+            Key.joinedAt: FieldValue.serverTimestamp(),
+            Key.lastSeenAt: FieldValue.serverTimestamp()
         ], merge: true) { err in
             if let err { completion(.failure(err)); return }
             completion(.success(()))
         }
     }
 
-    // MARK: - Shared writes
     func heartbeatPresence(liveId: String) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        let presenceRef = db.collection("liveGames").document(liveId)
-            .collection("participants").document(uid)
-        presenceRef.setData(["lastSeenAt": FieldValue.serverTimestamp()], merge: true)
+        let presenceRef = db.collection(Col.liveGames).document(liveId)
+            .collection(Col.participants).document(uid)
+        presenceRef.setData([Key.lastSeenAt: FieldValue.serverTimestamp()], merge: true)
     }
+
+    // MARK: - Shared writes
 
     func updateLiveFields(
         liveId: String,
@@ -286,13 +376,10 @@ final class LiveGameService {
         completion: ((Error?) -> Void)? = nil
     ) {
         let keys = Array(fields.keys).sorted()
-        print("📤 updateLiveFields → liveGames/\(liveId)")
+        print("📤 updateLiveFields → \(Col.liveGames)/\(liveId)")
         print("📤 keys:", keys)
 
-        // Optional: if you want to see values (can be noisy)
-        // print("📤 payload:", fields)
-
-        db.collection("liveGames").document(liveId).updateData(fields) { err in
+        db.collection(Col.liveGames).document(liveId).updateData(fields) { err in
             if let err {
                 print("❌ updateLiveFields failed:", err.localizedDescription)
             } else {
@@ -301,11 +388,141 @@ final class LiveGameService {
             completion?(err)
         }
     }
+    
+    // MARK: - Lineup writes (LIVE)
+    func addLiveJersey(
+        liveId: String,
+        jerseyNumber: String,
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        let liveRef = db.collection("liveGames").document(liveId)
 
+        db.runTransaction({ txn, errPtr -> Any? in
+            do {
+                let snap = try txn.getDocument(liveRef)
+                guard snap.exists, let data = snap.data() else { return nil }
 
-    func addLivePitchEvent(liveId: String, eventData: [String: Any], completion: ((Error?) -> Void)? = nil) {
-        db.collection("liveGames").document(liveId)
-            .collection("pitchEvents").document()
+                var jerseys = (data["jerseyNumbers"] as? [String]) ?? []
+                var batterIds = (data["batterIds"] as? [String]) ?? []
+
+                // normalize
+                let trimmed = jerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+
+                // prevent duplicates (optional)
+                if jerseys.contains(trimmed) {
+                    errPtr?.pointee = NSError(domain: "LiveGame", code: 409,
+                                              userInfo: [NSLocalizedDescriptionKey: "Jersey already exists"])
+                    return nil
+                }
+
+                jerseys.append(trimmed)
+                batterIds.append(UUID().uuidString)
+
+                txn.updateData([
+                    "jerseyNumbers": jerseys,
+                    "batterIds": batterIds
+                ], forDocument: liveRef)
+
+                return nil
+            } catch let e as NSError {
+                errPtr?.pointee = e
+                return nil
+            }
+        }) { _, err in
+            if let err {
+                print("❌ addLiveJersey failed:", err.localizedDescription)
+            } else {
+                print("✅ addLiveJersey success jersey=\(jerseyNumber)")
+            }
+            completion?(err)
+        }
+    }
+
+    func addLivePitchEvent(
+        liveId: String,
+        eventData: [String: Any],
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        db.collection(Col.liveGames).document(liveId)
+            .collection(Col.pitchEvents).document()
             .setData(eventData, merge: false, completion: completion)
+    }
+
+    // MARK: - Payload / Logging Helpers
+
+    private func makeLiveGamePayload(
+        ownerUid: String,
+        ownerGameId: String,
+        opponent: String,
+        templateName: String?,
+        expires: Timestamp
+    ) -> [String: Any] {
+        [
+            Key.ownerUid: ownerUid,
+            Key.ownerGameId: ownerGameId,
+            Key.opponent: opponent,
+            Key.templateName: templateName as Any,
+            Key.createdAt: FieldValue.serverTimestamp(),
+            Key.expiresAt: expires,
+            Key.status: LiveStatus.active,
+            Key.balls: 0,
+            Key.strikes: 0,
+            Key.inning: 1,
+            Key.hits: 0,
+            Key.walks: 0,
+            Key.us: 0,
+            Key.them: 0
+        ]
+    }
+
+    private func logCreateLiveStart(liveId: String, ownerUid: String, liveRef: DocumentReference) {
+        print("\(logPrefix) createLiveGameAndJoinCode: writing \(Col.liveGames)/\(liveId) as uid=\(ownerUid)")
+        print("\(logPrefix) About to write:", liveRef.path)
+        print("\(logPrefix) joinCodes collection:", db.collection(Col.joinCodes).path)
+        print("\(logPrefix) joinCodes ownerUid:", ownerUid)
+    }
+
+    private func logLiveSetDataCallback(liveRef: DocumentReference, timedOutOrFinished: Bool, err: Error?) {
+        print("\(logPrefix) liveGames setData callback fired for \(liveRef.path) finished=\(timedOutOrFinished) err=\(err?.localizedDescription ?? "nil")")
+    }
+    
+    
+}
+
+// MARK: - Small Utilities (completion gating)
+
+/// Ensures a closure is only invoked once (thread-safe).
+private func finishOnceWrapper<T>(
+    _ completion: @escaping (Result<T, Error>) -> Void
+) -> (Result<T, Error>) -> Void {
+    let lock = NSLock()
+    var didFinish = false
+    return { result in
+        lock.lock()
+        defer { lock.unlock() }
+        guard !didFinish else { return }
+        didFinish = true
+        completion(result)
+    }
+}
+
+/// Used to guard racey paths like timeout + Firestore callback.
+private final class CompletionGate {
+    private let lock = NSLock()
+    private var finished = false
+
+    var isFinished: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return finished
+    }
+
+    /// Returns true if it successfully marked finished (i.e. first finisher)
+    func tryFinish() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if finished { return false }
+        finished = true
+        return true
     }
 }
