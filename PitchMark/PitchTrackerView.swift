@@ -838,14 +838,17 @@ struct PitchTrackerView: View {
                         defaults.set("tracker", forKey: DefaultsKeys.lastView)
                     }
 
-                    // Fallback: if live doc DOESN’T have lineup yet, hydrate from owner's game doc
-                    if (data["jerseyNumbers"] as? [String])?.isEmpty ?? true {
-                        if !self.didHydrateLineupFromLive || self.jerseyCells.isEmpty {
-                            let ownerUid = (data["ownerUid"] as? String) ?? (self.effectiveGameOwnerUserId ?? "")
-                            if !ownerUid.isEmpty {
-                                self.didHydrateLineupFromLive = true
-                                self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: ownerGameId)
-                                self.startListeningToActiveGame()
+                    // Fallback: ONLY the OWNER may hydrate lineup from the owner's private game doc.
+                    // Participants cannot read /users/{owner}/games/{gid}, so this would leave them empty.
+                    if self.isOwnerForActiveGame {
+                        if (data["jerseyNumbers"] as? [String])?.isEmpty ?? true {
+                            if !self.didHydrateLineupFromLive || self.jerseyCells.isEmpty {
+                                let ownerUid = (data["ownerUid"] as? String) ?? (self.effectiveGameOwnerUserId ?? "")
+                                if !ownerUid.isEmpty {
+                                    self.didHydrateLineupFromLive = true
+                                    self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: ownerGameId)
+                                    self.startListeningToActiveGame()
+                                }
                             }
                         }
                     }

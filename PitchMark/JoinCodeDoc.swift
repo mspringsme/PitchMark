@@ -123,6 +123,9 @@ final class LiveGameService {
         static let uid = "uid"
         static let joinedAt = "joinedAt"
         static let lastSeenAt = "lastSeenAt"
+        
+        static let jerseyNumbers = "jerseyNumbers"
+        static let batterIds = "batterIds"
     }
 
     private enum LiveStatus {
@@ -224,13 +227,10 @@ final class LiveGameService {
 
             timeoutWork.cancel()
 
-            if let err {
-                print("❌ \(self.logPrefix) liveGames setData failed:", err.localizedDescription)
-                finishOnce(.failure(err))
-                return
-            }
+            print("✅ \(self.logPrefix) liveGames setData succeeded liveId=\(liveId). Seeding lineup…")
+            self.seedLiveLineupFromOwnerGame(ownerUid: ownerUid, ownerGameId: ownerGameId, liveId: liveId)
 
-            print("✅ \(self.logPrefix) liveGames setData succeeded liveId=\(liveId). Creating join code…")
+            print("✅ \(self.logPrefix) Creating join code…")
             self.createUniqueJoinCode(
                 liveId: liveId,
                 ownerUid: ownerUid,
@@ -238,8 +238,53 @@ final class LiveGameService {
                 completion: finishOnce
             )
         }
+        
     }
+    private func seedLiveLineupFromOwnerGame(ownerUid: String, ownerGameId: String, liveId: String) {
+        let gameRef = db.collection(Col.users).document(ownerUid)
+            .collection(Col.games).document(ownerGameId)
 
+        gameRef.getDocument { [weak self] snap, err in
+            guard let self else { return }
+
+            if let err {
+                print("⚠️ \(self.logPrefix) seed lineup: failed to read owner game doc:", err.localizedDescription)
+                return
+            }
+            guard let data = snap?.data() else {
+                print("⚠️ \(self.logPrefix) seed lineup: owner game doc missing data")
+                return
+            }
+
+            let jerseys = (data["jerseyNumbers"] as? [String]) ?? []
+            let batterIds = (data["batterIds"] as? [String]) ?? []
+
+            // Only seed if there is something to seed
+            guard !jerseys.isEmpty else {
+                print("ℹ️ \(self.logPrefix) seed lineup: owner game has no jerseys; skipping")
+                return
+            }
+
+            // If batterIds missing/mismatched, generate stable ids so participants can select reliably
+            let finalIds: [String]
+            if batterIds.count == jerseys.count, !batterIds.isEmpty {
+                finalIds = batterIds
+            } else {
+                finalIds = jerseys.map { _ in UUID().uuidString }
+            }
+
+            self.db.collection(Col.liveGames).document(liveId).updateData([
+                "jerseyNumbers": jerseys,
+                "batterIds": finalIds
+            ]) { err in
+                if let err {
+                    print("⚠️ \(self.logPrefix) seed lineup: update live doc failed:", err.localizedDescription)
+                } else {
+                    print("✅ \(self.logPrefix) seed lineup: copied \(jerseys.count) jerseys into liveGames/\(liveId)")
+                }
+            }
+        }
+    }
     // MARK: - Join Code Generation (transaction)
 
     private func createUniqueJoinCode(
@@ -466,13 +511,19 @@ final class LiveGameService {
             Key.createdAt: FieldValue.serverTimestamp(),
             Key.expiresAt: expires,
             Key.status: LiveStatus.active,
+
+            // Scoreboard defaults
             Key.balls: 0,
             Key.strikes: 0,
             Key.inning: 1,
             Key.hits: 0,
             Key.walks: 0,
             Key.us: 0,
-            Key.them: 0
+            Key.them: 0,
+
+            // ✅ Lineup defaults (critical so participant never sees "missing fields")
+            "jerseyNumbers": [],
+            "batterIds": []
         ]
     }
 
