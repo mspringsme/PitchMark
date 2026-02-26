@@ -27,7 +27,8 @@ struct LiveGameDoc: Codable {
 
     var opponent: String
     var templateName: String?
-
+    var templateId: String?
+    
     var createdAt: Timestamp?
     var expiresAt: Timestamp?
     var status: String  // "active" | "ended"
@@ -107,7 +108,7 @@ final class LiveGameService {
         static let ownerGameId = "ownerGameId"
         static let opponent = "opponent"
         static let templateName = "templateName"
-
+        static let templateId = "templateId"
         static let createdAt = "createdAt"
         static let expiresAt = "expiresAt"
         static let status = "status"
@@ -180,6 +181,7 @@ final class LiveGameService {
     func createLiveGameAndJoinCode(
         ownerGameId: String,
         opponent: String,
+        templateId: String?,
         templateName: String?,
         completion: @escaping (Result<(liveId: String, code: String), Error>) -> Void
     ) {
@@ -196,6 +198,7 @@ final class LiveGameService {
             ownerUid: ownerUid,
             ownerGameId: ownerGameId,
             opponent: opponent,
+            templateId: templateId,
             templateName: templateName,
             expires: expires
         )
@@ -500,6 +503,7 @@ final class LiveGameService {
         ownerUid: String,
         ownerGameId: String,
         opponent: String,
+        templateId: String?,
         templateName: String?,
         expires: Timestamp
     ) -> [String: Any] {
@@ -507,7 +511,11 @@ final class LiveGameService {
             Key.ownerUid: ownerUid,
             Key.ownerGameId: ownerGameId,
             Key.opponent: opponent,
+
+            // ✅ Template flow
+            Key.templateId: templateId as Any,
             Key.templateName: templateName as Any,
+
             Key.createdAt: FieldValue.serverTimestamp(),
             Key.expiresAt: expires,
             Key.status: LiveStatus.active,
@@ -521,7 +529,7 @@ final class LiveGameService {
             Key.us: 0,
             Key.them: 0,
 
-            // ✅ Lineup defaults (critical so participant never sees "missing fields")
+            // Lineup defaults (keep this)
             "jerseyNumbers": [],
             "batterIds": []
         ]

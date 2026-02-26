@@ -814,7 +814,26 @@ struct PitchTrackerView: View {
                    let parsed = BatterSide(rawValue: sideRaw) {
                     self.batterSide = parsed
                 }
+                // ✅ LIVE TEMPLATE FLOW: apply owner's template on participant (and keep owner consistent too)
+                let liveTemplateId = data["templateId"] as? String
+                let liveTemplateName = data["templateName"] as? String
 
+                if let tid = liveTemplateId, !tid.isEmpty {
+                    if self.selectedTemplate?.id.uuidString != tid {
+                        if let t = self.templates.first(where: { $0.id.uuidString == tid }) {
+                            self.applyTemplate(t)
+                        } else {
+                            // templates not loaded yet or participant doesn't have it
+                            print("⚠️ Live templateId not found locally:", tid, "name:", liveTemplateName ?? "nil")
+                        }
+                    }
+                } else if let tname = liveTemplateName, !tname.isEmpty {
+                    // Fallback match by name
+                    if self.selectedTemplate?.name != tname,
+                       let t = self.templates.first(where: { $0.name == tname }) {
+                        self.applyTemplate(t)
+                    }
+                }
                 // ✅ selected batter comes over Firestore as STRING uuid
                 if let idStr = data["selectedBatterId"] as? String, let uuid = UUID(uuidString: idStr) {
                     self.selectedBatterId = uuid
@@ -2920,7 +2939,9 @@ struct PitchTrackerView: View {
             hostUid: authManager.user?.uid,
             gameId: selectedGameId,
             opponent: opponentName,
-            isGame: isGame
+            isGame: isGame,
+            templateId: selectedTemplate?.id.uuidString,
+            templateName: selectedTemplate?.name
         ) { code in
             consumeShareCode(code)
         }
@@ -3010,8 +3031,12 @@ struct PitchTrackerView: View {
                     let uid = authManager.user?.uid ?? ""
                     do {
                         var eventData = try Firestore.Encoder().encode(event)
+                        // Firestore.Encoder already encodes event.timestamp correctly (as a Timestamp).
                         eventData["createdByUid"] = uid
-                        eventData["timestamp"] = FieldValue.serverTimestamp()
+
+                        // ✅ OPTIONAL: keep a server-side write time in a separate field (doesn't break decoding)
+                        eventData["serverTimestamp"] = FieldValue.serverTimestamp()
+
                         LiveGameService.shared.addLivePitchEvent(liveId: liveId, eventData: eventData)
 
                         // clear pending in live doc
@@ -4713,7 +4738,8 @@ private struct CodeShareSheet: View {
     let gameId: String?
     let opponent: String?
     let isGame: Bool
-
+    let templateId: String?
+    let templateName: String?
     let onConsume: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var tab: Int // 0 generate, 1 enter
@@ -4730,6 +4756,8 @@ private struct CodeShareSheet: View {
         gameId: String?,
         opponent: String?,
         isGame: Bool,
+        templateId: String?,
+        templateName: String?,
         onConsume: @escaping (String) -> Void
     ) {
         self.initialCode = initialCode
@@ -4739,6 +4767,8 @@ private struct CodeShareSheet: View {
         self.opponent = opponent
         self.isGame = isGame
         self.onConsume = onConsume
+        self.templateId = templateId
+        self.templateName = templateName
 
         let effectiveTab: Int = {
             // If we don't have enough info to generate a code, always open on Enter Code
@@ -4901,31 +4931,25 @@ private struct CodeShareSheet: View {
         String(format: "%06d", Int.random(in: 0...999_999))
     }
 
-    
-
-
-
-
     @State private var isGenerating: Bool = false
 
     private func generateLiveGameAndCode() {
         guard tab == 0 else { return }
-        guard let hostUid = hostUid, let gameId = gameId else {
+        guard let gameId = gameId else {
             writeErrorMessage = "Select a game first before generating a partner code."
             return
         }
 
         isGenerating = true
-        print("🧩 Generate tapped | gameId=\(gameId) hostUid=\(hostUid) isGame=\(isGame)")
+        print("🧩 Generate tapped | gameId=\(gameId) isGame=\(isGame)")
         writeErrorMessage = nil
         generated = ""
 
-        // NOTE: hostUid is still passed in from your view.
-        // We’re no longer writing into /users/{hostUid}/... from the participant.
         LiveGameService.shared.createLiveGameAndJoinCode(
             ownerGameId: gameId,
             opponent: opponent ?? "",
-            templateName: nil
+            templateId: self.templateId,
+            templateName: self.templateName
         ) { result in
             DispatchQueue.main.async {
                 self.isGenerating = false
