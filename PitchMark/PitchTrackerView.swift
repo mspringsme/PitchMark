@@ -129,6 +129,7 @@ private extension View {
 }
 
 struct PitchTrackerView: View {
+    @State private var mirroredLivePitchEventIds: Set<String> = []
     @State private var didAutoDismissCodeSheetForLiveId: String? = nil
     @State private var uiConnected: Bool = false
     @State private var showSelectBatterOverlay: Bool = false
@@ -625,7 +626,7 @@ struct PitchTrackerView: View {
     private func clearResultSelection() {
         writeResultSelection(label: "")
     }
-    private func startListeningToLivePitchEvents(liveId: String) {
+    func startListeningToLivePitchEvents(liveId: String) {
         gamePitchEventsListener?.remove()
         gamePitchEventsListener = nil
 
@@ -641,12 +642,46 @@ struct PitchTrackerView: View {
             }
             guard let docs = snap?.documents else { return }
 
+            // Decode for UI (existing behavior)
             let events: [PitchEvent] = docs.compactMap { doc in
                 try? doc.data(as: PitchEvent.self)
             }
 
             DispatchQueue.main.async {
                 self.gamePitchEvents = events
+
+                // ✅ OWNER ONLY: mirror live events into owner’s real game doc
+                guard self.isOwnerForActiveGame,
+                      let ownerUid = self.activeGameOwnerUserId, !ownerUid.isEmpty,
+                      let gameId = self.selectedGameId, !gameId.isEmpty
+                else { return }
+
+                for doc in docs {
+                    let liveEventId = doc.documentID
+                    guard !self.mirroredLivePitchEventIds.contains(liveEventId) else { continue }
+                    self.mirroredLivePitchEventIds.insert(liveEventId)
+
+                    var data = doc.data()
+
+                    // Ensure required fields exist for game storage / rules
+                    data["gameId"] = gameId
+                    if data["createdByUid"] == nil {
+                        data["createdByUid"] = ownerUid
+                    }
+
+                    let dst = Firestore.firestore()
+                        .collection("users").document(ownerUid)
+                        .collection("games").document(gameId)
+                        .collection("pitchEvents").document(liveEventId)
+
+                    dst.setData(data, merge: false) { err in
+                        if let err {
+                            print("❌ mirror live pitchEvent failed:", err.localizedDescription)
+                        } else {
+                            print("✅ mirrored live pitchEvent → users/\(ownerUid)/games/\(gameId)/pitchEvents/\(liveEventId)")
+                        }
+                    }
+                }
             }
         }
     }
@@ -741,6 +776,7 @@ struct PitchTrackerView: View {
     @State private var participantsListener: ListenerRegistration? = nil
 
     private func startListeningToLiveGame(liveId: String) {
+        mirroredLivePitchEventIds.removeAll()
         liveListener?.remove()
         liveListener = nil
 
@@ -1026,7 +1062,8 @@ struct PitchTrackerView: View {
         jerseyCells = []
         showParticipantOverlay = false
         lastObservedResultSelectionId = nil
-
+        mirroredLivePitchEventIds.removeAll()
+        
         // Persist leaving game
         let defaults = UserDefaults.standard
         defaults.removeObject(forKey: DefaultsKeys.activeGameId)
@@ -2996,14 +3033,19 @@ struct PitchTrackerView: View {
                 writeResultSelection(label: event.location)
 
                 sessionManager.incrementCount()
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    pitchEvents.append(event)
-                }
-                authManager.loadPitchEvents { events in
-                    self.pitchEvents = events
-                }
-                if overlayTab == .progress && sessionManager.currentMode == .practice {
-                    progressRefreshToken = UUID()
+
+                // ✅ LIVE: do NOT append to local pitchEvents (prevents “saved on participant” feeling).
+                // Owner will show cards from live listener; practice/legacy continue using pitchEvents.
+                if activeLiveId == nil {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        pitchEvents.append(event)
+                    }
+                    authManager.loadPitchEvents { events in
+                        self.pitchEvents = events
+                    }
+                    if overlayTab == .progress && sessionManager.currentMode == .practice {
+                        progressRefreshToken = UUID()
+                    }
                 }
 
                 resultVisualState = event.location
