@@ -857,6 +857,13 @@ struct PitchTrackerView: View {
 
                 // ✅ Apply pending/result ONLY while LIVE is active
                 let liveStatus = (data["status"] as? String) ?? "active"
+                if liveStatus != "active" {
+                    print("🔌 Live session ended remotely → disconnecting")
+
+                    self.uiConnected = false
+                    self.disconnectFromGame(notifyHost: false)
+                    return
+                }
                 let notExpired: Bool = {
                     if let exp = data["expiresAt"] as? Timestamp {
                         return exp.dateValue() > Date()
@@ -946,7 +953,7 @@ struct PitchTrackerView: View {
             participantsListener?.remove()
             participantsListener = nil
             uiConnected = false
-
+            didHydrateLineupFromLive = false
             // clear presence doc (optional)
             let uid = authManager.user?.uid ?? ""
             if !uid.isEmpty {
@@ -2378,10 +2385,26 @@ struct PitchTrackerView: View {
                 codeShareInitialTab = 0
                 showCodeShareSheet = true
             }
+
             Button("Enter Code") {
                 codeShareInitialTab = 1
                 showCodeShareSheet = true
             }
+
+            // ✅ Disconnect (both sides) — only show when currently linked
+            if let liveId = activeLiveId, !liveId.isEmpty {
+                Button(isOwnerForActiveGame ? "Disconnect Participant" : "Disconnect from Host", role: .destructive) {
+                    if let liveId = activeLiveId, !liveId.isEmpty {
+                        LiveGameService.shared.updateLiveFields(
+                            liveId: liveId,
+                            fields: ["status": "ended"]
+                        )
+                    }
+                    disconnectFromGame(notifyHost: false)
+                    showCodeShareModePicker = false
+                }
+            }
+
             Button("Cancel", role: .cancel) { }
         }
     }
