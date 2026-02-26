@@ -129,6 +129,7 @@ private extension View {
 }
 
 struct PitchTrackerView: View {
+    @State private var didAutoDismissCodeSheetForLiveId: String? = nil
     @State private var uiConnected: Bool = false
     @State private var showSelectBatterOverlay: Bool = false
     @State private var showCodeAssignmentSheet = false
@@ -922,7 +923,29 @@ struct PitchTrackerView: View {
             }
 
             DispatchQueue.main.async {
-                self.uiConnected = (self.activeLiveId != nil) && otherRecent
+                // Only show green if we’re actually in a live room AND we see the other side recently
+                let connectedNow = (self.activeLiveId != nil) && otherRecent
+                self.uiConnected = connectedNow
+
+                // ✅ OWNER ONLY: auto-dismiss code sheet when participant connects
+                if connectedNow && self.isOwnerForActiveGame {
+                    // One-shot per liveId
+                    if self.didAutoDismissCodeSheetForLiveId != liveId {
+                        self.didAutoDismissCodeSheetForLiveId = liveId
+
+                        // Dismiss whichever is currently visible
+                        self.showCodeShareSheet = false
+                        self.showCodeShareModePicker = false
+
+                        // If you have any other code UI (optional):
+                        // self.codeShareInitialTab = 0
+                    }
+                }
+
+                // If we become disconnected, allow the next connection to auto-dismiss again
+                if !connectedNow, self.didAutoDismissCodeSheetForLiveId == liveId {
+                    self.didAutoDismissCodeSheetForLiveId = nil
+                }
             }
         }
     }
