@@ -1734,11 +1734,12 @@ struct PitchTrackerView: View {
     }
     @ViewBuilder
     private var cardsOverlayContent: some View {
-        if selectedTemplate != nil {
+        if let template = selectedTemplate {
             PitchResultSheet(
                 allEvents: filteredEvents,
                 games: games,
-                templates: templates
+                templates: templates,
+                isParticipant: (isGame && !isOwnerForActiveGame)
             )
             .environmentObject(authManager)
             .environmentObject(sessionManager)
@@ -1943,6 +1944,7 @@ struct PitchTrackerView: View {
     // MARK: - Extracted subviews to help type-checker
     private var topBar: some View {
         HStack {
+            if !(isGame && !isOwnerForActiveGame) {
             Menu {
                 ForEach(templates, id: \.id) { template in
                     Button(template.name) {
@@ -1957,7 +1959,7 @@ struct PitchTrackerView: View {
             } label: {
                 let currentLabel = selectedTemplate?.name ?? "Select a template"
                 let widestLabel = ([currentLabel] + templates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
-
+                
                 ZStack {
                     // Invisible widest label to reserve width and prevent size jumps
                     HStack(spacing: 8) {
@@ -1974,7 +1976,7 @@ struct PitchTrackerView: View {
                             .font(.subheadline.weight(.semibold))
                             .opacity(0)
                     }
-
+                    
                     // Visible current label
                     HStack(spacing: 8) {
                         Text(currentLabel)
@@ -2006,7 +2008,7 @@ struct PitchTrackerView: View {
                 .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
             }
             .disabled(templates.isEmpty)
-
+        }
             Spacer()
             
             Button(action: {

@@ -171,6 +171,8 @@ struct PitchCardView: View {
     let pitchNumber: Int?
     let outcomeSummary: [String]?
     let jerseyNumber: String?
+    let hideHeader: Bool
+
     let onLongPress: () -> Void
     
     init(
@@ -189,6 +191,7 @@ struct PitchCardView: View {
         jerseyNumber: String?,
         gameTitle: String? = nil,
         practiceTitle: String? = nil,
+        hideHeader: Bool = false,
         onLongPress: @escaping (() -> Void) = {}
     ) {
         self.batterSide = batterSide
@@ -206,38 +209,38 @@ struct PitchCardView: View {
         self.jerseyNumber = jerseyNumber
         self.gameTitle = gameTitle
         self.practiceTitle = practiceTitle
+        self.hideHeader = hideHeader
         self.onLongPress = onLongPress
     }
     
     var body: some View {
         VStack(spacing: 0) {
-            // 🧠 Header at top-left
-            HStack(spacing: 4) {
-                
-                Text({
-                    if let game = gameTitle, !game.isEmpty {
-                        return "\(footerTextName) vs. \(game)"
-                    } else if let practice = practiceTitle, !practice.isEmpty {
-                        return "\(footerTextName) — \(practice)"
-                    } else {
-                        return footerTextName
-                    }
-                }())
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(.secondary)
-                    .padding(.top, 8)
-                    .padding(.leading, 8)
-                
-                Spacer()
-                
-                if let pitchNumber = pitchNumber {
-                    Text("Pitch #\(pitchNumber)")
+            if hideHeader == false {
+                // 🧠 Header at top-left
+                HStack(spacing: 4) {
+                    Text({
+                        if let game = gameTitle, !game.isEmpty {
+                            return "\(footerTextName) vs. \(game)"
+                        } else if let practice = practiceTitle, !practice.isEmpty {
+                            return "\(footerTextName) — \(practice)"
+                        } else {
+                            return footerTextName
+                        }
+                    }())
                         .font(.caption)
                         .fontWeight(.bold)
                         .foregroundColor(.secondary)
-                        .padding(.trailing, 8)
                         .padding(.top, 8)
+                        .padding(.leading, 8)
+                    Spacer()
+                    if let pitchNumber = pitchNumber {
+                        Text("Pitch #\(pitchNumber)")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.secondary)
+                            .padding(.trailing, 8)
+                            .padding(.top, 8)
+                    }
                 }
             }
             
@@ -418,6 +421,7 @@ struct PitchResultCard: View {
     let allEvents: [PitchEvent] // ✅ Add this
     let games: [Game]
     let templateName: String
+    let isParticipant: Bool
     @State private var showDetails = false
     
     @Binding var isSelecting: Bool
@@ -429,7 +433,8 @@ struct PitchResultCard: View {
         games: [Game],
         templateName: String,
         isSelecting: Binding<Bool> = .constant(false),
-        isSelected: Binding<Bool> = .constant(false)
+        isSelected: Binding<Bool> = .constant(false),
+        isParticipant: Bool = false
     ) {
         self.event = event
         self.allEvents = allEvents
@@ -437,6 +442,7 @@ struct PitchResultCard: View {
         self.templateName = templateName
         self._isSelecting = isSelecting
         self._isSelected = isSelected
+        self.isParticipant = isParticipant
     }
 
     private func isLocationMatch(_ event: PitchEvent) -> Bool {
@@ -557,6 +563,7 @@ struct PitchResultCard: View {
                 jerseyNumber: jerseyNumber,
                 gameTitle: derivedGameTitle(from: event),
                 practiceTitle: practiceTitle(for: event),
+                hideHeader: isParticipant,
                 onLongPress: { showDetails = true }
             )
         }
@@ -923,6 +930,7 @@ struct PitchResultSheet: View {
     let allEvents: [PitchEvent]
     let games: [Game]
     let templates: [PitchTemplate]
+    let isParticipant: Bool
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var sessionManager: PitchSessionManager
 
@@ -1188,7 +1196,8 @@ struct PitchResultSheet: View {
                                 templates: templates,
                                 isSelecting: $isSelecting,
                                 selectedEventIDs: $selectedEventIDs,
-                                localTemplateOverrides: localTemplateOverrides
+                                localTemplateOverrides: localTemplateOverrides,
+                                isParticipant: isParticipant
                             )
                             .transition(.move(edge: .top).combined(with: .opacity))
                         }
@@ -1278,7 +1287,7 @@ struct PitchResultSheet: View {
         @Binding var selectedEventIDs: Set<String>
 
         let localTemplateOverrides: [String: String]
-
+        let isParticipant: Bool   // <-- add this
         var body: some View {
             // Compute ids and effective template id outside of ViewBuilder statements that produce views
             let eventId: String = event.id ?? "<nil>"
@@ -1315,7 +1324,8 @@ struct PitchResultSheet: View {
                 games: games,
                 templateName: templateName,
                 isSelecting: $isSelecting,
-                isSelected: isSelectedBinding
+                isSelected: isSelectedBinding,
+                isParticipant: isParticipant
             )
         }
     }

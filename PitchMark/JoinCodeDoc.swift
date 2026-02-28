@@ -243,6 +243,7 @@ final class LiveGameService {
         }
         
     }
+    
     private func seedLiveLineupFromOwnerGame(ownerUid: String, ownerGameId: String, liveId: String) {
         let gameRef = db.collection(Col.users).document(ownerUid)
             .collection(Col.games).document(ownerGameId)
@@ -288,6 +289,7 @@ final class LiveGameService {
             }
         }
     }
+    
     // MARK: - Join Code Generation (transaction)
 
     private func createUniqueJoinCode(
