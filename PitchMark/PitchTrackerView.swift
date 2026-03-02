@@ -949,7 +949,7 @@ struct PitchTrackerView: View {
                     print("🔌 Live session ended remotely → disconnecting")
 
                     self.uiConnected = false
-                    self.disconnectFromGame(notifyHost: false)
+                    self.endLiveSessionLocally(keepCurrentGame: self.isOwnerForActiveGame)
                     return
                 }
                 let notExpired: Bool = {
@@ -1057,37 +1057,48 @@ struct PitchTrackerView: View {
         actualLocationRecorded = nil
     }
 
-    private func disconnectFromGame(notifyHost: Bool = true) {
-        if let liveId = activeLiveId {
-            // stop listeners
-            liveListener?.remove()
-            liveListener = nil
-            livePitchEventsListener?.remove()
-            livePitchEventsListener = nil
-            gamePitchEventsListener?.remove()
-            gamePitchEventsListener = nil
+    private func endLiveSessionLocally(keepCurrentGame: Bool) {
+        guard let liveId = activeLiveId else { return }
 
-            // stop heartbeat
-            stopHeartbeat()
-            participantsListener?.remove()
-            participantsListener = nil
-            uiConnected = false
-            didHydrateLineupFromLive = false
-            // clear presence doc (optional)
-            let uid = authManager.user?.uid ?? ""
-            if !uid.isEmpty {
-                Firestore.firestore()
-                    .collection("liveGames").document(liveId)
-                    .collection("participants").document(uid)
-                    .delete()
-            }
+        liveListener?.remove()
+        liveListener = nil
+        livePitchEventsListener?.remove()
+        livePitchEventsListener = nil
+        gamePitchEventsListener?.remove()
+        gamePitchEventsListener = nil
 
-            activeLiveId = nil
-            UserDefaults.standard.removeObject(forKey: "activeLiveId")
+        stopHeartbeat()
+        participantsListener?.remove()
+        participantsListener = nil
+        uiConnected = false
+        didHydrateLineupFromLive = false
+        didAutoDismissCodeSheetForLiveId = nil
+        mirroredLivePitchEventIds.removeAll()
+        resetCallAndResultUIState()
 
-            // return to practice
+        let uid = authManager.user?.uid ?? ""
+        if !uid.isEmpty {
+            Firestore.firestore()
+                .collection("liveGames").document(liveId)
+                .collection("participants").document(uid)
+                .delete()
+        }
+
+        activeLiveId = nil
+        UserDefaults.standard.removeObject(forKey: "activeLiveId")
+
+        if keepCurrentGame, isGame {
+            startListeningToActiveGame()
+            startListeningToGamePitchEvents()
+        } else {
             isGame = false
             sessionManager.switchMode(to: .practice)
+        }
+    }
+
+    private func disconnectFromGame(notifyHost: Bool = true) {
+        if activeLiveId != nil {
+            endLiveSessionLocally(keepCurrentGame: false)
             return
         }
 
@@ -2525,7 +2536,7 @@ struct PitchTrackerView: View {
                             fields: ["status": "ended"]
                         )
                     }
-                    disconnectFromGame(notifyHost: false)
+                    endLiveSessionLocally(keepCurrentGame: isOwnerForActiveGame)
                     showCodeShareModePicker = false
                 }
             }
