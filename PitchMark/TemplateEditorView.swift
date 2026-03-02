@@ -10,8 +10,10 @@ import Combine
 
 // MARK: - PNG Rendering & Share Sheet
 extension View {
-    func renderAsPNG(size: CGSize, scale: CGFloat = 3.0) -> UIImage? {
-        let renderer = ImageRenderer(content: self.frame(width: size.width, height: size.height))
+    func renderAsPNG(size: CGSize, scale: CGFloat = 3.0, alignment: Alignment = .center) -> UIImage? {
+        let renderer = ImageRenderer(
+            content: self.frame(width: size.width, height: size.height, alignment: alignment)
+        )
         renderer.scale = scale
         return renderer.uiImage
     }
@@ -372,6 +374,57 @@ private enum GridPaletteColor: String, CaseIterable, Identifiable {
     }
 }
 
+private struct AnimatedGridShieldOverlay: View {
+    let baseSizeScale: CGFloat
+
+    @State private var offsetX: CGFloat = 0
+    @State private var offsetY: CGFloat = 0
+    @State private var rotation: Double = 0
+    @State private var scale: CGFloat = 1
+    @State private var hasStarted = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            Image(systemName: "bubbles.and.sparkles.fill")
+                .font(.system(size: min(proxy.size.width, proxy.size.height) * baseSizeScale, weight: .bold))
+                .foregroundStyle(Color(.systemGray4))
+                .shadow(color: Color(.systemGray5), radius: 12, x: 0, y: 0)
+                .scaleEffect(scale)
+                .rotationEffect(.degrees(rotation))
+                .offset(x: offsetX, y: offsetY)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .allowsHitTesting(false)
+                .onAppear {
+                    guard !hasStarted else { return }
+                    hasStarted = true
+                    animateToNextPosition(in: proxy.size)
+                }
+        }
+    }
+
+    private func animateToNextPosition(in size: CGSize) {
+        let xRange = max(12, size.width * 0.14)
+        let yRange = max(10, size.height * 0.14)
+
+        withAnimation(.easeInOut(duration: Double.random(in: 1.8...3.0))) {
+            offsetX = CGFloat.random(in: -xRange...xRange)
+            offsetY = CGFloat.random(in: -yRange...yRange)
+            rotation = Double.random(in: -18...18)
+            scale = CGFloat.random(in: 0.9...1.12)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 2.0...3.2)) {
+            animateToNextPosition(in: size)
+        }
+    }
+}
+
+private enum ShieldedGridTarget {
+    case top
+    case strikes
+    case balls
+}
+
 struct TemplateEditorView: View {
     
     @State private var name: String
@@ -391,6 +444,8 @@ struct TemplateEditorView: View {
     @State private var showClearConfirm = false
     @State private var hasAnyPitchInTopRow = false
     @State private var showNoPitchAlert = false
+    @State private var hiddenShieldTarget: ShieldedGridTarget? = nil
+    @State private var shieldRestoreWorkItem: DispatchWorkItem? = nil
     
     // Added new states for encrypted share sheet
     @State private var showEncryptedShare = false
@@ -544,6 +599,19 @@ struct TemplateEditorView: View {
         return GridPaletteColor.allCases.filter { !used.contains($0) }
     }
 
+    private func noteGridInteraction(_ target: ShieldedGridTarget) {
+        shieldRestoreWorkItem?.cancel()
+        hiddenShieldTarget = target
+
+        let workItem = DispatchWorkItem {
+            hiddenShieldTarget = nil
+            shieldRestoreWorkItem = nil
+        }
+        shieldRestoreWorkItem = workItem
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5, execute: workItem)
+    }
+
     @ViewBuilder
     private func palettePickerButton(at index: Int) -> some View {
         Menu {
@@ -598,6 +666,116 @@ struct TemplateEditorView: View {
                 palettePickerButton(at: index)
             }
         }
+    }
+
+    private var gridEditorContent: some View {
+        HStack(spacing: 0) {
+            palettePickerColumn
+                .padding(.top, 32)
+                .frame(width: 60, alignment: .leading)
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 8) {
+                GeometryReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack {
+                            Spacer(minLength: 0)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Pitch Selection")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .padding(.top, 20)
+                                    .padding(.bottom, -2)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+
+                                PitchGridView2(
+                                    availablePitches: availablePitches,
+                                    hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
+                                    onProvideRandomizeAction: { action in
+                                        self.randomizeFirstColumnAction = action
+                                    },
+                                    onProvideClearAction: { action in
+                                        self.clearPitchGridAction = action
+                                    },
+                                    onProvideSnapshot: { provider in
+                                        self.pitchGridSnapshotProvider = provider
+                                    },
+                                    initialHeaders: initialPitchGridHeaders,
+                                    initialGrid: initialPitchGridValues
+                                )
+                                .simultaneousGesture(
+                                    TapGesture().onEnded {
+                                        noteGridInteraction(.top)
+                                    }
+                                )
+                                .overlay {
+                                    if hiddenShieldTarget != .top {
+                                        ZStack {
+                                            AnimatedGridShieldOverlay(baseSizeScale: 0.44)
+                                                .offset(x: -44)
+                                            AnimatedGridShieldOverlay(baseSizeScale: 0.44)
+                                                .offset(x: 44)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(minLength: 0)
+                        }
+                        .frame(minWidth: proxy.size.width)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 170)
+
+                VStack(spacing: 4) {
+                    HStack(spacing: 6) {
+                        VStack {
+                            StrikeLocationGridView()
+                                .environment(\.topRowCoordinator, topRowCoordinator)
+                                .padding(.top, 8)
+                                .simultaneousGesture(
+                                    TapGesture().onEnded {
+                                        noteGridInteraction(.strikes)
+                                    }
+                                )
+                                .overlay {
+                                    if hiddenShieldTarget != .strikes {
+                                        AnimatedGridShieldOverlay(baseSizeScale: 0.52)
+                                    }
+                                }
+                            Text("Strikes")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, -2)
+                        }
+                        VStack {
+                            BallsLocationGridView()
+                                .environment(\.topRowCoordinator, topRowCoordinator)
+                                .padding(.top, 8)
+                                .simultaneousGesture(
+                                    TapGesture().onEnded {
+                                        noteGridInteraction(.balls)
+                                    }
+                                )
+                                .overlay {
+                                    if hiddenShieldTarget != .balls {
+                                        AnimatedGridShieldOverlay(baseSizeScale: 0.52)
+                                    }
+                                }
+                            Text("Balls")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .padding(.top, -2)
+                        }
+                    }
+                }
+            }
+            .padding(.trailing, 12)
+        }
+        .frame(maxWidth: .infinity)
     }
     
     var body: some View {
@@ -720,78 +898,7 @@ struct TemplateEditorView: View {
                         .padding(.top, 4)
                         .padding(.bottom, -2)
                     // 3 grids
-                    HStack(spacing: 0) {
-                        palettePickerColumn
-                            .padding(.top, 32)
-                        .frame(width: 60, alignment: .leading)
-
-                        Spacer(minLength: 8)
-
-                        VStack(alignment: .trailing, spacing: 8) {
-                            GeometryReader { proxy in
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack {
-                                        Spacer(minLength: 0)
-
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text("Pitch Selection")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                                .padding(.top, 20)
-                                                .padding(.bottom, -2)
-                                                .frame(maxWidth: .infinity, alignment: .center)
-                                            
-                                            PitchGridView2(
-                                                availablePitches: availablePitches,
-                                                hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
-                                                onProvideRandomizeAction: { action in
-                                                    self.randomizeFirstColumnAction = action
-                                                },
-                                                onProvideClearAction: { action in
-                                                    self.clearPitchGridAction = action
-                                                },
-                                                onProvideSnapshot: { provider in
-                                                    self.pitchGridSnapshotProvider = provider
-                                                },
-                                                initialHeaders: initialPitchGridHeaders,
-                                                initialGrid: initialPitchGridValues
-                                            )
-                                        }
-
-                                        Spacer(minLength: 0)
-                                    }
-                                    .frame(minWidth: proxy.size.width)
-                                }
-                            }
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 170)
-
-                            VStack(spacing: 4) {
-                                HStack(spacing: 6) {
-                                    VStack {
-                                        StrikeLocationGridView()
-                                            .environment(\.topRowCoordinator, topRowCoordinator)
-                                            .padding(.top, 8)
-                                        Text("Strikes")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                            .padding(.top, -2)
-                                    }
-                                    VStack {
-                                        BallsLocationGridView()
-                                            .environment(\.topRowCoordinator, topRowCoordinator)
-                                            .padding(.top, 8)
-                                        Text("Balls")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                            .padding(.top, -2)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.trailing, 12)
-                    }
-                    .frame(maxWidth: .infinity)
+                    gridEditorContent
                     
                     VStack() {
                         Spacer()
@@ -843,7 +950,9 @@ struct TemplateEditorView: View {
                                     strikeTopRow: strikeTop,
                                     strikeRows: strikeRows,
                                     ballsTopRow: ballsTop,
-                                    ballsRows: ballsRows
+                                    ballsRows: ballsRows,
+                                    pitchFirstColors: gridPaletteSelections.prefix(2).compactMap { $0?.rawValue },
+                                    locationFirstColors: gridPaletteSelections.suffix(3).compactMap { $0?.rawValue }
                                 )
                                 // Letter-sized points; adjust as needed
                                 let targetSize = CGSize(width: 612, height: 792)
@@ -2197,6 +2306,8 @@ struct PrintableEncryptedGridsView: View {
     
     let ballsTopRow: [String]
     let ballsRows: [[String]]    // expects count == 4, uses rows 1..3
+    let pitchFirstColors: [String]
+    let locationFirstColors: [String]
     
     // Your screenshot has a fixed green block in Balls at (row 2, col 1) in the 4x3 grid
     // (i.e., body row 2, col 1). Keep this default for drop-in compatibility.
@@ -2213,34 +2324,101 @@ struct PrintableEncryptedGridsView: View {
     private let cellH: CGFloat = 48
     private let corner: CGFloat = 10
     private let lineW: CGFloat = 2.0
+
+    init(
+        grid: [[String]],
+        strikeTopRow: [String],
+        strikeRows: [[String]],
+        ballsTopRow: [String],
+        ballsRows: [[String]],
+        pitchFirstColors: [String] = [],
+        locationFirstColors: [String] = []
+    ) {
+        self.grid = grid
+        self.strikeTopRow = strikeTopRow
+        self.strikeRows = strikeRows
+        self.ballsTopRow = ballsTopRow
+        self.ballsRows = ballsRows
+        self.pitchFirstColors = pitchFirstColors
+        self.locationFirstColors = locationFirstColors
+    }
     
+    private let topBlockHeight: CGFloat = 228
+    private let bottomBlockHeight: CGFloat = 214
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            
-            
-            pitchSelectionBlock()
-            
-            HStack(alignment: .top, spacing: 50) {
-                locationBlock(
-                    title: "Strikes",
-                    header: strikeTopRow,
-                    rows: strikeRows,
-                    border: .green,
-                    highlightBodyCell: nil
-                )
-                
-                locationBlock(
-                    title: "Balls",
-                    header: ballsTopRow,
-                    rows: ballsRows,
-                    border: .red,
-                    highlightBodyCell: selectedBallBodyCell
-                )
+        HStack(alignment: .top, spacing: 28) {
+            palettePreviewColumn()
+
+            VStack(alignment: .leading, spacing: 22) {
+                pitchSelectionBlock()
+
+                HStack(alignment: .top, spacing: 50) {
+                    locationBlock(
+                        title: "Strikes",
+                        header: strikeTopRow,
+                        rows: strikeRows,
+                        border: .green,
+                        highlightBodyCell: nil
+                    )
+                    
+                    locationBlock(
+                        title: "Balls",
+                        header: ballsTopRow,
+                        rows: ballsRows,
+                        border: .red,
+                        highlightBodyCell: selectedBallBodyCell
+                    )
+                }
+                .padding(.top, 4)
             }
         }
         .padding(24)
         .background(Color.white)
         .foregroundColor(.black)
+    }
+}
+
+private extension PrintableEncryptedGridsView {
+    func palettePreviewColumn() -> some View {
+        VStack(spacing: 22) {
+            VStack(spacing: 14) {
+                ForEach(0..<2, id: \.self) { index in
+                    palettePreviewCircle(at: index)
+                }
+            }
+            .frame(width: 24, height: topBlockHeight, alignment: .center)
+
+            VStack(spacing: 14) {
+                ForEach(2..<5, id: \.self) { index in
+                    palettePreviewCircle(at: index)
+                }
+            }
+            .frame(width: 24, height: bottomBlockHeight, alignment: .center)
+        }
+    }
+
+    func palettePreviewCircle(at index: Int) -> some View {
+        Circle()
+            .fill(palettePreviewColor(at: index))
+            .frame(width: 24, height: 24)
+            .overlay(
+                Circle()
+                    .stroke(Color.black, lineWidth: 1.5)
+            )
+    }
+
+    func palettePreviewColor(at index: Int) -> Color {
+        if index < 2, pitchFirstColors.indices.contains(index) {
+            return templatePaletteColor(pitchFirstColors[index])
+        }
+
+        let locationIndex = index - 2
+        if locationIndex >= 0, locationFirstColors.indices.contains(locationIndex) {
+            return templatePaletteColor(locationFirstColors[locationIndex])
+        }
+
+        return .white
     }
 }
 

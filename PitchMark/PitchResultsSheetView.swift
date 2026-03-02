@@ -127,6 +127,72 @@ private struct ToggleSection: View {
     }
 }
 
+private struct HoldActionButton: View {
+    let title: String
+    let systemImage: String
+    let foregroundColor: Color
+    let tint: Color
+    let isEnabled: Bool
+    let action: () -> Void
+
+    @State private var holdProgress: CGFloat = 0
+    private let holdDuration: Double = 0.65
+
+    var body: some View {
+        let shape = Capsule()
+
+        Label(title, systemImage: systemImage)
+            .foregroundColor(isEnabled ? foregroundColor : .gray)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                shape
+                    .fill(isEnabled ? tint : Color(.systemGray5))
+            )
+            .contentShape(shape)
+        .fixedSize()
+        .overlay {
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    shape
+                        .fill(Color.clear)
+
+                    shape
+                        .fill((isEnabled ? foregroundColor : .gray).opacity(0.18))
+                        .frame(width: geo.size.width * holdProgress)
+                }
+            }
+            .clipShape(shape)
+            .allowsHitTesting(false)
+        }
+        .overlay {
+            shape
+                .stroke((isEnabled ? foregroundColor : .gray).opacity(holdProgress > 0 ? 0.7 : 0.25), lineWidth: holdProgress > 0 ? 2 : 1)
+                .allowsHitTesting(false)
+        }
+        .animation(.easeOut(duration: 0.15), value: isEnabled)
+        .opacity(isEnabled ? 1 : 0.75)
+        .onLongPressGesture(
+            minimumDuration: holdDuration,
+            maximumDistance: 24,
+            pressing: { pressing in
+                guard isEnabled else {
+                    holdProgress = 0
+                    return
+                }
+                withAnimation(pressing ? .linear(duration: holdDuration) : .easeOut(duration: 0.15)) {
+                    holdProgress = pressing ? 1 : 0
+                }
+            },
+            perform: {
+                guard isEnabled else { return }
+                holdProgress = 0
+                action()
+            }
+        )
+    }
+}
+
 struct PitchResultSheetView: View {
     @Binding var isPresented: Bool
     @Binding var isStrikeSwinging: Bool
@@ -263,13 +329,34 @@ struct PitchResultSheetView: View {
     }
 
     private func handleSave() {
-        guard let label = pendingResultLabel,
-              let pitchCall = pitchCall else {
+        guard let event = buildCurrentEvent() else {
             isPresented = false
             return
         }
+        event.debugLog()
+        saveAction(event)
+        isPresented = false
+        resetSelections()
+    }
 
-        let event = PitchEvent(
+    private func handlePitchOnlySave() {
+        guard let event = buildCurrentEvent() else {
+            isPresented = false
+            return
+        }
+        event.debugLog(prefix: "📤 Saving Pitch-Only PitchEvent")
+        saveAction(event)
+        isPresented = false
+        resetSelections()
+    }
+
+    private func buildCurrentEvent() -> PitchEvent? {
+        guard let label = pendingResultLabel,
+              let pitchCall = pitchCall else {
+            return nil
+        }
+
+        return PitchEvent(
             id: nil,
             timestamp: Date(),
             pitch: pitchCall.pitch,
@@ -304,10 +391,6 @@ struct PitchResultSheetView: View {
             opponentBatterId: selectedOpponentBatterId,
             practiceId: selectedPracticeId
         )
-        event.debugLog()
-        saveAction(event)
-        isPresented = false
-        resetSelections()
     }
 
     private struct OutcomeChangeHandlers: ViewModifier {
@@ -355,6 +438,24 @@ struct PitchResultSheetView: View {
     var body: some View {
         AnyView(
             VStack(spacing: 20) {
+                HStack {
+                    Spacer()
+                    Button {
+                        isPresented = false
+                        resetSelections()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .background(
+                                Circle()
+                                    .fill(Color(.systemGray6))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close")
+                }
                 
                 if let template = template {
                     Text(template.name)
@@ -398,56 +499,70 @@ struct PitchResultSheetView: View {
                     isPassedBall ||
                     isBall
                 }()
-
-                Button("Save Pitch Event") {
-                    handleSave()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canSave)
-                .padding(.top)
-
+                
                 if !( (battedBallRegionName != nil) || (selectedOutcome != nil) || (selectedDescriptor != nil) || isError ) {
-                    Text("Select an outcome or tap a field location to enable Save.")
+                    Text("Select an outcome to enable 'Save Event'.")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
+                
+                Spacer()
+                
+                HStack(alignment: .center, spacing: 12) {
+                    HoldActionButton(
+                        title: "Pitch Only",
+                        systemImage: "square.and.arrow.down",
+                        foregroundColor: .blue,
+                        tint: .white,
+                        isEnabled: true,
+                        action: handlePitchOnlySave
+                    )
 
-                Button("Cancel", role: .cancel) {
-                    isPresented = false
-                    resetSelections()
+                    Spacer()
+                    
+                    HoldActionButton(
+                        title: "Pitch Event",
+                        systemImage: "square.and.arrow.down.on.square.fill",
+                        foregroundColor: .green,
+                        tint: .white,
+                        isEnabled: canSave,
+                        action: handleSave
+                    )
                 }
-                .padding(.bottom)
+                
+                Spacer()
+                
             }
-            .padding()
-            .fullScreenCover(isPresented: $showFieldOverlay) {
-                FieldOverlayView(
-                    isPresented: $showFieldOverlay,
-                    colorMapImage: colorMapImage,
-                    colorMapping: colorMapping,
-                    selectedOutcome: $selectedOutcome,
-                    selectedDescriptor: $selectedDescriptor,
-                    isError: $isError,
-                    battedBallRegionName: $battedBallRegionName,
-                    battedBallSelection: $battedBallSelection,
-                    battedBallTapNormalized: $battedBallTapNormalized
+                .padding()
+                .fullScreenCover(isPresented: $showFieldOverlay) {
+                    FieldOverlayView(
+                        isPresented: $showFieldOverlay,
+                        colorMapImage: colorMapImage,
+                        colorMapping: colorMapping,
+                        selectedOutcome: $selectedOutcome,
+                        selectedDescriptor: $selectedDescriptor,
+                        isError: $isError,
+                        battedBallRegionName: $battedBallRegionName,
+                        battedBallSelection: $battedBallSelection,
+                        battedBallTapNormalized: $battedBallTapNormalized
+                    )
+                    .ignoresSafeArea()
+                }
+                .presentationDetents([.large])
+                .modifier(
+                    OutcomeChangeHandlers(
+                        isPresented: $isPresented,
+                        isStrikeSwinging: $isStrikeSwinging,
+                        isStrikeLooking: $isStrikeLooking,
+                        isWildPitch: $isWildPitch,
+                        isPassedBall: $isPassedBall,
+                        isBall: $isBall,
+                        selectedOutcome: $selectedOutcome,
+                        selectedDescriptor: $selectedDescriptor,
+                        isError: $isError,
+                        deselectIfDisabled: { self.deselectIfDisabled() }
+                    )
                 )
-                .ignoresSafeArea()
-            }
-            .presentationDetents([.large])
-            .modifier(
-                OutcomeChangeHandlers(
-                    isPresented: $isPresented,
-                    isStrikeSwinging: $isStrikeSwinging,
-                    isStrikeLooking: $isStrikeLooking,
-                    isWildPitch: $isWildPitch,
-                    isPassedBall: $isPassedBall,
-                    isBall: $isBall,
-                    selectedOutcome: $selectedOutcome,
-                    selectedDescriptor: $selectedDescriptor,
-                    isError: $isError,
-                    deselectIfDisabled: { self.deselectIfDisabled() }
-                )
-            )
         )
     }
     private func deselectIfDisabled() {
@@ -468,7 +583,7 @@ private struct OutcomeButtonsSection: View {
     @Binding var selectedDescriptor: String?
     @Binding var isError: Bool
     var isOutcomeDisabled: (String) -> Bool
-
+    
     var body: some View {
         VStack(spacing: 12) {
             HStack(spacing: 8) {

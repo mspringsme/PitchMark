@@ -271,6 +271,8 @@ struct PitchTrackerView: View {
     @State private var heartbeatTimer: Timer? = nil
     @State private var isJoiningSession: Bool = false
     @State private var pendingRestoreGameId: String? = nil
+    @State private var pendingLiveTemplateId: String? = nil
+    @State private var pendingLiveTemplateName: String? = nil
 
     private func dismissAllTopLevelSheets() {
         showSettings = false
@@ -627,6 +629,26 @@ struct PitchTrackerView: View {
     private func clearResultSelection() {
         writeResultSelection(label: "")
     }
+
+    private func applyPendingLiveTemplateIfPossible() {
+        guard activeLiveId != nil else { return }
+
+        if let tid = pendingLiveTemplateId, !tid.isEmpty,
+           let template = templates.first(where: { $0.id.uuidString == tid }) {
+            if selectedTemplate?.id != template.id {
+                applyTemplate(template)
+            }
+            return
+        }
+
+        if let tname = pendingLiveTemplateName, !tname.isEmpty,
+           let template = templates.first(where: { $0.name == tname }) {
+            if selectedTemplate?.id != template.id {
+                applyTemplate(template)
+            }
+        }
+    }
+
     func startListeningToLivePitchEvents(liveId: String) {
         livePitchEventsListener?.remove()
         livePitchEventsListener = nil
@@ -825,6 +847,8 @@ struct PitchTrackerView: View {
                 // ✅ LIVE TEMPLATE FLOW: apply owner's template on participant (and keep owner consistent too)
                 let liveTemplateId = data["templateId"] as? String
                 let liveTemplateName = data["templateName"] as? String
+                self.pendingLiveTemplateId = liveTemplateId
+                self.pendingLiveTemplateName = liveTemplateName
 
                 if let tid = liveTemplateId, !tid.isEmpty {
                     if self.selectedTemplate?.id.uuidString != tid {
@@ -993,6 +1017,15 @@ struct PitchTrackerView: View {
                     // One-shot per liveId
                     if self.didAutoDismissCodeSheetForLiveId != liveId {
                         self.didAutoDismissCodeSheetForLiveId = liveId
+
+                        // Re-arm the live pitch-events listener right when the
+                        // participant connection becomes active. This mirrors the
+                        // post-relaunch recovery path and prevents the owner from
+                        // getting stuck on a stale live listener after the initial
+                        // connect handoff.
+                        if self.activeLiveId == liveId {
+                            self.startListeningToLivePitchEvents(liveId: liveId)
+                        }
 
                         // Dismiss whichever is currently visible
                         self.showCodeShareSheet = false
@@ -2777,6 +2810,7 @@ struct PitchTrackerView: View {
             if self.selectedTemplate == nil {
                 self.selectedTemplate = loadedTemplates.first
             }
+            self.applyPendingLiveTemplateIfPossible()
         }
 
         authManager.loadGames { loadedGames in
@@ -3137,7 +3171,9 @@ struct PitchTrackerView: View {
         let synced = baseBody.withGameSync(
             start: {
                 startListeningToActiveGame()
-                if activeLiveId == nil {
+                if let liveId = activeLiveId, !liveId.isEmpty {
+                    startListeningToLivePitchEvents(liveId: liveId)
+                } else {
                     startListeningToGamePitchEvents()
                 }
             },
@@ -3278,6 +3314,24 @@ struct PitchTrackerView: View {
                     defaults.set(liveId, forKey: "activeLiveId")
                     defaults.set(false, forKey: "activeIsPractice")
                     defaults.set("tracker", forKey: DefaultsKeys.lastView)
+
+                    if let gid = info["gameId"] as? String, !gid.isEmpty {
+                        self.selectedGameId = gid
+                        defaults.set(gid, forKey: DefaultsKeys.activeGameId)
+
+                        let ownerUid = (info["ownerUid"] as? String) ?? (self.authManager.user?.uid ?? "")
+                        if !ownerUid.isEmpty {
+                            self.activeGameOwnerUserId = ownerUid
+                            defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
+                            self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: gid)
+                            self.startListeningToActiveGame()
+                        }
+                    }
+
+                    self.pendingLiveTemplateId = info["templateId"] as? String
+                    self.pendingLiveTemplateName = info["templateName"] as? String
+                    self.applyPendingLiveTemplateIfPossible()
+
                     // ✅ Persist opponent label if provided
                     if let opp = info["opponent"] as? String, !opp.isEmpty {
                         self.opponentName = opp
@@ -5226,7 +5280,12 @@ private struct CodeShareSheet: View {
                         userInfo: [
                             "resolved": true,
                             "type": "liveGame",
-                            "liveId": tuple.liveId
+                            "liveId": tuple.liveId,
+                            "ownerUid": self.hostUid ?? "",
+                            "gameId": gameId,
+                            "opponent": self.opponent ?? "",
+                            "templateId": self.templateId ?? "",
+                            "templateName": self.templateName ?? ""
                         ]
                     )
 

@@ -86,6 +86,8 @@ private struct TemplateDetailView: View {
     @State private var showTemplatePicker: Bool = false
 
     @State private var renderedPreview: UIImage? = nil
+    @State private var animatePreviewWatermark: Bool = false
+    private let previewHeight: CGFloat = 220
 
     private func generatePreviewImage(for template: PitchTemplate) {
         // Build a printable view of the encrypted grids using the chosen template
@@ -105,10 +107,12 @@ private struct TemplateDetailView: View {
             strikeTopRow: strikeTop,
             strikeRows: strikeRows,
             ballsTopRow: ballsTop,
-            ballsRows: ballsRows
+            ballsRows: ballsRows,
+            pitchFirstColors: template.pitchFirstColors,
+            locationFirstColors: template.locationFirstColors
         )
-        let targetSize = CGSize(width: 612, height: 792)
-        if let img = printable.renderAsPNG(size: targetSize, scale: 2.0) {
+        let targetSize = CGSize(width: 900, height: 480)
+        if let img = printable.renderAsPNG(size: targetSize, scale: 2.0, alignment: .top) {
             self.renderedPreview = img
         }
     }
@@ -117,15 +121,16 @@ private struct TemplateDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(.gray.opacity(0.12))
-                    .frame(height: 180)
+                    .fill(.white)
+                    .frame(height: previewHeight)
                     .overlay(
                         Group {
                             if let preview = renderedPreview {
                                 Image(uiImage: preview)
                                     .resizable()
                                     .scaledToFit()
-                                    .padding(8)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .padding(4)
                             } else {
                                 Image(systemName: template.icon)
                                     .font(.largeTitle)
@@ -133,6 +138,21 @@ private struct TemplateDetailView: View {
                             }
                         }
                     )
+                    .overlay {
+                        GeometryReader { proxy in
+                            Text("🌧️Long Lasting💪")
+                                .font(.system(size: 60, weight: .bold, design: .rounded))
+                                .foregroundStyle(.black)
+                                .rotationEffect(.degrees(-10))
+                                .offset(
+                                    x: animatePreviewWatermark ? proxy.size.width * 0.18 : -proxy.size.width * 0.18,
+                                    y: animatePreviewWatermark ? -8 : 10
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
 
                 Text(template.name)
                     .font(.title.bold())
@@ -190,6 +210,7 @@ private struct TemplateDetailView: View {
                 .buttonStyle(.borderedProminent)
             }
             .padding()
+            .padding(.top, 16)
             .task {
                 // Load user templates once when entering detail
                 authManager.loadTemplates { templates in
@@ -202,6 +223,12 @@ private struct TemplateDetailView: View {
                             self.generatePreviewImage(for: current)
                         }
                     }
+                }
+            }
+            .onAppear {
+                guard !animatePreviewWatermark else { return }
+                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
+                    animatePreviewWatermark = true
                 }
             }
         }
@@ -219,4 +246,3 @@ private struct TemplateDetailView: View {
         }
     }
 }
-
