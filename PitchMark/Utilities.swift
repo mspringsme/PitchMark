@@ -21,6 +21,25 @@ func colorForPitch(_ pitch: String) -> Color {
     return palette[index]
 }
 
+let templatePaletteColorNames: [String] = ["red", "black", "green", "white", "blue"]
+
+func templatePaletteColor(_ name: String) -> Color {
+    switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "red":
+        return .red
+    case "black":
+        return .black
+    case "green":
+        return .green
+    case "white":
+        return .white
+    case "blue":
+        return .blue
+    default:
+        return .gray
+    }
+}
+
 private let pitchColorOverridesKey = "pitchColorOverrides"
 
 // Convert Color <-> Hex for persistence
@@ -358,6 +377,9 @@ struct PitchTemplate: Identifiable, Hashable, Codable {
 
     var ballsTopRow: [String] = []                    // length 3
     var ballsRows: [[String]] = []                    // 4 x 3
+
+    var pitchFirstColors: [String] = []              // length 2
+    var locationFirstColors: [String] = []           // length 3
 }
 
 enum BatterSide: String, CaseIterable, Identifiable, Codable {
@@ -501,4 +523,3 @@ struct PitchImageGridPreview: View {
         }
     }
 }
-

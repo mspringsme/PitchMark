@@ -200,6 +200,8 @@ class AuthManager: ObservableObject {
             "pitches": template.pitches,
             "codeAssignments": codeAssignmentsArray,
             "isEncrypted": template.isEncrypted,
+            "pitchFirstColors": template.pitchFirstColors,
+            "locationFirstColors": template.locationFirstColors,
             "pitchGrid": [
                 "headers": headersArray,
                 "gridRows": pitchGridMap
@@ -345,6 +347,9 @@ class AuthManager: ObservableObject {
                             ballsRows = sorted.map { rowsMap[String($0)] ?? [] }
                         }
 
+                        let pitchFirstColors = data["pitchFirstColors"] as? [String] ?? []
+                        let locationFirstColors = data["locationFirstColors"] as? [String] ?? []
+
                         let isEncrypted = data["isEncrypted"] as? Bool ?? false
                         let templateId = UUID(uuidString: doc.documentID) ?? UUID()
 
@@ -360,7 +365,9 @@ class AuthManager: ObservableObject {
                                 strikeTopRow: strikeTop,
                                 strikeRows: strikeRows,
                                 ballsTopRow: ballsTop,
-                                ballsRows: ballsRows
+                                ballsRows: ballsRows,
+                                pitchFirstColors: pitchFirstColors,
+                                locationFirstColors: locationFirstColors
                             )
                         )
                     }
@@ -452,6 +459,9 @@ class AuthManager: ObservableObject {
                     ballsRows = sorted.map { rowsMap[String($0)] ?? [] }
                 }
 
+                let pitchFirstColors = data["pitchFirstColors"] as? [String] ?? []
+                let locationFirstColors = data["locationFirstColors"] as? [String] ?? []
+
                 let isEncrypted = data["isEncrypted"] as? Bool ?? false
 
                 return PitchTemplate(
@@ -465,7 +475,9 @@ class AuthManager: ObservableObject {
                     strikeTopRow: strikeTop,
                     strikeRows: strikeRows,
                     ballsTopRow: ballsTop,
-                    ballsRows: ballsRows
+                    ballsRows: ballsRows,
+                    pitchFirstColors: pitchFirstColors,
+                    locationFirstColors: locationFirstColors
                 )
             }
         } catch {
@@ -1160,4 +1172,3 @@ extension AuthManager {
     }
     
 }
-

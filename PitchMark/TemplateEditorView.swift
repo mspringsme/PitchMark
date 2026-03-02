@@ -446,6 +446,8 @@ struct TemplateEditorView: View {
         let strikeRows = topRowCoordinator.strikeRows
         let ballsTop = topRowCoordinator.ballsTopRow
         let ballsRows = topRowCoordinator.ballsRows
+        let pitchFirstColors = gridPaletteSelections.prefix(2).compactMap { $0?.rawValue }
+        let locationFirstColors = gridPaletteSelections.suffix(3).compactMap { $0?.rawValue }
         
         let newTemplate = PitchTemplate(
             id: templateID,
@@ -457,7 +459,9 @@ struct TemplateEditorView: View {
             strikeTopRow: strikeTop,
             strikeRows: strikeRows,
             ballsTopRow: ballsTop,
-            ballsRows: ballsRows
+            ballsRows: ballsRows,
+            pitchFirstColors: pitchFirstColors,
+            locationFirstColors: locationFirstColors
         )
         onSave(newTemplate)
     }
@@ -477,13 +481,26 @@ struct TemplateEditorView: View {
         }()
         let initialAssignments = template?.codeAssignments ?? []
         let id = template?.id ?? UUID()
+        let initialPalette = Self.paletteSelections(from: template)
         
         _name = State(initialValue: initialName)
         _selectedPitches = State(initialValue: initialPitches)
         _codeAssignments = State(initialValue: initialAssignments)
         _customPitches = State(initialValue: (template?.pitches ?? []).filter { !pitchOrder.contains($0) })
+        _gridPaletteSelections = State(initialValue: initialPalette)
         self.templateID = id
         
+    }
+
+    private static func paletteSelections(from template: PitchTemplate?) -> [GridPaletteColor?] {
+        let pitchColors = template?.pitchFirstColors ?? []
+        let locationColors = template?.locationFirstColors ?? []
+        let names = Array(pitchColors.prefix(2)) + Array(locationColors.prefix(3))
+        var selections = names.map { GridPaletteColor(rawValue: $0.lowercased()) }
+        while selections.count < 5 {
+            selections.append(nil)
+        }
+        return Array(selections.prefix(5))
     }
     
     private var availablePitches: [String] {
@@ -897,6 +914,7 @@ struct TemplateEditorView: View {
                     if t.ballsTopRow.count == 3 { self.topRowCoordinator.ballsTopRow = t.ballsTopRow }
                     if t.strikeRows.count == 4 { self.topRowCoordinator.strikeRows = t.strikeRows }
                     if t.ballsRows.count == 4 { self.topRowCoordinator.ballsRows = t.ballsRows }
+                    self.gridPaletteSelections = Self.paletteSelections(from: t)
                 }
 
             }

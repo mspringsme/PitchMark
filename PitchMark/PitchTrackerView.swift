@@ -4588,31 +4588,150 @@ struct ResetPitchButton: View {
 
 struct CodeOrderToggle: View {
     @Binding var pitchFirst: Bool
+    let template: PitchTemplate?
+    let selectedCode: String?
+    let onColorTap: (String) -> Void
+
+    private var activeColorNames: [String] {
+        guard let template else { return [] }
+        return pitchFirst
+            ? Array(template.pitchFirstColors.prefix(2))
+            : Array(template.locationFirstColors.prefix(3))
+    }
+
+    private var canShowOverlay: Bool {
+        guard let selectedCode else { return false }
+        return !selectedCode.isEmpty
+    }
 
     var body: some View {
-        HStack(spacing: 4) {
-            Text("Code Order")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            if !activeColorNames.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(activeColorNames.enumerated()), id: \.offset) { item in
+                            let name = item.element
+                            Button {
+                                onColorTap(name)
+                            } label: {
+                                Circle()
+                                    .fill(templatePaletteColor(name))
+                                    .frame(width: 26, height: 26)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.black, lineWidth: 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!canShowOverlay)
+                            .opacity(canShowOverlay ? 1 : 0.5)
+                        }
+                    }
 
-            Picker("", selection: $pitchFirst) {
-                Text("Pitch 1st")
-                    .tag(true)
-
-                Text("Location 1st")
-                    .tag(false)
+                    Text("Tap to show")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .controlSize(.mini)
-            .pickerStyle(.segmented)
+            else {
+                Color.clear
+                    .frame(width: 1, height: 36)
+            }
+
+            Spacer()
+
+            HStack(spacing: 3) {
+                Text("Order")
+                    .font(.caption)
+                    .foregroundStyle(.black)
+
+                Picker("", selection: $pitchFirst) {
+                    Text("Pitch 1st")
+                        .tag(true)
+
+                    Text("Location 1st")
+                        .tag(false)
+                }
+                .controlSize(.mini)
+                .pickerStyle(.segmented)
+                .fixedSize(horizontal: true, vertical: false)
+            }
         }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
     }
+}
+
+private struct CodeDisplayOverlayView: View {
+    let colorName: String
+    let code: String
+    let onClose: () -> Void
+
+    private var backgroundColor: Color {
+        templatePaletteColor(colorName)
+    }
+
+    private var foregroundColor: Color {
+        switch colorName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "black", "blue", "red":
+            return .white
+        default:
+            return .black
+        }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .topTrailing) {
+                backgroundColor
+                    .ignoresSafeArea()
+
+                let horizontalSpan = max(120.0, proxy.size.width - 48)
+                let verticalSpan = max(120.0, proxy.size.height - 48)
+                let characterSpacing = max(18.0, horizontalSpan * 0.09)
+                let fontSize = max(110.0, (verticalSpan - (characterSpacing * 3)) / 2.5)
+
+                HStack(spacing: characterSpacing) {
+                    ForEach(Array(code).map(String.init), id: \.self) { character in
+                        Text(character)
+                            .font(.system(size: fontSize, weight: .black, design: .rounded))
+                            .foregroundStyle(foregroundColor)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    }
+                }
+                .fixedSize()
+                .rotationEffect(.degrees(-90))
+                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(foregroundColor)
+                        .padding(12)
+                        .background(
+                            Circle()
+                                .fill(foregroundColor.opacity(0.15))
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(20)
+            }
+        }
+    }
+}
+
+private struct CodeDisplayOverlayPayload: Identifiable {
+    let id = UUID()
+    let colorName: String
+    let code: String
 }
 
 struct CalledPitchView: View {
     @State private var showResultOverlay = false
     @State private var selectedActualLocation: String?
     @State private var tappedCode: String?
+    @State private var codeDisplayOverlayPayload: CodeDisplayOverlayPayload?
     @AppStorage(PitchTrackerView.DefaultsKeys.practiceCodesEnabled) private var codesEnabled: Bool = true
     @Binding var isRecordingResult: Bool
     @Binding var activeCalledPitchId: String?
@@ -4636,7 +4755,12 @@ struct CalledPitchView: View {
         }
         return code
     }
-    
+
+    private var selectedDisplayedCode: String? {
+        guard let tappedCode else { return nil }
+        return reorderedCodeIfNeeded(tappedCode)
+    }
+
     var body: some View {
         let displayLocation = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
         let assignments = pitchCodeAssignments.filter {
@@ -4737,7 +4861,18 @@ struct CalledPitchView: View {
                     .padding(.top, 2)
                     // Code order toggle (hidden in practice when codes are Off)
                     if !isPracticeMode || codesEnabled {
-                        CodeOrderToggle(pitchFirst: $pitchFirst)
+                        CodeOrderToggle(
+                            pitchFirst: $pitchFirst,
+                            template: template,
+                            selectedCode: selectedDisplayedCode,
+                            onColorTap: { colorName in
+                                guard let selectedDisplayedCode else { return }
+                                codeDisplayOverlayPayload = CodeDisplayOverlayPayload(
+                                    colorName: colorName,
+                                    code: selectedDisplayedCode
+                                )
+                            }
+                        )
                     }
                     
                 } else {
@@ -4748,7 +4883,12 @@ struct CalledPitchView: View {
                             .frame(height: 60)
                             .padding(.top, 2)
                         // Reserve space for the CodeOrderToggle to prevent layout jump
-                        CodeOrderToggle(pitchFirst: $pitchFirst)
+                        CodeOrderToggle(
+                            pitchFirst: $pitchFirst,
+                            template: template,
+                            selectedCode: selectedDisplayedCode,
+                            onColorTap: { _ in }
+                        )
                             .hidden()
                     } else if !isEncryptedMode {
                         Text("No assigned calls for this pitch/location")
@@ -4790,6 +4930,15 @@ struct CalledPitchView: View {
         .padding(.horizontal)
         .transition(.opacity)
         .accessibilityElement(children: .combine)
+        .fullScreenCover(item: $codeDisplayOverlayPayload) { payload in
+            CodeDisplayOverlayView(
+                colorName: payload.colorName,
+                code: payload.code,
+                onClose: {
+                    codeDisplayOverlayPayload = nil
+                }
+            )
+        }
         .onAppear {
             if isPracticeMode {
                 // If Codes are Off, allow choosing result without tapping a code first
@@ -4801,6 +4950,11 @@ struct CalledPitchView: View {
                 // When turning Codes Off, immediately allow result selection; when On, require code tap again
                 isRecordingResult = !newValue
                 tappedCode = nil
+            }
+        }
+        .onChange(of: tappedCode) { _, newValue in
+            if newValue == nil {
+                codeDisplayOverlayPayload = nil
             }
         }
         
@@ -5761,13 +5915,3 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
-
-
-
-
-
-
-
-
-
-
