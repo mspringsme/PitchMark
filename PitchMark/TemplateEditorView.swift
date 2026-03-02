@@ -352,6 +352,26 @@ extension EnvironmentValues {
     }
 }
 
+private enum GridPaletteColor: String, CaseIterable, Identifiable {
+    case red
+    case black
+    case green
+    case white
+    case blue
+
+    var id: String { rawValue }
+
+    var color: Color {
+        switch self {
+        case .red: return .red
+        case .black: return .black
+        case .green: return .green
+        case .white: return .white
+        case .blue: return .blue
+        }
+    }
+}
+
 struct TemplateEditorView: View {
     
     @State private var name: String
@@ -383,6 +403,7 @@ struct TemplateEditorView: View {
     // Added new states for initial snapshot injection
     @State private var initialPitchGridHeaders: [PitchHeader]? = nil
     @State private var initialPitchGridValues: [[String]]? = nil
+    @State private var gridPaletteSelections: [GridPaletteColor?] = Array(repeating: nil, count: 5)
     
     @StateObject private var topRowCoordinator = TopRowValidationCoordinator()
     @EnvironmentObject var authManager: AuthManager
@@ -495,6 +516,71 @@ struct TemplateEditorView: View {
         selectedPitches.insert(trimmed)
         customPitchName = ""
         customPitchFieldFocused = false
+    }
+
+    private func availablePaletteColors(for index: Int) -> [GridPaletteColor] {
+        let used = Set(
+            gridPaletteSelections.enumerated().compactMap { offset, selection in
+                offset == index ? nil : selection
+            }
+        )
+        return GridPaletteColor.allCases.filter { !used.contains($0) }
+    }
+
+    @ViewBuilder
+    private func palettePickerButton(at index: Int) -> some View {
+        Menu {
+            ForEach(availablePaletteColors(for: index)) { option in
+                Button {
+                    gridPaletteSelections[index] = option
+                } label: {
+                    Label(option.rawValue.capitalized, systemImage: "circle.fill")
+                        .foregroundStyle(option.color)
+                }
+            }
+            if gridPaletteSelections[index] != nil {
+                Button("Clear") {
+                    gridPaletteSelections[index] = nil
+                }
+            }
+        } label: {
+            Circle()
+                .fill(gridPaletteSelections[index]?.color ?? .white)
+                .frame(width: 22, height: 22)
+                .overlay(
+                    Circle()
+                        .stroke(Color.black, lineWidth: 1.5)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var topGridPickerRow: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ForEach(0..<2, id: \.self) { index in
+                palettePickerButton(at: index)
+            }
+        }
+    }
+
+    private var bottomGridPickerRow: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ForEach(2..<5, id: \.self) { index in
+                palettePickerButton(at: index)
+            }
+        }
+    }
+
+    private var palettePickerColumn: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(0..<5, id: \.self) { index in
+                if index == 2 {
+                    Spacer()
+                        .frame(height: 40)
+                }
+                palettePickerButton(at: index)
+            }
+        }
     }
     
     var body: some View {
@@ -615,55 +701,80 @@ struct TemplateEditorView: View {
                         .font(.title3)
                         .foregroundColor(.secondary)
                         .padding(.top, 4)
+                        .padding(.bottom, -2)
                     // 3 grids
-                    VStack{
-                        VStack{
-                            
-                            Text("Pitch Selection")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding(.top, 60)
-                                .padding(.bottom, -2)
-                            
-                            PitchGridView2(
-                                availablePitches: availablePitches,
-                                hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
-                                onProvideRandomizeAction: { action in
-                                    self.randomizeFirstColumnAction = action
-                                },
-                                onProvideClearAction: { action in
-                                    self.clearPitchGridAction = action
-                                },
-                                onProvideSnapshot: { provider in
-                                    self.pitchGridSnapshotProvider = provider
-                                },
-                                initialHeaders: initialPitchGridHeaders,
-                                initialGrid: initialPitchGridValues
-                            )
-                        }
-                        
-                        HStack{
-                            
-                            VStack{
-                                StrikeLocationGridView()
-                                    .environment(\.topRowCoordinator, topRowCoordinator)
-                                    .padding(.top, 8)
-                                Text("Strikes")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .padding(.top, -2)
+                    HStack(spacing: 0) {
+                        palettePickerColumn
+                            .padding(.top, 32)
+                        .frame(width: 60, alignment: .leading)
+
+                        Spacer(minLength: 8)
+
+                        VStack(alignment: .trailing, spacing: 8) {
+                            GeometryReader { proxy in
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack {
+                                        Spacer(minLength: 0)
+
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text("Pitch Selection")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                                .padding(.top, 20)
+                                                .padding(.bottom, -2)
+                                                .frame(maxWidth: .infinity, alignment: .center)
+                                            
+                                            PitchGridView2(
+                                                availablePitches: availablePitches,
+                                                hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
+                                                onProvideRandomizeAction: { action in
+                                                    self.randomizeFirstColumnAction = action
+                                                },
+                                                onProvideClearAction: { action in
+                                                    self.clearPitchGridAction = action
+                                                },
+                                                onProvideSnapshot: { provider in
+                                                    self.pitchGridSnapshotProvider = provider
+                                                },
+                                                initialHeaders: initialPitchGridHeaders,
+                                                initialGrid: initialPitchGridValues
+                                            )
+                                        }
+
+                                        Spacer(minLength: 0)
+                                    }
+                                    .frame(minWidth: proxy.size.width)
+                                }
                             }
-                            VStack{
-                                BallsLocationGridView()
-                                    .environment(\.topRowCoordinator, topRowCoordinator)
-                                    .padding(.top, 8)
-                                Text("Balls")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .padding(.top, -2)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 170)
+
+                            VStack(spacing: 4) {
+                                HStack(spacing: 6) {
+                                    VStack {
+                                        StrikeLocationGridView()
+                                            .environment(\.topRowCoordinator, topRowCoordinator)
+                                            .padding(.top, 8)
+                                        Text("Strikes")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .padding(.top, -2)
+                                    }
+                                    VStack {
+                                        BallsLocationGridView()
+                                            .environment(\.topRowCoordinator, topRowCoordinator)
+                                            .padding(.top, 8)
+                                        Text("Balls")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .padding(.top, -2)
+                                    }
+                                }
                             }
                         }
+                        .padding(.trailing, 12)
                     }
+                    .frame(maxWidth: .infinity)
                     
                     VStack() {
                         Spacer()
@@ -2281,5 +2392,3 @@ private extension PrintableEncryptedGridsView {
         return Array(headerRow[1...n])
     }
 }
-
-

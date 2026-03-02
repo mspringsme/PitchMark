@@ -248,6 +248,7 @@ struct PitchTrackerView: View {
     @State private var shareCode: String = ""
     @State private var activeGameOwnerUserId: String? = nil
     @State private var gameListener: ListenerRegistration? = nil
+    @State private var livePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEvents: [PitchEvent] = []
     @State private var lastObservedResultSelectionId: String? = nil
@@ -627,15 +628,15 @@ struct PitchTrackerView: View {
         writeResultSelection(label: "")
     }
     func startListeningToLivePitchEvents(liveId: String) {
-        gamePitchEventsListener?.remove()
-        gamePitchEventsListener = nil
+        livePitchEventsListener?.remove()
+        livePitchEventsListener = nil
 
         let ref = Firestore.firestore()
             .collection("liveGames").document(liveId)
             .collection("pitchEvents")
             .order(by: "timestamp", descending: false)
 
-        gamePitchEventsListener = ref.addSnapshotListener { snap, err in
+        livePitchEventsListener = ref.addSnapshotListener { snap, err in
             if let err = err {
                 print("❌ Live pitchEvents listener error:", err.localizedDescription)
                 return
@@ -742,6 +743,11 @@ struct PitchTrackerView: View {
         gamePitchEventsListener?.remove()
         gamePitchEventsListener = nil
 
+        // While a live room is active, the cards should be driven only by
+        // /liveGames/{liveId}/pitchEvents to avoid stale owner-game snapshots
+        // overwriting fresh live updates.
+        guard activeLiveId == nil else { return }
+
         guard isGame,
               let gid = selectedGameId,
               let owner = effectiveGameOwnerUserId
@@ -779,6 +785,8 @@ struct PitchTrackerView: View {
         mirroredLivePitchEventIds.removeAll()
         liveListener?.remove()
         liveListener = nil
+        gamePitchEventsListener?.remove()
+        gamePitchEventsListener = nil
 
         activeLiveId = liveId
         startListeningToLivePitchEvents(liveId: liveId)
@@ -931,10 +939,8 @@ struct PitchTrackerView: View {
 
                 if liveIsActive {
                     if self.isOwnerForActiveGame {
-                        // Owner: dismiss CalledPitchView when participant clears pending (i.e., after saving)
                         self.syncOwnerCallStateFromLiveData(data)
                     } else if !self.showConfirmSheet {
-                        // Participant: reflect owner's pending pitch, but don't clobber UI mid-confirm
                         self.applyPendingFromLiveData(data)
                     }
                     self.applyResultSelectionFromLiveData(data)
@@ -1023,6 +1029,8 @@ struct PitchTrackerView: View {
             // stop listeners
             liveListener?.remove()
             liveListener = nil
+            livePitchEventsListener?.remove()
+            livePitchEventsListener = nil
             gamePitchEventsListener?.remove()
             gamePitchEventsListener = nil
 
@@ -1074,7 +1082,10 @@ struct PitchTrackerView: View {
         // Stop listening and clear active game selection for this device
         gameListener?.remove()
         gameListener = nil
-
+        livePitchEventsListener?.remove()
+        livePitchEventsListener = nil
+        gamePitchEventsListener?.remove()
+        gamePitchEventsListener = nil
         selectedGameId = nil
         opponentName = nil
         selectedBatterId = nil
@@ -2915,7 +2926,7 @@ struct PitchTrackerView: View {
 
                 hydrateChosenGameUI(ownerUid: ownerUid, gameId: gameId)
                 startListeningToActiveGame()
-
+                startListeningToGamePitchEvents()
                 showGameSheet = false
             },
 
@@ -3124,10 +3135,19 @@ struct PitchTrackerView: View {
 
     var body: some View {
         let synced = baseBody.withGameSync(
-            start: startListeningToActiveGame,
+            start: {
+                startListeningToActiveGame()
+                if activeLiveId == nil {
+                    startListeningToGamePitchEvents()
+                }
+            },
             stop: {
                 gameListener?.remove()
                 gameListener = nil
+                livePitchEventsListener?.remove()
+                livePitchEventsListener = nil
+                gamePitchEventsListener?.remove()
+                gamePitchEventsListener = nil
             },
             gameId: selectedGameId,
             ownerId: activeGameOwnerUserId,
@@ -3270,10 +3290,15 @@ struct PitchTrackerView: View {
                     self.sessionManager.switchMode(to: .game)
 
                     // ✅ Start listeners
-                    self.startListeningToLiveGame(liveId: liveId)
-                    self.startListeningToLivePitchEvents(liveId: liveId)
+                        self.startListeningToLiveGame(liveId: liveId)
+                        self.startListeningToLivePitchEvents(liveId: liveId)
 
-                    return
+                        // Ensure owner also listens to their /users/{owner}/games/{gid}/pitchEvents
+                        if self.isOwnerForActiveGame {
+                            self.startListeningToGamePitchEvents()
+                        }
+
+                        return
                 }
 
 
@@ -3312,6 +3337,7 @@ struct PitchTrackerView: View {
                     DispatchQueue.main.async {
                         self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: gid)
                         self.startListeningToActiveGame()
+                        self.startListeningToGamePitchEvents()
                     }
 
 
@@ -3321,7 +3347,85 @@ struct PitchTrackerView: View {
             }
             .eraseToAnyView()
     }
+    
+    struct OwnerCalledPitchRecordContainer: View {
+        @EnvironmentObject var authManager: AuthManager
+        @EnvironmentObject var sessionManager: PitchSessionManager
 
+        // Live events that drive PitchResultSheet
+        @State private var gameEvents: [PitchEvent] = []
+
+        // Keep a listener handle to detach on change/disappear
+        @State private var pitchEventsListener: ListenerRegistration? = nil
+
+        // Optional: if you show the selected selection in your UI
+        @State private var selectedOwnerUid: String = ""
+        @State private var selectedGameId: String = ""
+
+        // If you already have these in a parent, pass them in instead
+        @State private var games: [Game] = []
+        @State private var templates: [PitchTemplate] = []
+
+        var body: some View {
+            PitchResultSheet(
+                allEvents: gameEvents,   // <- live-updating array
+                games: games,
+                templates: templates,
+                isParticipant: false
+            )
+            .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
+                guard
+                    let info = note.userInfo as? [String: Any],
+                    let type = info["type"] as? String
+                else { return }
+
+                if type == "game" {
+                    guard let gameId = info["gameId"] as? String else { return }
+                    let ownerUid = (info["ownerUserId"] as? String) ?? (authManager.user?.uid ?? "")
+
+                    selectedOwnerUid = ownerUid
+                    selectedGameId = gameId
+
+                    // Attach listener to the owner’s game path
+                    attachGameListener(ownerUid: ownerUid, gameId: gameId)
+
+                    // Ensure PitchResultSheet filters as game
+                    sessionManager.switchMode(to: .game)
+                } else if type == "practice" {
+                    // Optional: If you want live practice updates, attach a per-user listener
+                    authManager.stopListening(pitchEventsListener)
+                    pitchEventsListener = authManager.listenUserPitchEvents(userId: authManager.user?.uid ?? "") { events in
+                        // PitchResultSheet will filter to the active practiceId via sessionManager
+                        self.gameEvents = events
+                    }
+                    sessionManager.switchMode(to: .practice)
+                }
+            }
+            .onAppear {
+                // Optional: If you persist a last-selected game, re-attach here
+                // attachGameListener(ownerUid: <owner>, gameId: <gameId>)
+
+                // Optional: fetch games/templates locally if you’re not already passing them down
+                // authManager.loadGames { self.games = $0 }
+                // authManager.loadTemplates { self.templates = $0 }
+            }
+            .onDisappear {
+                authManager.stopListening(pitchEventsListener)
+                pitchEventsListener = nil
+            }
+        }
+
+        private func attachGameListener(ownerUid: String, gameId: String) {
+            // Detach any previous listener before attaching
+            authManager.stopListening(pitchEventsListener)
+            pitchEventsListener = nil
+
+            pitchEventsListener = authManager.listenGamePitchEvents(ownerUserId: ownerUid, gameId: gameId) { events in
+                // Already ordered by timestamp ascending
+                self.gameEvents = events
+            }
+        }
+    }
 }
 
 private struct ProgressGameView: View {
@@ -5657,8 +5761,6 @@ struct BallStrikeToggle: View {
         .accessibilityValue(isOn ? "On" : "Off")
     }
 }
-
-
 
 
 

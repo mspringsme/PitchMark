@@ -720,6 +720,97 @@ class AuthManager: ObservableObject {
         }
     }
     
+    // MARK: - Pitch Events (Realtime Listeners)
+    @discardableResult
+    func listenGamePitchEvents(
+        ownerUserId: String,
+        gameId: String,
+        onChange: @escaping ([PitchEvent]) -> Void
+    ) -> ListenerRegistration {
+        let ref = Firestore.firestore()
+            .collection("users").document(ownerUserId)
+            .collection("games").document(gameId)
+            .collection("pitchEvents")
+
+        print("👂 listenGamePitchEvents path=\(ref.path)")
+
+        let listener = ref
+            .order(by: "timestamp", descending: false)
+            .addSnapshotListener { snapshot, error in
+                if let error = error {
+                    print("❌ listenGamePitchEvents error:", error.localizedDescription)
+                    DispatchQueue.main.async { onChange([]) }
+                    return
+                }
+
+                let docs = snapshot?.documents ?? []
+                var events: [PitchEvent] = []
+                events.reserveCapacity(docs.count)
+
+                for d in docs {
+                    do {
+                        let evt = try d.data(as: PitchEvent.self)
+                        events.append(evt)
+                    } catch {
+                        print("❌ PitchEvent decode failed (game) docId=\(d.documentID) error=\(error)")
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    onChange(events)
+                }
+            }
+
+        return listener
+    }
+
+    @discardableResult
+    func listenUserPitchEvents(
+        userId: String,
+        onChange: @escaping ([PitchEvent]) -> Void
+    ) -> ListenerRegistration {
+        let ref = Firestore.firestore()
+            .collection("users").document(userId)
+            .collection("pitchEvents")
+
+        print("👂 listenUserPitchEvents path=\(ref.path)")
+
+        let listener = ref
+            .order(by: "timestamp", descending: false)
+            .addSnapshotListener { snapshot, error in
+                if let error = error {
+                    print("❌ listenUserPitchEvents error:", error.localizedDescription)
+                    DispatchQueue.main.async { onChange([]) }
+                    return
+                }
+
+                let docs = snapshot?.documents ?? []
+                var events: [PitchEvent] = []
+                events.reserveCapacity(docs.count)
+
+                for d in docs {
+                    do {
+                        let evt = try d.data(as: PitchEvent.self)
+                        events.append(evt)
+                    } catch {
+                        print("❌ PitchEvent decode failed (user) docId=\(d.documentID) error=\(error)")
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    onChange(events)
+                }
+            }
+
+        return listener
+    }
+
+    /// Convenience to remove a Firestore listener safely.
+    func stopListening(_ listener: ListenerRegistration?) {
+        listener?.remove()
+    }
+    
+
     func probeUserPrivateCollections(tag: String) {
         guard let u = user else {
             print("🧪 \(tag) probe: user=nil")
