@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UIKit
+import FirebaseFirestore
 
 // Shared helper: returns a stable color for any pitch name, including custom ones.
 // Order of precedence: user override -> pitchColors map -> deterministic palette.
@@ -361,12 +362,27 @@ struct PitchHeader: Codable, Hashable {
     var abbreviation: String?
 }
 
+struct Pitcher: Identifiable, Codable, Hashable {
+    @DocumentID var id: String?
+
+    var name: String
+    var templateId: String?
+
+    var ownerUid: String
+    var sharedWith: [String]
+    var claimedByUid: String?
+
+    var createdAt: Date? = nil
+}
+
 struct PitchTemplate: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
     var pitches: [String]
     var codeAssignments: [PitchCodeAssignment]
     var isEncrypted: Bool = false
+    var ownerUid: String? = nil
+    var sharedWith: [String] = []
 
     // Encrypted editor data
     var pitchGridHeaders: [PitchHeader] = []          // headers from PitchGridView2 (col > 0)

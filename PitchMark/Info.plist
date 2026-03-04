@@ -8,6 +8,16 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
+			<string>PitchMarkInvite</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pitchmark</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
 			<string>Google</string>
 			<key>CFBundleURLSchemes</key>
 			<array>

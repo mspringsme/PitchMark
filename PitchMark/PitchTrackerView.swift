@@ -12,6 +12,7 @@ import FirebaseFirestore
 import FirebaseAuth
 import UniformTypeIdentifiers
 import UIKit
+import CoreImage.CIFilterBuiltins
 
 //Hi
 // 🧩 Toggle Chip Component
@@ -153,6 +154,11 @@ struct PitchTrackerView: View {
     @State private var showSignOutConfirmation = false
     @State private var selectedTemplate: PitchTemplate? = nil
     @State private var showTemplateEditor = false
+    @State private var showInviteJoinSheet = false
+    @State private var inviteJoinText: String = ""
+    @State private var inviteJoinError: String? = nil
+    @State private var pitchers: [Pitcher] = []
+    @State private var selectedPitcherId: String? = nil
     @State private var isRecordingResult = false
     @State private var activeCalledPitchId: String? = nil
     @State private var actualLocationRecorded: String? = nil
@@ -230,6 +236,7 @@ struct PitchTrackerView: View {
         static let activeIsPractice = "activeIsPractice"
         static let activePracticeId = "activePracticeId"
         static let storedPracticeSessions = "storedPracticeSessions"
+        static let lastPitcherId = "lastPitcherId"
         static let encryptedByGameId = "encryptedByGameId"
         static let encryptedByPracticeId = "encryptedByPracticeId"
         static let practiceCodesEnabled = "practiceCodesEnabled"
@@ -630,6 +637,35 @@ struct PitchTrackerView: View {
         writeResultSelection(label: "")
     }
 
+    private func ensureLivePresence(liveId: String) {
+        LiveGameService.shared.heartbeatPresence(liveId: liveId)
+    }
+
+    private func seedLivePitchEventsOnce(liveId: String) {
+        guard gamePitchEvents.isEmpty else { return }
+
+        let ref = Firestore.firestore()
+            .collection("liveGames").document(liveId)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+
+        ref.getDocuments { snap, err in
+            if let err {
+                print("❌ seed live pitchEvents failed:", err.localizedDescription)
+                return
+            }
+            let events: [PitchEvent] = snap?.documents.compactMap { doc in
+                PitchEvent.decodeFirestoreDocument(doc)
+            } ?? []
+
+            DispatchQueue.main.async {
+                if self.gamePitchEvents.isEmpty {
+                    self.gamePitchEvents = events
+                }
+            }
+        }
+    }
+
     private func applyPendingLiveTemplateIfPossible() {
         guard activeLiveId != nil else { return }
 
@@ -667,11 +703,16 @@ struct PitchTrackerView: View {
 
             // Decode for UI (existing behavior)
             let events: [PitchEvent] = docs.compactMap { doc in
-                try? doc.data(as: PitchEvent.self)
+                PitchEvent.decodeFirestoreDocument(doc)
             }
 
             DispatchQueue.main.async {
-                self.gamePitchEvents = events
+                if events.isEmpty {
+                    // Owner fallback: seed cards from the owner's game history
+                    self.seedOwnerGamePitchEventsForLiveIfNeeded()
+                } else {
+                    self.gamePitchEvents = events
+                }
 
                 // ✅ OWNER ONLY: mirror live events into owner’s real game doc
                 guard self.isOwnerForActiveGame,
@@ -753,6 +794,17 @@ struct PitchTrackerView: View {
                         self.us = updated.us
                         self.them = updated.them
                     }
+
+                    // Ensure owner still sees the lineup if local cells are empty
+                    if self.jerseyCells.isEmpty {
+                        if let ids = updated.batterIds, ids.count == updated.jerseyNumbers.count {
+                            self.jerseyCells = zip(ids, updated.jerseyNumbers).map { (idStr, num) in
+                                JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
+                            }
+                        } else {
+                            self.jerseyCells = updated.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                        }
+                    }
                 }
             } catch {
                 print("❌ decode Game failed:", error)
@@ -789,7 +841,7 @@ struct PitchTrackerView: View {
             guard let docs = snap?.documents else { return }
 
             let events: [PitchEvent] = docs.compactMap { doc in
-                try? doc.data(as: PitchEvent.self)
+                PitchEvent.decodeFirestoreDocument(doc)
             }
 
             DispatchQueue.main.async {
@@ -801,7 +853,44 @@ struct PitchTrackerView: View {
     @State private var liveListener: ListenerRegistration? = nil
     @State private var activeLiveId: String? = nil
     @State private var didHydrateLineupFromLive: Bool = false
+    @State private var didSeedOwnerGameEventsForLive: Bool = false
     @State private var participantsListener: ListenerRegistration? = nil
+
+    private func seedOwnerGamePitchEventsForLiveIfNeeded() {
+        guard activeLiveId != nil else { return }
+        guard !didSeedOwnerGameEventsForLive else { return }
+        guard isOwnerForActiveGame,
+              let owner = effectiveGameOwnerUserId,
+              let gid = selectedGameId
+        else { return }
+
+        didSeedOwnerGameEventsForLive = true
+
+        let ref = Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+
+        ref.getDocuments { snap, err in
+            if let err {
+                print("❌ seed owner game pitchEvents failed:", err.localizedDescription)
+                return
+            }
+
+            let docs = snap?.documents ?? []
+            let events: [PitchEvent] = docs.compactMap { doc in
+                PitchEvent.decodeFirestoreDocument(doc)
+            }
+
+            DispatchQueue.main.async {
+                guard self.activeLiveId != nil else { return }
+                if self.gamePitchEvents.isEmpty {
+                    self.gamePitchEvents = events
+                }
+            }
+        }
+    }
 
     private func startListeningToLiveGame(liveId: String) {
         mirroredLivePitchEventIds.removeAll()
@@ -810,6 +899,8 @@ struct PitchTrackerView: View {
         gamePitchEventsListener?.remove()
         gamePitchEventsListener = nil
 
+        didSeedOwnerGameEventsForLive = false
+        gamePitchEvents = []
         activeLiveId = liveId
         startListeningToLivePitchEvents(liveId: liveId)
         startListeningToLiveParticipants(liveId: liveId)
@@ -938,6 +1029,10 @@ struct PitchTrackerView: View {
                                     self.startListeningToActiveGame()
                                 }
                             }
+                        }
+
+                        if self.gamePitchEvents.isEmpty {
+                            self.seedOwnerGamePitchEventsForLiveIfNeeded()
                         }
                     }
                 }
@@ -1179,17 +1274,7 @@ struct PitchTrackerView: View {
 
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
-        // Prefer explicit per-session selection when available
-        if isGame, let gid = selectedGameId, let explicit = encryptedSelectionByGameId[gid] {
-            return explicit ? "Encrypted" : "Classic"
-        }
-        if !isGame, let pid = selectedPracticeId, let explicit = encryptedSelectionByPracticeId[pid] {
-            return explicit ? "Encrypted" : "Classic"
-        }
-        // Fallback: infer from template data presence
-        if let t = selectedTemplate {
-            return templateHasEncryptedData(t) ? "Encrypted" : "Classic"
-        }
+        // Encrypted mode has been retired; keep label empty.
         return String()
     }
 
@@ -1215,6 +1300,15 @@ struct PitchTrackerView: View {
             defaults.set(id, forKey: DefaultsKeys.lastTemplateId)
         } else {
             defaults.removeObject(forKey: DefaultsKeys.lastTemplateId)
+        }
+    }
+
+    private func persistSelectedPitcherId(_ id: String?) {
+        let defaults = UserDefaults.standard
+        if let id {
+            defaults.set(id, forKey: DefaultsKeys.lastPitcherId)
+        } else {
+            defaults.removeObject(forKey: DefaultsKeys.lastPitcherId)
         }
     }
 
@@ -1430,6 +1524,18 @@ struct PitchTrackerView: View {
         // Force chips/strike zone to refresh colors and content
         colorRefreshToken = UUID()
     }
+
+    private func applySelectedPitcher(_ pitcher: Pitcher) {
+        selectedPitcherId = pitcher.id
+        persistSelectedPitcherId(pitcher.id)
+
+        guard !(isGame && !isOwnerForActiveGame) else { return }
+        if let tid = pitcher.templateId,
+           let template = templates.first(where: { $0.id.uuidString == tid }),
+           selectedTemplate?.id != template.id {
+            applyTemplate(template)
+        }
+    }
     
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
@@ -1500,9 +1606,55 @@ struct PitchTrackerView: View {
         }
     }
 
+    private func inviteToken(from text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
 
+        if let url = URL(string: trimmed),
+           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+           !token.isEmpty {
+            return token
+        }
 
-    
+        // Allow raw token input (no URL scheme)
+        if trimmed.contains("://") { return nil }
+        return trimmed
+    }
+
+    private func joinLiveGameFromInvite() {
+        inviteJoinError = nil
+
+        guard let token = inviteToken(from: inviteJoinText) else {
+            inviteJoinError = "Paste a valid invite link."
+            return
+        }
+
+        isJoiningSession = true
+        LiveGameService.shared.joinLiveGameByInviteToken(token: token) { result in
+            DispatchQueue.main.async {
+                self.isJoiningSession = false
+
+                switch result {
+                case .success(let liveId):
+                    NotificationCenter.default.post(
+                        name: .gameOrSessionChosen,
+                        object: nil,
+                        userInfo: [
+                            "type": "liveGame",
+                            "liveId": liveId
+                        ]
+                    )
+                    self.inviteJoinText = ""
+                    self.showInviteJoinSheet = false
+
+                case .failure(let err):
+                    self.inviteJoinError = err.localizedDescription
+                }
+            }
+        }
+    }
+
     // Tiny factory to reduce type-checker work when creating bindings
     private func intBinding(
         get: @escaping () -> Int,
@@ -1678,6 +1830,11 @@ struct PitchTrackerView: View {
         jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber
     }
 
+    private var selectedPitcherName: String {
+        guard let pid = selectedPitcherId else { return "Select a pitcher" }
+        return pitchers.first(where: { $0.id == pid })?.name ?? "Select a pitcher"
+    }
+
     private var pitchesFacedTitle: String {
         if let num = selectedJerseyNumberDisplay, !num.isEmpty {
             return "Pitches Faced – #\(num)"
@@ -1789,7 +1946,8 @@ struct PitchTrackerView: View {
     }
     @ViewBuilder
     private var cardsOverlayContent: some View {
-        if let template = selectedTemplate {
+        let showCards = (selectedTemplate != nil) || (isGame && activeLiveId != nil)
+        if showCards {
             PitchResultSheet(
                 allEvents: filteredEvents,
                 games: games,
@@ -1894,13 +2052,12 @@ struct PitchTrackerView: View {
     private var headerContainer: some View {
         let screen = UIScreen.main.bounds
         
-        return VStack(spacing: 8) {
+        return VStack(spacing: 4) {
             topBar
-            pitchSelectionChips
         }
         .frame(
-            width: screen.width * 0.9,   // 90% of screen width
-            height: screen.height * 0.15 // 15% of screen height
+            width: screen.width * 0.94,   // 94% of screen width
+            height: screen.height * 0.10 // 10% of screen height
         )
         .background(
             .thickMaterial,
@@ -1974,7 +2131,8 @@ struct PitchTrackerView: View {
     }
     
     private var contentSectionDimmed: some View {
-        let isDimmed = (selectedTemplate == nil)
+        let isActiveLiveParticipant = (activeLiveId != nil && isGame && !isOwnerForActiveGame)
+        let isDimmed = (selectedTemplate == nil && !isActiveLiveParticipant)
         return contentSection
             .opacity(isDimmed ? 0.6 : 1.0)
             .blur(radius: isDimmed ? 4 : 0)
@@ -2001,6 +2159,48 @@ struct PitchTrackerView: View {
         HStack {
             if !(isGame && !isOwnerForActiveGame) {
             Menu {
+                ForEach(pitchers) { pitcher in
+                    Button(pitcher.name) {
+                        applySelectedPitcher(pitcher)
+                    }
+                }
+            } label: {
+                let currentLabel = selectedPitcherName
+                let widestLabel = ([currentLabel] + pitchers.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+
+                ZStack {
+                    HStack(spacing: 8) {
+                        Text(widestLabel)
+                            .font(.headline)
+                            .opacity(0)
+                        Image(systemName: "chevron.down")
+                            .font(.subheadline.weight(.semibold))
+                            .opacity(0)
+                    }
+
+                    HStack(spacing: 8) {
+                        Text(currentLabel)
+                            .font(.headline)
+                        Image(systemName: "chevron.down")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .foregroundColor(.primary)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                .opacity(pitchers.isEmpty ? 0.6 : 1.0)
+                .contentShape(Capsule())
+            }
+            .disabled(pitchers.isEmpty)
+
+            Menu {
                 ForEach(templates, id: \.id) { template in
                     Button(template.name) {
                         if sessionManager.currentMode == .practice && selectedPracticeId != nil {
@@ -2021,12 +2221,14 @@ struct PitchTrackerView: View {
                         Text(widestLabel)
                             .font(.headline)
                             .opacity(0)
-                        Text(currentTemplateVersionLabel)
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(Color.clear)
-                            .opacity(0)
+                        if !currentTemplateVersionLabel.isEmpty {
+                            Text(currentTemplateVersionLabel)
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Color.clear)
+                                .opacity(0)
+                        }
                         Image(systemName: "chevron.down")
                             .font(.subheadline.weight(.semibold))
                             .opacity(0)
@@ -2036,14 +2238,15 @@ struct PitchTrackerView: View {
                     HStack(spacing: 8) {
                         Text(currentLabel)
                             .font(.headline)
-                        Text(currentTemplateVersionLabel)
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                        //.background(Color.gray.opacity(0.2))
-                            .foregroundStyle(Color.gray)
-                            .clipShape(Capsule())
-                            .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
+                        if !currentTemplateVersionLabel.isEmpty {
+                            Text(currentTemplateVersionLabel)
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .foregroundStyle(Color.gray)
+                                .clipShape(Capsule())
+                                .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
+                        }
                         Image(systemName: "chevron.down")
                             .font(.subheadline.weight(.semibold))
                     }
@@ -2066,6 +2269,8 @@ struct PitchTrackerView: View {
         }
             Spacer()
             
+            codeLinkButton
+
             Button(action: {
                 showSettings = true
             }) {
@@ -2073,25 +2278,6 @@ struct PitchTrackerView: View {
                     .imageScale(.large)
             }
             .tint(.gray)
-            Button(action: {
-                showSignOutConfirmation = true
-            }) {
-                Image(systemName: "person.crop.circle")
-                    .foregroundColor(.gray)
-                    .imageScale(.large)
-            }
-            
-            .accessibilityLabel("Sign Out")
-            .confirmationDialog(
-                "Are you sure you want to sign out of \(authManager.userEmail)?",
-                isPresented: $showSignOutConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Sign Out", role: .destructive) {
-                    authManager.signOut()
-                }
-                Button("Cancel", role: .cancel) { }
-            }
         }
         .padding(.horizontal)
         .padding(.top, 6)
@@ -2114,25 +2300,6 @@ struct PitchTrackerView: View {
             }
         } message: {
             Text("You're currently in a practice session:")
-        }
-    }
-    
-    private var pitchSelectionChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(orderedPitchesForTemplate, id: \.self) { pitch in
-                    ToggleChip(
-                        pitch: pitch,
-                        selectedPitches: $selectedPitches,
-                        template: selectedTemplate,
-                        codeAssignments: pitchCodeAssignments
-                    )
-                }
-            }
-            .padding(.horizontal)
-            .padding(.bottom, 4)
-            .padding(.top, 10)
-            .id(colorRefreshToken)
         }
     }
     
@@ -2513,18 +2680,19 @@ struct PitchTrackerView: View {
         .accessibilityLabel("Code Link")
         // ✅ Attach the dialog HERE so it anchors to THIS button
         .confirmationDialog(
-            "Code Link",
+            "Invite Link",
             isPresented: $showCodeShareModePicker,
             titleVisibility: .visible
         ) {
-            Button("Generate Code") {
+            Button("Create Invite Link") {
                 codeShareInitialTab = 0
                 showCodeShareSheet = true
             }
 
-            Button("Enter Code") {
-                codeShareInitialTab = 1
-                showCodeShareSheet = true
+            Button("Join via Invite Link") {
+                inviteJoinError = nil
+                inviteJoinText = ""
+                showInviteJoinSheet = true
             }
 
             // ✅ Disconnect (both sides) — only show when currently linked
@@ -2590,10 +2758,6 @@ struct PitchTrackerView: View {
                     progressRefreshToken = UUID()
                 }
             }
-
-            // ✅ Moved button: just right of the Practice/Game toggle
-            
-            codeLinkButton
 
             Spacer()
         }
@@ -2765,6 +2929,8 @@ struct PitchTrackerView: View {
 
             self.activeLiveId = persistedLiveId
             self.startLivePresenceHeartbeat(liveId: persistedLiveId)
+            self.ensureLivePresence(liveId: persistedLiveId)
+            self.seedLivePitchEventsOnce(liveId: persistedLiveId)
 
             self.isGame = true
             self.sessionManager.switchMode(to: .game)
@@ -2844,6 +3010,20 @@ struct PitchTrackerView: View {
                 }
 
                 self.pendingRestoreGameId = nil
+            }
+        }
+
+        authManager.loadPitchers { loadedPitchers in
+            self.pitchers = loadedPitchers
+
+            let defaults = UserDefaults.standard
+            let persistedPitcherId = defaults.string(forKey: DefaultsKeys.lastPitcherId)
+
+            if let pid = persistedPitcherId,
+               let pitcher = loadedPitchers.first(where: { $0.id == pid }) {
+                self.applySelectedPitcher(pitcher)
+            } else if let first = loadedPitchers.first {
+                self.applySelectedPitcher(first)
             }
         }
 
@@ -3004,7 +3184,62 @@ struct PitchTrackerView: View {
             consumeShareCode(code)
         }
         .id(codeShareSheetID)
-        .presentationDetents([.fraction(0.4), .medium])
+        .presentationDetents([.fraction(0.5)])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder private var inviteJoinSheetView: some View {
+        VStack(spacing: 16) {
+            Text("Join a Live Game")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Invite Link")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                TextField("Paste invite link", text: $inviteJoinText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Button("Paste") {
+                        if let pasted = UIPasteboard.general.string {
+                            inviteJoinText = pasted
+                        }
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+                }
+            }
+
+            if let error = inviteJoinError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack {
+                Button("Cancel", role: .cancel) {
+                    inviteJoinError = nil
+                    showInviteJoinSheet = false
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Button(isJoiningSession ? "Joining..." : "Join") {
+                    joinLiveGameFromInvite()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(inviteJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningSession)
+            }
+        }
+        .padding()
+        .presentationDetents([.fraction(0.5)])
         .presentationDragIndicator(.visible)
     }
 
@@ -3083,6 +3318,7 @@ struct PitchTrackerView: View {
             selectedOpponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             selectedOpponentBatterId: selectedBatterId?.uuidString,
             selectedPracticeId: selectedPracticeId,
+            selectedPitcherId: selectedPitcherId,
             saveAction: { event in
                 if isGame, let liveId = activeLiveId {
                     // ✅ Live: save to shared room
@@ -3095,7 +3331,36 @@ struct PitchTrackerView: View {
                         // ✅ OPTIONAL: keep a server-side write time in a separate field (doesn't break decoding)
                         eventData["serverTimestamp"] = FieldValue.serverTimestamp()
 
-                        LiveGameService.shared.addLivePitchEvent(liveId: liveId, eventData: eventData)
+                        if let gid = selectedGameId {
+                            eventData["gameId"] = gid
+                        }
+
+                        let liveRef = Firestore.firestore()
+                            .collection("liveGames").document(liveId)
+                            .collection("pitchEvents").document()
+                        let liveEventId = liveRef.documentID
+
+                        liveRef.setData(eventData, merge: false) { err in
+                            if let err {
+                                print("❌ live pitchEvent save failed:", err.localizedDescription)
+                            }
+                        }
+
+                        if let owner = effectiveGameOwnerUserId,
+                           let gid = selectedGameId,
+                           !owner.isEmpty {
+                            let ownerRef = Firestore.firestore()
+                                .collection("users").document(owner)
+                                .collection("games").document(gid)
+                                .collection("pitchEvents").document(liveEventId)
+                            ownerRef.setData(eventData, merge: false) { err in
+                                if let err {
+                                    print("❌ owner pitchEvent save failed:", err.localizedDescription)
+                                }
+                            }
+                        } else {
+                            print("⚠️ Owner path unavailable; saved only to liveGames.")
+                        }
 
                         // clear pending in live doc
                         LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
@@ -3167,6 +3432,7 @@ struct PitchTrackerView: View {
         SettingsView(
               templates: $templates,
               games: $games,
+              pitchers: $pitchers,
               allPitches: allPitches,
               selectedTemplate: $selectedTemplate,
               codeShareInitialTab: $codeShareInitialTab,
@@ -3261,6 +3527,10 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v4 = v3
+            .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
+            .eraseToAnyView()
+
+        let v5 = v4
             .sheet(isPresented: $showPracticeSheet, onDismiss: {
                 if sessionManager.currentMode == .practice && practiceName == nil && selectedPracticeId == nil {
                     // no-op (your current behavior)
@@ -3268,20 +3538,20 @@ struct PitchTrackerView: View {
             }) { practiceSheetView }
             .eraseToAnyView()
 
-        let v5 = v4
+        let v6 = v5
             .sheet(isPresented: confirmSheetBinding) { pitchResultSheetView }
             .eraseToAnyView()
 
-        let v6 = v5
+        let v7 = v6
             .sheet(isPresented: $showCodeAssignmentSheet) { codeAssignmentSheetView }
             .eraseToAnyView()
 
-        let v7 = v6
+        let v8 = v7
             .sheet(isPresented: $showSettings) { settingsSheetView }
             .eraseToAnyView()
 
         // Keep alerts + the rest of your observers, then erase one last time
-        return v7
+        return v8
             .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -3314,6 +3584,8 @@ struct PitchTrackerView: View {
                     // ✅ Set in-memory live session id FIRST (this is what your writes check)
                     self.activeLiveId = liveId
                     self.startLivePresenceHeartbeat(liveId: liveId)
+                    self.ensureLivePresence(liveId: liveId)
+                    self.seedLivePitchEventsOnce(liveId: liveId)
 
                     // (Optional but recommended) If the notification includes ownerUid, set it
                     if let ownerUid = info["ownerUid"] as? String, !ownerUid.isEmpty {
@@ -5067,9 +5339,8 @@ private struct CodeShareSheet: View {
     let templateName: String?
     let onConsume: (String) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var tab: Int // 0 generate, 1 enter
     @State private var generated: String
-    @State private var entered: String = ""
+    @State private var inviteLink: String = ""
     @State private var didWriteSessionDoc = false
     @State private var writeErrorMessage: String? = nil
 
@@ -5095,158 +5366,79 @@ private struct CodeShareSheet: View {
         self.templateId = templateId
         self.templateName = templateName
 
-        let effectiveTab: Int = {
-            // If we don't have enough info to generate a code, always open on Enter Code
-            if initialTab == 0 && (hostUid == nil || gameId == nil) { return 1 }
-            return initialTab
-        }()
+        _generated = State(initialValue: initialCode)
 
-        _generated = State(initialValue: effectiveTab == 0 ? initialCode : "")
-        _tab = State(initialValue: effectiveTab)
-
-    }
-    private var enteredDigits: String {
-        entered.filter { $0.isNumber }
-    }
-
-    private var isJoinEnabled: Bool {
-        enteredDigits.count == 6
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
 
-                if tab == 0 {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Share this code with your partner:")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .center, spacing: 12) {
+                    Text("Share this invite link:")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
 
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color(UIColor.secondarySystemBackground).opacity(0.6))
-
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-
-                            Text(isGenerating ? "Generating…" : (writeErrorMessage?.isEmpty == false ? "Failed" : (generated.isEmpty ? "—" : generated)))
-                                .font(.system(size: 40, weight: .regular, design: .monospaced))
-                                .foregroundStyle(generated.isEmpty ? .secondary : .primary)
-                                .frame(maxWidth: .infinity, minHeight: 100)
-                        }
-                        .frame(minHeight: 100)
-
-
-                        if let msg = writeErrorMessage {
-                            Text(msg)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                                .multilineTextAlignment(.center)
-                        }
-
-                        HStack {
-                            Button {
-                                UIPasteboard.general.string = generated
-                            } label: {
-                                Label("Copy", systemImage: "doc.on.doc")
-                            }
-                            .buttonStyle(.bordered)
-
-                            ShareLink(item: generated) {
-                                Label("Share", systemImage: "square.and.arrow.up")
-                            }
-                        }
-                    }
-                    .onAppear {
-                        if generated.trimmingCharacters(in: .whitespacesAndNewlines).count != 6 {
-                            generated = ""
-                        }
-                        if tab == 0 {
-                            generateLiveGameAndCode()
-                        }
+                    if let qrImage = qrImage(for: inviteLink) {
+                        Image(uiImage: qrImage)
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 720, maxHeight: 720)
+                            .padding(.vertical, 6)
                     }
 
-
-                } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Paste the code from your partner:")
+                    if !inviteLink.isEmpty {
+                        Text(inviteLink)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
-
-                        TextEditor(text: $entered)
-                            .font(.system(size: 40, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
                             .multilineTextAlignment(.center)
-                            .frame(minHeight: 120)
-                            .padding(8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color(UIColor.secondarySystemBackground).opacity(0.6))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                            )
-                            .onChange(of: entered) { _, newValue in
-                                let digits = newValue.filter { $0.isNumber }
-                                let capped = String(digits.prefix(6))
-                                if capped != newValue {
-                                    entered = capped
-                                }
-                            }
-
-                        // ✅ Only warn on the Generate tab. Enter Code must work from any mode.
-                        if tab == 0 && !isGame {
-                            Text("Generate Codes requires Game Mode (select a game first).")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-
-
-                        Button {
-                            let code = enteredDigits
-                            LiveGameService.shared.joinLiveGame(code: code) { result in
-                                DispatchQueue.main.async {
-                                    switch result {
-                                    case .success(let liveId):
-                                        NotificationCenter.default.post(
-                                            name: .gameOrSessionChosen,
-                                            object: nil,
-                                            userInfo: [
-                                                "resolved": true,
-                                                "type": "liveGame",
-                                                "liveId": liveId
-                                            ]
-                                        )
-                                        dismiss()
-                                    case .failure(let err):
-                                        writeErrorMessage = err.localizedDescription
-                                    }
-                                }
-                            }
-                        } label: {
-                            Label("Join", systemImage: "arrow.right.circle.fill")
-                        }
-
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!isJoinEnabled)
+                    } else if isGenerating {
+                        Text("Generating…")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
+
+                    if let msg = writeErrorMessage {
+                        Text(msg)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    HStack {
+                        Button {
+                            UIPasteboard.general.string = inviteLink
+                        } label: {
+                            Label("Copy Link", systemImage: "link")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(inviteLink.isEmpty)
+
+                        if let url = URL(string: inviteLink) {
+                            ShareLink(item: url) {
+                                Label("Share Link", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .onAppear {
+                    inviteLink = ""
+                    generateLiveGameAndCode()
                 }
 
                 Spacer(minLength: 0)
             }
             .padding()
-            .navigationTitle("Code Link")
+            .navigationTitle("Invite Link")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
-                }
-            }
-            // ✅ If user switches tabs while the sheet is open, ensure Generate triggers the write
-            .onChange(of: tab) { _, newValue in
-                if newValue == 0 {
-                    generateLiveGameAndCode()
                 }
             }
         }
@@ -5259,9 +5451,8 @@ private struct CodeShareSheet: View {
     @State private var isGenerating: Bool = false
 
     private func generateLiveGameAndCode() {
-        guard tab == 0 else { return }
         guard let gameId = gameId else {
-            writeErrorMessage = "Select a game first before generating a partner code."
+            writeErrorMessage = "Select a game first before generating an invite link."
             return
         }
 
@@ -5269,6 +5460,7 @@ private struct CodeShareSheet: View {
         print("🧩 Generate tapped | gameId=\(gameId) isGame=\(isGame)")
         writeErrorMessage = nil
         generated = ""
+        inviteLink = ""
 
         LiveGameService.shared.createLiveGameAndJoinCode(
             ownerGameId: gameId,
@@ -5282,6 +5474,7 @@ private struct CodeShareSheet: View {
                 case .success(let tuple):
                     print("✅ Generated code=\(tuple.code) liveId=\(tuple.liveId)")
                     self.generated = tuple.code
+                    self.inviteLink = "pitchmark://join?token=\(tuple.inviteToken)"
 
                     // Tell the parent to switch into the live session
                     // We pass the LIVE ID now (not the 6-digit code)
@@ -5306,6 +5499,19 @@ private struct CodeShareSheet: View {
                 }
             }
         }
+    }
+
+    private func qrImage(for text: String) -> UIImage? {
+        guard !text.isEmpty else { return nil }
+        let data = Data(text.utf8)
+        let filter = CIFilter.qrCodeGenerator()
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("Q", forKey: "inputCorrectionLevel")
+        guard let outputImage = filter.outputImage else { return nil }
+        let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        return UIImage(cgImage: cgImage)
     }
 
 

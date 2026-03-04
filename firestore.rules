@@ -1,0 +1,232 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+
+    function notExpired(data) {
+      return !(data.keys().hasAny(['expiresAt'])) || (data.expiresAt > request.time);
+    }
+
+    function sharedWithMe(data) {
+      return data.keys().hasAny(['sharedWith']) && data.sharedWith.hasAny([uid()]);
+    }
+
+    // ─────────────────────────────────────────────
+    // TOP-LEVEL TEMPLATES: /templates/{templateId}
+    // ─────────────────────────────────────────────
+    match /templates/{templateId} {
+      allow get: if signedIn()
+        && (resource.data.ownerUid == uid() || sharedWithMe(resource.data));
+      allow list: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid();
+
+      allow update, delete: if signedIn()
+        && resource.data.ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
+    // TOP-LEVEL PITCHERS: /pitchers/{pitcherId}
+    // ─────────────────────────────────────────────
+    match /pitchers/{pitcherId} {
+      allow get: if signedIn()
+        && (
+          resource.data.ownerUid == uid()
+          || sharedWithMe(resource.data)
+          || resource.data.claimedByUid == uid()
+        );
+      allow list: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid();
+
+      allow update, delete: if signedIn()
+        && resource.data.ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
+    // USER TEMPLATES (LEGACY): /users/{ownerUid}/templates/{templateId}
+    // ─────────────────────────────────────────────
+    match /users/{ownerUid}/templates/{templateId} {
+      allow get, list: if signedIn()
+        && (
+          ownerUid == uid()
+          || sharedWithMe(resource.data)
+        );
+
+      allow create, update, delete: if signedIn() && ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
+    // JOIN CODES: /joinCodes/{code}
+    // ─────────────────────────────────────────────
+    match /joinCodes/{code} {
+      allow get: if signedIn() && (resource == null || notExpired(resource.data));
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && request.resource.data.liveId is string
+        && request.resource.data.expiresAt is timestamp;
+
+      allow update, delete: if signedIn()
+        && resource != null
+        && resource.data.ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
+    // INVITE TOKENS: /inviteTokens/{token}
+    // ─────────────────────────────────────────────
+    match /inviteTokens/{token} {
+      allow get: if signedIn() && (resource == null || notExpired(resource.data));
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && request.resource.data.liveId is string
+        && request.resource.data.expiresAt is timestamp;
+
+      allow update, delete: if signedIn()
+        && resource != null
+        && resource.data.ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
+    // LIVE GAMES: /liveGames/{liveId}
+    // ─────────────────────────────────────────────
+    match /liveGames/{liveId} {
+
+      function isOwner() {
+        return signedIn()
+          && resource != null
+          && resource.data.ownerUid == uid();
+      }
+
+      function isParticipant() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/liveGames/$(liveId)/participants/$(uid()));
+      }
+
+      allow get: if signedIn() && (isOwner() || isParticipant());
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && request.resource.data.status == "active";
+
+      // Participants can update gameplay fields, but cannot alter identity/lifecycle fields.
+      function participantAllowedUpdate() {
+        return isParticipant()
+          && request.resource.data.ownerUid == resource.data.ownerUid
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.ownerGameId == resource.data.ownerGameId
+          && request.resource.data.expiresAt == resource.data.expiresAt;
+      }
+
+      allow update: if isOwner() || participantAllowedUpdate();
+      allow delete: if isOwner();
+
+      match /participants/{participantUid} {
+        allow get: if signedIn() && (isOwner() || uid() == participantUid);
+
+        allow list: if signedIn()
+          && (
+            (get(/databases/$(database)/documents/liveGames/$(liveId)).data.ownerUid == uid())
+            || exists(/databases/$(database)/documents/liveGames/$(liveId)/participants/$(uid()))
+          );
+
+        allow create: if signedIn() && uid() == participantUid;
+
+        allow update: if signedIn()
+          && uid() == participantUid
+          && request.writeFields.hasOnly(["uid", "joinedAt", "lastSeenAt"]);
+
+        // ✅ Let participant remove their own presence (optional but nice)
+        allow delete: if isOwner() || (signedIn() && uid() == participantUid);
+      }
+
+      match /pitchEvents/{eventId} {
+        allow get, list: if isOwner() || isParticipant();
+
+        allow create: if signedIn()
+          && (isOwner() || isParticipant())
+          && request.resource.data.createdByUid == uid();
+
+        allow update, delete: if isOwner()
+          || (isParticipant() && resource.data.createdByUid == uid());
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // SHARED OWNER GAME (canonical) for ACTIVE participants
+    // users/{ownerUid}/games/{gameId} (+ pitchEvents)
+    // Requires: game.activeSessionCode -> joinCodes/{code}.liveId -> liveGames/{liveId}/participants/{uid}
+    // ─────────────────────────────────────────────
+    match /users/{ownerUid}/games/{gameId} {
+
+      function activeCode() {
+        return resource != null
+          && resource.data.keys().hasAny(["activeSessionCode"])
+          ? resource.data.activeSessionCode
+          : null;
+      }
+
+      function joinDoc(code) {
+        return get(/databases/$(database)/documents/joinCodes/$(code)).data;
+      }
+
+      function liveIdFor(code) {
+        return joinDoc(code).liveId;
+      }
+
+      function liveDoc(code) {
+        return get(/databases/$(database)/documents/liveGames/$(liveIdFor(code))).data;
+      }
+
+      function isActiveParticipantForThisGame() {
+        let code = activeCode();
+        return signedIn()
+          && code != null
+
+          && exists(/databases/$(database)/documents/joinCodes/$(code))
+          && notExpired(joinDoc(code))
+
+          && exists(/databases/$(database)/documents/liveGames/$(liveIdFor(code)))
+          && liveDoc(code).status == "active"
+
+          && liveDoc(code).ownerUid == ownerUid
+          && liveDoc(code).ownerGameId == gameId
+
+          && exists(/databases/$(database)/documents/liveGames/$(liveIdFor(code))/participants/$(uid()));
+      }
+
+      // Owner full access
+      allow get, list, create, update, delete: if signedIn() && uid() == ownerUid;
+
+      // Participant can GET this specific game doc during active session (no list)
+      allow get: if isActiveParticipantForThisGame();
+      allow list: if false;
+
+      match /pitchEvents/{eventId} {
+        allow get, list: if signedIn() && uid() == ownerUid;
+        allow get, list: if isActiveParticipantForThisGame();
+
+        allow create: if isActiveParticipantForThisGame()
+          && request.resource.data.createdByUid == uid();
+
+        allow update, delete: if signedIn() && uid() == ownerUid;
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // USERS PRIVATE TREE (default-deny for others)
+    // ─────────────────────────────────────────────
+    match /users/{userId}/{docPath=**} {
+      allow read, write: if signedIn() && uid() == userId;
+    }
+  }
+}

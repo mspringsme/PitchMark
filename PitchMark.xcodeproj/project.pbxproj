@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		2307AFBE2F12BB3A00690E69 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 2307AFBD2F12BB3A00690E69 /* GoogleSignIn */; };
 		2307AFC02F12BB3A00690E69 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 2307AFBF2F12BB3A00690E69 /* GoogleSignInSwift */; };
+		23652D3B2F57705F00461063 /* firestore.rules in Resources */ = {isa = PBXBuildFile; fileRef = 23652D3A2F57705F00461063 /* firestore.rules */; };
 		23F1A88B2F12C6EF0094E7BC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88A2F12C6EF0094E7BC /* FirebaseAuth */; };
 		23F1A88D2F12C7030094E7BC /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88C2F12C7030094E7BC /* FirebaseFirestore */; };
 		23F1A88F2F12C70B0094E7BC /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88E2F12C70B0094E7BC /* FirebaseAnalytics */; };
@@ -18,6 +19,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		23652D3A2F57705F00461063 /* firestore.rules */ = {isa = PBXFileReference; lastKnownFileType = text; path = firestore.rules; sourceTree = "<group>"; };
 		239F0B7C2F12B238004E32DD /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -67,6 +69,7 @@
 				239F0B7E2F12B238004E32DD /* PitchMark */,
 				23F1A8892F12C6EF0094E7BC /* Frameworks */,
 				239F0B7D2F12B238004E32DD /* Products */,
+				23652D3A2F57705F00461063 /* firestore.rules */,
 			);
 			sourceTree = "<group>";
 		};
@@ -161,6 +164,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				23652D3B2F57705F00461063 /* firestore.rules in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

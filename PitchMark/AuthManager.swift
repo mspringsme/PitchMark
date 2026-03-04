@@ -195,6 +195,7 @@ class AuthManager: ObservableObject {
         let strikeRowsMap: [String: [String]] = rowsToMap(template.strikeRows)
         let ballsRowsMap: [String: [String]] = rowsToMap(template.ballsRows)
         
+        let ownerUid = user.uid
         let data: [String: Any] = [
             "name": template.name,
             "pitches": template.pitches,
@@ -214,6 +215,8 @@ class AuthManager: ObservableObject {
                 "topRow": template.ballsTopRow,
                 "rowsMap": ballsRowsMap
             ],
+            "ownerUid": ownerUid,
+            "sharedWith": template.sharedWith,
             "updatedAt": FieldValue.serverTimestamp()
         ]
         
@@ -222,6 +225,13 @@ class AuthManager: ObservableObject {
                 print("Error saving template: \(error.localizedDescription)")
             } else {
                 print("Template saved successfully for user: \(user.email ?? "Unknown")")
+            }
+        }
+
+        let sharedRef = db.collection("templates").document(template.id.uuidString)
+        sharedRef.setData(data, merge: true) { error in
+            if let error = error {
+                print("❌ save shared template failed:", error.localizedDescription)
             }
         }
     }
@@ -245,6 +255,14 @@ class AuthManager: ObservableObject {
                 print("Template deleted successfully for user: \(user.email ?? "Unknown")")
             }
         }
+
+        db.collection("templates")
+            .document(template.id.uuidString)
+            .delete { error in
+                if let error = error {
+                    print("❌ delete shared template failed:", error.localizedDescription)
+                }
+            }
     }
 
     func loadTemplates(completion: @escaping ([PitchTemplate]) -> Void) {
@@ -256,126 +274,242 @@ class AuthManager: ObservableObject {
 
         print("📥 loadTemplates uid=\(user.uid)")
 
-        Firestore.firestore()
-            .collection("users").document(user.uid)
+        let db = Firestore.firestore()
+        let group = DispatchGroup()
+        var templateDocs: [QueryDocumentSnapshot] = []
+
+        group.enter()
+        db.collection("users").document(user.uid)
             .collection("templates")
             .getDocuments { snapshot, error in
-
                 if let error = error {
-                    print("❌ loadTemplates Firestore error:", error.localizedDescription)
-                    DispatchQueue.main.async { completion([]) }
-                    return
+                    print("❌ loadTemplates (legacy) error:", error.localizedDescription)
+                } else {
+                    templateDocs.append(contentsOf: snapshot?.documents ?? [])
                 }
+                group.leave()
+            }
 
-                let docs = snapshot?.documents ?? []
-                print("📥 loadTemplates raw docs:", docs.count)
+        group.enter()
+        db.collection("templates")
+            .whereField("ownerUid", isEqualTo: user.uid)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("❌ loadTemplates (owner) error:", error.localizedDescription)
+                } else {
+                    templateDocs.append(contentsOf: snapshot?.documents ?? [])
+                }
+                group.leave()
+            }
 
-                Task { @MainActor in
-                    var templates: [PitchTemplate] = []
-                    templates.reserveCapacity(docs.count)
+        group.enter()
+        db.collection("templates")
+            .whereField("sharedWith", arrayContains: user.uid)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("❌ loadTemplates (shared) error:", error.localizedDescription)
+                } else {
+                    templateDocs.append(contentsOf: snapshot?.documents ?? [])
+                }
+                group.leave()
+            }
 
-                    for doc in docs {
-                        let data = doc.data()
-                        let keys = Array(data.keys).sorted()
-                        print("🧩 Template docId=\(doc.documentID) keys=\(keys)")
+        group.notify(queue: .main) {
+            let docs = templateDocs
+            print("📥 loadTemplates raw docs:", docs.count)
 
-                        // ✅ Accept either "name" or "templateName" (common pivot break)
-                        let name = (data["name"] as? String) ?? (data["templateName"] as? String) ?? ""
-                        if name.isEmpty {
-                            print("❌ Template missing name (name/templateName) docId=\(doc.documentID)")
-                            continue
-                        }
+            Task { @MainActor in
+                var templatesById: [UUID: PitchTemplate] = [:]
 
-                        // ✅ pitches may be missing; default [] so it still shows in UI
-                        let pitches = data["pitches"] as? [String] ?? []
+                for doc in docs {
+                    let data = doc.data()
+                    let keys = Array(data.keys).sorted()
+                    print("🧩 Template docId=\(doc.documentID) keys=\(keys)")
 
-                        // ✅ codeAssignments: accept array form OR map form OR missing
-                        var codeAssignments: [PitchCodeAssignment] = []
-
-                        if let raw = data["codeAssignments"] as? [[String: Any]] {
-                            codeAssignments = raw.compactMap { dict in
-                                guard let pitch = dict["pitch"] as? String,
-                                      let location = dict["location"] as? String,
-                                      let code = dict["code"] as? String else { return nil }
-                                let encrypted = dict["encryptedCode"] as? String
-                                return PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted)
-                            }
-                        } else if let map = data["codeAssignments"] as? [String: Any] {
-                            // Map form: { "0": {pitch,location,code}, "1": {...} }
-                            let sortedKeys = map.keys.compactMap { Int($0) }.sorted()
-                            for k in sortedKeys {
-                                guard let dict = map[String(k)] as? [String: Any],
-                                      let pitch = dict["pitch"] as? String,
-                                      let location = dict["location"] as? String,
-                                      let code = dict["code"] as? String else { continue }
-                                let encrypted = dict["encryptedCode"] as? String
-                                codeAssignments.append(PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted))
-                            }
-                            print("⚠️ codeAssignments was MAP form docId=\(doc.documentID) count=\(codeAssignments.count)")
-                        } else {
-                            print("⚠️ codeAssignments missing docId=\(doc.documentID) (default empty)")
-                        }
-
-                        // Optional encrypted grid fields (keep yours, but tolerate missing)
-                        let pitchGrid = data["pitchGrid"] as? [String: Any]
-                        let headersRaw = pitchGrid?["headers"] as? [[String: Any]] ?? []
-                        let headers: [PitchHeader] = headersRaw.compactMap { dict in
-                            guard let pitch = dict["pitch"] as? String else { return nil }
-                            let abbr = dict["abbreviation"] as? String
-                            return PitchHeader(pitch: pitch, abbreviation: abbr)
-                        }
-
-                        var gridValues: [[String]] = []
-                        if let gridMap = pitchGrid?["gridRows"] as? [String: [String]] {
-                            let sorted = gridMap.keys.compactMap { Int($0) }.sorted()
-                            gridValues = sorted.map { gridMap[String($0)] ?? [] }
-                        }
-
-                        let strikeGrid = data["strikeGrid"] as? [String: Any]
-                        let strikeTop = strikeGrid?["topRow"] as? [String] ?? []
-                        var strikeRows: [[String]] = []
-                        if let rowsMap = strikeGrid?["rowsMap"] as? [String: [String]] {
-                            let sorted = rowsMap.keys.compactMap { Int($0) }.sorted()
-                            strikeRows = sorted.map { rowsMap[String($0)] ?? [] }
-                        }
-
-                        let ballsGrid = data["ballsGrid"] as? [String: Any]
-                        let ballsTop = ballsGrid?["topRow"] as? [String] ?? []
-                        var ballsRows: [[String]] = []
-                        if let rowsMap = ballsGrid?["rowsMap"] as? [String: [String]] {
-                            let sorted = rowsMap.keys.compactMap { Int($0) }.sorted()
-                            ballsRows = sorted.map { rowsMap[String($0)] ?? [] }
-                        }
-
-                        let pitchFirstColors = data["pitchFirstColors"] as? [String] ?? []
-                        let locationFirstColors = data["locationFirstColors"] as? [String] ?? []
-
-                        let isEncrypted = data["isEncrypted"] as? Bool ?? false
-                        let templateId = UUID(uuidString: doc.documentID) ?? UUID()
-
-                        templates.append(
-                            PitchTemplate(
-                                id: templateId,
-                                name: name,
-                                pitches: pitches,
-                                codeAssignments: codeAssignments,
-                                isEncrypted: isEncrypted,
-                                pitchGridHeaders: headers,
-                                pitchGridValues: gridValues,
-                                strikeTopRow: strikeTop,
-                                strikeRows: strikeRows,
-                                ballsTopRow: ballsTop,
-                                ballsRows: ballsRows,
-                                pitchFirstColors: pitchFirstColors,
-                                locationFirstColors: locationFirstColors
-                            )
-                        )
+                    let name = (data["name"] as? String) ?? (data["templateName"] as? String) ?? ""
+                    if name.isEmpty {
+                        print("❌ Template missing name (name/templateName) docId=\(doc.documentID)")
+                        continue
                     }
 
-                    print("✅ loadTemplates decoded:", templates.count)
-                    completion(templates)
+                    let pitches = data["pitches"] as? [String] ?? []
+
+                    var codeAssignments: [PitchCodeAssignment] = []
+
+                    if let raw = data["codeAssignments"] as? [[String: Any]] {
+                        codeAssignments = raw.compactMap { dict in
+                            guard let pitch = dict["pitch"] as? String,
+                                  let location = dict["location"] as? String,
+                                  let code = dict["code"] as? String else { return nil }
+                            let encrypted = dict["encryptedCode"] as? String
+                            return PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted)
+                        }
+                    } else if let map = data["codeAssignments"] as? [String: Any] {
+                        let sortedKeys = map.keys.compactMap { Int($0) }.sorted()
+                        for k in sortedKeys {
+                            guard let dict = map[String(k)] as? [String: Any],
+                                  let pitch = dict["pitch"] as? String,
+                                  let location = dict["location"] as? String,
+                                  let code = dict["code"] as? String else { continue }
+                            let encrypted = dict["encryptedCode"] as? String
+                            codeAssignments.append(PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted))
+                        }
+                        print("⚠️ codeAssignments was MAP form docId=\(doc.documentID) count=\(codeAssignments.count)")
+                    } else {
+                        print("⚠️ codeAssignments missing docId=\(doc.documentID) (default empty)")
+                    }
+
+                    let pitchGrid = data["pitchGrid"] as? [String: Any]
+                    let headersRaw = pitchGrid?["headers"] as? [[String: Any]] ?? []
+                    let headers: [PitchHeader] = headersRaw.compactMap { dict in
+                        guard let pitch = dict["pitch"] as? String else { return nil }
+                        let abbr = dict["abbreviation"] as? String
+                        return PitchHeader(pitch: pitch, abbreviation: abbr)
+                    }
+
+                    var gridValues: [[String]] = []
+                    if let gridMap = pitchGrid?["gridRows"] as? [String: [String]] {
+                        let sorted = gridMap.keys.compactMap { Int($0) }.sorted()
+                        gridValues = sorted.map { gridMap[String($0)] ?? [] }
+                    }
+
+                    let strikeGrid = data["strikeGrid"] as? [String: Any]
+                    let strikeTop = strikeGrid?["topRow"] as? [String] ?? []
+                    var strikeRows: [[String]] = []
+                    if let rowsMap = strikeGrid?["rowsMap"] as? [String: [String]] {
+                        let sorted = rowsMap.keys.compactMap { Int($0) }.sorted()
+                        strikeRows = sorted.map { rowsMap[String($0)] ?? [] }
+                    }
+
+                    let ballsGrid = data["ballsGrid"] as? [String: Any]
+                    let ballsTop = ballsGrid?["topRow"] as? [String] ?? []
+                    var ballsRows: [[String]] = []
+                    if let rowsMap = ballsGrid?["rowsMap"] as? [String: [String]] {
+                        let sorted = rowsMap.keys.compactMap { Int($0) }.sorted()
+                        ballsRows = sorted.map { rowsMap[String($0)] ?? [] }
+                    }
+
+                    let pitchFirstColors = data["pitchFirstColors"] as? [String] ?? []
+                    let locationFirstColors = data["locationFirstColors"] as? [String] ?? []
+
+                    let isEncrypted = data["isEncrypted"] as? Bool ?? false
+                    let templateId = UUID(uuidString: doc.documentID) ?? UUID()
+
+                    let ownerUid = data["ownerUid"] as? String
+                    let sharedWith = data["sharedWith"] as? [String] ?? []
+
+                    let template = PitchTemplate(
+                        id: templateId,
+                        name: name,
+                        pitches: pitches,
+                        codeAssignments: codeAssignments,
+                        isEncrypted: isEncrypted,
+                        ownerUid: ownerUid,
+                        sharedWith: sharedWith,
+                        pitchGridHeaders: headers,
+                        pitchGridValues: gridValues,
+                        strikeTopRow: strikeTop,
+                        strikeRows: strikeRows,
+                        ballsTopRow: ballsTop,
+                        ballsRows: ballsRows,
+                        pitchFirstColors: pitchFirstColors,
+                        locationFirstColors: locationFirstColors
+                    )
+
+                    templatesById[templateId] = template
+                }
+
+                let templates = Array(templatesById.values)
+                print("✅ loadTemplates decoded:", templates.count)
+                completion(templates)
+            }
+        }
+    }
+
+    func loadPitchers(completion: @escaping ([Pitcher]) -> Void) {
+        guard let user = user else {
+            print("⚠️ loadPitchers: user=nil")
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
+
+        let db = Firestore.firestore()
+        let group = DispatchGroup()
+        var docs: [QueryDocumentSnapshot] = []
+
+        group.enter()
+        db.collection("pitchers")
+            .whereField("ownerUid", isEqualTo: user.uid)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("❌ loadPitchers (owner) error:", error.localizedDescription)
+                } else {
+                    docs.append(contentsOf: snapshot?.documents ?? [])
+                }
+                group.leave()
+            }
+
+        group.enter()
+        db.collection("pitchers")
+            .whereField("sharedWith", arrayContains: user.uid)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("❌ loadPitchers (shared) error:", error.localizedDescription)
+                } else {
+                    docs.append(contentsOf: snapshot?.documents ?? [])
+                }
+                group.leave()
+            }
+
+        group.notify(queue: .main) {
+            var pitchersById: [String: Pitcher] = [:]
+
+            for doc in docs {
+                do {
+                    let pitcher = try doc.data(as: Pitcher.self)
+                    if let id = pitcher.id {
+                        pitchersById[id] = pitcher
+                    }
+                } catch {
+                    print("❌ Pitcher decode failed docId=\(doc.documentID) error=\(error)")
                 }
             }
+
+            completion(Array(pitchersById.values))
+        }
+    }
+
+    func createPitcher(name: String, templateId: String?, completion: ((Pitcher?) -> Void)? = nil) {
+        guard let user = user else {
+            print("⚠️ createPitcher: user=nil")
+            completion?(nil)
+            return
+        }
+
+        let ref = Firestore.firestore().collection("pitchers").document()
+        let pitcher = Pitcher(
+            id: ref.documentID,
+            name: name,
+            templateId: templateId,
+            ownerUid: user.uid,
+            sharedWith: [],
+            claimedByUid: nil,
+            createdAt: Date()
+        )
+
+        do {
+            try ref.setData(from: pitcher) { err in
+                if let err {
+                    print("❌ createPitcher failed:", err.localizedDescription)
+                    completion?(nil)
+                } else {
+                    completion?(pitcher)
+                }
+            }
+        } catch {
+            print("❌ createPitcher encode failed:", error.localizedDescription)
+            completion?(nil)
+        }
     }
     func loadTemplate(id: String) async -> PitchTemplate? {
         guard let user = user else {
@@ -532,12 +666,7 @@ class AuthManager: ObservableObject {
                 }
                 
                 let events: [PitchEvent] = snapshot?.documents.compactMap { doc in
-                    do {
-                        return try doc.data(as: PitchEvent.self)
-                    } catch {
-                        print("❌ Decoding failed for doc \(doc.documentID): \(error)")
-                        return nil
-                    }
+                    PitchEvent.decodeFirestoreDocument(doc)
                 } ?? []
                 completion(events)
             }
@@ -760,11 +889,8 @@ class AuthManager: ObservableObject {
                 events.reserveCapacity(docs.count)
 
                 for d in docs {
-                    do {
-                        let evt = try d.data(as: PitchEvent.self)
+                    if let evt = PitchEvent.decodeFirestoreDocument(d) {
                         events.append(evt)
-                    } catch {
-                        print("❌ PitchEvent decode failed (game) docId=\(d.documentID) error=\(error)")
                     }
                 }
 
@@ -801,11 +927,8 @@ class AuthManager: ObservableObject {
                 events.reserveCapacity(docs.count)
 
                 for d in docs {
-                    do {
-                        let evt = try d.data(as: PitchEvent.self)
+                    if let evt = PitchEvent.decodeFirestoreDocument(d) {
                         events.append(evt)
-                    } catch {
-                        print("❌ PitchEvent decode failed (user) docId=\(d.documentID) error=\(error)")
                     }
                 }
 
@@ -1004,8 +1127,8 @@ extension AuthManager {
     
     func updateGameLineup(ownerUserId: String?, gameId: String, jerseyNumbers: [String], batterIds: [String]) {
         guard let currentUid = user?.uid else { return }
-        if ownerUserId != currentUid {
-            print("⏭️ Skipping <functionName> (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
+        if let ownerUserId, ownerUserId != currentUid {
+            print("⏭️ Skipping updateGameLineup (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
             return
         }
         

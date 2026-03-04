@@ -249,6 +249,7 @@ struct PitchResultSheetView: View {
     let selectedOpponentJersey: String?
     let selectedOpponentBatterId: String?
     let selectedPracticeId: String?
+    let selectedPitcherId: String?
     let saveAction: (PitchEvent) -> Void
     let template: PitchTemplate?
 
@@ -389,7 +390,8 @@ struct PitchResultSheetView: View {
             gameId: selectedGameId,
             opponentJersey: selectedOpponentJersey,
             opponentBatterId: selectedOpponentBatterId,
-            practiceId: selectedPracticeId
+            practiceId: selectedPracticeId,
+            pitcherId: selectedPitcherId
         )
     }
 

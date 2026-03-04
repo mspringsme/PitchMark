@@ -96,6 +96,7 @@ final class LiveGameService {
     private enum Col {
         static let liveGames = "liveGames"
         static let joinCodes = "joinCodes"
+        static let inviteTokens = "inviteTokens"
         static let participants = "participants"
         static let pitchEvents = "pitchEvents"
         static let users = "users"
@@ -112,6 +113,7 @@ final class LiveGameService {
         static let createdAt = "createdAt"
         static let expiresAt = "expiresAt"
         static let status = "status"
+        static let inviteToken = "inviteToken"
 
         static let balls = "balls"
         static let strikes = "strikes"
@@ -143,6 +145,9 @@ final class LiveGameService {
         case joinCodeExpired
         case malformedJoinCode
         case couldNotGenerateUniqueCode
+        case inviteTokenNotFound
+        case inviteTokenExpired
+        case malformedInviteToken
 
         var errorDescription: String? {
             switch self {
@@ -158,6 +163,12 @@ final class LiveGameService {
                 return "Malformed code document"
             case .couldNotGenerateUniqueCode:
                 return "Could not generate a unique code. Try again."
+            case .inviteTokenNotFound:
+                return "Invite link not found"
+            case .inviteTokenExpired:
+                return "Invite link expired"
+            case .malformedInviteToken:
+                return "Malformed invite document"
             }
         }
 
@@ -170,6 +181,9 @@ final class LiveGameService {
                 case .joinCodeExpired: return ("JoinCode", 410)
                 case .malformedJoinCode: return ("JoinCode", 422)
                 case .couldNotGenerateUniqueCode: return ("JoinCode", 500)
+                case .inviteTokenNotFound: return ("InviteToken", 404)
+                case .inviteTokenExpired: return ("InviteToken", 410)
+                case .malformedInviteToken: return ("InviteToken", 422)
                 }
             }()
             return NSError(domain: domain, code: code, userInfo: [NSLocalizedDescriptionKey: errorDescription ?? "Error"])
@@ -183,7 +197,7 @@ final class LiveGameService {
         opponent: String,
         templateId: String?,
         templateName: String?,
-        completion: @escaping (Result<(liveId: String, code: String), Error>) -> Void
+        completion: @escaping (Result<(liveId: String, code: String, inviteToken: String), Error>) -> Void
     ) {
         guard let ownerUid = Auth.auth().currentUser?.uid else {
             completion(.failure(LiveGameError.notSignedIn.nsError))
@@ -237,11 +251,75 @@ final class LiveGameService {
             self.createUniqueJoinCode(
                 liveId: liveId,
                 ownerUid: ownerUid,
-                expiresAt: expires,
-                completion: finishOnce
-            )
+                expiresAt: expires
+            ) { result in
+                switch result {
+                case .success(let join):
+                    self.createInviteToken(liveId: liveId, ownerUid: ownerUid, expiresAt: expires) { tokenResult in
+                        switch tokenResult {
+                        case .success(let token):
+                            finishOnce(.success((liveId: join.liveId, code: join.code, inviteToken: token)))
+                        case .failure(let err):
+                            finishOnce(.failure(err))
+                        }
+                    }
+                case .failure(let err):
+                    finishOnce(.failure(err))
+                }
+            }
         }
         
+    }
+
+    private func createInviteToken(
+        liveId: String,
+        ownerUid: String,
+        expiresAt: Timestamp,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        func attempt(_ n: Int) {
+            if n > 4 {
+                completion(.failure(LiveGameError.couldNotGenerateUniqueCode.nsError))
+                return
+            }
+
+            let token = randomInviteToken(length: 24)
+            let ref = db.collection(Col.inviteTokens).document(token)
+
+            db.runTransaction({ txn, errPtr -> Any? in
+                do {
+                    let snap = try txn.getDocument(ref)
+                    if snap.exists {
+                        errPtr?.pointee = NSError(domain: "InviteToken", code: 409,
+                                                  userInfo: [NSLocalizedDescriptionKey: "Invite token collision"])
+                        return nil
+                    }
+
+                    txn.setData([
+                        Key.liveId: liveId,
+                        Key.ownerUid: ownerUid,
+                        Key.expiresAt: expiresAt,
+                        Key.createdAt: FieldValue.serverTimestamp()
+                    ], forDocument: ref)
+                    return nil
+                } catch let e as NSError {
+                    errPtr?.pointee = e
+                    return nil
+                }
+            }) { _, error in
+                if let nsError = error as NSError? {
+                    if nsError.domain == "InviteToken", nsError.code == 409 {
+                        attempt(n + 1)
+                        return
+                    }
+                    completion(.failure(nsError))
+                    return
+                }
+                completion(.success(token))
+            }
+        }
+
+        attempt(0)
     }
     
     private func seedLiveLineupFromOwnerGame(ownerUid: String, ownerGameId: String, liveId: String) {
@@ -377,6 +455,45 @@ final class LiveGameService {
 
             guard let liveId = data[Key.liveId] as? String else {
                 completion(.failure(LiveGameError.malformedJoinCode.nsError))
+                return
+            }
+
+            self.upsertPresence(liveId: liveId, uid: uid) { result in
+                switch result {
+                case .success:
+                    completion(.success(liveId))
+                case .failure(let e):
+                    completion(.failure(e))
+                }
+            }
+        }
+    }
+
+    func joinLiveGameByInviteToken(
+        token: String,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            completion(.failure(LiveGameError.notSignedIn.nsError))
+            return
+        }
+
+        let ref = db.collection(Col.inviteTokens).document(token)
+        ref.getDocument { [weak self] snap, err in
+            guard let self else { return }
+            if let err { completion(.failure(err)); return }
+            guard let snap, snap.exists, let data = snap.data() else {
+                completion(.failure(LiveGameError.inviteTokenNotFound.nsError))
+                return
+            }
+
+            if let expiresAt = data[Key.expiresAt] as? Timestamp, expiresAt.dateValue() < Date() {
+                completion(.failure(LiveGameError.inviteTokenExpired.nsError))
+                return
+            }
+
+            guard let liveId = data[Key.liveId] as? String else {
+                completion(.failure(LiveGameError.malformedInviteToken.nsError))
                 return
             }
 
@@ -546,6 +663,16 @@ final class LiveGameService {
 
     private func logLiveSetDataCallback(liveRef: DocumentReference, timedOutOrFinished: Bool, err: Error?) {
         print("\(logPrefix) liveGames setData callback fired for \(liveRef.path) finished=\(timedOutOrFinished) err=\(err?.localizedDescription ?? "nil")")
+    }
+    
+    private func randomInviteToken(length: Int) -> String {
+        let chars = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        var result = ""
+        result.reserveCapacity(length)
+        for _ in 0..<length {
+            if let c = chars.randomElement() { result.append(c) }
+        }
+        return result
     }
     
     

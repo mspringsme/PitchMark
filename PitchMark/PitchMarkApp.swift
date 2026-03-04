@@ -25,6 +25,56 @@ struct RootView: View {
         .onAppear {
             authManager.restoreSignIn() // ✅ safe here
         }
+        .onOpenURL { url in
+            handleInviteLink(url)
+        }
+        .onChange(of: authManager.isSignedIn) { _, isSignedIn in
+            if isSignedIn {
+                if let token = UserDefaults.standard.string(forKey: "pendingInviteToken"), !token.isEmpty {
+                    UserDefaults.standard.removeObject(forKey: "pendingInviteToken")
+                    joinLiveGameByInviteToken(token)
+                }
+            }
+        }
+    }
+
+    private func handleInviteLink(_ url: URL) {
+        guard let token = inviteToken(from: url), !token.isEmpty else { return }
+        if authManager.isSignedIn {
+            joinLiveGameByInviteToken(token)
+        } else {
+            UserDefaults.standard.set(token, forKey: "pendingInviteToken")
+        }
+    }
+
+    private func joinLiveGameByInviteToken(_ token: String) {
+        LiveGameService.shared.joinLiveGameByInviteToken(token: token) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let liveId):
+                    NotificationCenter.default.post(
+                        name: .gameOrSessionChosen,
+                        object: nil,
+                        userInfo: [
+                            "resolved": true,
+                            "type": "liveGame",
+                            "liveId": liveId
+                        ]
+                    )
+                case .failure(let err):
+                    print("❌ Invite link join failed:", err.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func inviteToken(from url: URL) -> String? {
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let host = url.host?.lowercased()
+        let path = url.path.lowercased()
+        guard host == "join" || path == "/join" else { return nil }
+        let token = components?.queryItems?.first(where: { $0.name == "token" })?.value
+        return token
     }
 }
 
@@ -92,4 +142,3 @@ extension UIApplication {
         sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 }
-

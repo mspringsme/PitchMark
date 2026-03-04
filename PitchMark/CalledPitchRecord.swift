@@ -1362,6 +1362,7 @@ struct PitchEvent: Codable, Identifiable {
     var opponentJersey: String?
     var opponentBatterId: String?
     var practiceId: String?
+    var pitcherId: String?
     
     var createdByUid: String?
 }
@@ -1430,6 +1431,117 @@ extension PitchCall {
 }
 
 extension PitchEvent {
+    static func decodeFirestoreDocument(_ doc: QueryDocumentSnapshot) -> PitchEvent? {
+        do {
+            return try doc.data(as: PitchEvent.self)
+        } catch {
+            if let fallback = PitchEvent(legacyData: doc.data(), documentId: doc.documentID) {
+                print("⚠️ PitchEvent legacy decode used docId=\(doc.documentID)")
+                return fallback
+            }
+            print("❌ PitchEvent decode failed docId=\(doc.documentID) error=\(error)")
+            return nil
+        }
+    }
+
+    init?(legacyData data: [String: Any], documentId: String?) {
+        let resolvedTimestamp: Date
+        if let ts = data["timestamp"] as? Timestamp {
+            resolvedTimestamp = ts.dateValue()
+        } else if let date = data["timestamp"] as? Date {
+            resolvedTimestamp = date
+        } else {
+            return nil
+        }
+
+        guard let pitch = data["pitch"] as? String, !pitch.isEmpty,
+              let location = data["location"] as? String, !location.isEmpty
+        else { return nil }
+
+        let codes: [String] = {
+            if let arr = data["codes"] as? [String], !arr.isEmpty {
+                return arr
+            }
+            if let single = data["code"] as? String, !single.isEmpty {
+                return [single]
+            }
+            return []
+        }()
+
+        let isStrike = data["isStrike"] as? Bool ?? false
+        let isBall = data["isBall"] as? Bool
+
+        let mode: PitchMode = {
+            if let raw = data["mode"] as? String, let parsed = PitchMode(rawValue: raw) {
+                return parsed
+            }
+            if let gameId = data["gameId"] as? String, !gameId.isEmpty {
+                return .game
+            }
+            return .practice
+        }()
+
+        let calledPitch: PitchCall? = {
+            guard let payload = data["calledPitch"] as? [String: Any] else { return nil }
+            guard let cpPitch = payload["pitch"] as? String,
+                  let cpLocation = payload["location"] as? String
+            else { return nil }
+
+            let cpCodes: [String] = {
+                if let arr = payload["codes"] as? [String], !arr.isEmpty {
+                    return arr
+                }
+                if let single = payload["code"] as? String, !single.isEmpty {
+                    return [single]
+                }
+                return []
+            }()
+
+            return PitchCall(
+                pitch: cpPitch,
+                location: cpLocation,
+                isStrike: payload["isStrike"] as? Bool ?? isStrike,
+                codes: cpCodes
+            )
+        }()
+
+        let batterSide: BatterSide = {
+            if let raw = data["batterSide"] as? String, let parsed = BatterSide(rawValue: raw) {
+                return parsed
+            }
+            return .right
+        }()
+
+        self.id = documentId
+        self.timestamp = resolvedTimestamp
+        self.pitch = pitch
+        self.location = location
+        self.codes = codes
+        self.isStrike = isStrike
+        self.isBall = isBall
+        self.mode = mode
+        self.calledPitch = calledPitch
+        self.batterSide = batterSide
+        self.templateId = data["templateId"] as? String
+        self.strikeSwinging = data["strikeSwinging"] as? Bool ?? false
+        self.wildPitch = data["wildPitch"] as? Bool ?? false
+        self.passedBall = data["passedBall"] as? Bool ?? false
+        self.strikeLooking = data["strikeLooking"] as? Bool ?? false
+        self.outcome = data["outcome"] as? String
+        self.descriptor = data["descriptor"] as? String
+        self.errorOnPlay = data["errorOnPlay"] as? Bool ?? false
+        self.battedBallRegion = data["battedBallRegion"] as? String
+        self.battedBallType = data["battedBallType"] as? String
+        self.battedBallTapX = data["battedBallTapX"] as? Double
+        self.battedBallTapY = data["battedBallTapY"] as? Double
+        self.gameId = data["gameId"] as? String
+        self.opponentJersey = data["opponentJersey"] as? String
+        self.opponentBatterId = data["opponentBatterId"] as? String
+        self.practiceId = data["practiceId"] as? String
+        self.pitcherId = data["pitcherId"] as? String
+        self.createdByUid = data["createdByUid"] as? String
+    }
+
     func debugLog(prefix: String = "📤 Saving PitchEvent") {
         struct DebugEvent: Encodable {
             let id: String?
@@ -1458,6 +1570,7 @@ extension PitchEvent {
             let opponentJersey: String?
             let opponentBatterId: String?
             let practiceId: String?
+            let pitcherId: String?
         }
         let debug = DebugEvent(
             id: self.id,
@@ -1485,7 +1598,8 @@ extension PitchEvent {
             gameId: self.gameId,
             opponentJersey: self.opponentJersey,
             opponentBatterId: self.opponentBatterId,
-            practiceId: self.practiceId
+            practiceId: self.practiceId,
+            pitcherId: self.pitcherId
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -1509,4 +1623,3 @@ extension PitchEvent {
         return text.contains("hr") || text.contains("home run") || text.contains("homerun")
     }
 }
-
