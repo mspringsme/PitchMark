@@ -694,12 +694,19 @@ struct PitchTrackerView: View {
             .collection("pitchEvents")
             .order(by: "timestamp", descending: false)
 
+        print("👂 live pitchEvents listener start liveId=\(liveId)")
+
         livePitchEventsListener = ref.addSnapshotListener { snap, err in
             if let err = err {
                 print("❌ Live pitchEvents listener error:", err.localizedDescription)
                 return
             }
-            guard let docs = snap?.documents else { return }
+            guard let docs = snap?.documents else {
+                print("⚠️ Live pitchEvents snapshot has no documents")
+                return
+            }
+
+            print("🧾 Live pitchEvents snapshot count=\(docs.count) isOwner=\(self.isOwnerForActiveGame) activeLiveId=\(self.activeLiveId ?? "<nil>") selectedGameId=\(self.selectedGameId ?? "<nil>") ownerUid=\(self.effectiveGameOwnerUserId ?? self.activeGameOwnerUserId ?? "<nil>")")
 
             // Decode for UI (existing behavior)
             let events: [PitchEvent] = docs.compactMap { doc in
@@ -707,11 +714,18 @@ struct PitchTrackerView: View {
             }
 
             DispatchQueue.main.async {
-                if events.isEmpty {
-                    // Owner fallback: seed cards from the owner's game history
+                if self.isOwnerForActiveGame {
+                    // Owner can seed from private history and backfill live collection for participants.
                     self.seedOwnerGamePitchEventsForLiveIfNeeded()
+                    if events.isEmpty {
+                    }
+                }
+
+                let combined = self.mergeLiveAndSeededEvents(liveEvents: events)
+                if !combined.isEmpty {
+                    self.gamePitchEvents = combined
                 } else {
-                    self.gamePitchEvents = events
+                    print("⚠️ Live merge produced 0 events (seeded=\(self.seededGamePitchEventsForLive.count), live=\(events.count))")
                 }
 
                 // ✅ OWNER ONLY: mirror live events into owner’s real game doc
@@ -854,17 +868,20 @@ struct PitchTrackerView: View {
     @State private var activeLiveId: String? = nil
     @State private var didHydrateLineupFromLive: Bool = false
     @State private var didSeedOwnerGameEventsForLive: Bool = false
+    @State private var didSeedLivePitchEventsFromOwnerGame: Bool = false
+    @State private var seededGamePitchEventsForLive: [PitchEvent] = []
     @State private var participantsListener: ListenerRegistration? = nil
 
     private func seedOwnerGamePitchEventsForLiveIfNeeded() {
         guard activeLiveId != nil else { return }
+        guard isOwnerForActiveGame else { return }
         guard !didSeedOwnerGameEventsForLive else { return }
-        guard isOwnerForActiveGame,
-              let owner = effectiveGameOwnerUserId,
+        guard let owner = (effectiveGameOwnerUserId ?? activeGameOwnerUserId),
               let gid = selectedGameId
-        else { return }
-
-        didSeedOwnerGameEventsForLive = true
+        else {
+            print("⚠️ seedOwnerGamePitchEventsForLiveIfNeeded missing owner/gid")
+            return
+        }
 
         let ref = Firestore.firestore()
             .collection("users").document(owner)
@@ -885,11 +902,101 @@ struct PitchTrackerView: View {
 
             DispatchQueue.main.async {
                 guard self.activeLiveId != nil else { return }
-                if self.gamePitchEvents.isEmpty {
-                    self.gamePitchEvents = events
+                self.didSeedOwnerGameEventsForLive = true
+                self.seededGamePitchEventsForLive = events
+
+                print("✅ seeded owner game pitchEvents count=\(events.count)")
+
+                let combined = self.mergeLiveAndSeededEvents(liveEvents: [])
+                if !combined.isEmpty {
+                    self.gamePitchEvents = combined
                 }
             }
         }
+    }
+
+    private func seedLivePitchEventsFromOwnerGameIfNeeded() {
+        guard activeLiveId != nil else { return }
+        guard isOwnerForActiveGame else { return }
+        guard !didSeedLivePitchEventsFromOwnerGame else { return }
+        guard let owner = (effectiveGameOwnerUserId ?? activeGameOwnerUserId),
+              let gid = selectedGameId,
+              let liveId = activeLiveId
+        else {
+            print("⚠️ seedLivePitchEventsFromOwnerGameIfNeeded missing owner/gid/liveId")
+            return
+        }
+
+        let source = Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+
+        source.getDocuments { snap, err in
+            if let err {
+                print("❌ seed live pitchEvents from owner game failed:", err.localizedDescription)
+                return
+            }
+
+            let docs = snap?.documents ?? []
+            guard !docs.isEmpty else {
+                print("⚠️ seed live pitchEvents: owner game has 0 events")
+                return
+            }
+
+            let liveRef = Firestore.firestore()
+                .collection("liveGames").document(liveId)
+                .collection("pitchEvents")
+
+            let batch = Firestore.firestore().batch()
+            for doc in docs {
+                var data = doc.data()
+                // Force ownership for live backfill to satisfy rules.
+                if let original = data["createdByUid"] as? String, original != owner {
+                    data["originalCreatedByUid"] = original
+                }
+                data["createdByUid"] = owner
+
+                let dst = liveRef.document(doc.documentID)
+                batch.setData(data, forDocument: dst, merge: false)
+            }
+
+            batch.commit { err in
+                if let err {
+                    print("❌ seed live pitchEvents batch failed:", err.localizedDescription)
+                } else {
+                    DispatchQueue.main.async {
+                        self.didSeedLivePitchEventsFromOwnerGame = true
+                    }
+                    print("✅ seeded live pitchEvents from owner game history count=\(docs.count)")
+                }
+            }
+        }
+    }
+
+    private func mergeLiveAndSeededEvents(liveEvents: [PitchEvent]) -> [PitchEvent] {
+        var byId: [String: PitchEvent] = [:]
+        var result: [PitchEvent] = []
+
+        for event in seededGamePitchEventsForLive {
+            if let id = event.id {
+                byId[id] = event
+            } else {
+                result.append(event)
+            }
+        }
+
+        for event in liveEvents {
+            if let id = event.id {
+                byId[id] = event
+            } else {
+                result.append(event)
+            }
+        }
+
+        result.append(contentsOf: byId.values)
+        return result.sorted { lhs, rhs in lhs.timestamp > rhs.timestamp }
     }
 
     private func startListeningToLiveGame(liveId: String) {
@@ -900,10 +1007,17 @@ struct PitchTrackerView: View {
         gamePitchEventsListener = nil
 
         didSeedOwnerGameEventsForLive = false
+        didSeedLivePitchEventsFromOwnerGame = false
+        seededGamePitchEventsForLive.removeAll()
         gamePitchEvents = []
         activeLiveId = liveId
         startListeningToLivePitchEvents(liveId: liveId)
         startListeningToLiveParticipants(liveId: liveId)
+
+        // Kick a backfill attempt early if we already know owner + game.
+        if canBackfillLiveHistory {
+            seedLivePitchEventsFromOwnerGameIfNeeded()
+        }
 
         let ref = Firestore.firestore().collection("liveGames").document(liveId)
         liveListener = ref.addSnapshotListener { snap, err in
@@ -1034,6 +1148,11 @@ struct PitchTrackerView: View {
                         if self.gamePitchEvents.isEmpty {
                             self.seedOwnerGamePitchEventsForLiveIfNeeded()
                         }
+
+                        if self.canBackfillLiveHistory {
+                            self.seedLivePitchEventsFromOwnerGameIfNeeded()
+                        }
+
                     }
                 }
 
@@ -1074,6 +1193,14 @@ struct PitchTrackerView: View {
             }
         }
     }
+    private var canBackfillLiveHistory: Bool {
+        guard activeLiveId != nil else { return false }
+        guard let owner = (effectiveGameOwnerUserId ?? activeGameOwnerUserId), !owner.isEmpty else { return false }
+        guard let gid = selectedGameId, !gid.isEmpty else { return false }
+        guard let myUid = authManager.user?.uid, !myUid.isEmpty else { return false }
+        return owner == myUid
+    }
+
     private func startListeningToLiveParticipants(liveId: String) {
         participantsListener?.remove()
         participantsListener = nil
@@ -1169,6 +1296,10 @@ struct PitchTrackerView: View {
         didHydrateLineupFromLive = false
         didAutoDismissCodeSheetForLiveId = nil
         mirroredLivePitchEventIds.removeAll()
+        didSeedOwnerGameEventsForLive = false
+        didSeedLivePitchEventsFromOwnerGame = false
+        seededGamePitchEventsForLive.removeAll()
+        gamePitchEvents.removeAll()
         resetCallAndResultUIState()
 
         let uid = authManager.user?.uid ?? ""
@@ -1232,6 +1363,10 @@ struct PitchTrackerView: View {
         showParticipantOverlay = false
         lastObservedResultSelectionId = nil
         mirroredLivePitchEventIds.removeAll()
+        didSeedOwnerGameEventsForLive = false
+        didSeedLivePitchEventsFromOwnerGame = false
+        seededGamePitchEventsForLive.removeAll()
+        gamePitchEvents.removeAll()
         
         // Persist leaving game
         let defaults = UserDefaults.standard
@@ -1946,13 +2081,14 @@ struct PitchTrackerView: View {
     }
     @ViewBuilder
     private var cardsOverlayContent: some View {
-        let showCards = (selectedTemplate != nil) || (isGame && activeLiveId != nil)
+        let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
         if showCards {
             PitchResultSheet(
                 allEvents: filteredEvents,
                 games: games,
                 templates: templates,
-                isParticipant: (isGame && !isOwnerForActiveGame)
+                isParticipant: (isGame && !isOwnerForActiveGame),
+                selectedPlayerName: selectedPitcherName
             )
             .environmentObject(authManager)
             .environmentObject(sessionManager)
@@ -3444,6 +3580,16 @@ struct PitchTrackerView: View {
         .environmentObject(authManager)
     }
 
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        guard newPhase != .active else { return }
+
+        let shouldDisconnect = (activeLiveId != nil) || (isGame && selectedGameId != nil && !isOwnerForActiveGame)
+        guard shouldDisconnect else { return }
+
+        print("🔌 Scene inactive/background → disconnecting from game")
+        disconnectFromGame(notifyHost: true)
+    }
+
     var body: some View {
         let synced = baseBody.withGameSync(
             start: {
@@ -3470,6 +3616,9 @@ struct PitchTrackerView: View {
         let v0 = synced.eraseToAnyView()
 
         let v1 = v0
+            .onChange(of: scenePhase) { _, newValue in
+                handleScenePhaseChange(newValue)
+            }
             .onChange(of: pendingResultLabel) { _, newValue in
                 handlePendingResultChange(newValue)
             }
@@ -3580,6 +3729,10 @@ struct PitchTrackerView: View {
 
                     // 🔴 Clear any stale practice/game UI state before switching
                     self.resetCallAndResultUIState()
+                    self.gamePitchEvents.removeAll()
+                    self.seededGamePitchEventsForLive.removeAll()
+                    self.didSeedOwnerGameEventsForLive = false
+                    self.didSeedLivePitchEventsFromOwnerGame = false
 
                     // ✅ Set in-memory live session id FIRST (this is what your writes check)
                     self.activeLiveId = liveId
@@ -3708,7 +3861,8 @@ struct PitchTrackerView: View {
                 allEvents: gameEvents,   // <- live-updating array
                 games: games,
                 templates: templates,
-                isParticipant: false
+                isParticipant: false,
+                selectedPlayerName: "Pitcher"
             )
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
                 guard

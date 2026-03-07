@@ -422,6 +422,7 @@ struct PitchResultCard: View {
     let games: [Game]
     let templateName: String
     let isParticipant: Bool
+    let selectedPlayerName: String
     @State private var showDetails = false
     
     @Binding var isSelecting: Bool
@@ -432,6 +433,7 @@ struct PitchResultCard: View {
         allEvents: [PitchEvent],
         games: [Game],
         templateName: String,
+        selectedPlayerName: String,
         isSelecting: Binding<Bool> = .constant(false),
         isSelected: Binding<Bool> = .constant(false),
         isParticipant: Bool = false
@@ -440,6 +442,7 @@ struct PitchResultCard: View {
         self.allEvents = allEvents
         self.games = games
         self.templateName = templateName
+        self.selectedPlayerName = selectedPlayerName
         self._isSelecting = isSelecting
         self._isSelected = isSelected
         self.isParticipant = isParticipant
@@ -556,7 +559,7 @@ struct PitchResultCard: View {
                 verticalTopImage: Image(verticalTopImageName),
                 rightImage: Image(rightImageName),
                 rightImageShouldHighlight: didHitLocation,
-                footerTextName: "\(templateName)",
+                footerTextName: selectedPlayerName,
                 footerTextDate: "\(timestampText)",
                 pitchNumber: pitchNumber(for: event, in: allEvents),
                 outcomeSummary: outcomeSummary,
@@ -931,6 +934,7 @@ struct PitchResultSheet: View {
     let games: [Game]
     let templates: [PitchTemplate]
     let isParticipant: Bool
+    let selectedPlayerName: String
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var sessionManager: PitchSessionManager
 
@@ -1197,7 +1201,8 @@ struct PitchResultSheet: View {
                                 isSelecting: $isSelecting,
                                 selectedEventIDs: $selectedEventIDs,
                                 localTemplateOverrides: localTemplateOverrides,
-                                isParticipant: isParticipant
+                                isParticipant: isParticipant,
+                                selectedPlayerName: selectedPlayerName
                             )
                             .transition(.move(edge: .top).combined(with: .opacity))
                         }
@@ -1288,13 +1293,16 @@ struct PitchResultSheet: View {
 
         let localTemplateOverrides: [String: String]
         let isParticipant: Bool   // <-- add this
+        let selectedPlayerName: String
+
         var body: some View {
             // Compute ids and effective template id outside of ViewBuilder statements that produce views
             let eventId: String = event.id ?? "<nil>"
             let effectiveTemplateId: String? = (event.id.flatMap { localTemplateOverrides[$0] }) ?? event.templateId
 
             // Log rendering for debugging
-            let templateName: String = templates.first(where: { $0.id.uuidString == effectiveTemplateId })?.name ?? "Unknown"
+            let fallbackTemplateName = templates.first?.name ?? "Template"
+            let templateName: String = templates.first(where: { $0.id.uuidString == effectiveTemplateId })?.name ?? fallbackTemplateName
             print("UI: Rendering card for eventId=\(eventId), effectiveTemplateId=\(effectiveTemplateId ?? "<nil>"), templateName=\(templateName)")
 
             // Create a simple Binding for selection state
@@ -1323,6 +1331,7 @@ struct PitchResultSheet: View {
                 allEvents: allEvents,
                 games: games,
                 templateName: templateName,
+                selectedPlayerName: selectedPlayerName,
                 isSelecting: $isSelecting,
                 isSelected: isSelectedBinding,
                 isParticipant: isParticipant
