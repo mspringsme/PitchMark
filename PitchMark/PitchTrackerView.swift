@@ -226,7 +226,7 @@ struct PitchTrackerView: View {
     fileprivate enum OverlayTab { case cards, progress }
     @State private var overlayTab: OverlayTab = .progress
 
-    fileprivate enum DefaultsKeys {
+    enum DefaultsKeys {
         static let lastTemplateId = "lastTemplateId"
         static let lastBatterSide = "lastBatterSide"
         static let lastMode = "lastMode"
@@ -241,6 +241,8 @@ struct PitchTrackerView: View {
         static let encryptedByPracticeId = "encryptedByPracticeId"
         static let practiceCodesEnabled = "practiceCodesEnabled"
         static let activeGameOwnerUserId = "activeGameOwnerUserId"
+        static let hiddenTemplateIds = "hiddenTemplateIds"
+        static let hiddenPitcherIds = "hiddenPitcherIds"
     }
     @State private var isSelecting: Bool = false
     @State private var selectedEventIDs: Set<String> = []
@@ -280,6 +282,7 @@ struct PitchTrackerView: View {
     @State private var pendingRestoreGameId: String? = nil
     @State private var pendingLiveTemplateId: String? = nil
     @State private var pendingLiveTemplateName: String? = nil
+    @State private var liveTemplateOverrideLocked: Bool = false
 
     private func dismissAllTopLevelSheets() {
         showSettings = false
@@ -668,11 +671,16 @@ struct PitchTrackerView: View {
 
     private func applyPendingLiveTemplateIfPossible() {
         guard activeLiveId != nil else { return }
+        guard let myUid = authManager.user?.uid else { return }
+        // Only participants should be overridden by live doc values.
+        guard let ownerUid = activeGameOwnerUserId, !ownerUid.isEmpty else { return }
+        guard ownerUid != myUid else { return }
+        guard !liveTemplateOverrideLocked else { return }
 
         if let tid = pendingLiveTemplateId, !tid.isEmpty,
            let template = templates.first(where: { $0.id.uuidString == tid }) {
             if selectedTemplate?.id != template.id {
-                applyTemplate(template)
+                applyTemplate(template, source: .live)
             }
             return
         }
@@ -680,7 +688,7 @@ struct PitchTrackerView: View {
         if let tname = pendingLiveTemplateName, !tname.isEmpty,
            let template = templates.first(where: { $0.name == tname }) {
             if selectedTemplate?.id != template.id {
-                applyTemplate(template)
+                applyTemplate(template, source: .live)
             }
         }
     }
@@ -1058,7 +1066,7 @@ struct PitchTrackerView: View {
                 if let tid = liveTemplateId, !tid.isEmpty {
                     if self.selectedTemplate?.id.uuidString != tid {
                         if let t = self.templates.first(where: { $0.id.uuidString == tid }) {
-                            self.applyTemplate(t)
+                            self.applyTemplate(t, source: .live)
                         } else {
                             // templates not loaded yet or participant doesn't have it
                             print("⚠️ Live templateId not found locally:", tid, "name:", liveTemplateName ?? "nil")
@@ -1068,7 +1076,7 @@ struct PitchTrackerView: View {
                     // Fallback match by name
                     if self.selectedTemplate?.name != tname,
                        let t = self.templates.first(where: { $0.name == tname }) {
-                        self.applyTemplate(t)
+                        self.applyTemplate(t, source: .live)
                     }
                 }
                 // ✅ selected batter comes over Firestore as STRING uuid
@@ -1279,6 +1287,10 @@ struct PitchTrackerView: View {
         actualLocationRecorded = nil
     }
 
+    private func resetLiveTemplateOverrideLock() {
+        liveTemplateOverrideLocked = false
+    }
+
     private func endLiveSessionLocally(keepCurrentGame: Bool) {
         guard let liveId = activeLiveId else { return }
 
@@ -1301,6 +1313,7 @@ struct PitchTrackerView: View {
         seededGamePitchEventsForLive.removeAll()
         gamePitchEvents.removeAll()
         resetCallAndResultUIState()
+        resetLiveTemplateOverrideLock()
 
         let uid = authManager.user?.uid ?? ""
         if !uid.isEmpty {
@@ -1367,6 +1380,7 @@ struct PitchTrackerView: View {
         didSeedLivePitchEventsFromOwnerGame = false
         seededGamePitchEventsForLive.removeAll()
         gamePitchEvents.removeAll()
+        resetLiveTemplateOverrideLock()
         
         // Persist leaving game
         let defaults = UserDefaults.standard
@@ -1405,6 +1419,22 @@ struct PitchTrackerView: View {
 
         // fire once immediately so presence shows up right away
         heartbeatTimer?.fire()
+    }
+
+    private var hiddenTemplateIdSet: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: DefaultsKeys.hiddenTemplateIds) ?? [])
+    }
+
+    private var hiddenPitcherIdSet: Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: DefaultsKeys.hiddenPitcherIds) ?? [])
+    }
+
+    private var visibleTemplates: [PitchTemplate] {
+        templates.filter { !hiddenTemplateIdSet.contains($0.id.uuidString) }
+    }
+
+    private var visiblePitchers: [Pitcher] {
+        pitchers.filter { !hiddenPitcherIdSet.contains($0.id ?? "") }
     }
 
     // MARK: - Template Version Indicator
@@ -1640,8 +1670,13 @@ struct PitchTrackerView: View {
         }
     }
 
+    private enum TemplateSelectionSource {
+        case user
+        case live
+    }
+
     // MARK: - Template Apply Helper
-    private func applyTemplate(_ template: PitchTemplate) {
+    private func applyTemplate(_ template: PitchTemplate, source: TemplateSelectionSource = .user) {
         selectedTemplate = template
         let fallbackList = availablePitches(for: template)
         if useEncrypted(for: template) {
@@ -1658,6 +1693,10 @@ struct PitchTrackerView: View {
         persistSelectedTemplate(template)
         // Force chips/strike zone to refresh colors and content
         colorRefreshToken = UUID()
+
+        if source == .user {
+            liveTemplateOverrideLocked = true
+        }
     }
 
     private func applySelectedPitcher(_ pitcher: Pitcher) {
@@ -2295,14 +2334,14 @@ struct PitchTrackerView: View {
         HStack {
             if !(isGame && !isOwnerForActiveGame) {
             Menu {
-                ForEach(pitchers) { pitcher in
+                ForEach(visiblePitchers) { pitcher in
                     Button(pitcher.name) {
                         applySelectedPitcher(pitcher)
                     }
                 }
             } label: {
                 let currentLabel = selectedPitcherName
-                let widestLabel = ([currentLabel] + pitchers.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+                let widestLabel = ([currentLabel] + visiblePitchers.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
 
                 ZStack {
                     HStack(spacing: 8) {
@@ -2331,13 +2370,13 @@ struct PitchTrackerView: View {
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 )
                 .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                .opacity(pitchers.isEmpty ? 0.6 : 1.0)
+                .opacity(visiblePitchers.isEmpty ? 0.6 : 1.0)
                 .contentShape(Capsule())
             }
-            .disabled(pitchers.isEmpty)
+            .disabled(visiblePitchers.isEmpty)
 
             Menu {
-                ForEach(templates, id: \.id) { template in
+                ForEach(visibleTemplates, id: \.id) { template in
                     Button(template.name) {
                         if sessionManager.currentMode == .practice && selectedPracticeId != nil {
                             pendingTemplateSelection = template
@@ -2349,7 +2388,7 @@ struct PitchTrackerView: View {
                 }
             } label: {
                 let currentLabel = selectedTemplate?.name ?? "Select a template"
-                let widestLabel = ([currentLabel] + templates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+                let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
                 
                 ZStack {
                     // Invisible widest label to reserve width and prevent size jumps
@@ -2397,11 +2436,11 @@ struct PitchTrackerView: View {
                         .stroke(Color.white.opacity(0.08), lineWidth: 1)
                 )
                 .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                .opacity(templates.isEmpty ? 0.6 : 1.0)
+                .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
                 .contentShape(Capsule())
                 .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
             }
-            .disabled(templates.isEmpty)
+            .disabled(visibleTemplates.isEmpty)
         }
             Spacer()
             
@@ -3729,6 +3768,7 @@ struct PitchTrackerView: View {
 
                     // 🔴 Clear any stale practice/game UI state before switching
                     self.resetCallAndResultUIState()
+                    self.resetLiveTemplateOverrideLock()
                     self.gamePitchEvents.removeAll()
                     self.seededGamePitchEventsForLive.removeAll()
                     self.didSeedOwnerGameEventsForLive = false

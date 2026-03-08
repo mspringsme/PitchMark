@@ -10,7 +10,13 @@ service cloud.firestore {
     }
 
     function sharedWithMe(data) {
-      return data.keys().hasAny(['sharedWith']) && data.sharedWith.hasAny([uid()]);
+      return (
+        data.keys().hasAny(['sharedWith']) && data.sharedWith.hasAny([uid()])
+      ) || (
+        request.auth.token.email != null
+        && data.keys().hasAny(['sharedWithEmails'])
+        && data.sharedWithEmails.hasAny([request.auth.token.email])
+      );
     }
 
     // ─────────────────────────────────────────────
@@ -64,8 +70,9 @@ service cloud.firestore {
     // JOIN CODES: /joinCodes/{code}
     // ─────────────────────────────────────────────
     match /joinCodes/{code} {
-      allow get: if signedIn() && (resource == null || notExpired(resource.data));
-      allow list: if false;
+      allow get: if signedIn()
+        && (resource == null || notExpired(resource.data) || resource.data.ownerUid == uid());
+      allow list: if signedIn() && request.query.where("ownerUid", "==", uid());
 
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid()
@@ -81,8 +88,9 @@ service cloud.firestore {
     // INVITE TOKENS: /inviteTokens/{token}
     // ─────────────────────────────────────────────
     match /inviteTokens/{token} {
-      allow get: if signedIn() && (resource == null || notExpired(resource.data));
-      allow list: if false;
+      allow get: if signedIn()
+        && (resource == null || notExpired(resource.data) || resource.data.ownerUid == uid());
+      allow list: if signedIn() && request.query.where("ownerUid", "==", uid());
 
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid()

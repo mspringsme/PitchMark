@@ -30,6 +30,7 @@ struct RootView: View {
         }
         .onChange(of: authManager.isSignedIn) { _, isSignedIn in
             if isSignedIn {
+                LiveGameService.shared.cleanupExpiredJoinArtifacts()
                 if let token = UserDefaults.standard.string(forKey: "pendingInviteToken"), !token.isEmpty {
                     UserDefaults.standard.removeObject(forKey: "pendingInviteToken")
                     joinLiveGameByInviteToken(token)

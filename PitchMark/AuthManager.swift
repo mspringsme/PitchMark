@@ -217,6 +217,7 @@ class AuthManager: ObservableObject {
             ],
             "ownerUid": ownerUid,
             "sharedWith": template.sharedWith,
+            "sharedWithEmails": template.sharedWithEmails,
             "updatedAt": FieldValue.serverTimestamp()
         ]
         
@@ -233,6 +234,37 @@ class AuthManager: ObservableObject {
             if let error = error {
                 print("❌ save shared template failed:", error.localizedDescription)
             }
+        }
+    }
+
+    func shareTemplateByEmail(_ template: PitchTemplate, email: String, completion: ((Error?) -> Void)? = nil) {
+        guard let user = user else {
+            completion?(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard trimmed.contains("@") else {
+            completion?(NSError(domain: "Share", code: 400, userInfo: [NSLocalizedDescriptionKey: "Invalid email"]))
+            return
+        }
+
+        let db = Firestore.firestore()
+        let ownerTemplateRef = db.collection("users")
+            .document(user.uid)
+            .collection("templates")
+            .document(template.id.uuidString)
+
+        let sharedRef = db.collection("templates").document(template.id.uuidString)
+
+        let batch = db.batch()
+        batch.updateData(["sharedWithEmails": FieldValue.arrayUnion([trimmed])], forDocument: ownerTemplateRef)
+        batch.setData(["sharedWithEmails": FieldValue.arrayUnion([trimmed])], forDocument: sharedRef, merge: true)
+
+        batch.commit { error in
+            if let error {
+                print("❌ shareTemplateByEmail failed:", error.localizedDescription)
+            }
+            completion?(error)
         }
     }
     
@@ -307,12 +339,26 @@ class AuthManager: ObservableObject {
             .whereField("sharedWith", arrayContains: user.uid)
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ loadTemplates (shared) error:", error.localizedDescription)
+                    print("❌ loadTemplates (shared uid) error:", error.localizedDescription)
                 } else {
                     templateDocs.append(contentsOf: snapshot?.documents ?? [])
                 }
                 group.leave()
             }
+
+        if let email = user.email?.lowercased(), !email.isEmpty {
+            group.enter()
+            db.collection("templates")
+                .whereField("sharedWithEmails", arrayContains: email)
+                .getDocuments { snapshot, error in
+                    if let error = error {
+                        print("❌ loadTemplates (shared email) error:", error.localizedDescription)
+                    } else {
+                        templateDocs.append(contentsOf: snapshot?.documents ?? [])
+                    }
+                    group.leave()
+                }
+        }
 
         group.notify(queue: .main) {
             let docs = templateDocs
@@ -397,6 +443,7 @@ class AuthManager: ObservableObject {
 
                     let ownerUid = data["ownerUid"] as? String
                     let sharedWith = data["sharedWith"] as? [String] ?? []
+                    let sharedWithEmails = data["sharedWithEmails"] as? [String] ?? []
 
                     let template = PitchTemplate(
                         id: templateId,
@@ -406,6 +453,7 @@ class AuthManager: ObservableObject {
                         isEncrypted: isEncrypted,
                         ownerUid: ownerUid,
                         sharedWith: sharedWith,
+                        sharedWithEmails: sharedWithEmails,
                         pitchGridHeaders: headers,
                         pitchGridValues: gridValues,
                         strikeTopRow: strikeTop,
@@ -475,7 +523,8 @@ class AuthManager: ObservableObject {
                 }
             }
 
-            completion(Array(pitchersById.values))
+            let pitchers = Array(pitchersById.values)
+            completion(pitchers)
         }
     }
 
@@ -509,6 +558,36 @@ class AuthManager: ObservableObject {
         } catch {
             print("❌ createPitcher encode failed:", error.localizedDescription)
             completion?(nil)
+        }
+    }
+
+    func updatePitcher(id: String, name: String, templateId: String?, completion: ((Pitcher?) -> Void)? = nil) {
+        guard let user = user else {
+            completion?(nil)
+            return
+        }
+        let ref = Firestore.firestore().collection("pitchers").document(id)
+        let data: [String: Any] = [
+            "name": name,
+            "templateId": templateId as Any,
+            "ownerUid": user.uid
+        ]
+        ref.setData(data, merge: true) { err in
+            if let err {
+                print("❌ updatePitcher failed:", err.localizedDescription)
+                completion?(nil)
+                return
+            }
+            let updated = Pitcher(
+                id: id,
+                name: name,
+                templateId: templateId,
+                ownerUid: user.uid,
+                sharedWith: [],
+                claimedByUid: nil,
+                createdAt: Date()
+            )
+            completion?(updated)
         }
     }
     func loadTemplate(id: String) async -> PitchTemplate? {

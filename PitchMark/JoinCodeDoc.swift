@@ -204,6 +204,9 @@ final class LiveGameService {
             return
         }
 
+        // Best-effort cleanup (non-blocking).
+        cleanupExpiredJoinArtifacts()
+
         let liveRef = db.collection(Col.liveGames).document()
         let liveId = liveRef.documentID
         let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60))
@@ -368,6 +371,47 @@ final class LiveGameService {
         }
     }
     
+    // MARK: - Cleanup (Client-Side)
+
+    func cleanupExpiredJoinArtifacts() {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let now = Timestamp(date: Date())
+        cleanupExpired(in: Col.joinCodes, ownerUid: uid, now: now)
+        cleanupExpired(in: Col.inviteTokens, ownerUid: uid, now: now)
+    }
+
+    private func cleanupExpired(in collection: String, ownerUid: String, now: Timestamp) {
+        db.collection(collection)
+            .whereField(Key.ownerUid, isEqualTo: ownerUid)
+            .whereField(Key.expiresAt, isLessThan: now)
+            .limit(to: 200)
+            .getDocuments { [weak self] snap, err in
+                guard let self else { return }
+                if let err {
+                    print("⚠️ \(self.logPrefix) cleanup \(collection) failed:", err.localizedDescription)
+                    return
+                }
+                let docs = snap?.documents ?? []
+                guard !docs.isEmpty else { return }
+
+                let batch = self.db.batch()
+                for doc in docs {
+                    batch.deleteDocument(doc.reference)
+                }
+
+                batch.commit { err in
+                    if let err {
+                        print("⚠️ \(self.logPrefix) cleanup \(collection) batch failed:", err.localizedDescription)
+                    } else {
+                        print("✅ \(self.logPrefix) cleanup \(collection) deleted \(docs.count)")
+                        if docs.count == 200 {
+                            self.cleanupExpired(in: collection, ownerUid: ownerUid, now: now)
+                        }
+                    }
+                }
+            }
+    }
+
     // MARK: - Join Code Generation (transaction)
 
     private func createUniqueJoinCode(

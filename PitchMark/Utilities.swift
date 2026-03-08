@@ -383,6 +383,7 @@ struct PitchTemplate: Identifiable, Hashable, Codable {
     var isEncrypted: Bool = false
     var ownerUid: String? = nil
     var sharedWith: [String] = []
+    var sharedWithEmails: [String] = []
 
     // Encrypted editor data
     var pitchGridHeaders: [PitchHeader] = []          // headers from PitchGridView2 (col > 0)

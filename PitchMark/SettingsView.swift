@@ -35,6 +35,18 @@ struct SettingsView: View {
     @State private var showAddPitcher = false
     @State private var newPitcherName: String = ""
     @State private var newPitcherTemplateId: String? = nil
+    @State private var editingPitcher: Pitcher? = nil
+
+    @State private var templatePendingShare: PitchTemplate? = nil
+    @State private var showShareTemplateSheet = false
+    @State private var shareTargetEmail: String = ""
+    @State private var shareTemplateError: String = ""
+    @State private var isSharingTemplate = false
+    @State private var isRefreshingTemplates = false
+    @State private var hiddenTemplateIds: Set<String> = []
+    @State private var hiddenPitcherIds: Set<String> = []
+    @State private var templateActionTargetId: UUID? = nil
+    @State private var pitcherActionTargetId: String? = nil
 
     @State private var showInviteJoinSheet = false
     @State private var inviteJoinText: String = ""
@@ -70,6 +82,42 @@ struct SettingsView: View {
         authManager.deleteTemplate(template)
         templates.removeAll { $0.id == template.id }
         templatePendingDeletion = nil
+    }
+
+    private func beginShareTemplate(_ template: PitchTemplate) {
+        templatePendingShare = template
+        shareTargetEmail = ""
+        shareTemplateError = ""
+        showShareTemplateSheet = true
+    }
+
+    private func loadHiddenIds() {
+        hiddenTemplateIds = Set(UserDefaults.standard.stringArray(forKey: PitchTrackerView.DefaultsKeys.hiddenTemplateIds) ?? [])
+        hiddenPitcherIds = Set(UserDefaults.standard.stringArray(forKey: PitchTrackerView.DefaultsKeys.hiddenPitcherIds) ?? [])
+    }
+
+    private func saveHiddenTemplateIds() {
+        UserDefaults.standard.set(Array(hiddenTemplateIds), forKey: PitchTrackerView.DefaultsKeys.hiddenTemplateIds)
+    }
+
+    private func saveHiddenPitcherIds() {
+        UserDefaults.standard.set(Array(hiddenPitcherIds), forKey: PitchTrackerView.DefaultsKeys.hiddenPitcherIds)
+    }
+
+    private var visibleTemplates: [PitchTemplate] {
+        sortedTemplates.filter { !hiddenTemplateIds.contains($0.id.uuidString) }
+    }
+
+    private var hiddenTemplates: [PitchTemplate] {
+        sortedTemplates.filter { hiddenTemplateIds.contains($0.id.uuidString) }
+    }
+
+    private var visiblePitchers: [Pitcher] {
+        sortedPitchers.filter { !hiddenPitcherIds.contains($0.id ?? "") }
+    }
+
+    private var hiddenPitchers: [Pitcher] {
+        sortedPitchers.filter { hiddenPitcherIds.contains($0.id ?? "") }
     }
     
     private func savePracticeSessions(_ sessions: [PracticeSession]) {
@@ -214,12 +262,25 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var templatesHeader: some View {
-        HStack{
+        HStack {
             Text("Templates")
                 .font(.title2)
                 .bold()
                 .padding(.horizontal)
             Spacer()
+            Button(isRefreshingTemplates ? "Refreshing..." : "Refresh") {
+                guard !isRefreshingTemplates else { return }
+                isRefreshingTemplates = true
+                authManager.loadTemplates { loaded in
+                    templates = loaded
+                    if selectedTemplate == nil {
+                        selectedTemplate = loaded.first
+                    }
+                    isRefreshingTemplates = false
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(isRefreshingTemplates)
             Button("New Template") {
                 editorTemplate = PitchTemplate(
                     id: UUID(),
@@ -241,6 +302,7 @@ struct SettingsView: View {
                 .padding(.horizontal)
             Spacer()
             Button("New Pitcher") {
+                editingPitcher = nil
                 newPitcherName = ""
                 newPitcherTemplateId = selectedTemplate?.id.uuidString
                 showAddPitcher = true
@@ -257,28 +319,71 @@ struct SettingsView: View {
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 12)
+        } else if visiblePitchers.isEmpty {
+            Text("No visible pitchers")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 12)
         } else {
-            List {
-                ForEach(sortedPitchers) { pitcher in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(pitcher.name)
-                                .font(.headline)
-                            if let tid = pitcher.templateId,
-                               let t = templates.first(where: { $0.id.uuidString == tid }) {
-                                Text("Template: \(t.name)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+            let selected = visiblePitchers.first(where: { $0.id == pitcherActionTargetId })
+
+            VStack(alignment: .leading, spacing: 12) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(visiblePitchers) { pitcher in
+                            let isActive = pitcher.id == pitcherActionTargetId
+                            Button(pitcher.name) {
+                                pitcherActionTargetId = pitcher.id
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule().fill(isActive ? Color.black.opacity(0.14) : Color.clear)
+                            )
+                            .overlay(
+                                Capsule().stroke(Color.black, lineWidth: 1)
+                            )
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+
+                if let pitcher = selected {
+                    HStack(spacing: 8) {
+                        Button("Hide") {
+                            if let id = pitcher.id {
+                                hiddenPitcherIds.insert(id)
+                                saveHiddenPitcherIds()
+                                if pitcherActionTargetId == id {
+                                    pitcherActionTargetId = nil
+                                }
                             }
                         }
+                        .buttonStyle(.bordered)
+
+                        Button("Edit") {
+                            editingPitcher = pitcher
+                            newPitcherName = pitcher.name
+                            newPitcherTemplateId = pitcher.templateId
+                            showAddPitcher = true
+                        }
+                        .buttonStyle(.bordered)
+
                         Spacer()
                     }
-                    .padding(.vertical, 4)
+                    .padding(.horizontal)
+                } else {
+                    Text("Select a pitcher to manage")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
                 }
+
+                Spacer().frame(height: 8)
             }
-            .frame(maxHeight: 260)
-            .listStyle(.plain)
-            .padding(.horizontal)
         }
     }
     
@@ -290,37 +395,139 @@ struct SettingsView: View {
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 12)
+        } else if visibleTemplates.isEmpty {
+            Text("No visible templates")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 12)
         } else {
-            List {
-                ForEach(sortedTemplates) { template in
-                    TemplateRowView(
-                        template: template,
-                        isSelected: selectedTemplate?.id == template.id,
-                        isEditable: isTemplateEditable(template),
-                        editAction: {
+            let selected = visibleTemplates.first(where: { $0.id == templateActionTargetId })
+
+            VStack(alignment: .leading, spacing: 12) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(visibleTemplates) { template in
+                            let isActive = template.id == templateActionTargetId
+                            Button(template.name) {
+                                templateActionTargetId = template.id
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule().fill(isActive ? Color.black.opacity(0.14) : Color.clear)
+                            )
+                            .overlay(
+                                Capsule().stroke(Color.black, lineWidth: 1)
+                            )
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+
+                if let template = selected {
+                    HStack(spacing: 8) {
+                        Button("Hide") {
+                            hiddenTemplateIds.insert(template.id.uuidString)
+                            saveHiddenTemplateIds()
+                            if templateActionTargetId == template.id {
+                                templateActionTargetId = nil
+                            }
+                            if selectedTemplate?.id == template.id {
+                                selectedTemplate = nil
+                            }
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Share") {
+                            beginShareTemplate(template)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!isTemplateEditable(template))
+
+                        Button("Edit") {
                             editorTemplate = template
-                        },
-                        launchAction: {
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!isTemplateEditable(template))
+
+                        Button("Launch") {
                             templatePendingLaunch = template
                             showModeChoice = true
                         }
-                    )
-                }
-                .onDelete { indexSet in
-                    let itemsToDelete = indexSet.map { sortedTemplates[$0] }
-                    for templateToDelete in itemsToDelete {
-                        if isTemplateEditable(templateToDelete) {
-                            showDeleteConfirmation(for: templateToDelete)
-                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Spacer()
                     }
+                    .padding(.horizontal)
+                } else {
+                    Text("Select a template to manage")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.horizontal)
                 }
+
+                Spacer().frame(height: 8)
             }
-            .frame(maxHeight: 360)
-            .listStyle(.plain)
-            .padding(.horizontal)
         }
     }
     
+    @ViewBuilder
+    private var hiddenTemplatesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Hidden Templates")
+                .font(.headline)
+                .padding(.horizontal)
+            VStack(spacing: 0) {
+                ForEach(hiddenTemplates) { template in
+                    HStack {
+                        Text(template.name)
+                            .font(.subheadline)
+                        Spacer()
+                        Button("Unhide") {
+                            hiddenTemplateIds.remove(template.id.uuidString)
+                            saveHiddenTemplateIds()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.vertical, 6)
+                    Divider().padding(.leading)
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
+    private var hiddenPitchersSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Hidden Pitchers")
+                .font(.headline)
+                .padding(.horizontal)
+            VStack(spacing: 0) {
+                ForEach(hiddenPitchers) { pitcher in
+                    HStack {
+                        Text(pitcher.name)
+                            .font(.subheadline)
+                        Spacer()
+                        Button("Unhide") {
+                            if let id = pitcher.id {
+                                hiddenPitcherIds.remove(id)
+                                saveHiddenPitcherIds()
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.vertical, 6)
+                    Divider().padding(.leading)
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+
     @ViewBuilder
     private var storeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -399,67 +606,127 @@ struct SettingsView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                
-                VStack(alignment: .leading, spacing: 20) {
-                    Color.clear.frame(height: 24)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Join a live game")
-                            .font(.headline)
-                        Text("Use the invite link or scan the QR code from the host.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        Color.clear.frame(height: 0)
+                        
 
-                    Button("Join via Invite Link") {
-                        inviteJoinError = nil
-                        inviteJoinText = ""
-                        showInviteJoinSheet = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.horizontal)
-
-                    // 🔹 Templates Header
-                    templatesHeader
-
-                    // 🔹 Templates List / Empty State
-                    templatesListView
-
-                    Divider()
+                        Button("Join via Invite Link") {
+                            inviteJoinError = nil
+                            inviteJoinText = ""
+                            showInviteJoinSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
                         .padding(.horizontal)
 
-                    // 🔹 Pitchers Header
-                    pitchersHeader
+                        // 🔹 Templates Header
+                        templatesHeader
 
-                    // 🔹 Pitchers List / Empty State
-                    pitchersListView
+                        // 🔹 Templates List / Empty State
+                        templatesListView
 
-                    Divider()
-                        .padding(.horizontal)
-                    
-                    storeSection
-                    Divider()
-                    
-                    // 🔹 Account Section
-                    accountSection
-                    
-                    Spacer(minLength: 80) // 👈 Leaves room for footer
+                        if !hiddenTemplates.isEmpty {
+                            hiddenTemplatesSection
+                        }
+
+                        Divider()
+                            .padding(.horizontal)
+
+                        // 🔹 Pitchers Header
+                        pitchersHeader
+
+                        // 🔹 Pitchers List / Empty State
+                        pitchersListView
+
+                        if !hiddenPitchers.isEmpty {
+                            hiddenPitchersSection
+                        }
+
+                        Divider()
+                            .padding(.horizontal)
+                        
+                        storeSection
+                        Divider()
+                        
+                        // 🔹 Account Section
+                        accountSection
+                    }
+                    .padding(.top, 4)
                 }
-                .padding(.top)
-                
-                
-                // 🔹 Bottom-Centered Email
-                VStack {
-                    Spacer()
+                .safeAreaInset(edge: .bottom) {
                     Text("Signed in as: \(authManager.userEmail)")
                         .font(.footnote)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
-                        .padding(.bottom, 12)
+                        .padding(.vertical, 12)
+                        .background(.ultraThinMaterial)
                 }
             }
             .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
+            .onAppear {
+                loadHiddenIds()
+            }
+            .sheet(isPresented: $showShareTemplateSheet) {
+                VStack(spacing: 16) {
+                    Text("Share Template")
+                        .font(.headline)
+
+                    if let template = templatePendingShare {
+                        Text(template.name)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+
+                    TextField("Recipient Email", text: $shareTargetEmail)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.emailAddress)
+                        .textFieldStyle(.roundedBorder)
+
+                    if !shareTemplateError.isEmpty {
+                        Text(shareTemplateError)
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+
+                    HStack {
+                        Button("Cancel") {
+                            showShareTemplateSheet = false
+                        }
+                        Spacer()
+                        Button(isSharingTemplate ? "Sharing..." : "Share") {
+                            guard let template = templatePendingShare else { return }
+                            let trimmed = shareTargetEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                            guard !trimmed.isEmpty else { return }
+
+                            isSharingTemplate = true
+                            shareTemplateError = ""
+
+                            authManager.shareTemplateByEmail(template, email: trimmed) { error in
+                                DispatchQueue.main.async {
+                                    isSharingTemplate = false
+                                    if let error {
+                                        shareTemplateError = error.localizedDescription
+                                        return
+                                    }
+
+                                    if let idx = templates.firstIndex(where: { $0.id == template.id }) {
+                                        if !templates[idx].sharedWithEmails.contains(trimmed) {
+                                            templates[idx].sharedWithEmails.append(trimmed)
+                                        }
+                                    }
+
+                                    showShareTemplateSheet = false
+                                }
+                            }
+                        }
+                        .disabled(shareTargetEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSharingTemplate)
+                    }
+                }
+                .padding()
+                .presentationDetents([.medium])
+            }
             .alert("Are you sure you want to delete this template?", isPresented: $showDeleteAlert) {
                 Button("Cancel", role: .cancel) {}
                 Button("Delete", role: .destructive) {
@@ -521,7 +788,7 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showAddPitcher) {
                 VStack(spacing: 16) {
-                    Text("New Pitcher")
+                    Text(editingPitcher == nil ? "New Pitcher" : "Edit Pitcher")
                         .font(.headline)
 
                     TextField("Name", text: $newPitcherName)
@@ -538,16 +805,29 @@ struct SettingsView: View {
                     HStack {
                         Button("Cancel") {
                             showAddPitcher = false
+                            editingPitcher = nil
                         }
                         Spacer()
                         Button("Save") {
                             let name = newPitcherName.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !name.isEmpty else { return }
-                            authManager.createPitcher(name: name, templateId: newPitcherTemplateId) { created in
-                                if let created {
-                                    pitchers.append(created)
+
+                            if let editing = editingPitcher, let pid = editing.id {
+                                authManager.updatePitcher(id: pid, name: name, templateId: newPitcherTemplateId) { updated in
+                                    if let updated,
+                                       let idx = pitchers.firstIndex(where: { $0.id == pid }) {
+                                        pitchers[idx] = updated
+                                    }
+                                    showAddPitcher = false
+                                    editingPitcher = nil
                                 }
-                                showAddPitcher = false
+                            } else {
+                                authManager.createPitcher(name: name, templateId: newPitcherTemplateId) { created in
+                                    if let created {
+                                        pitchers.append(created)
+                                    }
+                                    showAddPitcher = false
+                                }
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -670,6 +950,8 @@ private struct TemplateRowView: View {
     let isEditable: Bool
     let editAction: () -> Void
     let launchAction: () -> Void
+    let shareAction: () -> Void
+    let hideAction: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -686,6 +968,11 @@ private struct TemplateRowView: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
+            Button("Hide", action: hideAction)
+                .buttonStyle(.bordered)
+            Button("Share", action: shareAction)
+                .buttonStyle(.bordered)
+                .disabled(!isEditable)
             Button("Edit", action: editAction)
                 .buttonStyle(.bordered)
                 .disabled(!isEditable)
