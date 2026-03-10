@@ -599,6 +599,37 @@ struct TemplateEditorView: View {
         return GridPaletteColor.allCases.filter { !used.contains($0) }
     }
 
+    private func autoFillPaletteSelections() {
+        let topIndices = [0, 1]
+        let bottomIndices = [2, 3, 4]
+        let topComplete = topIndices.allSatisfy { gridPaletteSelections[$0] != nil }
+        let bottomComplete = bottomIndices.allSatisfy { gridPaletteSelections[$0] != nil }
+
+        var selections = gridPaletteSelections
+        let selected = Set(selections.compactMap { $0 })
+        let remaining = GridPaletteColor.allCases.filter { !selected.contains($0) }
+        var remainingIterator = remaining.makeIterator()
+
+        if topComplete {
+            for index in bottomIndices where selections[index] == nil {
+                selections[index] = remainingIterator.next()
+            }
+        }
+
+        if bottomComplete {
+            for index in topIndices where selections[index] == nil {
+                selections[index] = remainingIterator.next()
+            }
+        }
+
+        gridPaletteSelections = selections
+    }
+
+    private func randomizePaletteSelections() {
+        let shuffled = GridPaletteColor.allCases.shuffled()
+        gridPaletteSelections = shuffled.map { Optional($0) }
+    }
+
     private func noteGridInteraction(_ target: ShieldedGridTarget) {
         shieldRestoreWorkItem?.cancel()
         hiddenShieldTarget = target
@@ -618,6 +649,7 @@ struct TemplateEditorView: View {
             ForEach(availablePaletteColors(for: index)) { option in
                 Button {
                     gridPaletteSelections[index] = option
+                    autoFillPaletteSelections()
                 } label: {
                     Label(option.rawValue.capitalized, systemImage: "circle.fill")
                         .foregroundStyle(option.color)
@@ -924,6 +956,7 @@ struct TemplateEditorView: View {
                                     randomizeFirstColumnAction?()
                                     topRowCoordinator.randomizeTopRowsWithSequentialPairs()
                                     topRowCoordinator.randomizeBodyRowsWithSequentialPairs()
+                                    randomizePaletteSelections()
                                 }
                                 Button("Cancel", role: .cancel) { }
                             } message: {
@@ -985,6 +1018,7 @@ struct TemplateEditorView: View {
                                 Button("Clear", role: .destructive) {
                                     topRowCoordinator.clearAll()
                                     clearPitchGridAction?()
+                                    gridPaletteSelections = Array(repeating: nil, count: 5)
                                     hasAnyPitchInTopRow = false
                                 }
                                 Button("Cancel", role: .cancel) { }

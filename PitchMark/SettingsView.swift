@@ -47,6 +47,7 @@ struct SettingsView: View {
     @State private var hiddenPitcherIds: Set<String> = []
     @State private var templateActionTargetId: UUID? = nil
     @State private var pitcherActionTargetId: String? = nil
+    @State private var showHiddenItems = false
 
     @State private var showInviteJoinSheet = false
     @State private var inviteJoinText: String = ""
@@ -353,17 +354,6 @@ struct SettingsView: View {
 
                 if let pitcher = selected {
                     HStack(spacing: 8) {
-                        Button("Hide") {
-                            if let id = pitcher.id {
-                                hiddenPitcherIds.insert(id)
-                                saveHiddenPitcherIds()
-                                if pitcherActionTargetId == id {
-                                    pitcherActionTargetId = nil
-                                }
-                            }
-                        }
-                        .buttonStyle(.bordered)
-
                         Button("Edit") {
                             editingPitcher = pitcher
                             newPitcherName = pitcher.name
@@ -373,6 +363,17 @@ struct SettingsView: View {
                         .buttonStyle(.bordered)
 
                         Spacer()
+
+                        Button("Archive") {
+                            if let id = pitcher.id {
+                                hiddenPitcherIds.insert(id)
+                                saveHiddenPitcherIds()
+                                if pitcherActionTargetId == id {
+                                    pitcherActionTargetId = nil
+                                }
+                            }
+                        }
+                        .buttonStyle(.bordered)
                     }
                     .padding(.horizontal)
                 } else {
@@ -410,7 +411,7 @@ struct SettingsView: View {
                         ForEach(visibleTemplates) { template in
                             let isActive = template.id == templateActionTargetId
                             Button(template.name) {
-                                templateActionTargetId = template.id
+                                templateActionTargetId = (templateActionTargetId == template.id) ? nil : template.id
                             }
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.black)
@@ -423,23 +424,28 @@ struct SettingsView: View {
                                 Capsule().stroke(Color.black, lineWidth: 1)
                             )
                         }
+
+                        if !(hiddenTemplates.isEmpty && hiddenPitchers.isEmpty) {
+                            Button(showHiddenItems ? "Hide Archived" : "Show Archived") {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showHiddenItems.toggle()
+                                }
+                            }
+                            .font(.caption)
+                            .buttonStyle(.bordered)
+                            .tint(.gray)
+                        }
                     }
                     .padding(.horizontal)
                 }
 
                 if let template = selected {
                     HStack(spacing: 8) {
-                        Button("Hide") {
-                            hiddenTemplateIds.insert(template.id.uuidString)
-                            saveHiddenTemplateIds()
-                            if templateActionTargetId == template.id {
-                                templateActionTargetId = nil
-                            }
-                            if selectedTemplate?.id == template.id {
-                                selectedTemplate = nil
-                            }
+                        Button("Launch") {
+                            templatePendingLaunch = template
+                            showModeChoice = true
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.borderedProminent)
 
                         Button("Share") {
                             beginShareTemplate(template)
@@ -453,13 +459,19 @@ struct SettingsView: View {
                         .buttonStyle(.bordered)
                         .disabled(!isTemplateEditable(template))
 
-                        Button("Launch") {
-                            templatePendingLaunch = template
-                            showModeChoice = true
-                        }
-                        .buttonStyle(.borderedProminent)
-
                         Spacer()
+
+                        Button("Archive") {
+                            hiddenTemplateIds.insert(template.id.uuidString)
+                            saveHiddenTemplateIds()
+                            if templateActionTargetId == template.id {
+                                templateActionTargetId = nil
+                            }
+                            if selectedTemplate?.id == template.id {
+                                selectedTemplate = nil
+                            }
+                        }
+                        .buttonStyle(.bordered)
                     }
                     .padding(.horizontal)
                 } else {
@@ -479,18 +491,21 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Hidden Templates")
                 .font(.headline)
+                .foregroundColor(.gray)
                 .padding(.horizontal)
             VStack(spacing: 0) {
                 ForEach(hiddenTemplates) { template in
                     HStack {
                         Text(template.name)
                             .font(.subheadline)
+                            .foregroundColor(.gray)
                         Spacer()
                         Button("Unhide") {
                             hiddenTemplateIds.remove(template.id.uuidString)
                             saveHiddenTemplateIds()
                         }
                         .buttonStyle(.bordered)
+                        .tint(.gray)
                     }
                     .padding(.vertical, 6)
                     Divider().padding(.leading)
@@ -625,8 +640,10 @@ struct SettingsView: View {
                         // 🔹 Templates List / Empty State
                         templatesListView
 
-                        if !hiddenTemplates.isEmpty {
-                            hiddenTemplatesSection
+                        if showHiddenItems {
+                            if !hiddenTemplates.isEmpty {
+                                hiddenTemplatesSection
+                            }
                         }
 
                         Divider()
@@ -638,8 +655,10 @@ struct SettingsView: View {
                         // 🔹 Pitchers List / Empty State
                         pitchersListView
 
-                        if !hiddenPitchers.isEmpty {
-                            hiddenPitchersSection
+                        if showHiddenItems {
+                            if !hiddenPitchers.isEmpty {
+                                hiddenPitchersSection
+                            }
                         }
 
                         Divider()
@@ -650,6 +669,7 @@ struct SettingsView: View {
                         
                         // 🔹 Account Section
                         accountSection
+
                     }
                     .padding(.top, 4)
                 }

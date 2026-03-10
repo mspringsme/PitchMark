@@ -2333,114 +2333,138 @@ struct PitchTrackerView: View {
     private var topBar: some View {
         HStack {
             if !(isGame && !isOwnerForActiveGame) {
-            Menu {
-                ForEach(visiblePitchers) { pitcher in
-                    Button(pitcher.name) {
-                        applySelectedPitcher(pitcher)
-                    }
-                }
-            } label: {
-                let currentLabel = selectedPitcherName
-                let widestLabel = ([currentLabel] + visiblePitchers.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
-
-                ZStack {
-                    HStack(spacing: 8) {
-                        Text(widestLabel)
-                            .font(.headline)
-                            .opacity(0)
-                        Image(systemName: "chevron.down")
-                            .font(.subheadline.weight(.semibold))
-                            .opacity(0)
-                    }
-
-                    HStack(spacing: 8) {
-                        Text(currentLabel)
-                            .font(.headline)
-                        Image(systemName: "chevron.down")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .foregroundColor(.primary)
-                .background(.ultraThinMaterial)
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                .opacity(visiblePitchers.isEmpty ? 0.6 : 1.0)
-                .contentShape(Capsule())
-            }
-            .disabled(visiblePitchers.isEmpty)
-
-            Menu {
-                ForEach(visibleTemplates, id: \.id) { template in
-                    Button(template.name) {
-                        if sessionManager.currentMode == .practice && selectedPracticeId != nil {
-                            pendingTemplateSelection = template
-                            showTemplateChangeWarning = true
-                        } else {
-                            applyTemplate(template)
+            VStack(alignment: .center, spacing: 4) {
+                Text("Pitcher")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(visiblePitchers) { pitcher in
+                        Button(pitcher.name) {
+                            applySelectedPitcher(pitcher)
                         }
                     }
-                }
-            } label: {
-                let currentLabel = selectedTemplate?.name ?? "Select a template"
-                let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
-                
-                ZStack {
-                    // Invisible widest label to reserve width and prevent size jumps
-                    HStack(spacing: 8) {
-                        Text(widestLabel)
-                            .font(.headline)
-                            .opacity(0)
-                        if !currentTemplateVersionLabel.isEmpty {
-                            Text(currentTemplateVersionLabel)
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(Color.clear)
+                } label: {
+                    let currentLabel = selectedPitcherName
+                    let widestLabel = ([currentLabel] + visiblePitchers.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+
+                    ZStack {
+                        HStack(spacing: 8) {
+                            Text(widestLabel)
+                                .font(.headline)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .allowsTightening(true)
+                                .opacity(0)
+                            Image(systemName: "chevron.down")
+                                .font(.subheadline.weight(.semibold))
                                 .opacity(0)
                         }
-                        Image(systemName: "chevron.down")
-                            .font(.subheadline.weight(.semibold))
-                            .opacity(0)
-                    }
-                    
-                    // Visible current label
-                    HStack(spacing: 8) {
-                        Text(currentLabel)
-                            .font(.headline)
-                        if !currentTemplateVersionLabel.isEmpty {
-                            Text(currentTemplateVersionLabel)
-                                .font(.caption2.weight(.semibold))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .foregroundStyle(Color.gray)
-                                .clipShape(Capsule())
-                                .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
+
+                        HStack(spacing: 8) {
+                            Text(currentLabel)
+                                .font(.headline)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .allowsTightening(true)
+                            Image(systemName: "chevron.down")
+                                .font(.subheadline.weight(.semibold))
                         }
-                        Image(systemName: "chevron.down")
-                            .font(.subheadline.weight(.semibold))
                     }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .foregroundColor(.primary)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                    .opacity(visiblePitchers.isEmpty ? 0.6 : 1.0)
+                    .contentShape(Capsule())
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .foregroundColor(.primary)
-                .background(.ultraThinMaterial)
-                .clipShape(Capsule())
-                .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
-                .contentShape(Capsule())
-                .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
+                .disabled(visiblePitchers.isEmpty)
             }
-            .disabled(visibleTemplates.isEmpty)
+            .frame(maxWidth: .infinity)
+
+            VStack(alignment: .center, spacing: 4) {
+                Text("Template")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Menu {
+                    ForEach(visibleTemplates, id: \.id) { template in
+                        Button(template.name) {
+                            if sessionManager.currentMode == .practice && selectedPracticeId != nil {
+                                pendingTemplateSelection = template
+                                showTemplateChangeWarning = true
+                            } else {
+                                applyTemplate(template)
+                            }
+                        }
+                    }
+                } label: {
+                    let currentLabel = selectedTemplate?.name ?? "Select a template"
+                    let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+                    
+                    ZStack {
+                        // Invisible widest label to reserve width and prevent size jumps
+                        HStack(spacing: 8) {
+                            Text(widestLabel)
+                                .font(.headline)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .allowsTightening(true)
+                                .opacity(0)
+                            if !currentTemplateVersionLabel.isEmpty {
+                                Text(currentTemplateVersionLabel)
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .background(Color.clear)
+                                    .opacity(0)
+                            }
+                            Image(systemName: "chevron.down")
+                                .font(.subheadline.weight(.semibold))
+                                .opacity(0)
+                        }
+                        
+                        // Visible current label
+                        HStack(spacing: 8) {
+                            Text(currentLabel)
+                                .font(.headline)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .allowsTightening(true)
+                            if !currentTemplateVersionLabel.isEmpty {
+                                Text(currentTemplateVersionLabel)
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .foregroundStyle(Color.gray)
+                                    .clipShape(Capsule())
+                                    .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
+                            }
+                            Image(systemName: "chevron.down")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .foregroundColor(.primary)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Capsule())
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                    .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
+                    .contentShape(Capsule())
+                    .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
+                }
+                .disabled(visibleTemplates.isEmpty)
+            }
+            .frame(maxWidth: .infinity)
         }
             Spacer()
             
