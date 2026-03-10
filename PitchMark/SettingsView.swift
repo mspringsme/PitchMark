@@ -47,7 +47,8 @@ struct SettingsView: View {
     @State private var hiddenPitcherIds: Set<String> = []
     @State private var templateActionTargetId: UUID? = nil
     @State private var pitcherActionTargetId: String? = nil
-    @State private var showHiddenItems = false
+    @State private var showHiddenTemplates = false
+    @State private var showHiddenPitchers = false
 
     @State private var showInviteJoinSheet = false
     @State private var inviteJoinText: String = ""
@@ -221,16 +222,6 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
 
-                HStack {
-                    Button("Paste") {
-                        if let pasted = UIPasteboard.general.string {
-                            inviteJoinText = pasted
-                        }
-                    }
-                    .buttonStyle(.bordered)
-
-                    Spacer()
-                }
             }
 
             if let error = inviteJoinError {
@@ -240,21 +231,11 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            HStack {
-                Button("Cancel", role: .cancel) {
-                    inviteJoinError = nil
-                    showInviteJoinSheet = false
-                }
-                .buttonStyle(.bordered)
-
-                Spacer()
-
-                Button(isJoiningInvite ? "Joining..." : "Join") {
-                    joinLiveGameFromInvite()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(inviteJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningInvite)
+            Button(isJoiningInvite ? "Joining..." : "Join") {
+                joinLiveGameFromInvite()
             }
+            .buttonStyle(.borderedProminent)
+            .disabled(inviteJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningInvite)
         }
         .padding()
         .presentationDetents([.fraction(0.5)])
@@ -335,7 +316,7 @@ struct SettingsView: View {
                         ForEach(visiblePitchers) { pitcher in
                             let isActive = pitcher.id == pitcherActionTargetId
                             Button(pitcher.name) {
-                                pitcherActionTargetId = pitcher.id
+                                pitcherActionTargetId = (pitcherActionTargetId == pitcher.id) ? nil : pitcher.id
                             }
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(.black)
@@ -347,6 +328,17 @@ struct SettingsView: View {
                             .overlay(
                                 Capsule().stroke(Color.black, lineWidth: 1)
                             )
+                        }
+
+                        if !hiddenPitchers.isEmpty {
+                            Button(showHiddenPitchers ? "Hide Archived" : "Show Archived") {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showHiddenPitchers.toggle()
+                                }
+                            }
+                            .font(.caption)
+                            .buttonStyle(.bordered)
+                            .tint(.gray)
                         }
                     }
                     .padding(.horizontal)
@@ -425,10 +417,10 @@ struct SettingsView: View {
                             )
                         }
 
-                        if !(hiddenTemplates.isEmpty && hiddenPitchers.isEmpty) {
-                            Button(showHiddenItems ? "Hide Archived" : "Show Archived") {
+                        if !hiddenTemplates.isEmpty {
+                            Button(showHiddenTemplates ? "Hide Archived" : "Show Archived") {
                                 withAnimation(.easeInOut(duration: 0.2)) {
-                                    showHiddenItems.toggle()
+                                    showHiddenTemplates.toggle()
                                 }
                             }
                             .font(.caption)
@@ -520,12 +512,14 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Hidden Pitchers")
                 .font(.headline)
+                .foregroundColor(.gray)
                 .padding(.horizontal)
             VStack(spacing: 0) {
                 ForEach(hiddenPitchers) { pitcher in
                     HStack {
                         Text(pitcher.name)
                             .font(.subheadline)
+                            .foregroundColor(.gray)
                         Spacer()
                         Button("Unhide") {
                             if let id = pitcher.id {
@@ -534,6 +528,7 @@ struct SettingsView: View {
                             }
                         }
                         .buttonStyle(.bordered)
+                        .tint(.gray)
                     }
                     .padding(.vertical, 6)
                     Divider().padding(.leading)
@@ -626,21 +621,13 @@ struct SettingsView: View {
                         Color.clear.frame(height: 0)
                         
 
-                        Button("Join via Invite Link") {
-                            inviteJoinError = nil
-                            inviteJoinText = ""
-                            showInviteJoinSheet = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.horizontal)
-
                         // 🔹 Templates Header
                         templatesHeader
 
                         // 🔹 Templates List / Empty State
                         templatesListView
 
-                        if showHiddenItems {
+                        if showHiddenTemplates {
                             if !hiddenTemplates.isEmpty {
                                 hiddenTemplatesSection
                             }
@@ -655,7 +642,7 @@ struct SettingsView: View {
                         // 🔹 Pitchers List / Empty State
                         pitchersListView
 
-                        if showHiddenItems {
+                        if showHiddenPitchers {
                             if !hiddenPitchers.isEmpty {
                                 hiddenPitchersSection
                             }
@@ -767,6 +754,26 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Join a Game") {
+                        inviteJoinError = nil
+                        inviteJoinText = ""
+                        showInviteJoinSheet = true
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color(.darkGray))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.12), radius: 2, x: 0, y: 1)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
                         // Notify listeners (e.g., PitchTrackerView) to reload with the latest selected template before dismissing

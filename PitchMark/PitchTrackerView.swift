@@ -1481,13 +1481,25 @@ struct PitchTrackerView: View {
         UserDefaults.standard.set(side == .left ? "left" : "right", forKey: DefaultsKeys.lastBatterSide)
     }
     private func pushBatterSideToActiveGame(_ side: BatterSide) {
-        // ✅ Allow BOTH owner and participant to update batterSide
-        guard isGame,
-              let gid = selectedGameId,
-              let owner = effectiveGameOwnerUserId
-        else { return }
+        guard isGame else { return }
 
         let sideString = (side == .left) ? "left" : "right"
+
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            LiveGameService.shared.updateLiveFields(
+                liveId: liveId,
+                fields: [
+                    "batterSide": sideString,
+                    "batterSideUpdatedAt": FieldValue.serverTimestamp(),
+                    "batterSideUpdatedBy": authManager.user?.uid ?? ""
+                ]
+            )
+            return
+        }
+
+        guard let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
 
         Firestore.firestore()
             .collection("users").document(owner)
@@ -3402,16 +3414,6 @@ struct PitchTrackerView: View {
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
 
-                HStack {
-                    Button("Paste") {
-                        if let pasted = UIPasteboard.general.string {
-                            inviteJoinText = pasted
-                        }
-                    }
-                    .buttonStyle(.bordered)
-
-                    Spacer()
-                }
             }
 
             if let error = inviteJoinError {
@@ -3421,21 +3423,11 @@ struct PitchTrackerView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            HStack {
-                Button("Cancel", role: .cancel) {
-                    inviteJoinError = nil
-                    showInviteJoinSheet = false
-                }
-                .buttonStyle(.bordered)
-
-                Spacer()
-
-                Button(isJoiningSession ? "Joining..." : "Join") {
-                    joinLiveGameFromInvite()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(inviteJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningSession)
+            Button(isJoiningSession ? "Joining..." : "Join") {
+                joinLiveGameFromInvite()
             }
+            .buttonStyle(.borderedProminent)
+            .disabled(inviteJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningSession)
         }
         .padding()
         .presentationDetents([.fraction(0.5)])
