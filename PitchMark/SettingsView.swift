@@ -1317,13 +1317,11 @@ struct PitcherStatsSheetView: View {
                         .padding(.horizontal)
 
                     if lockToGameId == nil {
-                        filterSection
+                        summarySection
+                        statsPickerSection
                     } else {
                         lockedGameHeader
-                    }
-                    summarySection
-                    if lockToGameId == nil {
-                        dateRangeSection
+                        summarySection
                     }
                     pitchBreakdownSection
                     outcomesSection
@@ -1361,12 +1359,8 @@ struct PitcherStatsSheetView: View {
         }
     }
 
-    private var filterSection: some View {
+    private var statsPickerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Filters")
-                .font(.headline)
-                .padding(.horizontal)
-
             Picker("Scope", selection: $scope) {
                 ForEach(StatScope.allCases) { scope in
                     Text(scope.rawValue).tag(scope)
@@ -1388,6 +1382,44 @@ struct PitcherStatsSheetView: View {
             }
             .pickerStyle(.segmented)
             .padding(.horizontal)
+
+            Picker("Date Range", selection: $dateFilter) {
+                ForEach(DateRangeFilter.allCases) { range in
+                    Text(range.rawValue).tag(range)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+
+            if dateFilter == .custom {
+                HStack(spacing: 12) {
+                    DatePicker("From", selection: $startDate, displayedComponents: .date)
+                    DatePicker("To", selection: $endDate, displayedComponents: .date)
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    private var filterSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Filters")
+                .font(.headline)
+                .padding(.horizontal)
+
+            Picker("Scope", selection: $scope) {
+                ForEach(StatScope.allCases) { scope in
+                    Text(scope.rawValue).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+
+            if scope == .games {
+                gameFilterList
+            } else if scope == .practice {
+                practiceFilterList
+            }
         }
     }
 
@@ -1433,13 +1465,6 @@ struct PitcherStatsSheetView: View {
                     .padding(.horizontal)
             }
 
-            Picker("Sort", selection: $sort) {
-                ForEach(PitchSort.allCases) { sort in
-                    Text(sort.rawValue).tag(sort)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
         }
     }
 
@@ -1628,37 +1653,55 @@ struct PitcherStatsSheetView: View {
                 .font(.headline)
                 .padding(.horizontal)
 
+            if lockToGameId != nil {
+                Picker("Sort", selection: $sort) {
+                    ForEach(PitchSort.allCases) { sort in
+                        Text(sort.rawValue).tag(sort)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.top, 6)
+            }
+
             if pitchStats.isEmpty {
                 Text("No pitch data yet.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal)
             } else {
                 VStack(spacing: 8) {
                     ForEach(Array(pitchStats.enumerated()), id: \.offset) { _, row in
-                        HStack {
+                        HStack(spacing: 12) {
                             Text(row.name)
                                 .font(.subheadline.weight(.semibold))
-                            Spacer()
-                            Text("\(row.count) pitches")
+                                .frame(width: 54, alignment: .leading)
+                            Text("\(row.count)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("\(row.strikePct)% strike")
+                                .frame(width: 40, alignment: .trailing)
+                            Text("\(row.strikePct)%")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            Text("\(row.hitSpotPct)% hit")
+                                .frame(width: 50, alignment: .trailing)
+                            Text("\(row.hitSpotPct)%")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .frame(width: 50, alignment: .trailing)
                         }
-                        .padding(.horizontal)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
     }
 
     private var outcomesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Divider()
+                .padding(.horizontal)
+
             Text("Outcomes")
                 .font(.headline)
                 .padding(.horizontal)
@@ -1667,21 +1710,23 @@ struct PitcherStatsSheetView: View {
                 Text("No outcomes recorded.")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.horizontal)
             } else {
                 VStack(spacing: 6) {
                     ForEach(outcomesSummary, id: \.label) { item in
-                        HStack {
+                        HStack(spacing: 12) {
                             Text(item.label)
                                 .font(.subheadline.weight(.semibold))
-                            Spacer()
+                                .frame(width: 40, alignment: .leading)
                             Text("\(item.count)")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .frame(width: 30, alignment: .trailing)
                         }
-                        .padding(.horizontal)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
     }
