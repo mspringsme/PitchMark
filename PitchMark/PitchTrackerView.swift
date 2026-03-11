@@ -184,6 +184,7 @@ struct PitchTrackerView: View {
     @State private var selectedDescriptor: String? = nil
     @State private var isError: Bool = false
     @State private var showGameSheet = false
+    @State private var showGameStatsSheet = false
     @State private var opponentName: String? = nil
     @State private var selectedGameId: String? = nil
     // Participant overlay state
@@ -2021,6 +2022,11 @@ struct PitchTrackerView: View {
         return pitchers.first(where: { $0.id == pid })?.name ?? "Select a pitcher"
     }
 
+    private var selectedPitcherForStats: Pitcher? {
+        guard let pid = selectedPitcherId else { return nil }
+        return pitchers.first(where: { $0.id == pid })
+    }
+
     private var pitchesFacedTitle: String {
         if let num = selectedJerseyNumberDisplay, !num.isEmpty {
             return "Pitches Faced – #\(num)"
@@ -2700,28 +2706,50 @@ struct PitchTrackerView: View {
     
     private var sessionOverlay: some View {
         Group {
-            Button(action: {
-                if isGame {
-                    showGameSheet = true
-                } else {
-                    showPracticeSheet = true
+            HStack(spacing: 8) {
+                Button(action: {
+                    if isGame {
+                        showGameSheet = true
+                    } else {
+                        showPracticeSheet = true
+                    }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "gearshape")
+                        Text(isGame ? (opponentName ?? "Game") : (practiceName ?? "Practice"))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: 160)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Capsule())
+                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
                 }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "gearshape")
-                    Text(isGame ? (opponentName ?? "Game") : (practiceName ?? "Practice"))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: 160)
-                .background(.ultraThinMaterial)
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             .offset(y: 6)
+        }
+    }
+
+    private var gameStatsOverlay: some View {
+        Group {
+            if isGame {
+                Button(action: {
+                    showGameStatsSheet = true
+                }) {
+                    Image(systemName: "chart.bar")
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedGameId == nil || selectedPitcherForStats == nil)
+                .accessibilityLabel("Game Stats")
+            }
         }
     }
     
@@ -2870,6 +2898,7 @@ struct PitchTrackerView: View {
             )
             .overlay(resetOverlay, alignment: .bottomLeading)
             .overlay(sessionOverlay, alignment: .bottom)
+            .overlay(gameStatsOverlay, alignment: .bottomTrailing)
 
             batterSideOverlay(SZwidth: SZwidth)
         }
@@ -3048,7 +3077,8 @@ struct PitchTrackerView: View {
             gameId: nil,
             opponentJersey: nil,
             opponentBatterId: nil,
-            practiceId: selectedPracticeId
+            practiceId: selectedPracticeId,
+            pitcherId: selectedPitcherId
         )
         event.debugLog(prefix: "📤 Auto-saving Practice PitchEvent")
 
@@ -3604,7 +3634,8 @@ struct PitchTrackerView: View {
                 selectedOutcome = nil
                 selectedDescriptor = nil
             },
-            template: selectedTemplate
+            template: selectedTemplate,
+            pitcherName: pitchers.first(where: { $0.id == selectedPitcherId })?.name
         )
     }
 
@@ -3633,6 +3664,28 @@ struct PitchTrackerView: View {
               showCodeShareModePicker: $showCodeShareModePicker
           )
         .environmentObject(authManager)
+    }
+
+    @ViewBuilder private var gameStatsSheetView: some View {
+        if let pitcher = selectedPitcherForStats,
+           let game = currentGame,
+           let gameId = game.id {
+            PitcherStatsSheetView(
+                pitcher: pitcher,
+                games: [game],
+                lockToGameId: gameId
+            )
+            .environmentObject(authManager)
+        } else {
+            VStack(spacing: 12) {
+                Text("Stats unavailable")
+                    .font(.headline)
+                Text("Select a game and pitcher to view stats.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding()
+        }
     }
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
@@ -3754,8 +3807,12 @@ struct PitchTrackerView: View {
             .sheet(isPresented: $showSettings) { settingsSheetView }
             .eraseToAnyView()
 
+        let v9 = v8
+            .sheet(isPresented: $showGameStatsSheet) { gameStatsSheetView }
+            .eraseToAnyView()
+
         // Keep alerts + the rest of your observers, then erase one last time
-        return v8
+        return v9
             .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -5119,15 +5176,12 @@ struct ResetPitchButton: View {
             }
         }) {
             Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
-                .foregroundColor(.red)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
-                .frame(width: 70, height: 36)
                 .background(.ultraThinMaterial)
                 .clipShape(Capsule())
                 .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                .offset(y: 6)
-                
         }
         .accessibilityLabel("Reset pitch selection")
     }

@@ -15,4 +15,7 @@ extension Notification.Name {
 
     // Fired to request that practice progress be reset for a given session (or general)
     static let practiceProgressReset = Notification.Name("practiceProgressReset")
+
+    // Fired when the selected template changes (e.g., from SettingsView)
+    static let templateSelectionDidChange = Notification.Name("templateSelectionDidChange")
 }

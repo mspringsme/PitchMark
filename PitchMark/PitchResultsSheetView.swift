@@ -89,6 +89,7 @@ private struct ToggleSection: View {
     @Binding var isWildPitch: Bool
     @Binding var isPassedBall: Bool
     @Binding var isBall: Bool
+    @Binding var selectedOutcome: String?
     @Binding var showOverlay: Bool
 
     var body: some View {
@@ -103,6 +104,7 @@ private struct ToggleSection: View {
                         .onChange(of: isStrikeLooking) { _, newValue in
                             if newValue { isStrikeSwinging = false }
                         }
+                    Toggle("Ball", isOn: $isBall)
                     Toggle("Wild Pitch", isOn: $isWildPitch)
                         .onChange(of: isWildPitch) { _, newValue in
                             if newValue { isPassedBall = false }
@@ -111,7 +113,13 @@ private struct ToggleSection: View {
                         .onChange(of: isPassedBall) { _, newValue in
                             if newValue { isWildPitch = false }
                         }
-                    Toggle("Ball", isOn: $isBall)
+                    Toggle(
+                        "Hit batter",
+                        isOn: Binding(
+                            get: { selectedOutcome == "HBP" },
+                            set: { selectedOutcome = $0 ? "HBP" : nil }
+                        )
+                    )
                 }
                 .padding(.horizontal)
                 Spacer()
@@ -252,6 +260,7 @@ struct PitchResultSheetView: View {
     let selectedPitcherId: String?
     let saveAction: (PitchEvent) -> Void
     let template: PitchTemplate?
+    let pitcherName: String?
 
     private func resetSelections() {
         isStrikeSwinging = false
@@ -295,7 +304,7 @@ struct PitchResultSheetView: View {
             }
             // Disable the following non-descriptor outcomes when HR is selected
             let disallowedWhenHR: Set<String> = [
-                "BB", "Bunt", "E", "Foul", "K", "ꓘ", "HBP", "Safe", "Out"
+                "BB", "Walk", "Bunt", "E", "Foul", "K", "ꓘ", "HBP", "Safe", "Out"
             ]
             if disallowedWhenHR.contains(label) {
                 return true
@@ -317,7 +326,7 @@ struct PitchResultSheetView: View {
         }
 
         // 3) If either strike toggle is on, also deactivate BB
-        if anyStrikeToggle && label == "BB" {
+        if anyStrikeToggle && (label == "BB" || label == "Walk") {
             return true
         }
 
@@ -439,8 +448,10 @@ struct PitchResultSheetView: View {
 
     var body: some View {
         AnyView(
-            VStack(spacing: 20) {
+            VStack(spacing: 14) {
                 HStack {
+                    Text("Save Pitch")
+                        .font(.title2.weight(.bold))
                     Spacer()
                     Button {
                         isPresented = false
@@ -458,26 +469,31 @@ struct PitchResultSheetView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Close")
                 }
-                
-                if let template = template {
-                    Text(template.name)
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                }
-                
-                Text("Save Pitch")
-                    .font(.title2)
-                    .bold()
 
-                if let label = pendingResultLabel {
-                    Text("Location: \(label)")
-                        .font(.headline)
-                        .foregroundColor(.blue)
+                HStack(spacing: 12) {
+                    if let name = pitcherName, !name.isEmpty {
+                        Text(name)
+                            .font(.headline)
+                            .foregroundColor(.secondary)
+                    }
+                    if let label = pendingResultLabel {
+                        Text("Location: \(label)")
+                            .font(.headline)
+                            .foregroundColor(.blue)
+                    }
                 }
 
                 Divider()
 
-                ToggleSection(isStrikeSwinging: $isStrikeSwinging, isStrikeLooking: $isStrikeLooking, isWildPitch: $isWildPitch, isPassedBall: $isPassedBall, isBall: $isBall, showOverlay: $showFieldOverlay)
+                ToggleSection(
+                    isStrikeSwinging: $isStrikeSwinging,
+                    isStrikeLooking: $isStrikeLooking,
+                    isWildPitch: $isWildPitch,
+                    isPassedBall: $isPassedBall,
+                    isBall: $isBall,
+                    selectedOutcome: $selectedOutcome,
+                    showOverlay: $showFieldOverlay
+                )
 
                 Divider()
 
@@ -507,9 +523,7 @@ struct PitchResultSheetView: View {
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
-                
-                Spacer()
-                
+
                 HStack(alignment: .center, spacing: 12) {
                     HoldActionButton(
                         title: "Pitch Only",
@@ -531,9 +545,7 @@ struct PitchResultSheetView: View {
                         action: handleSave
                     )
                 }
-                
-                Spacer()
-                
+
             }
                 .padding()
                 .fullScreenCover(isPresented: $showFieldOverlay) {
@@ -589,13 +601,9 @@ private struct OutcomeButtonsSection: View {
     var body: some View {
         VStack(spacing: 12) {
             HStack(spacing: 8) {
-                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
-                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
-                Spacer()
-                OutcomeButton(label: "HBP", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HBP"), usesDescriptorSelection: false)
-                Spacer()
                 OutcomeButton(label: "Safe", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Safe"), usesDescriptorSelection: false)
                 OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
+                Spacer()
             }
             HStack(spacing: 8) {
                 OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("1B"), usesDescriptorSelection: false)
@@ -628,6 +636,11 @@ private struct OutcomeButtonsSection: View {
                 OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
                 OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)
                 OutcomeButton(label: "Foul", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Foul"), usesDescriptorSelection: false)
+            }
+            HStack(spacing: 8) {
+                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
+                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
             }
         }
     }

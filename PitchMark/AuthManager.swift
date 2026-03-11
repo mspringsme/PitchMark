@@ -750,6 +750,28 @@ class AuthManager: ObservableObject {
                 completion(events)
             }
     }
+
+    func loadGamePitchEvents(ownerUserId: String, gameId: String, completion: @escaping ([PitchEvent]) -> Void) {
+        let db = Firestore.firestore()
+        db.collection("users")
+            .document(ownerUserId)
+            .collection("games")
+            .document(gameId)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("❌ loadGamePitchEvents error: \(error.localizedDescription)")
+                    completion([])
+                    return
+                }
+
+                let events: [PitchEvent] = snapshot?.documents.compactMap { doc in
+                    PitchEvent.decodeFirestoreDocument(doc)
+                } ?? []
+                completion(events)
+            }
+    }
     
     func deletePracticeEvents(practiceId: String?, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let user = user else {
