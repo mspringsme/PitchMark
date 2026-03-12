@@ -198,6 +198,9 @@ struct PitchTrackerView: View {
     @State private var draggingJersey: JerseyCell?
     @State private var showAddJerseyPopover = false
     @State private var newJerseyNumber: String = ""
+    @State private var showBulkJerseyPrompt = false
+    @State private var showBulkJerseyInput = false
+    @State private var bulkJerseyNumbers: String = ""
     @State private var selectedBatterId: UUID? = nil
     @State private var selectedBatterJersey: String? = nil
     @FocusState private var jerseyInputFocused: Bool
@@ -1032,10 +1035,22 @@ struct PitchTrackerView: View {
         liveListener = ref.addSnapshotListener { snap, err in
             if let err {
                 print("❌ Live listener error:", err)
+                DispatchQueue.main.async {
+                    if self.activeLiveId == liveId {
+                        self.uiConnected = false
+                        self.endLiveSessionLocally(keepCurrentGame: false)
+                    }
+                }
                 return
             }
             guard let snap, snap.exists, let data = snap.data() else {
                 print("⚠️ Live game doc missing:", ref.path)
+                DispatchQueue.main.async {
+                    if self.activeLiveId == liveId {
+                        self.uiConnected = false
+                        self.endLiveSessionLocally(keepCurrentGame: false)
+                    }
+                }
                 return
             }
 
@@ -2646,8 +2661,12 @@ struct PitchTrackerView: View {
                         Button(action: {
                             editingCell = nil
                             newJerseyNumber = ""
-                            showAddJerseyPopover = true
-                            jerseyInputFocused = true
+                            if jerseyCells.isEmpty {
+                                showBulkJerseyPrompt = true
+                            } else {
+                                showAddJerseyPopover = true
+                                jerseyInputFocused = true
+                            }
                         }) {
                             ZStack {
                                 Circle()
@@ -2661,6 +2680,77 @@ struct PitchTrackerView: View {
                         }
                         .buttonStyle(.plain)
                         .padding(.horizontal, 6)
+                        .confirmationDialog(
+                            "Add multiple jersey numbers?",
+                            isPresented: $showBulkJerseyPrompt,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Add Multiple") {
+                                bulkJerseyNumbers = ""
+                                showBulkJerseyInput = true
+                            }
+                            Button("Add One", role: .cancel) {
+                                showAddJerseyPopover = true
+                                jerseyInputFocused = true
+                            }
+                        } message: {
+                            Text("Speak or type the jersey numbers with commas in between (example: 2, 7, 18).")
+                        }
+                        .alert("Add jersey numbers", isPresented: $showBulkJerseyInput) {
+                            TextField("2, 7, 18", text: $bulkJerseyNumbers)
+                            Button("Cancel", role: .cancel) {
+                                bulkJerseyNumbers = ""
+                            }
+                            Button("Add") {
+                                let rawParts = bulkJerseyNumbers
+                                    .split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" })
+                                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                let normalizedParts = rawParts.compactMap { part -> String? in
+                                    guard !part.isEmpty else { return nil }
+                                    return normalizeJersey(part) ?? part
+                                }
+                                let existing = Set(jerseyCells.map { $0.jerseyNumber })
+                                let unique = normalizedParts.filter { !existing.contains($0) }
+                                guard !unique.isEmpty else {
+                                    bulkJerseyNumbers = ""
+                                    return
+                                }
+                                let newCells = unique.map { JerseyCell(jerseyNumber: $0) }
+                                jerseyCells.append(contentsOf: newCells)
+
+                                func persistLineup(jerseyCells: [JerseyCell]) {
+                                    let jerseys = jerseyCells.map { $0.jerseyNumber }
+                                    let batterIds = jerseyCells.map { $0.id.uuidString }
+
+                                    if let liveId = activeLiveId, !liveId.isEmpty {
+                                        LiveGameService.shared.updateLiveFields(
+                                            liveId: liveId,
+                                            fields: [
+                                                "jerseyNumbers": jerseys,
+                                                "batterIds": batterIds
+                                            ]
+                                        )
+                                    } else if let gameId = selectedGameId,
+                                              let owner = effectiveGameOwnerUserId,
+                                              !owner.isEmpty {
+                                        authManager.updateGameLineup(
+                                            ownerUserId: owner,
+                                            gameId: gameId,
+                                            jerseyNumbers: jerseys,
+                                            batterIds: batterIds
+                                        )
+                                    } else {
+                                        print("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                                    }
+                                }
+
+                                persistLineup(jerseyCells: jerseyCells)
+
+                                bulkJerseyNumbers = ""
+                            }
+                        } message: {
+                            Text("Speak or type the jersey numbers with commas in between.")
+                        }
                     }
                     .padding(.vertical,12)
                     .padding(.horizontal, 0)

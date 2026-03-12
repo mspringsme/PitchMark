@@ -312,7 +312,15 @@ struct PitchResultSheetView: View {
         }
         
 
-        // 1) If K or backwards K is selected, deactivate all other buttons except 1B, E, Foul.
+        // 1) Require strike toggles to enable K buttons
+        if label == "K" {
+            return !isStrikeSwinging
+        }
+        if label == "ꓘ" {
+            return !isStrikeLooking
+        }
+
+        // 2) If K or backwards K is selected, deactivate all other buttons except 1B, E, Foul.
         //    K/ꓘ must remain active to allow deselection.
         if isKSelected {
             if label == "K" || label == "ꓘ" { return false }
