@@ -11,6 +11,42 @@ import UIKit
 import CoreImage
 import FirebaseFirestore
 
+struct PitcherPitchStats: Codable {
+    var count: Int
+    var hitSpotCount: Int
+}
+
+struct PitcherOutcomeStats: Codable {
+    var count: Int
+    var jerseys: [String]
+}
+
+struct PitcherLocationStats: Codable {
+    var count: Int
+    var hitCount: Int
+    var missCount: Int
+    var jerseys: [String]
+}
+
+struct PitcherStatsDoc: Codable {
+    var pitcherId: String
+    var scope: String
+    var scopeId: String
+    var updatedAt: Date?
+    var totalCount: Int
+    var strikeCount: Int
+    var ballCount: Int
+    var swingingStrikeCount: Int
+    var lookingStrikeCount: Int
+    var wildPitchCount: Int
+    var passedBallCount: Int
+    var walkCount: Int
+    var hitSpotCount: Int
+    var pitchStats: [String: PitcherPitchStats]
+    var outcomeStats: [String: PitcherOutcomeStats]
+    var pitchLocationStats: [String: PitcherLocationStats]
+}
+
 struct SettingsView: View {
     @Binding var templates: [PitchTemplate]
     @Binding var games: [Game]
@@ -1262,6 +1298,7 @@ struct PitcherStatsSheetView: View {
     @State private var sharedPracticeEvents: [PitchEvent] = []
     @State private var liveEventsListener: ListenerRegistration? = nil
     @State private var sharedPitcherEventsListener: ListenerRegistration? = nil
+    @State private var cachedStats: PitcherStatsDoc? = nil
     @State private var isLoading = false
     @State private var loadEventsToken = UUID()
     @State private var summaryDetail: SummaryDetail? = nil
@@ -1409,12 +1446,16 @@ struct PitcherStatsSheetView: View {
         return nil
     }
 
+    private var activeStats: PitcherStatsDoc? {
+        cachedStats
+    }
+
     private var strikeCount: Int {
-        filteredEvents.filter { resultType(for: $0) == .strike }.count
+        activeStats?.strikeCount ?? filteredEvents.filter { resultType(for: $0) == .strike }.count
     }
 
     private var totalCount: Int {
-        filteredEvents.count
+        activeStats?.totalCount ?? filteredEvents.count
     }
 
     private var strikePercent: Int {
@@ -1422,7 +1463,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var ballCount: Int {
-        filteredEvents.filter { resultType(for: $0) == .ball }.count
+        activeStats?.ballCount ?? filteredEvents.filter { resultType(for: $0) == .ball }.count
     }
 
     private var ballPercent: Int {
@@ -1430,11 +1471,11 @@ struct PitcherStatsSheetView: View {
     }
 
     private var swingingStrikeCount: Int {
-        filteredEvents.filter { $0.strikeSwinging && $0.outcome == "K" }.count
+        activeStats?.swingingStrikeCount ?? filteredEvents.filter { $0.strikeSwinging && $0.outcome == "K" }.count
     }
 
     private var lookingStrikeCount: Int {
-        filteredEvents.filter { $0.strikeLooking && $0.outcome == "ꓘ" }.count
+        activeStats?.lookingStrikeCount ?? filteredEvents.filter { $0.strikeLooking && $0.outcome == "ꓘ" }.count
     }
 
     private var swingingStrikeEvents: [PitchEvent] {
@@ -1446,22 +1487,22 @@ struct PitcherStatsSheetView: View {
     }
 
     private var wildPitchCount: Int {
-        filteredEvents.filter { $0.wildPitch }.count
+        activeStats?.wildPitchCount ?? filteredEvents.filter { $0.wildPitch }.count
     }
 
     private var passedBallCount: Int {
-        filteredEvents.filter { $0.passedBall }.count
+        activeStats?.passedBallCount ?? filteredEvents.filter { $0.passedBall }.count
     }
 
     private var walkCount: Int {
-        filteredEvents.filter {
+        activeStats?.walkCount ?? filteredEvents.filter {
             guard let outcome = $0.outcome, !outcome.isEmpty else { return false }
             return outcome == "BB" || outcome == "Walk"
         }.count
     }
 
     private var hitSpotCount: Int {
-        filteredEvents.filter { strictIsLocationMatch($0) }.count
+        activeStats?.hitSpotCount ?? filteredEvents.filter { strictIsLocationMatch($0) }.count
     }
 
     private var hitSpotEvents: [PitchEvent] {
@@ -1473,6 +1514,14 @@ struct PitcherStatsSheetView: View {
     }
 
     private var outcomesSummary: [(label: String, count: Int, jerseys: String)] {
+        if let stats = activeStats {
+            return stats.outcomeStats.map { key, value in
+                let jerseys = value.jerseys.sorted().joined(separator: ", ")
+                return (label: key, count: value.count, jerseys: jerseys)
+            }
+            .sorted { $0.count > $1.count }
+        }
+
         var counts: [String: Int] = [:]
         var jerseysByOutcome: [String: Set<String>] = [:]
         for event in filteredEvents {
@@ -1491,6 +1540,15 @@ struct PitcherStatsSheetView: View {
     }
 
     private var pitchStats: [(name: String, count: Int, hitSpotPct: Int)] {
+        if let stats = activeStats {
+            let rows = stats.pitchStats.map { key, value in
+                let total = value.count
+                let hitSpotPct = total == 0 ? 0 : Int(Double(value.hitSpotCount) / Double(total) * 100)
+                return (key, total, hitSpotPct)
+            }
+            return rows.sorted { $0.1 > $1.1 }
+        }
+
         let grouped = Dictionary(grouping: filteredEvents, by: { $0.pitch })
         var rows: [(String, Int, Int)] = []
         for (pitch, events) in grouped {
@@ -1534,6 +1592,24 @@ struct PitcherStatsSheetView: View {
     }
 
     private func hitSpotDetailRows() -> [(pitch: String, location: String, count: Int, jerseys: String)] {
+        if let stats = activeStats {
+            let rows: [(pitch: String, location: String, count: Int, jerseys: String)] = stats.pitchLocationStats.flatMap { key, value in
+                let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
+                let pitch = parts.first ?? "Unknown Pitch"
+                let location = parts.count > 1 ? parts[1] : "Unknown Location"
+                let jerseys = value.jerseys.sorted().joined(separator: ", ")
+
+                let hitRow = (pitch: pitch, location: "Hit: \(location)", count: value.hitCount, jerseys: jerseys)
+                let missRow = (pitch: pitch, location: "Miss: \(location)", count: value.missCount, jerseys: jerseys)
+                return [hitRow, missRow]
+            }
+
+            return rows.sorted { lhs, rhs in
+                if lhs.count == rhs.count { return lhs.pitch < rhs.pitch }
+                return lhs.count > rhs.count
+            }
+        }
+
         var hitCounts: [String: Int] = [:]
         var missCounts: [String: Int] = [:]
 
@@ -1753,6 +1829,7 @@ struct PitcherStatsSheetView: View {
             .onAppear {
                 initializeSelections()
                 loadEvents()
+                loadCachedStats()
                 startLiveListener()
                 startSharedPitcherListener()
             }
@@ -1760,19 +1837,27 @@ struct PitcherStatsSheetView: View {
                 stopLiveListener()
                 stopSharedPitcherListener()
             }
-            .onChange(of: selectedGameIds) { _, _ in loadEvents() }
-            .onChange(of: selectedPracticeIds) { _, _ in loadEvents() }
+            .onChange(of: selectedGameIds) { _, _ in
+                loadEvents()
+                loadCachedStats()
+            }
+            .onChange(of: selectedPracticeIds) { _, _ in
+                loadEvents()
+                loadCachedStats()
+            }
             .onChange(of: scope) { _, _ in
                 if lockToGameId != nil {
                     scope = .games
                 }
                 loadEvents()
+                loadCachedStats()
             }
             .onChange(of: liveId) { _, _ in
                 startLiveListener()
             }
             .onChange(of: pitcher.id) { _, _ in
                 startSharedPitcherListener()
+                loadCachedStats()
             }
         }
     }
@@ -2333,6 +2418,67 @@ struct PitcherStatsSheetView: View {
 
     private var combinedPracticeEvents: [PitchEvent] {
         mergeUnique([practiceEvents, sharedPracticeEvents])
+    }
+
+    private func statsScopeKey() -> (scope: String, scopeId: String)? {
+        if let lockedGameId = lockToGameId {
+            return ("game", lockedGameId)
+        }
+
+        switch scope {
+        case .all:
+            return ("overall", "overall")
+        case .games:
+            if selectedGameIds.count == 1, let gid = selectedGameIds.first {
+                return ("game", gid)
+            }
+        case .practice:
+            if selectedPracticeIds.count == 1, let pid = selectedPracticeIds.first {
+                let normalized = pid.trimmingCharacters(in: .whitespacesAndNewlines)
+                return ("practice", normalized.isEmpty ? "__GENERAL__" : normalized)
+            }
+        }
+
+        return nil
+    }
+
+    private func loadCachedStats() {
+        cachedStats = nil
+        guard let pitcherId = pitcher.id else { return }
+        guard let key = statsScopeKey() else { return }
+
+        let docId: String = {
+            switch key.scope {
+            case "overall":
+                return "overall"
+            case "game":
+                return "game_\(key.scopeId)"
+            case "practice":
+                return "practice_\(key.scopeId)"
+            default:
+                return "overall"
+            }
+        }()
+
+        let ref = Firestore.firestore()
+            .collection("pitchers").document(pitcherId)
+            .collection("stats").document(docId)
+
+        ref.getDocument { snap, error in
+            if let error {
+                print("❌ loadCachedStats error:", error.localizedDescription)
+                return
+            }
+            guard let snap, snap.exists else { return }
+            Task { @MainActor in
+                do {
+                    let doc = try snap.data(as: PitcherStatsDoc.self)
+                    self.cachedStats = doc
+                } catch {
+                    print("❌ decode cached stats failed:", error.localizedDescription)
+                }
+            }
+        }
     }
 
     private func startLiveListener() {

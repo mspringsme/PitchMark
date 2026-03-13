@@ -591,7 +591,18 @@ final class LiveGameService {
             Key.lastSeenAt: FieldValue.serverTimestamp()
         ], merge: true) { err in
             if let err { completion(.failure(err)); return }
-            completion(.success(()))
+
+            // ✅ Hard connection state: mark connected on join
+            self.db.collection(Col.liveGames).document(liveId).updateData([
+                "connection": [
+                    "participantUid": uid,
+                    "connected": true,
+                    "connectedAt": FieldValue.serverTimestamp()
+                ]
+            ]) { updateErr in
+                if let updateErr { completion(.failure(updateErr)); return }
+                completion(.success(()))
+            }
         }
     }
 
@@ -705,6 +716,13 @@ final class LiveGameService {
             Key.createdAt: FieldValue.serverTimestamp(),
             Key.expiresAt: expires,
             Key.status: LiveStatus.active,
+
+            // Hard connection state
+            "connection": [
+                "ownerUid": ownerUid,
+                "participantUid": NSNull(),
+                "connected": false
+            ],
 
             // Scoreboard defaults
             Key.balls: 0,

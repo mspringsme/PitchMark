@@ -264,11 +264,16 @@ struct PitchTrackerView: View {
     @State private var livePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEvents: [PitchEvent] = []
+    @State private var bufferedSharedPitcherEvents: [BufferedPitcherEvent] = []
     @State private var lastObservedResultSelectionId: String? = nil
     @State private var codeShareSheetID = UUID()
     // MARK: - Startup gating (prevents sheet-flash on launch)
 
     private enum StartupPhase { case launching, ready }
+    private struct BufferedPitcherEvent: Codable {
+        let pitcherId: String
+        let event: PitchEvent
+    }
 
     @State private var startupPhase: StartupPhase = .launching
     @State private var isRestoringState = false
@@ -1092,6 +1097,28 @@ struct PitchTrackerView: View {
                 } else {
                     self.livePitcherId = nil
                 }
+
+                if let connection = data["connection"] as? [String: Any],
+                   let connected = connection["connected"] as? Bool {
+                    self.uiConnected = connected
+                } else {
+                    self.uiConnected = false
+                }
+
+                if self.uiConnected && self.isOwnerForActiveGame {
+                    if self.didAutoDismissCodeSheetForLiveId != liveId {
+                        self.didAutoDismissCodeSheetForLiveId = liveId
+                        if self.activeLiveId == liveId {
+                            self.startListeningToLivePitchEvents(liveId: liveId)
+                        }
+                        self.showCodeShareSheet = false
+                        self.showCodeShareModePicker = false
+                    }
+                }
+
+                if !self.uiConnected, self.didAutoDismissCodeSheetForLiveId == liveId {
+                    self.didAutoDismissCodeSheetForLiveId = nil
+                }
                 // ✅ LIVE TEMPLATE FLOW: apply owner's template on participant (and keep owner consistent too)
                 let liveTemplateId = data["templateId"] as? String
                 let liveTemplateName = data["templateName"] as? String
@@ -1271,38 +1298,8 @@ struct PitchTrackerView: View {
             }
 
             DispatchQueue.main.async {
-                // Only show green if we’re actually in a live room AND we see the other side recently
-                let connectedNow = (self.activeLiveId != nil) && otherRecent
-                self.uiConnected = connectedNow
-
-                // ✅ OWNER ONLY: auto-dismiss code sheet when participant connects
-                if connectedNow && self.isOwnerForActiveGame {
-                    // One-shot per liveId
-                    if self.didAutoDismissCodeSheetForLiveId != liveId {
-                        self.didAutoDismissCodeSheetForLiveId = liveId
-
-                        // Re-arm the live pitch-events listener right when the
-                        // participant connection becomes active. This mirrors the
-                        // post-relaunch recovery path and prevents the owner from
-                        // getting stuck on a stale live listener after the initial
-                        // connect handoff.
-                        if self.activeLiveId == liveId {
-                            self.startListeningToLivePitchEvents(liveId: liveId)
-                        }
-
-                        // Dismiss whichever is currently visible
-                        self.showCodeShareSheet = false
-                        self.showCodeShareModePicker = false
-
-                        // If you have any other code UI (optional):
-                        // self.codeShareInitialTab = 0
-                    }
-                }
-
-                // If we become disconnected, allow the next connection to auto-dismiss again
-                if !connectedNow, self.didAutoDismissCodeSheetForLiveId == liveId {
-                    self.didAutoDismissCodeSheetForLiveId = nil
-                }
+                let connectedNow = (self.activeLiveId != nil) && self.isGame && otherRecent
+                _ = connectedNow
             }
         }
     }
@@ -1326,6 +1323,19 @@ struct PitchTrackerView: View {
 
     private func endLiveSessionLocally(keepCurrentGame: Bool) {
         guard let liveId = activeLiveId else { return }
+
+        flushBufferedSharedPitcherEvents(reason: "endLiveSession")
+
+        LiveGameService.shared.updateLiveFields(
+            liveId: liveId,
+            fields: [
+                "connection": [
+                    "participantUid": NSNull(),
+                    "connected": false,
+                    "disconnectedAt": FieldValue.serverTimestamp()
+                ]
+            ]
+        )
 
         liveListener?.remove()
         liveListener = nil
@@ -1370,6 +1380,7 @@ struct PitchTrackerView: View {
     }
 
     private func disconnectFromGame(notifyHost: Bool = true) {
+        flushBufferedSharedPitcherEvents(reason: "disconnect")
         if activeLiveId != nil {
             endLiveSessionLocally(keepCurrentGame: false)
             return
@@ -2906,7 +2917,6 @@ struct PitchTrackerView: View {
                         .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
                 }
                 .buttonStyle(.plain)
-                .disabled(selectedGameId == nil || selectedPitcherForStats == nil)
                 .accessibilityLabel("Game Stats")
             }
         }
@@ -3100,7 +3110,13 @@ struct PitchTrackerView: View {
                     if let liveId = activeLiveId, !liveId.isEmpty {
                         LiveGameService.shared.updateLiveFields(
                             liveId: liveId,
-                            fields: ["status": "ended"]
+                            fields: [
+                                "connection": [
+                                    "participantUid": NSNull(),
+                                    "connected": false,
+                                    "disconnectedAt": FieldValue.serverTimestamp()
+                                ]
+                            ]
                         )
                     }
                     endLiveSessionLocally(keepCurrentGame: isOwnerForActiveGame)
@@ -3277,6 +3293,59 @@ struct PitchTrackerView: View {
         selectedDescriptor = nil
     }
 
+    private var bufferedSharedEventsURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("PitchMark", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir.appendingPathComponent("buffered_shared_pitcher_events.json")
+    }
+
+    private func loadBufferedSharedPitcherEvents() {
+        let url = bufferedSharedEventsURL
+        guard let data = try? Data(contentsOf: url) else {
+            bufferedSharedPitcherEvents = []
+            return
+        }
+        do {
+            let decoded = try JSONDecoder().decode([BufferedPitcherEvent].self, from: data)
+            bufferedSharedPitcherEvents = decoded
+        } catch {
+            print("❌ Failed to decode buffered pitcher events:", error.localizedDescription)
+            bufferedSharedPitcherEvents = []
+        }
+    }
+
+    private func persistBufferedSharedPitcherEvents() {
+        do {
+            let data = try JSONEncoder().encode(bufferedSharedPitcherEvents)
+            try data.write(to: bufferedSharedEventsURL, options: [.atomic])
+        } catch {
+            print("❌ Failed to persist buffered pitcher events:", error.localizedDescription)
+        }
+    }
+
+    private func bufferSharedPitcherEvent(pitcherId: String, event: PitchEvent) {
+        bufferedSharedPitcherEvents.append(BufferedPitcherEvent(pitcherId: pitcherId, event: event))
+        persistBufferedSharedPitcherEvents()
+    }
+
+    private func flushBufferedSharedPitcherEvents(reason: String) {
+        guard !bufferedSharedPitcherEvents.isEmpty else { return }
+        print("📤 Flushing \(bufferedSharedPitcherEvents.count) buffered pitcher events (reason: \(reason))")
+        for buffered in bufferedSharedPitcherEvents {
+            authManager.saveSharedPitcherEvent(pitcherId: buffered.pitcherId, event: buffered.event)
+        }
+        bufferedSharedPitcherEvents.removeAll()
+        persistBufferedSharedPitcherEvents()
+    }
+
+    private var shouldWriteSharedPitcherEventImmediately: Bool {
+        activeLiveId != nil && uiConnected
+    }
+
     private func saveSharedPitcherEventIfAllowed(_ event: PitchEvent) {
         let targetPitcherId = event.pitcherId ?? selectedPitcherId
         guard let pitcherId = targetPitcherId else { return }
@@ -3289,7 +3358,11 @@ struct PitchTrackerView: View {
             print("⚠️ Shared pitcher write not confirmed (owner/shared missing); attempting save to let rules decide.")
         }
 
-        authManager.saveSharedPitcherEvent(pitcherId: pitcherId, event: event)
+        if shouldWriteSharedPitcherEventImmediately {
+            authManager.saveSharedPitcherEvent(pitcherId: pitcherId, event: event)
+        } else {
+            bufferSharedPitcherEvent(pitcherId: pitcherId, event: event)
+        }
     }
     
     private var baseBody: some View {
@@ -3308,6 +3381,8 @@ struct PitchTrackerView: View {
             startupPhase = .ready
             return
         }
+
+        loadBufferedSharedPitcherEvents()
 
         // If we've already presented the initial sheets once, don't do it again.
         // (But we can still refresh loaders below if you want; keeping it tight here.)
@@ -3867,14 +3942,40 @@ struct PitchTrackerView: View {
         }
     }
 
+    private func pauseLiveSessionForBackground() {
+        guard activeLiveId != nil else { return }
+        print("🔌 Scene inactive/background → pausing live presence (no disconnect)")
+        stopHeartbeat()
+        liveListener?.remove()
+        liveListener = nil
+        livePitchEventsListener?.remove()
+        livePitchEventsListener = nil
+        participantsListener?.remove()
+        participantsListener = nil
+        uiConnected = false
+        flushBufferedSharedPitcherEvents(reason: "background")
+    }
+
+    private func resumeLiveSessionIfNeeded() {
+        guard let liveId = activeLiveId, !liveId.isEmpty else { return }
+        print("🔌 Scene active → resuming live presence")
+        startListeningToActiveGame()
+        startListeningToLivePitchEvents(liveId: liveId)
+        startListeningToLiveParticipants(liveId: liveId)
+        startLivePresenceHeartbeat(liveId: liveId)
+        ensureLivePresence(liveId: liveId)
+    }
+
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
-        guard newPhase != .active else { return }
-
-        let shouldDisconnect = (activeLiveId != nil) || (isGame && selectedGameId != nil && !isOwnerForActiveGame)
-        guard shouldDisconnect else { return }
-
-        print("🔌 Scene inactive/background → disconnecting from game")
-        disconnectFromGame(notifyHost: true)
+        switch newPhase {
+        case .active:
+            resumeLiveSessionIfNeeded()
+        case .inactive, .background:
+            flushBufferedSharedPitcherEvents(reason: "background")
+            pauseLiveSessionForBackground()
+        @unknown default:
+            break
+        }
     }
 
     var body: some View {
