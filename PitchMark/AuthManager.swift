@@ -744,11 +744,16 @@ class AuthManager: ObservableObject {
     }
 
     func saveSharedPitcherEvent(pitcherId: String, event: PitchEvent) {
+        let docId: String? = {
+            let raw = event.id?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (raw?.isEmpty == false) ? raw : nil
+        }()
+
         let ref = Firestore.firestore()
             .collection("pitchers")
             .document(pitcherId)
             .collection("pitchEvents")
-            .document()
+            .document(docId ?? UUID().uuidString)
 
         do {
             var enriched = event

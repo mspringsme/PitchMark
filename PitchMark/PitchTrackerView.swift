@@ -1727,6 +1727,16 @@ struct PitchTrackerView: View {
         }
     }
 
+    private func loadPracticePitchEventsIfNeeded(force: Bool = false) {
+        guard sessionManager.currentMode == .practice else { return }
+        guard force || pitchEvents.isEmpty else { return }
+        authManager.loadPitchEvents { events in
+            DispatchQueue.main.async {
+                self.pitchEvents = events
+            }
+        }
+    }
+
     private enum TemplateSelectionSource {
         case user
         case live
@@ -3456,6 +3466,7 @@ struct PitchTrackerView: View {
             isGame = false
             sessionManager.switchMode(to: .practice)
             restoreActivePracticeSelection()
+            loadPracticePitchEventsIfNeeded(force: true)
 
         } else if let gid = persistedGameId {
             isGame = true
@@ -3791,6 +3802,7 @@ struct PitchTrackerView: View {
             selectedPracticeId: selectedPracticeId,
             selectedPitcherId: effectivePitcherIdForSave,
             saveAction: { event in
+                var sharedEvent = event
                 if isGame, let liveId = activeLiveId {
                     // ✅ Live: save to shared room
                     let uid = authManager.user?.uid ?? ""
@@ -3811,6 +3823,7 @@ struct PitchTrackerView: View {
                             .collection("liveGames").document(liveId)
                             .collection("pitchEvents").document()
                         let liveEventId = liveRef.documentID
+                        sharedEvent.id = liveEventId
 
                         liveRef.setData(eventData, merge: false) { err in
                             if let err {
@@ -3850,7 +3863,7 @@ struct PitchTrackerView: View {
                     authManager.savePitchEvent(event)
                 }
 
-                saveSharedPitcherEventIfAllowed(event)
+                saveSharedPitcherEventIfAllowed(sharedEvent)
 
                 writeResultSelection(label: event.location)
 
@@ -4018,6 +4031,11 @@ struct PitchTrackerView: View {
             .onChange(of: selectedPitcherId) { _, _ in
                 if isGame {
                     syncLivePitcherSelectionIfOwner()
+                }
+            }
+            .onChange(of: sessionManager.currentMode) { _, newValue in
+                if newValue == .practice {
+                    loadPracticePitchEventsIfNeeded(force: false)
                 }
             }
             .onChange(of: encryptedSelectionByGameId) { _, _ in

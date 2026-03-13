@@ -1290,6 +1290,7 @@ struct PitcherStatsSheetView: View {
 
     @State private var selectedGameIds: Set<String> = []
     @State private var selectedPracticeIds: Set<String> = []
+    @State private var cachedGameIdsWithEvents: Set<String> = []
 
     @State private var practiceEvents: [PitchEvent] = []
     @State private var gameEvents: [PitchEvent] = []
@@ -1322,7 +1323,12 @@ struct PitcherStatsSheetView: View {
     }()
 
     private var gamesWithPitcherEvents: [Game] {
-        let gameIdsWithEvents = Set(combinedGameEvents.compactMap { $0.gameId })
+        let gameIdsWithEvents: Set<String> = {
+            if !cachedGameIdsWithEvents.isEmpty {
+                return cachedGameIdsWithEvents
+            }
+            return Set(combinedGameEvents.compactMap { $0.gameId })
+        }()
         return sortedGames.filter { game in
             guard let id = game.id else { return false }
             return gameIdsWithEvents.contains(id)
@@ -1856,6 +1862,7 @@ struct PitcherStatsSheetView: View {
                 startLiveListener()
             }
             .onChange(of: pitcher.id) { _, _ in
+                cachedGameIdsWithEvents = []
                 startSharedPitcherListener()
                 loadCachedStats()
             }
@@ -2316,6 +2323,8 @@ struct PitcherStatsSheetView: View {
             return
         }
 
+        cachedGameIdsWithEvents = []
+
         let ids = sortedGames.compactMap { $0.id }
         selectedGameIds = Set(ids)
 
@@ -2407,6 +2416,10 @@ struct PitcherStatsSheetView: View {
 
             group.notify(queue: .main) {
                 guard loadEventsToken == requestToken else { return }
+                let ids = Set(self.combinedGameEvents.compactMap { $0.gameId })
+                if !ids.isEmpty {
+                    self.cachedGameIdsWithEvents.formUnion(ids)
+                }
                 self.isLoading = false
             }
         }
