@@ -8,6 +8,8 @@
 import SwiftUI
 import FirebaseAuth
 import UIKit
+import CoreImage
+import FirebaseFirestore
 
 struct SettingsView: View {
     @Binding var templates: [PitchTemplate]
@@ -56,8 +58,23 @@ struct SettingsView: View {
     @State private var inviteJoinError: String? = nil
     @State private var isJoiningInvite = false
 
+    @State private var copyPitcherTarget: Pitcher? = nil
+    @State private var showCopyPitcherConfirm = false
+
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
     @State private var encryptedSelectionByPracticeId: [String: Bool] = [:]
+
+    @State private var showPitcherShareSheet = false
+    @State private var showPitcherShareActivity = false
+    @State private var sharePitcherLink: String = ""
+    @State private var sharePitcherQR: UIImage? = nil
+    @State private var isGeneratingPitcherShare = false
+    @State private var pitcherShareError: String? = nil
+    @State private var showPitcherShareError = false
+    @State private var isCopyingPitcher = false
+    @State private var ownedPitchersListener: ListenerRegistration? = nil
+    @State private var sharedPitchersListener: ListenerRegistration? = nil
+    @State private var livePitchersById: [String: Pitcher] = [:]
     
     private var sortedTemplates: [PitchTemplate] {
         templates.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
@@ -207,6 +224,123 @@ struct SettingsView: View {
         }
     }
 
+    private func qrImage(for text: String) -> UIImage? {
+        let data = Data(text.utf8)
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let transformed = output.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(transformed, from: transformed.extent) else { return nil }
+        return UIImage(cgImage: cgImage)
+    }
+
+    private func beginPitcherShare(_ pitcher: Pitcher) {
+        guard let pitcherId = pitcher.id else { return }
+        isGeneratingPitcherShare = true
+        authManager.createPitcherInviteToken(pitcherId: pitcherId) { result in
+            DispatchQueue.main.async {
+                self.isGeneratingPitcherShare = false
+                switch result {
+                case .success(let token):
+                    let link = "pitchmark://pitcher?token=\(token)"
+                    self.sharePitcherLink = link
+                    self.sharePitcherQR = self.qrImage(for: link)
+                    self.showPitcherShareSheet = true
+                case .failure(let error):
+                    self.pitcherShareError = error.localizedDescription
+                    self.showPitcherShareError = true
+                }
+            }
+        }
+    }
+
+    private func reclaimPitcher(_ pitcher: Pitcher) {
+        guard let pitcherId = pitcher.id else { return }
+        authManager.reclaimPitcher(pitcherId: pitcherId) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let updated):
+                    if let id = updated.id, let idx = pitchers.firstIndex(where: { $0.id == id }) {
+                        pitchers[idx] = updated
+                    } else {
+                        authManager.loadPitchers { loaded in
+                            pitchers = loaded
+                        }
+                    }
+                    NotificationCenter.default.post(name: .pitcherSharedUpdated, object: nil)
+                case .failure(let error):
+                    self.pitcherShareError = error.localizedDescription
+                    self.showPitcherShareError = true
+                }
+            }
+        }
+    }
+
+    private func copyPitcher(_ pitcher: Pitcher) {
+        guard !isCopyingPitcher else { return }
+        isCopyingPitcher = true
+        authManager.copyPitcherWithEvents(sourcePitcher: pitcher) { result in
+            DispatchQueue.main.async {
+                self.isCopyingPitcher = false
+                switch result {
+                case .success(let newPitcher):
+                    pitchers.append(newPitcher)
+                    NotificationCenter.default.post(name: .pitcherSharedUpdated, object: nil)
+                case .failure(let error):
+                    self.pitcherShareError = error.localizedDescription
+                    self.showPitcherShareError = true
+                }
+            }
+        }
+    }
+
+    private func startPitchersListenerIfNeeded() {
+        guard ownedPitchersListener == nil && sharedPitchersListener == nil else { return }
+        guard let uid = authManager.user?.uid else { return }
+
+        let db = Firestore.firestore()
+        let ownedRef = db.collection("pitchers").whereField("ownerUid", isEqualTo: uid)
+        let sharedRef = db.collection("pitchers").whereField("sharedWith", arrayContains: uid)
+
+        func mergeDocs(_ docs: [QueryDocumentSnapshot]) {
+            Task { @MainActor in
+                var map = livePitchersById
+                for doc in docs {
+                    do {
+                        let pitcher = try doc.data(as: Pitcher.self)
+                        if let id = pitcher.id {
+                            map[id] = pitcher
+                        }
+                    } catch {
+                        print("❌ Pitcher decode failed (listener) docId=\(doc.documentID) error=\(error)")
+                    }
+                }
+                livePitchersById = map
+                pitchers = Array(map.values)
+            }
+        }
+
+        ownedPitchersListener = ownedRef.addSnapshotListener { snapshot, error in
+            if let error {
+                print("❌ owned pitchers listener error:", error.localizedDescription)
+                return
+            }
+            let docs = snapshot?.documents ?? []
+            mergeDocs(docs)
+        }
+
+        sharedPitchersListener = sharedRef.addSnapshotListener { snapshot, error in
+            if let error {
+                print("❌ shared pitchers listener error:", error.localizedDescription)
+                return
+            }
+            let docs = snapshot?.documents ?? []
+            mergeDocs(docs)
+        }
+    }
+
     @ViewBuilder
     private var inviteJoinSheetView: some View {
         VStack(spacing: 16) {
@@ -315,11 +449,12 @@ struct SettingsView: View {
                     HStack(spacing: 10) {
                         ForEach(visiblePitchers) { pitcher in
                             let isActive = pitcher.id == pitcherActionTargetId
+                            let isOwned = pitcher.isActiveOwner(currentUid: authManager.user?.uid)
                             Button(pitcher.name) {
                                 pitcherActionTargetId = (pitcherActionTargetId == pitcher.id) ? nil : pitcher.id
                             }
                             .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.black)
+                            .foregroundColor(isOwned ? .black : Color.gray.opacity(0.45))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(
@@ -345,6 +480,7 @@ struct SettingsView: View {
                 }
 
                 if let pitcher = selected {
+                    let isActiveOwner = pitcher.isActiveOwner(currentUid: authManager.user?.uid)
                     HStack(spacing: 8) {
                         Button("Edit") {
                             editingPitcher = pitcher
@@ -359,18 +495,42 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.bordered)
 
+                        if isActiveOwner {
+                            Button(isGeneratingPitcherShare ? "Sharing..." : "Owned") {
+                                beginPitcherShare(pitcher)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isGeneratingPitcherShare)
+                        } else {
+                            Button("Reclaim") {
+                                reclaimPitcher(pitcher)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
                         Spacer()
 
-                        Button("Archive") {
-                            if let id = pitcher.id {
-                                hiddenPitcherIds.insert(id)
-                                saveHiddenPitcherIds()
-                                if pitcherActionTargetId == id {
-                                    pitcherActionTargetId = nil
+                        VStack(alignment: .trailing, spacing: 6) {
+                            Button("Archive") {
+                                if let id = pitcher.id {
+                                    hiddenPitcherIds.insert(id)
+                                    saveHiddenPitcherIds()
+                                    if pitcherActionTargetId == id {
+                                        pitcherActionTargetId = nil
+                                    }
                                 }
                             }
+                            .buttonStyle(.bordered)
+                            .font(.caption)
+
+                            Button(isCopyingPitcher ? "Copying..." : "Copy") {
+                                copyPitcherTarget = pitcher
+                                showCopyPitcherConfirm = true
+                            }
+                            .buttonStyle(.bordered)
+                            .font(.caption)
+                            .disabled(isCopyingPitcher)
                         }
-                        .buttonStyle(.bordered)
                     }
                     .padding(.horizontal)
                 } else {
@@ -678,6 +838,18 @@ struct SettingsView: View {
             .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
             .onAppear {
                 loadHiddenIds()
+                startPitchersListenerIfNeeded()
+            }
+            .onDisappear {
+                ownedPitchersListener?.remove()
+                ownedPitchersListener = nil
+                sharedPitchersListener?.remove()
+                sharedPitchersListener = nil
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .pitcherSharedUpdated)) { _ in
+                authManager.loadPitchers { loaded in
+                    pitchers = loaded
+                }
             }
             .sheet(isPresented: $showShareTemplateSheet) {
                 VStack(spacing: 16) {
@@ -730,6 +902,54 @@ struct SettingsView: View {
                 .padding()
                 .presentationDetents([.medium])
             }
+            .sheet(isPresented: $showPitcherShareSheet) {
+                VStack(spacing: 16) {
+                    Text("Share Pitcher")
+                        .font(.headline)
+
+                    if !sharePitcherLink.isEmpty {
+                        Text(sharePitcherLink)
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .padding(.horizontal)
+                    }
+
+                    if let qr = sharePitcherQR {
+                        Image(uiImage: qr)
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 200, height: 200)
+                            .background(Color.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+
+                    HStack {
+                        Button("Close") {
+                            showPitcherShareSheet = false
+                        }
+                        Spacer()
+                        Button("Share") {
+                            showPitcherShareActivity = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(sharePitcherLink.isEmpty)
+                    }
+                }
+                .padding()
+                .presentationDetents([.medium])
+            }
+            .sheet(isPresented: $showPitcherShareActivity) {
+                let items: [Any] = {
+                    if let qr = sharePitcherQR {
+                        return [sharePitcherLink, qr]
+                    }
+                    return [sharePitcherLink]
+                }()
+                ShareSheet(items: items)
+            }
             .alert("Are you sure you want to delete this template?", isPresented: $showDeleteAlert) {
                 Button("Cancel", role: .cancel) {}
                 Button("Delete", role: .destructive) {
@@ -739,6 +959,28 @@ struct SettingsView: View {
                         templatePendingDeletion = nil
                     }
                 }
+            }
+            .alert("Pitcher Share", isPresented: $showPitcherShareError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(pitcherShareError ?? "Something went wrong.")
+            }
+            .confirmationDialog(
+                "Copy pitcher?",
+                isPresented: $showCopyPitcherConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Copy", role: .destructive) {
+                    if let pitcher = copyPitcherTarget {
+                        copyPitcher(pitcher)
+                    }
+                    copyPitcherTarget = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    copyPitcherTarget = nil
+                }
+            } message: {
+                Text("This creates a new pitcher profile you own, with the same stats. It won’t affect the shared pitcher.")
             }
             .confirmationDialog("Launch as…", isPresented: $showModeChoice, titleVisibility: .visible) {
                 Button("Game") {
@@ -992,14 +1234,16 @@ struct PitcherStatsSheetView: View {
     let pitcher: Pitcher
     let games: [Game]
     let lockToGameId: String?
+    let liveId: String?
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
 
-    init(pitcher: Pitcher, games: [Game], lockToGameId: String? = nil) {
+    init(pitcher: Pitcher, games: [Game], lockToGameId: String? = nil, liveId: String? = nil) {
         self.pitcher = pitcher
         self.games = games
         self.lockToGameId = lockToGameId
+        self.liveId = liveId
     }
 
     @State private var dateFilter: DateRangeFilter = .all
@@ -1013,6 +1257,11 @@ struct PitcherStatsSheetView: View {
 
     @State private var practiceEvents: [PitchEvent] = []
     @State private var gameEvents: [PitchEvent] = []
+    @State private var liveEvents: [PitchEvent] = []
+    @State private var sharedGameEvents: [PitchEvent] = []
+    @State private var sharedPracticeEvents: [PitchEvent] = []
+    @State private var liveEventsListener: ListenerRegistration? = nil
+    @State private var sharedPitcherEventsListener: ListenerRegistration? = nil
     @State private var isLoading = false
     @State private var loadEventsToken = UUID()
     @State private var summaryDetail: SummaryDetail? = nil
@@ -1036,7 +1285,7 @@ struct PitcherStatsSheetView: View {
     }()
 
     private var gamesWithPitcherEvents: [Game] {
-        let gameIdsWithEvents = Set(gameEvents.compactMap { $0.gameId })
+        let gameIdsWithEvents = Set(combinedGameEvents.compactMap { $0.gameId })
         return sortedGames.filter { game in
             guard let id = game.id else { return false }
             return gameIdsWithEvents.contains(id)
@@ -1102,7 +1351,10 @@ struct PitcherStatsSheetView: View {
 
     private var filteredEvents: [PitchEvent] {
         if let lockedGameId = lockToGameId {
-            let lockedEvents = gameEvents.filter { $0.gameId == lockedGameId }
+            let lockedEvents = combinedGameEvents.filter { event in
+                if let gid = event.gameId, !gid.isEmpty { return gid == lockedGameId }
+                return liveId != nil
+            }
             guard let range = dateRange else { return lockedEvents }
             return lockedEvents.filter { range.contains($0.timestamp) }
         }
@@ -1110,11 +1362,11 @@ struct PitcherStatsSheetView: View {
         let allForPitcher: [PitchEvent] = {
             switch scope {
             case .all:
-                return practiceEvents + gameEvents
+                return combinedPracticeEvents + combinedGameEvents
             case .practice:
-                return practiceEvents
+                return combinedPracticeEvents
             case .games:
-                return gameEvents
+                return combinedGameEvents
             }
         }()
 
@@ -1421,7 +1673,7 @@ struct PitcherStatsSheetView: View {
                         HStack(alignment: .center, spacing: 12) {
                             Text(pitcher.name)
                                 .font(.title2.weight(.semibold))
-                            
+
                             Spacer(minLength: 8)
                             VStack(spacing: 8) {
                                 Picker("Scope", selection: $scope) {
@@ -1442,24 +1694,36 @@ struct PitcherStatsSheetView: View {
                         summarySection
                         statsPickerSection
                     } else {
-                        HStack(alignment: .center, spacing: 12) {
-                            Text(pitcher.name)
-                                .font(.title2.weight(.semibold))
-                            Spacer(minLength: 8)
-                            VStack(alignment: .trailing, spacing: 4) {
-                                Text("Game")
-                                    .font(.headline)
-                                if let lockedGameId = lockToGameId,
-                                   let game = games.first(where: { $0.id == lockedGameId }) {
-                                    Text("vs. \(game.opponent)")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    Text("Selected game")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
+                        HStack(spacing: 0) {
+                            Spacer(minLength: 12)
+
+                            HStack(alignment: .center, spacing: 12) {
+                                Text(pitcher.name)
+                                    .font(.title2.weight(.semibold))
+                                Spacer(minLength: 8)
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    Text("Game")
+                                        .font(.headline)
+                                    if let lockedGameId = lockToGameId,
+                                       let game = games.first(where: { $0.id == lockedGameId }) {
+                                        Text("vs. \(game.opponent)")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        Text("Selected game")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                             }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                            )
+
+                            Spacer(minLength: 12)
                         }
                         .padding(.horizontal)
 
@@ -1489,6 +1753,12 @@ struct PitcherStatsSheetView: View {
             .onAppear {
                 initializeSelections()
                 loadEvents()
+                startLiveListener()
+                startSharedPitcherListener()
+            }
+            .onDisappear {
+                stopLiveListener()
+                stopSharedPitcherListener()
             }
             .onChange(of: selectedGameIds) { _, _ in loadEvents() }
             .onChange(of: selectedPracticeIds) { _, _ in loadEvents() }
@@ -1497,6 +1767,12 @@ struct PitcherStatsSheetView: View {
                     scope = .games
                 }
                 loadEvents()
+            }
+            .onChange(of: liveId) { _, _ in
+                startLiveListener()
+            }
+            .onChange(of: pitcher.id) { _, _ in
+                startSharedPitcherListener()
             }
         }
     }
@@ -1968,47 +2244,184 @@ struct PitcherStatsSheetView: View {
 
     private func loadEvents() {
         guard let pitcherId = pitcher.id else { return }
-        guard let ownerUid = authManager.user?.uid else { return }
-
         let requestToken = UUID()
         loadEventsToken = requestToken
 
         isLoading = true
         practiceEvents = []
         gameEvents = []
+        liveEvents = []
+        sharedGameEvents = []
+        sharedPracticeEvents = []
 
-        let group = DispatchGroup()
+        authManager.loadPitcherEvents(pitcherId: pitcherId) { events in
+            guard loadEventsToken == requestToken else { return }
 
-        group.enter()
-        authManager.loadPitchEvents { events in
-            guard loadEventsToken == requestToken else { group.leave(); return }
-            self.practiceEvents = events.filter { $0.pitcherId == pitcherId }
-            group.leave()
-        }
+            var sharedGameBucket: [PitchEvent] = []
+            var sharedPracticeBucket: [PitchEvent] = []
+            var seenIdentities = Set<String>()
 
-        let gameIdsToLoad: [String] = {
-            if let lockedGameId = lockToGameId { return [lockedGameId] }
-            switch scope {
-            case .practice:
-                return []
-            case .all, .games:
-                return selectedGameIds.isEmpty ? sortedGames.compactMap { $0.id } : Array(selectedGameIds)
+            if !events.isEmpty {
+                for event in events {
+                    if event.mode == .game || (event.gameId?.isEmpty == false) {
+                        sharedGameBucket.append(event)
+                    } else {
+                        sharedPracticeBucket.append(event)
+                    }
+                }
+                seenIdentities = Set((sharedGameBucket + sharedPracticeBucket).map { $0.identity })
+
+                DispatchQueue.main.async {
+                    self.gameEvents = sharedGameBucket
+                    self.practiceEvents = sharedPracticeBucket
+                }
             }
-        }()
 
-        for gameId in gameIdsToLoad {
+            guard let ownerUid = authManager.user?.uid else {
+                DispatchQueue.main.async { self.isLoading = false }
+                return
+            }
+
+            let group = DispatchGroup()
+
             group.enter()
-            authManager.loadGamePitchEvents(ownerUserId: ownerUid, gameId: gameId) { events in
+            authManager.loadPitchEvents { events in
                 guard loadEventsToken == requestToken else { group.leave(); return }
                 let filtered = events.filter { $0.pitcherId == pitcherId }
-                self.gameEvents.append(contentsOf: filtered)
-                group.leave()
+                DispatchQueue.main.async {
+                    let unique = filtered.filter { !seenIdentities.contains($0.identity) }
+                    seenIdentities.formUnion(unique.map { $0.identity })
+                    self.practiceEvents.append(contentsOf: unique)
+                    group.leave()
+                }
+            }
+
+            let gameIdsToLoad: [String] = {
+                if let lockedGameId = lockToGameId { return [lockedGameId] }
+                switch scope {
+                case .practice:
+                    return []
+                case .all, .games:
+                    return selectedGameIds.isEmpty ? sortedGames.compactMap { $0.id } : Array(selectedGameIds)
+                }
+            }()
+
+            for gameId in gameIdsToLoad {
+                group.enter()
+                authManager.loadGamePitchEvents(ownerUserId: ownerUid, gameId: gameId) { events in
+                    guard loadEventsToken == requestToken else { group.leave(); return }
+                    let filtered = events.filter { $0.pitcherId == pitcherId }
+                    DispatchQueue.main.async {
+                        let unique = filtered.filter { !seenIdentities.contains($0.identity) }
+                        seenIdentities.formUnion(unique.map { $0.identity })
+                        self.gameEvents.append(contentsOf: unique)
+                        group.leave()
+                    }
+                }
+            }
+
+            group.notify(queue: .main) {
+                guard loadEventsToken == requestToken else { return }
+                self.isLoading = false
             }
         }
+    }
 
-        group.notify(queue: .main) {
-            guard loadEventsToken == requestToken else { return }
-            self.isLoading = false
+    private var combinedGameEvents: [PitchEvent] {
+        mergeUnique([gameEvents, liveEvents, sharedGameEvents])
+    }
+
+    private var combinedPracticeEvents: [PitchEvent] {
+        mergeUnique([practiceEvents, sharedPracticeEvents])
+    }
+
+    private func startLiveListener() {
+        stopLiveListener()
+        liveEvents = []
+        guard let liveId, !liveId.isEmpty, let pitcherId = pitcher.id else { return }
+
+        let ref = Firestore.firestore()
+            .collection("liveGames").document(liveId)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+
+        liveEventsListener = ref.addSnapshotListener { snapshot, error in
+            if let error {
+                print("❌ live stats pitchEvents listener error:", error.localizedDescription)
+                return
+            }
+
+            let events: [PitchEvent] = snapshot?.documents.compactMap { doc in
+                PitchEvent.decodeFirestoreDocument(doc)
+            } ?? []
+
+            let filtered = events.filter { $0.pitcherId == pitcherId }
+            DispatchQueue.main.async {
+                self.liveEvents = filtered
+            }
         }
+    }
+
+    private func stopLiveListener() {
+        liveEventsListener?.remove()
+        liveEventsListener = nil
+    }
+
+    private func startSharedPitcherListener() {
+        stopSharedPitcherListener()
+        sharedGameEvents = []
+        sharedPracticeEvents = []
+
+        guard let pitcherId = pitcher.id else { return }
+
+        let ref = Firestore.firestore()
+            .collection("pitchers").document(pitcherId)
+            .collection("pitchEvents")
+            .order(by: "timestamp", descending: false)
+
+        sharedPitcherEventsListener = ref.addSnapshotListener { snapshot, error in
+            if let error {
+                print("❌ shared pitcherEvents listener error:", error.localizedDescription)
+                return
+            }
+
+            let docs = snapshot?.documents ?? []
+            print("🧾 shared pitcherEvents snapshot count=\(docs.count) pitcherId=\(pitcherId)")
+
+            let events: [PitchEvent] = docs.compactMap { doc in
+                PitchEvent.decodeFirestoreDocument(doc)
+            }
+
+            let sharedGame = events.filter { $0.mode == .game || ($0.gameId?.isEmpty == false) }
+            let sharedPractice = events.filter { !($0.mode == .game || ($0.gameId?.isEmpty == false)) }
+
+            if let sample = events.last {
+                print("🧾 shared pitcherEvents sample gameId=\(sample.gameId ?? "<nil>") mode=\(sample.mode.rawValue) pitcherId=\(sample.pitcherId ?? "<nil>") location=\(sample.location)")
+            }
+
+            DispatchQueue.main.async {
+                self.sharedGameEvents = sharedGame
+                self.sharedPracticeEvents = sharedPractice
+            }
+        }
+    }
+
+    private func stopSharedPitcherListener() {
+        sharedPitcherEventsListener?.remove()
+        sharedPitcherEventsListener = nil
+    }
+
+    private func mergeUnique(_ groups: [[PitchEvent]]) -> [PitchEvent] {
+        var seen = Set<String>()
+        var merged: [PitchEvent] = []
+        for group in groups {
+            for event in group {
+                let key = event.identity
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                merged.append(event)
+            }
+        }
+        return merged
     }
 }

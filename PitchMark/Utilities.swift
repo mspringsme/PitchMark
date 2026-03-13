@@ -375,6 +375,17 @@ struct Pitcher: Identifiable, Codable, Hashable {
     var createdAt: Date? = nil
 }
 
+extension Pitcher {
+    var activeOwnerUid: String {
+        claimedByUid ?? ownerUid
+    }
+
+    func isActiveOwner(currentUid: String?) -> Bool {
+        guard let currentUid else { return false }
+        return activeOwnerUid == currentUid
+    }
+}
+
 struct PitchTemplate: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String

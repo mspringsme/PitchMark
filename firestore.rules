@@ -19,6 +19,16 @@ service cloud.firestore {
       );
     }
 
+    function activeOwnerUid(data) {
+      return data.keys().hasAny(['claimedByUid']) && data.claimedByUid != null
+        ? data.claimedByUid
+        : data.ownerUid;
+    }
+
+    function isActiveOwner(data) {
+      return signedIn() && activeOwnerUid(data) == uid();
+    }
+
     // ─────────────────────────────────────────────
     // TOP-LEVEL TEMPLATES: /templates/{templateId}
     // ─────────────────────────────────────────────
@@ -49,7 +59,63 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid();
 
+      allow update: if signedIn()
+        && (
+          resource.data.ownerUid == uid()
+          || isActiveOwner(resource.data)
+          || (
+            sharedWithMe(resource.data)
+            && request.writeFields.hasOnly(["claimedByUid"])
+            && request.resource.data.claimedByUid == uid()
+          )
+          || (
+            request.writeFields.hasOnly(["sharedWith"])
+            && request.resource.data.sharedWith.size() >= resource.data.sharedWith.size()
+            && request.resource.data.sharedWith.hasAll(resource.data.sharedWith)
+            && request.resource.data.sharedWith.hasAny([uid()])
+          )
+        );
+
+      allow delete: if signedIn()
+        && resource.data.ownerUid == uid();
+
+      match /pitchEvents/{eventId} {
+        function pitcherDoc() {
+          return get(/databases/$(database)/documents/pitchers/$(pitcherId)).data;
+        }
+
+        allow get, list: if signedIn()
+          && (
+            pitcherDoc().ownerUid == uid()
+            || sharedWithMe(pitcherDoc())
+            || isActiveOwner(pitcherDoc())
+          );
+
+        allow create: if signedIn()
+          && (
+            isActiveOwner(pitcherDoc())
+            || sharedWithMe(pitcherDoc())
+          )
+          && request.resource.data.createdByUid == uid();
+
+        allow update, delete: if signedIn()
+          && isActiveOwner(pitcherDoc());
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // PITCHER INVITE TOKENS: /pitcherInviteTokens/{token}
+    // ─────────────────────────────────────────────
+    match /pitcherInviteTokens/{token} {
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && request.resource.data.pitcherId is string;
+
       allow update, delete: if signedIn()
+        && resource != null
         && resource.data.ownerUid == uid();
     }
 
@@ -158,14 +224,27 @@ service cloud.firestore {
       }
 
       match /pitchEvents/{eventId} {
-        allow get, list: if isOwner() || isParticipant();
+        function liveDoc() {
+          return get(/databases/$(database)/documents/liveGames/$(liveId)).data;
+        }
+
+        function liveOwner() {
+          return signedIn() && liveDoc().ownerUid == uid();
+        }
+
+        function liveParticipant() {
+          return signedIn()
+            && exists(/databases/$(database)/documents/liveGames/$(liveId)/participants/$(uid()));
+        }
+
+        allow get, list: if liveOwner() || liveParticipant();
 
         allow create: if signedIn()
-          && (isOwner() || isParticipant())
+          && (liveOwner() || liveParticipant())
           && request.resource.data.createdByUid == uid();
 
-        allow update, delete: if isOwner()
-          || (isParticipant() && resource.data.createdByUid == uid());
+        allow update, delete: if liveOwner()
+          || (liveParticipant() && resource.data.createdByUid == uid());
       }
     }
 
@@ -212,6 +291,21 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/liveGames/$(liveIdFor(code))/participants/$(uid()));
       }
 
+      function liveDocById(liveId) {
+        return get(/databases/$(database)/documents/liveGames/$(liveId)).data;
+      }
+
+      function isActiveParticipantByLiveId() {
+        return signedIn()
+          && request.resource.data.keys().hasAny(["liveId"])
+          && request.resource.data.liveId is string
+          && exists(/databases/$(database)/documents/liveGames/$(request.resource.data.liveId))
+          && liveDocById(request.resource.data.liveId).status == "active"
+          && liveDocById(request.resource.data.liveId).ownerUid == ownerUid
+          && liveDocById(request.resource.data.liveId).ownerGameId == gameId
+          && exists(/databases/$(database)/documents/liveGames/$(request.resource.data.liveId)/participants/$(uid()));
+      }
+
       // Owner full access
       allow get, list, create, update, delete: if signedIn() && uid() == ownerUid;
 
@@ -223,7 +317,7 @@ service cloud.firestore {
         allow get, list: if signedIn() && uid() == ownerUid;
         allow get, list: if isActiveParticipantForThisGame();
 
-        allow create: if isActiveParticipantForThisGame()
+        allow create: if (isActiveParticipantForThisGame() || isActiveParticipantByLiveId())
           && request.resource.data.createdByUid == uid();
 
         allow update, delete: if signedIn() && uid() == ownerUid;

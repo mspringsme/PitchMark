@@ -18,4 +18,7 @@ extension Notification.Name {
 
     // Fired when the selected template changes (e.g., from SettingsView)
     static let templateSelectionDidChange = Notification.Name("templateSelectionDidChange")
+
+    // Fired when pitcher sharing/ownership updates should refresh UI
+    static let pitcherSharedUpdated = Notification.Name("pitcherSharedUpdated")
 }

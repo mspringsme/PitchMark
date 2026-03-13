@@ -510,21 +510,23 @@ class AuthManager: ObservableObject {
             }
 
         group.notify(queue: .main) {
-            var pitchersById: [String: Pitcher] = [:]
+            Task { @MainActor in
+                var pitchersById: [String: Pitcher] = [:]
 
-            for doc in docs {
-                do {
-                    let pitcher = try doc.data(as: Pitcher.self)
-                    if let id = pitcher.id {
-                        pitchersById[id] = pitcher
+                for doc in docs {
+                    do {
+                        let pitcher = try doc.data(as: Pitcher.self)
+                        if let id = pitcher.id {
+                            pitchersById[id] = pitcher
+                        }
+                    } catch {
+                        print("❌ Pitcher decode failed docId=\(doc.documentID) error=\(error)")
                     }
-                } catch {
-                    print("❌ Pitcher decode failed docId=\(doc.documentID) error=\(error)")
                 }
-            }
 
-            let pitchers = Array(pitchersById.values)
-            completion(pitchers)
+                let pitchers = Array(pitchersById.values)
+                completion(pitchers)
+            }
         }
     }
 
@@ -541,8 +543,8 @@ class AuthManager: ObservableObject {
             name: name,
             templateId: templateId,
             ownerUid: user.uid,
-            sharedWith: [],
-            claimedByUid: nil,
+            sharedWith: [user.uid],
+            claimedByUid: user.uid,
             createdAt: Date()
         )
 
@@ -562,15 +564,14 @@ class AuthManager: ObservableObject {
     }
 
     func updatePitcher(id: String, name: String, templateId: String?, completion: ((Pitcher?) -> Void)? = nil) {
-        guard let user = user else {
+        guard user != nil else {
             completion?(nil)
             return
         }
         let ref = Firestore.firestore().collection("pitchers").document(id)
         let data: [String: Any] = [
             "name": name,
-            "templateId": templateId as Any,
-            "ownerUid": user.uid
+            "templateId": templateId as Any
         ]
         ref.setData(data, merge: true) { err in
             if let err {
@@ -578,16 +579,253 @@ class AuthManager: ObservableObject {
                 completion?(nil)
                 return
             }
-            let updated = Pitcher(
-                id: id,
-                name: name,
-                templateId: templateId,
-                ownerUid: user.uid,
-                sharedWith: [],
-                claimedByUid: nil,
-                createdAt: Date()
-            )
-            completion?(updated)
+            ref.getDocument { snap, readErr in
+                if let readErr {
+                    print("⚠️ updatePitcher: fetch updated doc failed:", readErr.localizedDescription)
+                    completion?(nil)
+                    return
+                }
+                guard let snap, snap.exists else {
+                    completion?(nil)
+                    return
+                }
+                Task { @MainActor in
+                    do {
+                        let updated = try snap.data(as: Pitcher.self)
+                        completion?(updated)
+                    } catch {
+                        print("⚠️ updatePitcher: decode updated doc failed:", error)
+                        completion?(nil)
+                    }
+                }
+            }
+        }
+    }
+
+    private func randomToken(length: Int = 10) -> String {
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        var output = ""
+        output.reserveCapacity(length)
+        for _ in 0..<length {
+            if let ch = alphabet.randomElement() {
+                output.append(ch)
+            }
+        }
+        return output
+    }
+
+    func createPitcherInviteToken(pitcherId: String, completion: @escaping (Result<String, Error>) -> Void) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+
+        let token = randomToken(length: 12)
+        let ref = Firestore.firestore().collection("pitcherInviteTokens").document(token)
+        let data: [String: Any] = [
+            "pitcherId": pitcherId,
+            "ownerUid": user.uid,
+            "createdAt": FieldValue.serverTimestamp()
+        ]
+
+        ref.setData(data) { error in
+            if let error {
+                completion(.failure(error))
+            } else {
+                completion(.success(token))
+            }
+        }
+    }
+
+    func joinPitcherByInviteToken(token: String, completion: @escaping (Result<Pitcher, Error>) -> Void) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+
+        let db = Firestore.firestore()
+        let tokenRef = db.collection("pitcherInviteTokens").document(token)
+        tokenRef.getDocument { snap, error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+            guard let snap, snap.exists,
+                  let data = snap.data(),
+                  let pitcherId = data["pitcherId"] as? String,
+                  !pitcherId.isEmpty
+            else {
+                completion(.failure(NSError(domain: "Invite", code: 404, userInfo: [NSLocalizedDescriptionKey: "Invite not found."])))
+                return
+            }
+
+            let pitcherRef = db.collection("pitchers").document(pitcherId)
+            let updates: [String: Any] = [
+                "sharedWith": FieldValue.arrayUnion([user.uid])
+            ]
+
+            pitcherRef.setData(updates, merge: true) { err in
+                if let err {
+                    completion(.failure(err))
+                    return
+                }
+                pitcherRef.getDocument { updatedSnap, readErr in
+                    if let readErr {
+                        completion(.failure(readErr))
+                        return
+                    }
+                    guard let updatedSnap, updatedSnap.exists else {
+                        completion(.failure(NSError(domain: "Invite", code: 404, userInfo: [NSLocalizedDescriptionKey: "Pitcher not found."])))
+                        return
+                    }
+                    Task { @MainActor in
+                        do {
+                            let pitcher = try updatedSnap.data(as: Pitcher.self)
+                            completion(.success(pitcher))
+                        } catch {
+                            completion(.failure(error))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func reclaimPitcher(pitcherId: String, completion: @escaping (Result<Pitcher, Error>) -> Void) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+        let ref = Firestore.firestore().collection("pitchers").document(pitcherId)
+        ref.setData(["claimedByUid": user.uid], merge: true) { error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+            ref.getDocument { snap, readErr in
+                if let readErr {
+                    completion(.failure(readErr))
+                    return
+                }
+                guard let snap, snap.exists else {
+                    completion(.failure(NSError(domain: "Pitcher", code: 404, userInfo: [NSLocalizedDescriptionKey: "Pitcher not found."])))
+                    return
+                }
+                Task { @MainActor in
+                    do {
+                        let updated = try snap.data(as: Pitcher.self)
+                        completion(.success(updated))
+                    } catch {
+                        completion(.failure(error))
+                    }
+                }
+            }
+        }
+    }
+
+    func loadPitcherEvents(pitcherId: String, completion: @escaping ([PitchEvent]) -> Void) {
+        let ref = Firestore.firestore()
+            .collection("pitchers")
+            .document(pitcherId)
+            .collection("pitchEvents")
+
+        ref.order(by: "timestamp", descending: false)
+            .getDocuments { snapshot, error in
+                if let error {
+                    print("❌ loadPitcherEvents error:", error.localizedDescription)
+                    completion([])
+                    return
+                }
+                let events: [PitchEvent] = snapshot?.documents.compactMap { doc in
+                    PitchEvent.decodeFirestoreDocument(doc)
+                } ?? []
+                completion(events)
+            }
+    }
+
+    func saveSharedPitcherEvent(pitcherId: String, event: PitchEvent) {
+        let ref = Firestore.firestore()
+            .collection("pitchers")
+            .document(pitcherId)
+            .collection("pitchEvents")
+            .document()
+
+        do {
+            var enriched = event
+            enriched.pitcherId = pitcherId
+            enriched.createdByUid = Auth.auth().currentUser?.uid
+            try ref.setData(from: enriched) { err in
+                if let err {
+                    print("❌ saveSharedPitcherEvent failed:", err.localizedDescription)
+                } else {
+                    print("✅ Shared pitcher event saved.")
+                }
+            }
+        } catch {
+            print("❌ saveSharedPitcherEvent encode failed:", error.localizedDescription)
+        }
+    }
+
+    func copyPitcherWithEvents(sourcePitcher: Pitcher, completion: @escaping (Result<Pitcher, Error>) -> Void) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+        guard let sourceId = sourcePitcher.id, !sourceId.isEmpty else {
+            completion(.failure(NSError(domain: "Pitcher", code: 400, userInfo: [NSLocalizedDescriptionKey: "Missing pitcher id."])))
+            return
+        }
+
+        let db = Firestore.firestore()
+        let newRef = db.collection("pitchers").document()
+        let copyName = "\(sourcePitcher.name) (Copy)"
+        let newPitcher = Pitcher(
+            id: newRef.documentID,
+            name: copyName,
+            templateId: sourcePitcher.templateId,
+            ownerUid: user.uid,
+            sharedWith: [user.uid],
+            claimedByUid: user.uid,
+            createdAt: Date()
+        )
+
+        do {
+            try newRef.setData(from: newPitcher) { err in
+                if let err {
+                    completion(.failure(err))
+                    return
+                }
+
+                self.loadPitcherEvents(pitcherId: sourceId) { events in
+                    guard !events.isEmpty else {
+                        completion(.success(newPitcher))
+                        return
+                    }
+
+                    let batch = db.batch()
+                    for event in events {
+                        let targetRef = newRef.collection("pitchEvents").document()
+                        var copied = event
+                        copied.pitcherId = newRef.documentID
+                        copied.createdByUid = user.uid
+                        do {
+                            let data = try Firestore.Encoder().encode(copied)
+                            batch.setData(data, forDocument: targetRef)
+                        } catch {
+                            print("❌ copyPitcherWithEvents encode failed:", error.localizedDescription)
+                        }
+                    }
+                    batch.commit { batchError in
+                        if let batchError {
+                            completion(.failure(batchError))
+                        } else {
+                            completion(.success(newPitcher))
+                        }
+                    }
+                }
+            }
+        } catch {
+            completion(.failure(error))
         }
     }
     func loadTemplate(id: String) async -> PitchTemplate? {
@@ -1184,17 +1422,19 @@ extension AuthManager {
             }
 
             let docs = snapshot?.documents ?? []
-            var decoded: [Game] = []
-            for d in docs {
-                do {
-                    decoded.append(try d.data(as: Game.self))
-                } catch {
-                    print("❌ Game decode failed (server) docId=\(d.documentID) error=\(error)")
-                    print("   keys:", Array(d.data().keys).sorted())
+            Task { @MainActor in
+                var decoded: [Game] = []
+                for d in docs {
+                    do {
+                        decoded.append(try d.data(as: Game.self))
+                    } catch {
+                        print("❌ Game decode failed (server) docId=\(d.documentID) error=\(error)")
+                        print("   keys:", Array(d.data().keys).sorted())
+                    }
                 }
-            }
 
-            DispatchQueue.main.async { completion(decoded) }
+                completion(decoded)
+            }
         }
     }
 
@@ -1216,12 +1456,14 @@ extension AuthManager {
                     return
                 }
                 
-                do {
-                    let game = try snapshot.data(as: Game.self)
-                    DispatchQueue.main.async { completion(game) }
-                } catch {
-                    print("Error decoding game \(gameId): \(error)")
-                    DispatchQueue.main.async { completion(nil) }
+                Task { @MainActor in
+                    do {
+                        let game = try snapshot.data(as: Game.self)
+                        completion(game)
+                    } catch {
+                        print("Error decoding game \(gameId): \(error)")
+                        completion(nil)
+                    }
                 }
             }
     }

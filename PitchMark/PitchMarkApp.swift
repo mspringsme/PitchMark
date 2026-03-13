@@ -35,11 +35,24 @@ struct RootView: View {
                     UserDefaults.standard.removeObject(forKey: "pendingInviteToken")
                     joinLiveGameByInviteToken(token)
                 }
+                if let token = UserDefaults.standard.string(forKey: "pendingPitcherInviteToken"), !token.isEmpty {
+                    UserDefaults.standard.removeObject(forKey: "pendingPitcherInviteToken")
+                    joinPitcherByInviteToken(token)
+                }
             }
         }
     }
 
     private func handleInviteLink(_ url: URL) {
+        if let token = pitcherInviteToken(from: url), !token.isEmpty {
+            if authManager.isSignedIn {
+                joinPitcherByInviteToken(token)
+            } else {
+                UserDefaults.standard.set(token, forKey: "pendingPitcherInviteToken")
+            }
+            return
+        }
+
         guard let token = inviteToken(from: url), !token.isEmpty else { return }
         if authManager.isSignedIn {
             joinLiveGameByInviteToken(token)
@@ -69,11 +82,33 @@ struct RootView: View {
         }
     }
 
+    private func joinPitcherByInviteToken(_ token: String) {
+        authManager.joinPitcherByInviteToken(token: token) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    NotificationCenter.default.post(name: .pitcherSharedUpdated, object: nil)
+                case .failure(let err):
+                    print("❌ Pitcher invite join failed:", err.localizedDescription)
+                }
+            }
+        }
+    }
+
     private func inviteToken(from url: URL) -> String? {
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let host = url.host?.lowercased()
         let path = url.path.lowercased()
         guard host == "join" || path == "/join" else { return nil }
+        let token = components?.queryItems?.first(where: { $0.name == "token" })?.value
+        return token
+    }
+
+    private func pitcherInviteToken(from url: URL) -> String? {
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let host = url.host?.lowercased()
+        let path = url.path.lowercased()
+        guard host == "pitcher" || path == "/pitcher" else { return nil }
         let token = components?.queryItems?.first(where: { $0.name == "token" })?.value
         return token
     }

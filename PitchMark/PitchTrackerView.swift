@@ -503,11 +503,22 @@ struct PitchTrackerView: View {
         let callId = pending["id"] as? String
         let label = (pending["label"] as? String) ?? loc
 
-        // Only seed if the joiner isn't already mid-confirm
-        if !showConfirmSheet && pendingResultLabel == nil {
-            pendingResultLabel = label
+        let isNewCall: Bool = {
+            if let callId {
+                return callId != activeCalledPitchId
+            }
+            return activeCalledPitchId == nil
+        }()
+
+        if isNewCall {
+            resetCallAndResultUIState()
         }
 
+        if showConfirmSheet && !isNewCall {
+            return
+        }
+
+        pendingResultLabel = label
         calledPitch = PitchCall(
             pitch: pitch,
             location: loc,
@@ -742,7 +753,7 @@ struct PitchTrackerView: View {
 
                 // ✅ OWNER ONLY: mirror live events into owner’s real game doc
                 guard self.isOwnerForActiveGame,
-                      let ownerUid = self.activeGameOwnerUserId, !ownerUid.isEmpty,
+                      let ownerUid = self.effectiveGameOwnerUserId, !ownerUid.isEmpty,
                       let gameId = self.selectedGameId, !gameId.isEmpty
                 else { return }
 
@@ -878,6 +889,7 @@ struct PitchTrackerView: View {
 
     @State private var liveListener: ListenerRegistration? = nil
     @State private var activeLiveId: String? = nil
+    @State private var livePitcherId: String? = nil
     @State private var didHydrateLineupFromLive: Bool = false
     @State private var didSeedOwnerGameEventsForLive: Bool = false
     @State private var didSeedLivePitchEventsFromOwnerGame: Bool = false
@@ -1025,6 +1037,7 @@ struct PitchTrackerView: View {
         activeLiveId = liveId
         startListeningToLivePitchEvents(liveId: liveId)
         startListeningToLiveParticipants(liveId: liveId)
+        syncLivePitcherSelectionIfOwner()
 
         // Kick a backfill attempt early if we already know owner + game.
         if canBackfillLiveHistory {
@@ -1073,6 +1086,12 @@ struct PitchTrackerView: View {
                    let parsed = BatterSide(rawValue: sideRaw) {
                     self.batterSide = parsed
                 }
+
+                if let pid = data["pitcherId"] as? String, !pid.isEmpty {
+                    self.livePitcherId = pid
+                } else {
+                    self.livePitcherId = nil
+                }
                 // ✅ LIVE TEMPLATE FLOW: apply owner's template on participant (and keep owner consistent too)
                 let liveTemplateId = data["templateId"] as? String
                 let liveTemplateName = data["templateName"] as? String
@@ -1114,8 +1133,6 @@ struct PitchTrackerView: View {
                     self.selectedBatterJersey = nil
                 }
 
-
-                let status = (data["status"] as? String) ?? "active"
 
                 // ✅ keep owner identity in sync (needed for isOwnerForActiveGame)
                 if let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty {
@@ -1202,7 +1219,7 @@ struct PitchTrackerView: View {
                 if liveIsActive {
                     if self.isOwnerForActiveGame {
                         self.syncOwnerCallStateFromLiveData(data)
-                    } else if !self.showConfirmSheet {
+                    } else {
                         self.applyPendingFromLiveData(data)
                     }
                     self.applyResultSelectionFromLiveData(data)
@@ -1340,6 +1357,7 @@ struct PitchTrackerView: View {
         }
 
         activeLiveId = nil
+        livePitcherId = nil
         UserDefaults.standard.removeObject(forKey: "activeLiveId")
 
         if keepCurrentGame, isGame {
@@ -1728,8 +1746,15 @@ struct PitchTrackerView: View {
     }
 
     private func applySelectedPitcher(_ pitcher: Pitcher) {
+        if isGame && !pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
+            return
+        }
         selectedPitcherId = pitcher.id
         persistSelectedPitcherId(pitcher.id)
+
+        if isGame {
+            syncLivePitcherSelectionIfOwner()
+        }
 
         guard !(isGame && !isOwnerForActiveGame) else { return }
         if let tid = pitcher.templateId,
@@ -2034,12 +2059,53 @@ struct PitchTrackerView: View {
 
     private var selectedPitcherName: String {
         guard let pid = selectedPitcherId else { return "Select a pitcher" }
-        return pitchers.first(where: { $0.id == pid })?.name ?? "Select a pitcher"
+        guard let pitcher = pitchers.first(where: { $0.id == pid }) else { return "Select a pitcher" }
+        if isGame && !pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
+            return "Owner only"
+        }
+        return pitcher.name
+    }
+
+    private var canSelectPitcherInGame: Bool {
+        guard isGame else { return true }
+        let uid = authManager.user?.uid
+        if let pid = selectedPitcherId, let current = pitchers.first(where: { $0.id == pid }) {
+            return current.isActiveOwner(currentUid: uid)
+        }
+        return pitchers.contains { $0.isActiveOwner(currentUid: uid) }
     }
 
     private var selectedPitcherForStats: Pitcher? {
-        guard let pid = selectedPitcherId else { return nil }
+        let pid: String? = {
+            if activeLiveId != nil {
+                return livePitcherId ?? selectedPitcherId
+            }
+            return selectedPitcherId
+        }()
+        guard let pid else { return nil }
         return pitchers.first(where: { $0.id == pid })
+    }
+
+    private func syncLivePitcherSelectionIfOwner() {
+        guard isOwnerForActiveGame,
+              let liveId = activeLiveId,
+              let pid = selectedPitcherId,
+              !pid.isEmpty,
+              let pitcher = pitchers.first(where: { $0.id == pid })
+        else { return }
+
+        LiveGameService.shared.updateLiveFields(
+            liveId: liveId,
+            fields: [
+                "pitcherId": pid,
+                "pitcherName": pitcher.name
+            ]
+        )
+    }
+
+    private var effectivePitcherIdForSave: String? {
+        if isGame && activeLiveId != nil { return livePitcherId ?? selectedPitcherId }
+        return selectedPitcherId
     }
 
     private var pitchesFacedTitle: String {
@@ -2371,7 +2437,10 @@ struct PitchTrackerView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Menu {
-                    ForEach(visiblePitchers) { pitcher in
+                    let pitchersForMenu = isGame
+                    ? visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
+                    : visiblePitchers
+                    ForEach(pitchersForMenu) { pitcher in
                         Button(pitcher.name) {
                             applySelectedPitcher(pitcher)
                         }
@@ -2413,10 +2482,10 @@ struct PitchTrackerView: View {
                             .stroke(Color.white.opacity(0.08), lineWidth: 1)
                     )
                     .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                    .opacity(visiblePitchers.isEmpty ? 0.6 : 1.0)
+                    .opacity((visiblePitchers.isEmpty || !canSelectPitcherInGame) ? 0.6 : 1.0)
                     .contentShape(Capsule())
                 }
-                .disabled(visiblePitchers.isEmpty)
+                .disabled(visiblePitchers.isEmpty || !canSelectPitcherInGame)
             }
             .frame(maxWidth: .infinity)
 
@@ -2498,9 +2567,9 @@ struct PitchTrackerView: View {
                 .disabled(visibleTemplates.isEmpty)
             }
             .frame(maxWidth: .infinity)
-        }
+            }
             Spacer()
-            
+
             codeLinkButton
 
             Button(action: {
@@ -3174,6 +3243,7 @@ struct PitchTrackerView: View {
 
         // Persist and update UI state
         authManager.savePitchEvent(event)
+        saveSharedPitcherEventIfAllowed(event)
         sessionManager.incrementCount()
         withAnimation(.easeInOut(duration: 0.3)) {
             pitchEvents.append(event)
@@ -3205,6 +3275,21 @@ struct PitchTrackerView: View {
         isBall = false
         selectedOutcome = nil
         selectedDescriptor = nil
+    }
+
+    private func saveSharedPitcherEventIfAllowed(_ event: PitchEvent) {
+        let targetPitcherId = event.pitcherId ?? selectedPitcherId
+        guard let pitcherId = targetPitcherId else { return }
+        guard let pitcher = pitchers.first(where: { $0.id == pitcherId }) else { return }
+        guard let uid = authManager.user?.uid else { return }
+
+        let isOwner = pitcher.isActiveOwner(currentUid: uid)
+        let isShared = pitcher.sharedWith.contains(uid)
+        if !isOwner && !isShared {
+            print("⚠️ Shared pitcher write not confirmed (owner/shared missing); attempting save to let rules decide.")
+        }
+
+        authManager.saveSharedPitcherEvent(pitcherId: pitcherId, event: event)
     }
     
     private var baseBody: some View {
@@ -3629,7 +3714,7 @@ struct PitchTrackerView: View {
             selectedOpponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             selectedOpponentBatterId: selectedBatterId?.uuidString,
             selectedPracticeId: selectedPracticeId,
-            selectedPitcherId: selectedPitcherId,
+            selectedPitcherId: effectivePitcherIdForSave,
             saveAction: { event in
                 if isGame, let liveId = activeLiveId {
                     // ✅ Live: save to shared room
@@ -3638,6 +3723,7 @@ struct PitchTrackerView: View {
                         var eventData = try Firestore.Encoder().encode(event)
                         // Firestore.Encoder already encodes event.timestamp correctly (as a Timestamp).
                         eventData["createdByUid"] = uid
+                        eventData["liveId"] = liveId
 
                         // ✅ OPTIONAL: keep a server-side write time in a separate field (doesn't break decoding)
                         eventData["serverTimestamp"] = FieldValue.serverTimestamp()
@@ -3688,6 +3774,8 @@ struct PitchTrackerView: View {
                     // Practice
                     authManager.savePitchEvent(event)
                 }
+
+                saveSharedPitcherEventIfAllowed(event)
 
                 writeResultSelection(label: event.location)
 
@@ -3763,7 +3851,8 @@ struct PitchTrackerView: View {
             PitcherStatsSheetView(
                 pitcher: pitcher,
                 games: [game],
-                lockToGameId: gameId
+                lockToGameId: gameId,
+                liveId: activeLiveId
             )
             .environmentObject(authManager)
         } else {
@@ -3823,6 +3912,11 @@ struct PitchTrackerView: View {
             .onChange(of: selectedPitches) { _, newValue in
                 if let template = selectedTemplate {
                     persistActivePitches(for: template.id, active: newValue)
+                }
+            }
+            .onChange(of: selectedPitcherId) { _, _ in
+                if isGame {
+                    syncLivePitcherSelectionIfOwner()
                 }
             }
             .onChange(of: encryptedSelectionByGameId) { _, _ in
@@ -3921,6 +4015,11 @@ struct PitchTrackerView: View {
                     // ✅ If sign-in/restore completes AFTER first appear,
                     // rerun the boot flow so games/templates load and initial sheets can present.
                     handleInitialAppear()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .pitcherSharedUpdated)) { _ in
+                authManager.loadPitchers { loaded in
+                    self.pitchers = loaded
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
@@ -4229,8 +4328,8 @@ private struct ProgressGameView: View {
             authManager.loadGame(ownerUserId: owner, gameId: gid) { game in
                 guard let game else { return }
 
-                let newBalls = max(0, min(3, game.balls ?? 0))
-                let newStrikes = max(0, min(2, game.strikes ?? 0))
+                let newBalls = max(0, min(3, game.balls))
+                let newStrikes = max(0, min(2, game.strikes))
 
                 balls = newBalls
                 strikes = newStrikes
@@ -4704,8 +4803,7 @@ private struct ProgressSummaryView: View {
         // Aggregate attempts and hits per (pitch, template) based on matching actual == called location
         var dict: [String: (hits: Int, attempts: Int, templateId: String?)] = [:]
         for ev in practiceEvents {
-            guard let call = ev.calledPitch else { continue }
-              let hit = didHitLocation(ev)
+            guard ev.calledPitch != nil else { continue }
             let name = ev.pitch
             let tid = ev.templateId
             let key = (name) + "|" + (tid ?? "-")
@@ -4741,7 +4839,7 @@ private struct ProgressSummaryView: View {
     private var pitchRanking: [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
         for ev in practiceEvents {
-            print("[Metrics] Ranking consider id=\(ev.id ?? "-") pitch=\(ev.pitch ?? "-") hasCall=\(ev.calledPitch != nil) didHit=\(didHitLocation(ev))")
+            print("[Metrics] Ranking consider id=\(ev.id ?? "-") pitch=\(ev.pitch) hasCall=\(ev.calledPitch != nil) didHit=\(didHitLocation(ev))")
             guard ev.calledPitch != nil else { continue }
             guard didHitLocation(ev) else { continue }
             let name = ev.pitch
@@ -6186,7 +6284,7 @@ struct PitchesFacedGridView: View {
 
                     ForEach(events, id: \.id) { event in
                         // Column 1: Pitch Called
-                        Text(event.pitch ?? "-")
+                        Text(event.pitch)
                             .font(.body)
                             .lineLimit(1)
 

@@ -258,12 +258,14 @@ final class LiveGameService {
             ) { result in
                 switch result {
                 case .success(let join):
-                    self.createInviteToken(liveId: liveId, ownerUid: ownerUid, expiresAt: expires) { tokenResult in
-                        switch tokenResult {
-                        case .success(let token):
-                            finishOnce(.success((liveId: join.liveId, code: join.code, inviteToken: token)))
-                        case .failure(let err):
-                            finishOnce(.failure(err))
+                    self.setActiveSessionCode(ownerUid: ownerUid, gameId: ownerGameId, code: join.code) { _ in
+                        self.createInviteToken(liveId: liveId, ownerUid: ownerUid, expiresAt: expires) { tokenResult in
+                            switch tokenResult {
+                            case .success(let token):
+                                finishOnce(.success((liveId: join.liveId, code: join.code, inviteToken: token)))
+                            case .failure(let err):
+                                finishOnce(.failure(err))
+                            }
                         }
                     }
                 case .failure(let err):
@@ -369,6 +371,27 @@ final class LiveGameService {
                 }
             }
         }
+    }
+
+    private func setActiveSessionCode(
+        ownerUid: String,
+        gameId: String,
+        code: String,
+        completion: @escaping (Bool) -> Void
+    ) {
+        db.collection(Col.users).document(ownerUid)
+            .collection(Col.games).document(gameId)
+            .setData([
+                "activeSessionCode": code
+            ], merge: true) { err in
+                if let err {
+                    print("⚠️ \(self.logPrefix) set activeSessionCode failed:", err.localizedDescription)
+                    completion(false)
+                    return
+                }
+                print("✅ \(self.logPrefix) set activeSessionCode=\(code) on users/\(ownerUid)/games/\(gameId)")
+                completion(true)
+            }
     }
     
     // MARK: - Cleanup (Client-Side)
