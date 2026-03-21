@@ -1727,6 +1727,26 @@ struct PitchTrackerView: View {
         }
     }
 
+    private func refreshGamesList() {
+        authManager.loadGames { loaded in
+            self.games = loaded
+
+            if let selectedId = self.selectedGameId,
+               !loaded.contains(where: { $0.id == selectedId }) {
+                self.selectedGameId = nil
+                self.opponentName = nil
+                self.activeGameOwnerUserId = nil
+                self.sessionManager.switchMode(to: .practice)
+                self.isGame = false
+
+                let defaults = UserDefaults.standard
+                defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+                defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
+                defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
+            }
+        }
+    }
+
     private func loadPracticePitchEventsIfNeeded(force: Bool = false) {
         guard sessionManager.currentMode == .practice else { return }
         guard force || pitchEvents.isEmpty else { return }
@@ -2246,6 +2266,7 @@ struct PitchTrackerView: View {
                 allEvents: filteredEvents,
                 games: games,
                 templates: templates,
+                pitchers: pitchers,
                 isParticipant: (isGame && !isOwnerForActiveGame),
                 selectedPlayerName: selectedPitcherName
             )
@@ -4071,6 +4092,7 @@ struct PitchTrackerView: View {
 
         let v2 = v1
             .sheet(isPresented: $showGameSheet, onDismiss: {
+                refreshGamesList()
                 guard !isJoiningSession else { return }
 
                 // ✅ Only force practice if there is no game selected
@@ -4092,6 +4114,7 @@ struct PitchTrackerView: View {
 
         let v5 = v4
             .sheet(isPresented: $showPracticeSheet, onDismiss: {
+                refreshGamesList()
                 if sessionManager.currentMode == .practice && practiceName == nil && selectedPracticeId == nil {
                     // no-op (your current behavior)
                 }
@@ -4276,12 +4299,14 @@ struct PitchTrackerView: View {
         // If you already have these in a parent, pass them in instead
         @State private var games: [Game] = []
         @State private var templates: [PitchTemplate] = []
+        @State private var pitchers: [Pitcher] = []
 
         var body: some View {
             PitchResultSheet(
                 allEvents: gameEvents,   // <- live-updating array
                 games: games,
                 templates: templates,
+                pitchers: pitchers,
                 isParticipant: false,
                 selectedPlayerName: "Pitcher"
             )
@@ -4320,6 +4345,9 @@ struct PitchTrackerView: View {
                 // Optional: fetch games/templates locally if you’re not already passing them down
                 // authManager.loadGames { self.games = $0 }
                 // authManager.loadTemplates { self.templates = $0 }
+                authManager.loadPitchers { loaded in
+                    self.pitchers = loaded
+                }
             }
             .onDisappear {
                 authManager.stopListening(pitchEventsListener)
@@ -6107,6 +6135,7 @@ struct GameSelectionSheet: View {
     
     @State private var pendingDeleteGameId: String? = nil
     @State private var showDeleteGameConfirm: Bool = false
+    @State private var showFinalDeleteGameConfirm: Bool = false
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var authManager: AuthManager
@@ -6201,12 +6230,30 @@ struct GameSelectionSheet: View {
             isPresented: $showDeleteGameConfirm,
             titleVisibility: .visible
         ) {
-            Button("Delete", role: .destructive) {
+            Button("Continue", role: .destructive) {
+                showFinalDeleteGameConfirm = true
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteGameId = nil
+            }
+        } message: {
+            Text("This will remove the game and its lineup.")
+        }
+        .confirmationDialog(
+            "Delete Game and Stats?",
+            isPresented: $showFinalDeleteGameConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Everything", role: .destructive) {
                 if let id = pendingDeleteGameId {
                     if let idx = games.firstIndex(where: { $0.id == id }) {
                         games.remove(at: idx)
                     }
-                    authManager.deleteGame(gameId: id)
+                    authManager.deleteGameCascade(gameId: id) { result in
+                        if case .failure(let error) = result {
+                            print("❌ deleteGameCascade failed:", error.localizedDescription)
+                        }
+                    }
                     NotificationCenter.default.post(name: .gameOrSessionDeleted, object: nil, userInfo: ["type": "game", "gameId": id])
                 }
                 pendingDeleteGameId = nil
@@ -6215,7 +6262,7 @@ struct GameSelectionSheet: View {
                 pendingDeleteGameId = nil
             }
         } message: {
-            Text("This will permanently remove the game and its lineup.")
+            Text("This will permanently delete the game, all pitch events for that game, and pitcher stats linked to it. This cannot be undone.")
         }
         .overlay(
             Group {

@@ -9,6 +9,12 @@ import SwiftUI
 import FirebaseCore
 import FirebaseAppCheck
 
+private final class PitchMarkAppCheckProviderFactory: NSObject, AppCheckProviderFactory {
+    func createProvider(with app: FirebaseApp) -> AppCheckProvider? {
+        return AppAttestProvider(app: app)
+    }
+}
+
 struct RootView: View {
     @EnvironmentObject var authManager: AuthManager
 
@@ -26,6 +32,16 @@ struct RootView: View {
             authManager.restoreSignIn() // ✅ safe here
         }
         .onOpenURL { url in
+            if authManager.handleEmailSignInLink(url) {
+                return
+            }
+            handleInviteLink(url)
+        }
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+            guard let url = activity.webpageURL else { return }
+            if authManager.handleEmailSignInLink(url) {
+                return
+            }
             handleInviteLink(url)
         }
         .onChange(of: authManager.isSignedIn) { _, isSignedIn in
@@ -136,6 +152,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // ✅ Set provider factory BEFORE configuring Firebase
         #if DEBUG
         AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
+        #else
+        AppCheck.setAppCheckProviderFactory(PitchMarkAppCheckProviderFactory())
         #endif
 
         // ✅ Configure Firebase BEFORE touching AppCheck.appCheck()

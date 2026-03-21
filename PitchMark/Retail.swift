@@ -13,7 +13,7 @@ var Storefront: some View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Pitcher Wristband Inserts")
+                    Text("Pitcher Grid Key Inserts")
                         .font(.largeTitle.bold())
                     Text("Purchase template card inserts designed for pitcher wristbands.")
                         .font(.subheadline)

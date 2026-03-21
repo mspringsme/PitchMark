@@ -1,7 +1,12 @@
-import * as functions from "firebase-functions";
+import * as functions from "firebase-functions/v1";
 import * as admin from "firebase-admin";
+import { defineSecret } from "firebase-functions/params";
+import crypto from "crypto";
 
 admin.initializeApp();
+
+const otpSecret = defineSecret("OTP_SECRET");
+const resendApiKey = defineSecret("RESEND_API_KEY");
 
 interface PitchCall {
   pitch: string;
@@ -225,7 +230,10 @@ async function updateStatsDoc(
 
 exports.onPitcherPitchEventCreate = functions.firestore
   .document("pitchers/{pitcherId}/pitchEvents/{eventId}")
-  .onCreate(async (snap, context) => {
+  .onCreate(async (
+    snap: functions.firestore.DocumentSnapshot,
+    context: functions.EventContext
+  ) => {
     const pitcherId = context.params.pitcherId as string;
     const event = snap.data() as PitchEvent;
 
@@ -246,3 +254,257 @@ exports.onPitcherPitchEventCreate = functions.firestore
 
     await Promise.all(updates);
   });
+
+const OTP_TTL_MINUTES = 10;
+const OTP_ATTEMPT_LIMIT = 3;
+
+function requireString(input: unknown, field: string): string {
+  if (typeof input !== "string") {
+    throw new functions.https.HttpsError("invalid-argument", `${field} must be a string`);
+  }
+  const trimmed = input.trim().toLowerCase();
+  if (!trimmed) {
+    throw new functions.https.HttpsError("invalid-argument", `${field} is required`);
+  }
+  return trimmed;
+}
+
+function getOtpSecret(): string {
+  const secret = otpSecret.value() || process.env.OTP_SECRET;
+  if (!secret) {
+    throw new functions.https.HttpsError("failed-precondition", "OTP secret not configured");
+  }
+  return secret;
+}
+
+function hashOtp(email: string, code: string): string {
+  const secret = getOtpSecret();
+  return crypto.createHash("sha256").update(`${secret}:${email}:${code}`).digest("hex");
+}
+
+function generateOtp(): string {
+  const value = Math.floor(100000 + Math.random() * 900000);
+  return String(value);
+}
+
+async function sendOtpEmail(email: string, code: string): Promise<void> {
+  const resendKey = resendApiKey.value() || process.env.RESEND_API_KEY;
+  if (!resendKey) {
+    throw new functions.https.HttpsError("failed-precondition", "Resend API key not configured");
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${resendKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: "PitchMark <no-reply@mail.pitchmarkcode.com>",
+      to: [email],
+      subject: "Your PitchMark sign-in code",
+      html: `<p>Your PitchMark sign-in code is <strong>${code}</strong>.</p><p>This code expires in ${OTP_TTL_MINUTES} minutes.</p>`,
+      text: `Your PitchMark sign-in code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`
+    })
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new functions.https.HttpsError(
+      "internal",
+      `Failed to send OTP email: ${response.status} ${body}`
+    );
+  }
+}
+
+const DELETE_BATCH_SIZE = 400;
+
+async function deleteQueryBatch(
+  db: admin.firestore.Firestore,
+  query: admin.firestore.Query
+): Promise<void> {
+  const snapshot = await query.limit(DELETE_BATCH_SIZE).get();
+  if (snapshot.empty) return;
+
+  const batch = db.batch();
+  snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
+
+  if (snapshot.size === DELETE_BATCH_SIZE) {
+    await deleteQueryBatch(db, query);
+  }
+}
+
+async function deleteSubcollection(
+  db: admin.firestore.Firestore,
+  docRef: admin.firestore.DocumentReference,
+  subcollection: string
+): Promise<void> {
+  await deleteQueryBatch(db, docRef.collection(subcollection));
+}
+
+exports.requestEmailOtp = functions
+  .runWith({ secrets: [otpSecret, resendApiKey] })
+  .https.onCall(async (data: { email?: string }) => {
+  const email = requireString(data?.email, "email");
+  const code = generateOtp();
+  const db = admin.firestore();
+  const now = admin.firestore.Timestamp.now();
+  const expiresAt = admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000)
+  );
+
+  const ref = db.collection("otpRequests").doc(email);
+  await ref.set(
+    {
+      email,
+      codeHash: hashOtp(email, code),
+      createdAt: now,
+      expiresAt,
+      attemptsRemaining: OTP_ATTEMPT_LIMIT
+    },
+    { merge: false }
+  );
+
+  await sendOtpEmail(email, code);
+  return { status: "sent" };
+  });
+
+exports.verifyEmailOtp = functions
+  .runWith({ secrets: [otpSecret] })
+  .https.onCall(async (data: { email?: string; code?: string }) => {
+  const email = requireString(data?.email, "email");
+  const code = requireString(data?.code, "code");
+
+  const db = admin.firestore();
+  const ref = db.collection("otpRequests").doc(email);
+
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      throw new functions.https.HttpsError("not-found", "No OTP request found");
+    }
+    const payload = snap.data() as {
+      codeHash: string;
+      expiresAt: admin.firestore.Timestamp;
+      attemptsRemaining: number;
+    };
+
+    if (payload.expiresAt.toMillis() < Date.now()) {
+      tx.delete(ref);
+      throw new functions.https.HttpsError("deadline-exceeded", "OTP expired");
+    }
+
+    if (payload.attemptsRemaining <= 0) {
+      tx.delete(ref);
+      throw new functions.https.HttpsError("resource-exhausted", "OTP attempts exceeded");
+    }
+
+    const matches = payload.codeHash === hashOtp(email, code);
+    if (!matches) {
+      tx.update(ref, { attemptsRemaining: payload.attemptsRemaining - 1 });
+      throw new functions.https.HttpsError("permission-denied", "Invalid OTP code");
+    }
+
+    tx.delete(ref);
+    return true;
+  });
+
+  if (!result) {
+    throw new functions.https.HttpsError("internal", "OTP verification failed");
+  }
+
+  let userRecord: admin.auth.UserRecord;
+  try {
+    userRecord = await admin.auth().getUserByEmail(email);
+  } catch (error: unknown) {
+    userRecord = await admin.auth().createUser({ email });
+  }
+
+  const customToken = await admin.auth().createCustomToken(userRecord.uid);
+  return { token: customToken };
+  });
+
+exports.deleteAccount = functions.https.onCall(async (_, context) => {
+  if (!context.auth?.uid) {
+    throw new functions.https.HttpsError("unauthenticated", "Not signed in.");
+  }
+
+  const authTime = context.auth.token.auth_time || 0;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (nowSeconds - authTime > 5 * 60) {
+    throw new functions.https.HttpsError("unauthenticated", "Recent login required.");
+  }
+
+  const uid = context.auth.uid;
+  const db = admin.firestore();
+  const userRef = db.collection("users").doc(uid);
+
+  const userRecord = await admin.auth().getUser(uid);
+  const userEmail = userRecord.email || null;
+
+  // user-scoped subcollections
+  await deleteQueryBatch(db, userRef.collection("templates"));
+  await deleteQueryBatch(db, userRef.collection("pitchEvents"));
+
+  const gamesSnap = await userRef.collection("games").get();
+  for (const gameDoc of gamesSnap.docs) {
+    await deleteSubcollection(db, gameDoc.ref, "pitchEvents");
+    await gameDoc.ref.delete();
+  }
+
+  // shared templates (owner) + shared with arrays cleanup
+  const ownedTemplatesSnap = await db.collection("templates").where("ownerUid", "==", uid).get();
+  for (const doc of ownedTemplatesSnap.docs) {
+    await doc.ref.delete();
+  }
+
+  const sharedTemplatesSnap = await db.collection("templates").where("sharedWith", "array-contains", uid).get();
+  for (const doc of sharedTemplatesSnap.docs) {
+    const updates: Record<string, admin.firestore.FieldValue> = {
+      sharedWith: admin.firestore.FieldValue.arrayRemove(uid)
+    };
+    if (userEmail) {
+      updates.sharedWithEmails = admin.firestore.FieldValue.arrayRemove(userEmail);
+    }
+    await doc.ref.update(updates);
+  }
+
+  // pitchers (owner) + shared with arrays cleanup
+  const ownedPitchersSnap = await db.collection("pitchers").where("ownerUid", "==", uid).get();
+  for (const doc of ownedPitchersSnap.docs) {
+    await deleteSubcollection(db, doc.ref, "pitchEvents");
+    await deleteSubcollection(db, doc.ref, "stats");
+    await doc.ref.delete();
+  }
+
+  const sharedPitchersSnap = await db.collection("pitchers").where("sharedWith", "array-contains", uid).get();
+  for (const doc of sharedPitchersSnap.docs) {
+    await doc.ref.update({
+      sharedWith: admin.firestore.FieldValue.arrayRemove(uid)
+    });
+  }
+
+  // live games owned by user
+  const liveGamesSnap = await db.collection("liveGames").where("ownerUid", "==", uid).get();
+  for (const doc of liveGamesSnap.docs) {
+    await deleteSubcollection(db, doc.ref, "participants");
+    await deleteSubcollection(db, doc.ref, "pitchEvents");
+    await doc.ref.delete();
+  }
+
+  // join/invite tokens owned by user
+  await deleteQueryBatch(db, db.collection("joinCodes").where("ownerUid", "==", uid));
+  await deleteQueryBatch(db, db.collection("inviteTokens").where("ownerUid", "==", uid));
+  await deleteQueryBatch(db, db.collection("pitcherInviteTokens").where("ownerUid", "==", uid));
+
+  // remove OTP request keyed by email if present
+  if (userEmail) {
+    await db.collection("otpRequests").doc(userEmail).delete().catch(() => {});
+  }
+
+  await userRef.delete().catch(() => {});
+  await admin.auth().deleteUser(uid);
+
+  return { status: "deleted" };
+});

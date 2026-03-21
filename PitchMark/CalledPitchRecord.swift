@@ -611,14 +611,34 @@ struct PitchResultCard: View {
 }
 
 func pitchNumber(for event: PitchEvent, in allEvents: [PitchEvent]) -> Int {
-    let sameDayEvents = allEvents.filter {
-        Calendar.current.isDate($0.timestamp, inSameDayAs: event.timestamp) &&
-        $0.mode == event.mode &&
-        $0.templateId == event.templateId
+    let sameDayEvents = allEvents.filter { evt in
+        guard Calendar.current.isDate(evt.timestamp, inSameDayAs: event.timestamp) else { return false }
+        guard evt.mode == event.mode else { return false }
+
+        switch event.mode {
+        case .game:
+            if let gid = event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines), !gid.isEmpty {
+                guard evt.gameId == gid else { return false }
+            }
+        case .practice:
+            let eventPid = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let evtPid = evt.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !eventPid.isEmpty || !evtPid.isEmpty {
+                guard eventPid == evtPid else { return false }
+            }
+        }
+
+        if let eventPitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !eventPitcherId.isEmpty {
+            let evtPitcherId = evt.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return evtPitcherId == eventPitcherId
+        }
+
+        return true
     }
-    
+
     let sorted = sameDayEvents.sorted { $0.timestamp < $1.timestamp }
-    return (sorted.firstIndex { $0.id == event.id } ?? -1) + 1
+    let index = sorted.firstIndex { $0.identity == event.identity } ?? -1
+    return index + 1
 }
 
 struct CalledPitchRecord: Identifiable, Codable {
@@ -933,6 +953,7 @@ struct PitchResultSheet: View {
     let allEvents: [PitchEvent]
     let games: [Game]
     let templates: [PitchTemplate]
+    let pitchers: [Pitcher]
     let isParticipant: Bool
     let selectedPlayerName: String
     @Environment(\.dismiss) private var dismiss
@@ -946,6 +967,16 @@ struct PitchResultSheet: View {
     
     @State private var jerseyFilter: String = ""
     @State private var pitchFilter: String = ""
+
+    private var pitcherNameById: [String: String] {
+        var map: [String: String] = [:]
+        for pitcher in pitchers {
+            if let id = pitcher.id {
+                map[id] = pitcher.name
+            }
+        }
+        return map
+    }
 
     private var availableJerseyNumbers: [String] {
         let nums = allEvents.compactMap { $0.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1198,6 +1229,7 @@ struct PitchResultSheet: View {
                                 allEvents: allEvents,
                                 games: games,
                                 templates: templates,
+                                pitcherNameById: pitcherNameById,
                                 isSelecting: $isSelecting,
                                 selectedEventIDs: $selectedEventIDs,
                                 localTemplateOverrides: localTemplateOverrides,
@@ -1287,6 +1319,7 @@ struct PitchResultSheet: View {
         let allEvents: [PitchEvent]
         let games: [Game]
         let templates: [PitchTemplate]
+        let pitcherNameById: [String: String]
 
         @Binding var isSelecting: Bool
         @Binding var selectedEventIDs: Set<String>
@@ -1326,12 +1359,21 @@ struct PitchResultSheet: View {
                 }
             )
 
+            let pitcherNameForEvent: String = {
+                if let pid = event.pitcherId,
+                   let name = pitcherNameById[pid],
+                   !name.isEmpty {
+                    return name
+                }
+                return selectedPlayerName
+            }()
+
             return PitchResultCard(
                 event: event,
                 allEvents: allEvents,
                 games: games,
                 templateName: templateName,
-                selectedPlayerName: selectedPlayerName,
+                selectedPlayerName: pitcherNameForEvent,
                 isSelecting: $isSelecting,
                 isSelected: isSelectedBinding,
                 isParticipant: isParticipant

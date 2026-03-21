@@ -11,13 +11,62 @@ import GoogleSignIn
 import FirebaseCore
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
+import AuthenticationServices
+import CryptoKit
+import UIKit
+
+enum ChangeEmailError: LocalizedError {
+    case emptyEmail
+    case notSignedIn
+    case invalidEmail
+    case emailAlreadyInUse
+    case requiresRecentLogin
+    case unknown(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyEmail:
+            return "Email required."
+        case .notSignedIn:
+            return "Not signed in."
+        case .invalidEmail:
+            return "Enter a valid email address."
+        case .emailAlreadyInUse:
+            return "That email is already in use."
+        case .requiresRecentLogin:
+            return "For security, please sign in again to change your email."
+        case .unknown(let message):
+            return message
+        }
+    }
+}
+
+enum DeleteAccountError: LocalizedError {
+    case notSignedIn
+    case requiresRecentLogin
+    case unknown(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notSignedIn:
+            return "Not signed in."
+        case .requiresRecentLogin:
+            return "For security, please sign in again to delete your account."
+        case .unknown(let message):
+            return message
+        }
+    }
+}
 
 class AuthManager: ObservableObject {
     @Published var user: FirebaseAuth.User? = nil
     @Published var isSignedIn: Bool = false
     @Published var isCheckingAuth: Bool = true
-    
+
     private var authStateHandle: AuthStateDidChangeListenerHandle?
+    private var currentAppleNonce: String? = nil
+    private let pendingEmailLinkKey = "pendingEmailLinkSignInEmail"
 
     init() {
         isCheckingAuth = true
@@ -66,46 +115,194 @@ class AuthManager: ObservableObject {
         guard let clientID = FirebaseApp.app()?.options.clientID else {
             fatalError("Missing Firebase client ID")
         }
-        
+
         let config = GIDConfiguration(clientID: clientID)
         GIDSignIn.sharedInstance.configuration = config
-        
+
         GIDSignIn.sharedInstance.signIn(withPresenting: viewController) { result, error in
             guard let resultUser = result?.user,
                   let idToken = resultUser.idToken?.tokenString else {
                 print("Google Sign-In failed: \(error?.localizedDescription ?? "Unknown error")")
                 return
             }
-            
+
             let accessToken = resultUser.accessToken.tokenString
             let credential = GoogleAuthProvider.credential(withIDToken: idToken, accessToken: accessToken)
-            
+
             Auth.auth().signIn(with: credential) { authResult, error in
                 if let error = error {
                     print("Firebase Sign-In failed: \(error.localizedDescription)")
                     return
                 }
-                
+
                 guard let firebaseUser = authResult?.user else { return }
-                
+
                 self.user = firebaseUser
                 self.isSignedIn = true
-
-                let db = Firestore.firestore()
-                let userRef = db.collection("users").document(firebaseUser.uid)
-                
-                userRef.setData([
-                    "email": firebaseUser.email ?? "",
-                    "createdAt": FieldValue.serverTimestamp()
-                ], merge: true) { error in
-                    if let error = error {
-                        print("Error creating user document: \(error.localizedDescription)")
-                    } else {
-                        print("User document created/updated successfully.")
-                    }
-                }
+                self.upsertUserDocument(for: firebaseUser)
             }
         }
+    }
+
+
+    func prepareAppleSignIn(_ request: ASAuthorizationAppleIDRequest) {
+        let nonce = randomNonceString()
+        currentAppleNonce = nonce
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = sha256(nonce)
+    }
+
+    func handleAppleSignIn(result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .failure(let error):
+            print("Apple Sign-In failed: \(error.localizedDescription)")
+        case .success(let authorization):
+            guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
+                print("Apple Sign-In failed: missing credential")
+                return
+            }
+            guard let nonce = currentAppleNonce else {
+                print("Apple Sign-In failed: missing nonce")
+                return
+            }
+            guard let tokenData = credential.identityToken,
+                  let tokenString = String(data: tokenData, encoding: .utf8) else {
+                print("Apple Sign-In failed: invalid identity token")
+                return
+            }
+
+            let oauth = OAuthProvider.credential(providerID: .apple, idToken: tokenString, rawNonce: nonce)
+            Auth.auth().signIn(with: oauth) { authResult, error in
+                if let error = error {
+                    print("Firebase Apple Sign-In failed: \(error.localizedDescription)")
+                    return
+                }
+
+                guard let firebaseUser = authResult?.user else { return }
+                self.user = firebaseUser
+                self.isSignedIn = true
+                self.upsertUserDocument(for: firebaseUser)
+            }
+        }
+    }
+
+    func requestEmailOtp(email: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion(.failure(NSError(domain: "Auth", code: 400, userInfo: [NSLocalizedDescriptionKey: "Email required"])) )
+            return
+        }
+
+        let callable = Functions.functions().httpsCallable("requestEmailOtp")
+        callable.call(["email": trimmed]) { _, error in
+            if let error {
+                let nsError = error as NSError
+                print("❌ requestEmailOtp error domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+                completion(.failure(self.userFacingAuthError(error)))
+                return
+            }
+            completion(.success(()))
+        }
+    }
+
+    func verifyEmailOtp(email: String, code: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedEmail.isEmpty else {
+            completion(.failure(NSError(domain: "Auth", code: 400, userInfo: [NSLocalizedDescriptionKey: "Email required"])) )
+            return
+        }
+        guard !trimmedCode.isEmpty else {
+            completion(.failure(NSError(domain: "Auth", code: 400, userInfo: [NSLocalizedDescriptionKey: "Code required"])) )
+            return
+        }
+
+        let callable = Functions.functions().httpsCallable("verifyEmailOtp")
+        callable.call(["email": trimmedEmail, "code": trimmedCode]) { result, error in
+            if let error {
+                let nsError = error as NSError
+                print("❌ verifyEmailOtp error domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+                completion(.failure(self.userFacingAuthError(error)))
+                return
+            }
+
+            guard let data = result?.data as? [String: Any],
+                  let token = data["token"] as? String else {
+                completion(.failure(NSError(domain: "Auth", code: 500, userInfo: [NSLocalizedDescriptionKey: "Missing custom token"])) )
+                return
+            }
+
+            Auth.auth().signIn(withCustomToken: token) { authResult, signInError in
+                if let signInError {
+                    completion(.failure(self.userFacingAuthError(signInError)))
+                    return
+                }
+
+                guard let firebaseUser = authResult?.user else {
+                    completion(.failure(NSError(domain: "Auth", code: 500, userInfo: [NSLocalizedDescriptionKey: "Missing user"])) )
+                    return
+                }
+
+                self.user = firebaseUser
+                self.isSignedIn = true
+                self.upsertUserDocument(for: firebaseUser)
+                completion(.success(()))
+            }
+        }
+    }
+
+    private func userFacingAuthError(_ error: Error) -> Error {
+        let nsError = error as NSError
+        guard nsError.domain == FunctionsErrorDomain,
+              let code = FunctionsErrorCode(rawValue: nsError.code) else {
+            return error
+        }
+
+        let message: String
+        switch code {
+        case .invalidArgument:
+            message = "Invalid email or code."
+        case .unauthenticated:
+            message = "Please sign in again."
+        case .permissionDenied:
+            message = "Permission denied."
+        case .notFound:
+            message = "Code not found."
+        case .resourceExhausted:
+            message = "Too many attempts. Try again later."
+        case .deadlineExceeded:
+            message = "Request timed out. Try again."
+        case .internal:
+            message = "Server error. Please try again."
+        default:
+            message = "Something went wrong. Please try again."
+        }
+
+        return NSError(domain: nsError.domain, code: nsError.code, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    func handleEmailSignInLink(_ url: URL) -> Bool {
+        let link = url.absoluteString
+        guard Auth.auth().isSignIn(withEmailLink: link) else { return false }
+        guard let email = UserDefaults.standard.string(forKey: pendingEmailLinkKey),
+              !email.isEmpty else {
+            print("Email link sign-in failed: missing stored email")
+            return true
+        }
+
+        Auth.auth().signIn(withEmail: email, link: link) { authResult, error in
+            if let error {
+                print("Email link sign-in failed: \(error.localizedDescription)")
+                return
+            }
+
+            guard let firebaseUser = authResult?.user else { return }
+            self.user = firebaseUser
+            self.isSignedIn = true
+            self.upsertUserDocument(for: firebaseUser)
+        }
+
+        return true
     }
     
     func restoreSignIn() {
@@ -117,10 +314,10 @@ class AuthManager: ObservableObject {
                 self.isCheckingAuth = false
                 return
             }
-            
+
             let accessToken = restoredUser.accessToken.tokenString
             let credential = GoogleAuthProvider.credential(withIDToken: idToken, accessToken: accessToken)
-            
+
             Auth.auth().signIn(with: credential) { authResult, error in
                 if let error = error {
                     print("Firebase Sign-In failed: \(error.localizedDescription)")
@@ -134,7 +331,116 @@ class AuthManager: ObservableObject {
             }
         }
     }
+
+    private func upsertUserDocument(for firebaseUser: FirebaseAuth.User) {
+        let db = Firestore.firestore()
+        let userRef = db.collection("users").document(firebaseUser.uid)
+        userRef.setData([
+            "email": firebaseUser.email ?? "",
+            "createdAt": FieldValue.serverTimestamp()
+        ], merge: true) { error in
+            if let error {
+                print("Error creating user document: \(error.localizedDescription)")
+            } else {
+                print("User document created/updated successfully.")
+            }
+        }
+    }
+
+    private func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        var result = ""
+        var remainingLength = length
+
+        while remainingLength > 0 {
+            var random: UInt8 = 0
+            let status = SecRandomCopyBytes(kSecRandomDefault, 1, &random)
+            if status != errSecSuccess {
+                fatalError("Unable to generate nonce. SecRandomCopyBytes failed with OSStatus \(status)")
+            }
+
+            if random < charset.count {
+                result.append(charset[Int(random)])
+                remainingLength -= 1
+            }
+        }
+
+        return result
+    }
+
+    private func sha256(_ input: String) -> String {
+        let inputData = Data(input.utf8)
+        let hashed = SHA256.hash(data: inputData)
+        return hashed.compactMap { String(format: "%02x", $0) }.joined()
+    }
     
+    func changeEmail(to newEmail: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let trimmed = newEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            completion(.failure(ChangeEmailError.emptyEmail))
+            return
+        }
+        guard let currentUser = Auth.auth().currentUser else {
+            completion(.failure(ChangeEmailError.notSignedIn))
+            return
+        }
+
+        currentUser.sendEmailVerification(beforeUpdatingEmail: trimmed) { error in
+            if let error {
+                let nsError = error as NSError
+                if nsError.domain == AuthErrorDomain,
+                   let authCode = AuthErrorCode(rawValue: nsError.code) {
+                    switch authCode {
+                    case .invalidEmail:
+                        completion(.failure(ChangeEmailError.invalidEmail))
+                        return
+                    case .emailAlreadyInUse:
+                        completion(.failure(ChangeEmailError.emailAlreadyInUse))
+                        return
+                    case .requiresRecentLogin:
+                        completion(.failure(ChangeEmailError.requiresRecentLogin))
+                        return
+                    default:
+                        break
+                    }
+                }
+                completion(.failure(ChangeEmailError.unknown(error.localizedDescription)))
+                return
+            }
+            completion(.success(()))
+        }
+    }
+
+    func deleteAccount(completion: @escaping (Result<Void, Error>) -> Void) {
+        guard Auth.auth().currentUser != nil else {
+            completion(.failure(DeleteAccountError.notSignedIn))
+            return
+        }
+
+        let callable = Functions.functions().httpsCallable("deleteAccount")
+        callable.call { _, error in
+            if let error {
+                let nsError = error as NSError
+                if nsError.domain == FunctionsErrorDomain,
+                   let code = FunctionsErrorCode(rawValue: nsError.code) {
+                    switch code {
+                    case .unauthenticated:
+                        completion(.failure(DeleteAccountError.requiresRecentLogin))
+                        return
+                    default:
+                        break
+                    }
+                }
+                completion(.failure(DeleteAccountError.unknown(error.localizedDescription)))
+                return
+            }
+
+            self.signOut()
+            completion(.success(()))
+        }
+    }
+
     func signOut() {
         do {
             try Auth.auth().signOut()
@@ -1495,6 +1801,32 @@ extension AuthManager {
     }
     
     
+    private func deleteDocumentsInBatches(
+        _ docs: [QueryDocumentSnapshot],
+        db: Firestore,
+        completion: @escaping (Error?) -> Void
+    ) {
+        guard !docs.isEmpty else {
+            completion(nil)
+            return
+        }
+
+        let chunk = Array(docs.prefix(450))
+        let batch = db.batch()
+        for doc in chunk {
+            batch.deleteDocument(doc.reference)
+        }
+
+        batch.commit { error in
+            if let error {
+                completion(error)
+                return
+            }
+            let remaining = Array(docs.dropFirst(chunk.count))
+            self.deleteDocumentsInBatches(remaining, db: db, completion: completion)
+        }
+    }
+
     func deleteGame(gameId: String) {
         guard let user = user else { return }
         let ref = Firestore.firestore()
@@ -1505,6 +1837,63 @@ extension AuthManager {
                 print("Error deleting game: \(error)")
             } else {
                 print("Game \(gameId) deleted successfully")
+            }
+        }
+    }
+
+    func deleteGameCascade(gameId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+
+        let db = Firestore.firestore()
+        let ownerUid = user.uid
+        let gameRef = db.collection("users").document(ownerUid)
+            .collection("games").document(gameId)
+
+        let gameEventsRef = gameRef.collection("pitchEvents")
+        gameEventsRef.getDocuments { snapshot, error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+
+            let gameDocs = snapshot?.documents ?? []
+            self.deleteDocumentsInBatches(gameDocs, db: db) { deleteError in
+                if let deleteError {
+                    completion(.failure(deleteError))
+                    return
+                }
+
+                gameRef.delete { deleteGameError in
+                    if let deleteGameError {
+                        completion(.failure(deleteGameError))
+                        return
+                    }
+
+                    db.collectionGroup("pitchEvents")
+                        .whereField("gameId", isEqualTo: gameId)
+                        .getDocuments { pitchSnapshot, pitchError in
+                            if let pitchError {
+                                completion(.failure(pitchError))
+                                return
+                            }
+
+                            let allDocs = pitchSnapshot?.documents ?? []
+                            let pitcherDocs = allDocs.filter { doc in
+                                doc.reference.path.contains("/pitchers/")
+                            }
+
+                            self.deleteDocumentsInBatches(pitcherDocs, db: db) { pitcherDeleteError in
+                                if let pitcherDeleteError {
+                                    completion(.failure(pitcherDeleteError))
+                                    return
+                                }
+                                completion(.success(()))
+                            }
+                        }
+                }
             }
         }
     }

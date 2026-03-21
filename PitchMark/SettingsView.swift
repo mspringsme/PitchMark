@@ -61,6 +61,18 @@ struct SettingsView: View {
     
     @EnvironmentObject var authManager: AuthManager
     @State private var showSignOutConfirmation = false
+    @State private var showChangeEmailSheet = false
+    @State private var changeEmailText: String = ""
+    @State private var changeEmailError: String? = nil
+    @State private var changeEmailStatus: String? = nil
+    @State private var isChangingEmail = false
+    @State private var requiresRecentLogin = false
+    @State private var showDeleteAccountSheet = false
+    @State private var deleteAccountText: String = ""
+    @State private var deleteAccountError: String? = nil
+    @State private var isDeletingAccount = false
+    @State private var requiresDeleteRecentLogin = false
+    @State private var showAccountActionsSheet = false
     @State private var templatePendingDeletion: PitchTemplate?
     @State private var showDeleteAlert = false
     @Environment(\.dismiss) private var dismiss
@@ -72,7 +84,6 @@ struct SettingsView: View {
     @State private var editorTemplate: PitchTemplate? = nil
     @State private var showAddPitcher = false
     @State private var newPitcherName: String = ""
-    @State private var newPitcherTemplateId: String? = nil
     @State private var editingPitcher: Pitcher? = nil
 
     @State private var templatePendingShare: PitchTemplate? = nil
@@ -415,12 +426,12 @@ struct SettingsView: View {
     @ViewBuilder
     private var templatesHeader: some View {
         HStack {
-            Text("Templates")
+            Text("Code Grid Keys")
                 .font(.title2)
                 .bold()
                 .padding(.horizontal)
             Spacer()
-            Button(isRefreshingTemplates ? "Refreshing..." : "Refresh") {
+            Button {
                 guard !isRefreshingTemplates else { return }
                 isRefreshingTemplates = true
                 authManager.loadTemplates { loaded in
@@ -430,10 +441,13 @@ struct SettingsView: View {
                     }
                     isRefreshingTemplates = false
                 }
+            } label: {
+                Image(systemName: isRefreshingTemplates ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
+                    .font(.subheadline.weight(.semibold))
             }
             .buttonStyle(.bordered)
             .disabled(isRefreshingTemplates)
-            Button("New Template") {
+            Button("New Key") {
                 editorTemplate = PitchTemplate(
                     id: UUID(),
                     name: "",
@@ -456,7 +470,6 @@ struct SettingsView: View {
             Button("New Pitcher") {
                 editingPitcher = nil
                 newPitcherName = ""
-                newPitcherTemplateId = selectedTemplate?.id.uuidString
                 showAddPitcher = true
             }
             .padding(.horizontal)
@@ -521,7 +534,6 @@ struct SettingsView: View {
                         Button("Edit") {
                             editingPitcher = pitcher
                             newPitcherName = pitcher.name
-                            newPitcherTemplateId = pitcher.templateId
                             showAddPitcher = true
                         }
                         .buttonStyle(.bordered)
@@ -666,10 +678,11 @@ struct SettingsView: View {
                             }
                         }
                         .buttonStyle(.bordered)
+                        .font(.caption)
                     }
                     .padding(.horizontal)
                 } else {
-                    Text("Select a template to manage")
+                    Text("Select a Grid Key to start a game or manage")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.horizontal)
@@ -751,44 +764,61 @@ struct SettingsView: View {
             NavigationLink {
                 Storefront
             } label: {
-                HStack {
+                HStack(spacing: 8) {
                     Image(systemName: "cart")
-                        .foregroundStyle(.blue)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Template Inserts")
-                            .font(.headline)
-                        Text("Buy wristband card inserts")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                        .font(.subheadline.weight(.semibold))
+                    Text("Template Inserts")
+                        .font(.subheadline.weight(.semibold))
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .foregroundStyle(.tertiary)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
+                .foregroundColor(.black)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(Color.black.opacity(0.06))
+                )
+                .overlay(
+                    Capsule().stroke(Color.black, lineWidth: 1)
+                )
                 .padding(.horizontal)
             }
         }
     }
     
     @ViewBuilder
-    private var accountSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private var accountActionsSheetView: some View {
+        VStack(spacing: 16) {
             Text("Account")
-                .font(.title2)
-                .bold()
+                .font(.headline)
+
+            Text("Signed in as \(authManager.userEmail)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Button {
+                let current = authManager.userEmail
+                changeEmailText = (current == "Unknown") ? "" : current
+                changeEmailError = nil
+                changeEmailStatus = nil
+                requiresRecentLogin = false
+                showAccountActionsSheet = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    showChangeEmailSheet = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "envelope")
+                        .foregroundStyle(.blue)
+                    Text("Change Email")
+                        .font(.headline)
+                    Spacer()
+                }
                 .padding(.horizontal)
-
-            NavigationLink("Profile") {
-                Text("Coach profile settings go here")
-                    .padding()
             }
-            .padding(.horizontal)
-
-            NavigationLink("Sign-In Options") {
-                Text("Google / Firebase settings")
-                    .padding()
-            }
-            .padding(.horizontal)
 
             Button(role: .destructive) {
                 showSignOutConfirmation = true
@@ -808,13 +838,197 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Sign Out", role: .destructive) {
+                    showAccountActionsSheet = false
                     authManager.signOut()
                 }
                 Button("Cancel", role: .cancel) { }
             }
+
+            Button(role: .destructive) {
+                deleteAccountText = ""
+                deleteAccountError = nil
+                requiresDeleteRecentLogin = false
+                showAccountActionsSheet = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    showDeleteAccountSheet = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.red)
+                    Text("Delete Account")
+                        .font(.headline)
+                    Spacer()
+                }
+                .padding(.horizontal)
+            }
+
         }
+        .padding()
+        .presentationDetents([.fraction(0.4)])
+        .presentationDragIndicator(.visible)
     }
-    
+
+    @ViewBuilder
+    private var changeEmailSheetView: some View {
+        VStack(spacing: 16) {
+            Text("Change Email")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("New Email")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                TextField("name@example.com", text: $changeEmailText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if let error = changeEmailError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let status = changeEmailStatus {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if requiresRecentLogin {
+                Button("Sign Out to Re-Authenticate", role: .destructive) {
+                    showChangeEmailSheet = false
+                    authManager.signOut()
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button(isChangingEmail ? "Sending..." : "Send Verification") {
+                let trimmed = changeEmailText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    changeEmailError = "Email required."
+                    changeEmailStatus = nil
+                    requiresRecentLogin = false
+                    return
+                }
+
+                isChangingEmail = true
+                changeEmailError = nil
+                changeEmailStatus = nil
+                requiresRecentLogin = false
+                authManager.changeEmail(to: trimmed) { result in
+                    DispatchQueue.main.async {
+                        isChangingEmail = false
+                        switch result {
+                        case .success:
+                            changeEmailError = nil
+                            changeEmailStatus = "Verification email sent. Confirm it to finish updating your account email."
+                            requiresRecentLogin = false
+                        case .failure(let error):
+                            changeEmailError = error.localizedDescription
+                            changeEmailStatus = nil
+                            if let changeError = error as? ChangeEmailError {
+                                if case .requiresRecentLogin = changeError {
+                                    requiresRecentLogin = true
+                                } else {
+                                    requiresRecentLogin = false
+                                }
+                            } else {
+                                requiresRecentLogin = false
+                            }
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(isChangingEmail)
+
+            Button("Cancel", role: .cancel) {
+                showChangeEmailSheet = false
+            }
+        }
+        .padding()
+        .presentationDetents([.fraction(0.45)])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder
+    private var deleteAccountSheetView: some View {
+        VStack(spacing: 16) {
+            Text("Delete Account")
+                .font(.headline)
+
+            Text("This permanently deletes your account and all data. Type DELETE to confirm.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            TextField("Type DELETE", text: $deleteAccountText)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+
+            if let error = deleteAccountError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if requiresDeleteRecentLogin {
+                Button("Sign Out to Re-Authenticate", role: .destructive) {
+                    showDeleteAccountSheet = false
+                    authManager.signOut()
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button(isDeletingAccount ? "Deleting..." : "Delete Account") {
+                isDeletingAccount = true
+                deleteAccountError = nil
+                requiresDeleteRecentLogin = false
+                authManager.deleteAccount { result in
+                    DispatchQueue.main.async {
+                        isDeletingAccount = false
+                        switch result {
+                        case .success:
+                            deleteAccountText = ""
+                            deleteAccountError = nil
+                            requiresDeleteRecentLogin = false
+                            showDeleteAccountSheet = false
+                        case .failure(let error):
+                            deleteAccountError = error.localizedDescription
+                            if let deleteError = error as? DeleteAccountError {
+                                if case .requiresRecentLogin = deleteError {
+                                    requiresDeleteRecentLogin = true
+                                } else {
+                                    requiresDeleteRecentLogin = false
+                                }
+                            } else {
+                                requiresDeleteRecentLogin = false
+                            }
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+            .disabled(isDeletingAccount || deleteAccountText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "DELETE")
+
+            Button("Cancel", role: .cancel) {
+                showDeleteAccountSheet = false
+            }
+        }
+        .padding()
+        .presentationDetents([.fraction(0.5)])
+        .presentationDragIndicator(.visible)
+    }
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -855,23 +1069,43 @@ struct SettingsView: View {
                         
                         storeSection
                         Divider()
-                        
-                        // 🔹 Account Section
-                        accountSection
                     }
                     .padding(.top, 4)
                 }
                 .safeAreaInset(edge: .bottom) {
-                    Text("Signed in as: \(authManager.userEmail)")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
+                    Button {
+                        showAccountActionsSheet = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "person.crop.circle")
+                                .font(.footnote.weight(.semibold))
+                            Text("Signed in as: \(authManager.userEmail)")
+                                .font(.footnote.weight(.semibold))
+                            Image(systemName: "chevron.up")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
-                        .multilineTextAlignment(.center)
-                        .padding(.vertical, 12)
-                        .background(.ultraThinMaterial)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .background(
+                            Capsule().fill(Color.black.opacity(0.06))
+                        )
+                        .overlay(
+                            Capsule().stroke(Color.black, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 8)
+                    .padding(.horizontal)
+                    .background(.ultraThinMaterial)
                 }
             }
             .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
+            .sheet(isPresented: $showAccountActionsSheet) { accountActionsSheetView }
+            .sheet(isPresented: $showChangeEmailSheet) { changeEmailSheetView }
+            .sheet(isPresented: $showDeleteAccountSheet) { deleteAccountSheetView }
             .onAppear {
                 loadHiddenIds()
                 startPitchersListenerIfNeeded()
@@ -1029,24 +1263,27 @@ struct SettingsView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Join a Game") {
+                    Button {
                         inviteJoinError = nil
                         inviteJoinText = ""
                         showInviteJoinSheet = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "person.2")
+                                .font(.subheadline.weight(.semibold))
+                            Text("Join a Game")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule().fill(Color.black.opacity(0.06))
+                        )
+                        .overlay(
+                            Capsule().stroke(Color.black, lineWidth: 1)
+                        )
                     }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color(.darkGray))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-                    .shadow(color: Color.black.opacity(0.12), radius: 2, x: 0, y: 1)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
@@ -1095,13 +1332,6 @@ struct SettingsView: View {
                     TextField("Name", text: $newPitcherName)
                         .textFieldStyle(.roundedBorder)
 
-                    Picker("Template", selection: $newPitcherTemplateId) {
-                        Text("No Template").tag(String?.none)
-                        ForEach(templates, id: \.id) { template in
-                            Text(template.name).tag(Optional(template.id.uuidString))
-                        }
-                    }
-                    .pickerStyle(.menu)
 
                     HStack {
                         Button("Cancel") {
@@ -1114,7 +1344,7 @@ struct SettingsView: View {
                             guard !name.isEmpty else { return }
 
                             if let editing = editingPitcher, let pid = editing.id {
-                                authManager.updatePitcher(id: pid, name: name, templateId: newPitcherTemplateId) { updated in
+                                authManager.updatePitcher(id: pid, name: name, templateId: editing.templateId) { updated in
                                     if let updated,
                                        let idx = pitchers.firstIndex(where: { $0.id == pid }) {
                                         pitchers[idx] = updated
@@ -1123,7 +1353,8 @@ struct SettingsView: View {
                                     editingPitcher = nil
                                 }
                             } else {
-                                authManager.createPitcher(name: name, templateId: newPitcherTemplateId) { created in
+                                let templateId = selectedTemplate?.id.uuidString
+                                authManager.createPitcher(name: name, templateId: templateId) { created in
                                     if let created {
                                         pitchers.append(created)
                                     }

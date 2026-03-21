@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "E3TJVK4339.com.MarkSpringer.PitchMark",
+        "paths": [
+          "/signin",
+          "/signin*"
+        ]
+      }
+    ]
+  }
+}
