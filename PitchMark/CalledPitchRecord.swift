@@ -285,8 +285,9 @@ struct PitchCardView: View {
             
             Spacer()
             
-            if let outcomeSummary, !outcomeSummary.isEmpty {
-                OutcomeSummaryView(lines: outcomeSummary, jerseyNumber: jerseyNumber)
+            let hasJerseyNumber = (jerseyNumber?.isEmpty == false)
+            if (outcomeSummary != nil && !(outcomeSummary?.isEmpty ?? true)) || hasJerseyNumber {
+                OutcomeSummaryView(lines: outcomeSummary ?? [], jerseyNumber: jerseyNumber)
             }
             
             rightImage

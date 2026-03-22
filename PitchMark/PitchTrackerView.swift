@@ -133,7 +133,6 @@ struct PitchTrackerView: View {
     @State private var mirroredLivePitchEventIds: Set<String> = []
     @State private var didAutoDismissCodeSheetForLiveId: String? = nil
     @State private var uiConnected: Bool = false
-    @State private var showSelectBatterOverlay: Bool = false
     @State private var showCodeAssignmentSheet = false
     @State private var pitcherName: String = ""
     @State private var selectedPitches: Set<String> = []
@@ -164,6 +163,7 @@ struct PitchTrackerView: View {
     @State private var actualLocationRecorded: String? = nil
     @State private var resultVisualState: String? = nil
     @State private var pendingResultLabel: String? = nil
+    @State private var autoPitchOnlyEnabled: Bool = false
     @State private var showResultConfirmation = false
     @State private var isGameMode: Double = 1
     @StateObject var sessionManager = PitchSessionManager()
@@ -2193,9 +2193,6 @@ struct PitchTrackerView: View {
 
             calledPitchLayer
 
-            if showSelectBatterOverlay {
-                selectBatterOverlayView
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.horizontal])   // ✅ CHANGED (removed .bottom)
@@ -2285,6 +2282,7 @@ struct PitchTrackerView: View {
                     isRecordingResult: $isRecordingResult,
                     activeCalledPitchId: $activeCalledPitchId,
                     pitchFirst: $pitchFirst,
+                    autoPitchOnlyEnabled: $autoPitchOnlyEnabled,
                     call: call,
                     pitchCodeAssignments: pitchCodeAssignments,
                     batterSide: batterSide,
@@ -2303,37 +2301,9 @@ struct PitchTrackerView: View {
     }
     private func handleCalledPitchAppear() {
         shouldBlurBackground = true
-
-        if isGame && selectedBatterId == nil {
-            showSelectBatterOverlay = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                showSelectBatterOverlay = false
-            }
-        }
     }
     private func handleCalledPitchDisappear() {
         shouldBlurBackground = false
-        showSelectBatterOverlay = false
-    }
-    private var selectBatterOverlayView: some View {
-        VStack {
-            HStack {
-                Spacer()
-                Text("Select a batter?")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-                Spacer()
-            }
-            Spacer()
-        }
-        .padding(.top, -10)
-        .transition(.opacity)
-        .animation(.easeInOut(duration: 0.5), value: showSelectBatterOverlay)
     }
 
     @ViewBuilder
@@ -2385,7 +2355,7 @@ struct PitchTrackerView: View {
         )
         .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         .padding(.horizontal)
-        .padding(.top, 8)
+        .padding(.top, 24)
     }
     
     private var participantHeaderOverlay: some View {
@@ -2441,7 +2411,7 @@ struct PitchTrackerView: View {
         Group {
             batterAndModeBar
             mainStrikeZoneSection
-            Spacer(minLength: 40)
+            Spacer(minLength: 16)
             cardsAndOverlay
         }
     }
@@ -2473,50 +2443,26 @@ struct PitchTrackerView: View {
     // MARK: - Extracted subviews to help type-checker
     private var topBar: some View {
         HStack {
-            if !(isGame && !isOwnerForActiveGame) {
-            VStack(alignment: .center, spacing: 4) {
-                Text("Pitcher")
+            HStack(spacing: 12) {
+                VStack(alignment: .center, spacing: 4) {
+                Text(isGame ? "Game" : "Practice")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Menu {
-                    let pitchersForMenu = isGame
-                    ? visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
-                    : visiblePitchers
-                    ForEach(pitchersForMenu) { pitcher in
-                        Button(pitcher.name) {
-                            applySelectedPitcher(pitcher)
-                        }
+                Button(action: {
+                    if isGame {
+                        showGameSheet = true
+                    } else {
+                        showPracticeSheet = true
                     }
-                } label: {
-                    let currentLabel = selectedPitcherName
-                    let widestLabel = ([currentLabel] + visiblePitchers.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
-
-                    ZStack {
-                        HStack(spacing: 8) {
-                            Text(widestLabel)
-                                .font(.headline)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.7)
-                                .allowsTightening(true)
-                                .opacity(0)
-                            Image(systemName: "chevron.down")
-                                .font(.subheadline.weight(.semibold))
-                                .opacity(0)
-                        }
-
-                        HStack(spacing: 8) {
-                            Text(currentLabel)
-                                .font(.headline)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.7)
-                                .allowsTightening(true)
-                            Image(systemName: "chevron.down")
-                                .font(.subheadline.weight(.semibold))
-                        }
+                }) {
+                    HStack(spacing: 6) {
+                        Text(isGame ? (opponentName ?? "Game") : (practiceName ?? "Practice"))
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .foregroundColor(.primary)
                     .background(.ultraThinMaterial)
                     .clipShape(Capsule())
                     .overlay(
@@ -2524,103 +2470,149 @@ struct PitchTrackerView: View {
                             .stroke(Color.white.opacity(0.08), lineWidth: 1)
                     )
                     .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                    .opacity((visiblePitchers.isEmpty || !canSelectPitcherInGame) ? 0.6 : 1.0)
-                    .contentShape(Capsule())
                 }
-                .disabled(visiblePitchers.isEmpty || !canSelectPitcherInGame)
-            }
-            .frame(maxWidth: .infinity)
+                .buttonStyle(.plain)
+                }
 
-            VStack(alignment: .center, spacing: 4) {
-                Text("Template")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Menu {
-                    ForEach(visibleTemplates, id: \.id) { template in
-                        Button(template.name) {
-                            if sessionManager.currentMode == .practice && selectedPracticeId != nil {
-                                pendingTemplateSelection = template
-                                showTemplateChangeWarning = true
-                            } else {
-                                applyTemplate(template)
+                if !(isGame && !isOwnerForActiveGame) {
+                    VStack(alignment: .center, spacing: 4) {
+                        Text("Pitcher")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Menu {
+                            let pitchersForMenu = isGame
+                            ? visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
+                            : visiblePitchers
+                            ForEach(pitchersForMenu) { pitcher in
+                                Button(pitcher.name) {
+                                    applySelectedPitcher(pitcher)
+                                }
                             }
+                        } label: {
+                            let currentLabel = selectedPitcherName
+                            let widestLabel = ([currentLabel] + visiblePitchers.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+
+                            ZStack {
+                                HStack(spacing: 8) {
+                                    Text(widestLabel)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.7)
+                                        .allowsTightening(true)
+                                        .opacity(0)
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption.weight(.semibold))
+                                        .opacity(0)
+                                }
+
+                                HStack(spacing: 8) {
+                                    Text(currentLabel)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.7)
+                                        .allowsTightening(true)
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption.weight(.semibold))
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .foregroundColor(.primary)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule()
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                            .opacity((visiblePitchers.isEmpty || !canSelectPitcherInGame) ? 0.6 : 1.0)
+                            .contentShape(Capsule())
                         }
+                        .disabled(visiblePitchers.isEmpty || !canSelectPitcherInGame)
                     }
-                } label: {
-                    let currentLabel = selectedTemplate?.name ?? "Select a template"
-                    let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
-                    
-                    ZStack {
-                        // Invisible widest label to reserve width and prevent size jumps
-                        HStack(spacing: 8) {
-                            Text(widestLabel)
-                                .font(.headline)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.7)
-                                .allowsTightening(true)
-                                .opacity(0)
-                            if !currentTemplateVersionLabel.isEmpty {
-                                Text(currentTemplateVersionLabel)
-                                    .font(.caption2.weight(.semibold))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
-                                    .background(Color.clear)
-                                    .opacity(0)
+
+                    VStack(alignment: .center, spacing: 4) {
+                        Text("Grid Key")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Menu {
+                            ForEach(visibleTemplates, id: \.id) { template in
+                                Button(template.name) {
+                                    if sessionManager.currentMode == .practice && selectedPracticeId != nil {
+                                        pendingTemplateSelection = template
+                                        showTemplateChangeWarning = true
+                                    } else {
+                                        applyTemplate(template)
+                                    }
+                                }
                             }
-                            Image(systemName: "chevron.down")
-                                .font(.subheadline.weight(.semibold))
-                                .opacity(0)
-                        }
-                        
-                        // Visible current label
-                        HStack(spacing: 8) {
-                            Text(currentLabel)
-                                .font(.headline)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.7)
-                                .allowsTightening(true)
-                            if !currentTemplateVersionLabel.isEmpty {
-                                Text(currentTemplateVersionLabel)
-                                    .font(.caption2.weight(.semibold))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 3)
-                                    .foregroundStyle(Color.gray)
-                                    .clipShape(Capsule())
-                                    .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
+                        } label: {
+                            let currentLabel = selectedTemplate?.name ?? "Select a template"
+                            let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+                            
+                            ZStack {
+                                // Invisible widest label to reserve width and prevent size jumps
+                                HStack(spacing: 8) {
+                                    Text(widestLabel)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.7)
+                                        .allowsTightening(true)
+                                        .opacity(0)
+                                    if !currentTemplateVersionLabel.isEmpty {
+                                        Text(currentTemplateVersionLabel)
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 3)
+                                            .background(Color.clear)
+                                            .opacity(0)
+                                    }
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption.weight(.semibold))
+                                        .opacity(0)
+                                }
+                                
+                                // Visible current label
+                                HStack(spacing: 8) {
+                                    Text(currentLabel)
+                                        .font(.subheadline)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.7)
+                                        .allowsTightening(true)
+                                    if !currentTemplateVersionLabel.isEmpty {
+                                        Text(currentTemplateVersionLabel)
+                                            .font(.caption2.weight(.semibold))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 3)
+                                            .foregroundStyle(Color.gray)
+                                            .clipShape(Capsule())
+                                            .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
+                                    }
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption.weight(.semibold))
+                                }
                             }
-                            Image(systemName: "chevron.down")
-                                .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .foregroundColor(.primary)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule()
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                            .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
+                            .contentShape(Capsule())
+                            .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
                         }
+                        .disabled(visibleTemplates.isEmpty)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .foregroundColor(.primary)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
-                    .overlay(
-                        Capsule()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                    .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
-                    .contentShape(Capsule())
-                    .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
                 }
-                .disabled(visibleTemplates.isEmpty)
             }
-            .frame(maxWidth: .infinity)
-            }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             codeLinkButton
-
-            Button(action: {
-                showSettings = true
-            }) {
-                Image(systemName: "gearshape")
-                    .imageScale(.large)
-            }
-            .tint(.gray)
         }
         .padding(.horizontal)
         .padding(.top, 6)
@@ -2662,6 +2654,8 @@ struct PitchTrackerView: View {
     @ViewBuilder
     private var atBatSidebar: some View {
         if isGame {
+            let needsBatterSelection = selectedBatterId == nil
+
             VStack(spacing: 0) {
                 Text("At Bat")
                     .font(.caption)
@@ -2669,207 +2663,226 @@ struct PitchTrackerView: View {
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-                    .background(Color.gray)
+                    .background(needsBatterSelection ? Color.red.opacity(0.7) : Color.gray)
 
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 6) {
-                        ForEach(jerseyCells) { cell in
-                            JerseyRow(
-                                cell: cell,
-                                jerseyCells: $jerseyCells,
-                                selectedBatterId: $selectedBatterId,
-                                draggingJersey: $draggingJersey,
-                                editingCell: $editingCell,
-                                newJerseyNumber: $newJerseyNumber,
-                                showAddJerseyPopover: $showAddJerseyPopover,
-                                selectedGameId: selectedGameId,
-                                effectiveGameOwnerUserId: effectiveGameOwnerUserId,
-                                activeLiveId: activeLiveId,
-                                pitchesFacedBatterId: $pitchesFacedBatterId,
-                                isReordering: $isReorderingMode
-                            )
-                            .environmentObject(authManager)
-                        }
-
-                        if showAddJerseyPopover {
-                            VStack(spacing: 6) {
-                                TextField("##", text: $newJerseyNumber)
-                                    .keyboardType(.numberPad)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(height: 36)
-                                    .focused($jerseyInputFocused)
-                                    .onAppear { jerseyInputFocused = true }
+                ZStack(alignment: .top) {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 6) {
+                            ForEach(jerseyCells) { cell in
+                                JerseyRow(
+                                    cell: cell,
+                                    jerseyCells: $jerseyCells,
+                                    selectedBatterId: $selectedBatterId,
+                                    draggingJersey: $draggingJersey,
+                                    editingCell: $editingCell,
+                                    newJerseyNumber: $newJerseyNumber,
+                                    showAddJerseyPopover: $showAddJerseyPopover,
+                                    selectedGameId: selectedGameId,
+                                    effectiveGameOwnerUserId: effectiveGameOwnerUserId,
+                                    activeLiveId: activeLiveId,
+                                    pitchesFacedBatterId: $pitchesFacedBatterId,
+                                    isReordering: $isReorderingMode
+                                )
+                                .environmentObject(authManager)
                             }
-                            .toolbar {
-                                ToolbarItemGroup(placement: .keyboard) {
-                                    Button("Cancel") {
-                                        // Dismiss without changes
-                                        showAddJerseyPopover = false
-                                        jerseyInputFocused = false
-                                        newJerseyNumber = ""
-                                        editingCell = nil
-                                    }
-                                    Spacer()
-                                    Button("Save") {
-                                        let trimmed = newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        guard !trimmed.isEmpty else { return }
 
-                                        let normalized = normalizeJersey(trimmed) ?? trimmed
-
-                                        // 1) Apply local change (edit vs add)
-                                        if let editing = editingCell,
-                                           let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
-                                            jerseyCells[idx].jerseyNumber = normalized
-                                        } else {
-                                            // Add new cell (keep UUID stable across devices by storing batterIds)
-                                            let newCell = JerseyCell(jerseyNumber: normalized)
-                                            jerseyCells.append(newCell)
+                            if showAddJerseyPopover {
+                                VStack(spacing: 6) {
+                                    TextField("##", text: $newJerseyNumber)
+                                        .keyboardType(.numberPad)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(height: 36)
+                                        .focused($jerseyInputFocused)
+                                        .onAppear { jerseyInputFocused = true }
+                                }
+                                .toolbar {
+                                    ToolbarItemGroup(placement: .keyboard) {
+                                        Button("Cancel") {
+                                            // Dismiss without changes
+                                            showAddJerseyPopover = false
+                                            jerseyInputFocused = false
+                                            newJerseyNumber = ""
+                                            editingCell = nil
                                         }
+                                        Spacer()
+                                        Button("Save") {
+                                            let trimmed = newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+                                            guard !trimmed.isEmpty else { return }
 
-                                        // 2) Persist lineup (single source of truth)
-                                        func persistLineup(jerseyCells: [JerseyCell]) {
-                                            let jerseys = jerseyCells.map { $0.jerseyNumber }
-                                            let batterIds = jerseyCells.map { $0.id.uuidString }
+                                            let normalized = normalizeJersey(trimmed) ?? trimmed
 
-                                            if let liveId = activeLiveId, !liveId.isEmpty {
-                                                // LIVE session: write to liveGames so owner + participant both update
-                                                LiveGameService.shared.updateLiveFields(
-                                                    liveId: liveId,
-                                                    fields: [
-                                                        "jerseyNumbers": jerseys,
-                                                        "batterIds": batterIds
-                                                    ]
-                                                )
-                                            } else if let gameId = selectedGameId,
-                                                      let owner = effectiveGameOwnerUserId,
-                                                      !owner.isEmpty {
-                                                // Non-live: update owner's game doc
-                                                authManager.updateGameLineup(
-                                                    ownerUserId: owner,
-                                                    gameId: gameId,
-                                                    jerseyNumbers: jerseys,
-                                                    batterIds: batterIds
-                                                )
+                                            // 1) Apply local change (edit vs add)
+                                            if let editing = editingCell,
+                                               let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
+                                                jerseyCells[idx].jerseyNumber = normalized
                                             } else {
-                                                print("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                                                // Add new cell (keep UUID stable across devices by storing batterIds)
+                                                let newCell = JerseyCell(jerseyNumber: normalized)
+                                                jerseyCells.append(newCell)
                                             }
+
+                                            // 2) Persist lineup (single source of truth)
+                                            func persistLineup(jerseyCells: [JerseyCell]) {
+                                                let jerseys = jerseyCells.map { $0.jerseyNumber }
+                                                let batterIds = jerseyCells.map { $0.id.uuidString }
+
+                                                if let liveId = activeLiveId, !liveId.isEmpty {
+                                                    // LIVE session: write to liveGames so owner + participant both update
+                                                    LiveGameService.shared.updateLiveFields(
+                                                        liveId: liveId,
+                                                        fields: [
+                                                            "jerseyNumbers": jerseys,
+                                                            "batterIds": batterIds
+                                                        ]
+                                                    )
+                                                } else if let gameId = selectedGameId,
+                                                          let owner = effectiveGameOwnerUserId,
+                                                          !owner.isEmpty {
+                                                    // Non-live: update owner's game doc
+                                                    authManager.updateGameLineup(
+                                                        ownerUserId: owner,
+                                                        gameId: gameId,
+                                                        jerseyNumbers: jerseys,
+                                                        batterIds: batterIds
+                                                    )
+                                                } else {
+                                                    print("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                                                }
+                                            }
+
+                                            persistLineup(jerseyCells: jerseyCells)
+
+                                            // 3) Reset UI state
+                                            showAddJerseyPopover = false
+                                            jerseyInputFocused = false
+                                            newJerseyNumber = ""
+                                            editingCell = nil
                                         }
+                                        .disabled(newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                                        persistLineup(jerseyCells: jerseyCells)
-
-                                        // 3) Reset UI state
-                                        showAddJerseyPopover = false
-                                        jerseyInputFocused = false
-                                        newJerseyNumber = ""
-                                        editingCell = nil
                                     }
-                                    .disabled(newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
                                 }
                             }
-                        }
 
-                        Button(action: {
-                            editingCell = nil
-                            newJerseyNumber = ""
-                            if jerseyCells.isEmpty {
-                                showBulkJerseyPrompt = true
-                            } else {
-                                showAddJerseyPopover = true
-                                jerseyInputFocused = true
-                            }
-                        }) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 32, height: 32)
-
-                                Image(systemName: "plus")
-                                    .foregroundColor(.secondary)
-                                    .font(.headline)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, 6)
-                        .confirmationDialog(
-                            "Add multiple jersey numbers?",
-                            isPresented: $showBulkJerseyPrompt,
-                            titleVisibility: .visible
-                        ) {
-                            Button("Add Multiple") {
-                                bulkJerseyNumbers = ""
-                                showBulkJerseyInput = true
-                            }
-                            Button("Add One", role: .cancel) {
-                                showAddJerseyPopover = true
-                                jerseyInputFocused = true
-                            }
-                        } message: {
-                            Text("Speak or type the jersey numbers with commas in between (example: 2, 7, 18).")
-                        }
-                        .alert("Add jersey numbers", isPresented: $showBulkJerseyInput) {
-                            TextField("2, 7, 18", text: $bulkJerseyNumbers)
-                            Button("Cancel", role: .cancel) {
-                                bulkJerseyNumbers = ""
-                            }
-                            Button("Add") {
-                                let rawParts = bulkJerseyNumbers
-                                    .split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" })
-                                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                                let normalizedParts = rawParts.compactMap { part -> String? in
-                                    guard !part.isEmpty else { return nil }
-                                    return normalizeJersey(part) ?? part
+                            Button(action: {
+                                editingCell = nil
+                                newJerseyNumber = ""
+                                if jerseyCells.isEmpty {
+                                    showBulkJerseyPrompt = true
+                                } else {
+                                    showAddJerseyPopover = true
+                                    jerseyInputFocused = true
                                 }
-                                let existing = Set(jerseyCells.map { $0.jerseyNumber })
-                                let unique = normalizedParts.filter { !existing.contains($0) }
-                                guard !unique.isEmpty else {
+                            }) {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.white)
+                                        .frame(width: 32, height: 32)
+
+                                    Image(systemName: "plus")
+                                        .foregroundColor(.secondary)
+                                        .font(.headline)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 6)
+                            .confirmationDialog(
+                                "Add multiple jersey numbers?",
+                                isPresented: $showBulkJerseyPrompt,
+                                titleVisibility: .visible
+                            ) {
+                                Button("Add Multiple") {
                                     bulkJerseyNumbers = ""
-                                    return
+                                    showBulkJerseyInput = true
                                 }
-                                let newCells = unique.map { JerseyCell(jerseyNumber: $0) }
-                                jerseyCells.append(contentsOf: newCells)
-
-                                func persistLineup(jerseyCells: [JerseyCell]) {
-                                    let jerseys = jerseyCells.map { $0.jerseyNumber }
-                                    let batterIds = jerseyCells.map { $0.id.uuidString }
-
-                                    if let liveId = activeLiveId, !liveId.isEmpty {
-                                        LiveGameService.shared.updateLiveFields(
-                                            liveId: liveId,
-                                            fields: [
-                                                "jerseyNumbers": jerseys,
-                                                "batterIds": batterIds
-                                            ]
-                                        )
-                                    } else if let gameId = selectedGameId,
-                                              let owner = effectiveGameOwnerUserId,
-                                              !owner.isEmpty {
-                                        authManager.updateGameLineup(
-                                            ownerUserId: owner,
-                                            gameId: gameId,
-                                            jerseyNumbers: jerseys,
-                                            batterIds: batterIds
-                                        )
-                                    } else {
-                                        print("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
-                                    }
+                                Button("Add One", role: .cancel) {
+                                    showAddJerseyPopover = true
+                                    jerseyInputFocused = true
                                 }
-
-                                persistLineup(jerseyCells: jerseyCells)
-
-                                bulkJerseyNumbers = ""
+                            } message: {
+                                Text("Speak or type the jersey numbers with commas in between (example: 2, 7, 18).")
                             }
-                        } message: {
-                            Text("Speak or type the jersey numbers with commas in between.")
+                            .alert("Add jersey numbers", isPresented: $showBulkJerseyInput) {
+                                TextField("2, 7, 18", text: $bulkJerseyNumbers)
+                                Button("Cancel", role: .cancel) {
+                                    bulkJerseyNumbers = ""
+                                }
+                                Button("Add") {
+                                    let rawParts = bulkJerseyNumbers
+                                        .split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "\n" })
+                                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                    let normalizedParts = rawParts.compactMap { part -> String? in
+                                        guard !part.isEmpty else { return nil }
+                                        return normalizeJersey(part) ?? part
+                                    }
+                                    let existing = Set(jerseyCells.map { $0.jerseyNumber })
+                                    let unique = normalizedParts.filter { !existing.contains($0) }
+                                    guard !unique.isEmpty else {
+                                        bulkJerseyNumbers = ""
+                                        return
+                                    }
+                                    let newCells = unique.map { JerseyCell(jerseyNumber: $0) }
+                                    jerseyCells.append(contentsOf: newCells)
+
+                                    func persistLineup(jerseyCells: [JerseyCell]) {
+                                        let jerseys = jerseyCells.map { $0.jerseyNumber }
+                                        let batterIds = jerseyCells.map { $0.id.uuidString }
+
+                                        if let liveId = activeLiveId, !liveId.isEmpty {
+                                            LiveGameService.shared.updateLiveFields(
+                                                liveId: liveId,
+                                                fields: [
+                                                    "jerseyNumbers": jerseys,
+                                                    "batterIds": batterIds
+                                                ]
+                                            )
+                                        } else if let gameId = selectedGameId,
+                                                  let owner = effectiveGameOwnerUserId,
+                                                  !owner.isEmpty {
+                                            authManager.updateGameLineup(
+                                                ownerUserId: owner,
+                                                gameId: gameId,
+                                                jerseyNumbers: jerseys,
+                                                batterIds: batterIds
+                                            )
+                                        } else {
+                                            print("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                                        }
+                                    }
+
+                                    persistLineup(jerseyCells: jerseyCells)
+
+                                    bulkJerseyNumbers = ""
+                                }
+                            } message: {
+                                Text("Speak or type the jersey numbers with commas in between.")
+                            }
                         }
+                        .padding(.vertical,12)
+                        .padding(.horizontal, 0)
                     }
-                    .padding(.vertical,12)
-                    .padding(.horizontal, 0)
                 }
-            }
+
+                if needsBatterSelection {
+                    Text("Select a batter")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.red.opacity(0.85))
+                        )
+                        .padding(.top, 6)
+                }
+                }
             .frame(width: 60, height: 390)
             .background(.ultraThinMaterial)
             .cornerRadius(10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(needsBatterSelection ? Color.red.opacity(0.8) : Color.clear, lineWidth: 2)
+            )
             .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
         }
     }
@@ -2905,35 +2918,6 @@ struct PitchTrackerView: View {
         }
     }
     
-    private var sessionOverlay: some View {
-        Group {
-            HStack(spacing: 8) {
-                Button(action: {
-                    if isGame {
-                        showGameSheet = true
-                    } else {
-                        showPracticeSheet = true
-                    }
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "gearshape")
-                        Text(isGame ? (opponentName ?? "Game") : (practiceName ?? "Practice"))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: 160)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
-                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                }
-                .buttonStyle(.plain)
-            }
-            .offset(y: 6)
-        }
-    }
-
     private var gameStatsOverlay: some View {
         Group {
             if isGame {
@@ -3097,7 +3081,6 @@ struct PitchTrackerView: View {
                 canInitiateCall: canInitiateCall
             )
             .overlay(resetOverlay, alignment: .bottomLeading)
-            .overlay(sessionOverlay, alignment: .bottom)
             .overlay(gameStatsOverlay, alignment: .bottomTrailing)
 
             batterSideOverlay(SZwidth: SZwidth)
@@ -3105,19 +3088,37 @@ struct PitchTrackerView: View {
         .frame(width: SZwidth, height: 390)
     }
     private var codeLinkButton: some View {
-        Button {
-            showCodeShareModePicker = true
+        Menu {
+            Button {
+                showCodeShareModePicker = true
+            } label: {
+                Label("Code Link", systemImage: "key.sensor.tag.radiowaves.left.and.right.fill")
+            }
+
+            Button {
+                showSettings = true
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
         } label: {
-            Image(systemName: "key.sensor.tag.radiowaves.left.and.right.fill")
-                .imageScale(.large)
-                .foregroundStyle(uiConnected ? .green : .red)
-                .frame(width: 40, height: 32)
-                .background(.ultraThinMaterial)
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+            VStack(spacing: 4) {
+                Image(systemName: "key.sensor.tag.radiowaves.left.and.right.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(uiConnected ? .green : .red)
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
+            .frame(
+                width: 40,
+                height: max(0, (UIScreen.main.bounds.height * 0.10) - 22)
+            )
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Code Link")
+        .accessibilityLabel("Code Link and Settings")
         // ✅ Attach the dialog HERE so it anchors to THIS button
         .confirmationDialog(
             "Invite Link",
@@ -3210,7 +3211,7 @@ struct PitchTrackerView: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal)
         .padding(.bottom, 6)
-        .padding(.top, 14)
+        .padding(.top, 6)
     }
 
 
@@ -3240,6 +3241,18 @@ struct PitchTrackerView: View {
     private func handlePendingResultChange(_ newValue: String?) {
         // Auto-save in Practice, notify owner in Game (participant side)
         guard newValue != nil else { return }
+
+        if autoPitchOnlyEnabled,
+           sessionManager.currentMode == .game,
+           let value = newValue,
+           !value.isEmpty,
+           (showConfirmSheet || showResultConfirmation),
+           let event = buildPitchOnlyEvent()
+        {
+            showConfirmSheet = false
+            persistPitchEvent(event)
+            return
+        }
 
         if sessionManager.currentMode == .game, !isOwnerForActiveGame {
             guard let value = newValue, !value.isEmpty else { return }
@@ -3306,6 +3319,143 @@ struct PitchTrackerView: View {
 
         // Prevent sheet from showing and reset UI state (mirror sheet save reset)
         showConfirmSheet = false
+        resultVisualState = event.location
+        activeCalledPitchId = nil
+        isRecordingResult = false
+        selectedPitch = ""
+        selectedLocation = ""
+        lastTappedPosition = nil
+        calledPitch = nil
+        resultVisualState = nil
+        actualLocationRecorded = nil
+        pendingResultLabel = nil
+        isStrikeSwinging = false
+        isWildPitch = false
+        isPassedBall = false
+        isBall = false
+        selectedOutcome = nil
+        selectedDescriptor = nil
+    }
+
+    private func buildPitchOnlyEvent() -> PitchEvent? {
+        guard let label = pendingResultLabel,
+              let pitchCall = calledPitch else {
+            return nil
+        }
+
+        return PitchEvent(
+            id: nil,
+            timestamp: Date(),
+            pitch: pitchCall.pitch,
+            location: label,
+            codes: pitchCall.codes,
+            isStrike: pitchCall.isStrike,
+            isBall: isBall,
+            mode: sessionManager.currentMode,
+            calledPitch: pitchCall,
+            batterSide: batterSide,
+            templateId: selectedTemplate?.id.uuidString,
+            strikeSwinging: isStrikeSwinging,
+            wildPitch: isWildPitch,
+            passedBall: isPassedBall,
+            strikeLooking: isStrikeLooking,
+            outcome: selectedOutcome,
+            descriptor: selectedDescriptor,
+            errorOnPlay: isError,
+            battedBallRegion: nil,
+            battedBallType: nil,
+            battedBallTapX: nil,
+            battedBallTapY: nil,
+            gameId: selectedGameId,
+            opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
+            opponentBatterId: selectedBatterId?.uuidString,
+            practiceId: selectedPracticeId,
+            pitcherId: effectivePitcherIdForSave
+        )
+    }
+
+    private func persistPitchEvent(_ event: PitchEvent) {
+        var sharedEvent = event
+        if isGame, let liveId = activeLiveId {
+            // ✅ Live: save to shared room
+            let uid = authManager.user?.uid ?? ""
+            do {
+                var eventData = try Firestore.Encoder().encode(event)
+                // Firestore.Encoder already encodes event.timestamp correctly (as a Timestamp).
+                eventData["createdByUid"] = uid
+                eventData["liveId"] = liveId
+
+                // ✅ OPTIONAL: keep a server-side write time in a separate field (doesn't break decoding)
+                eventData["serverTimestamp"] = FieldValue.serverTimestamp()
+
+                if let gid = selectedGameId {
+                    eventData["gameId"] = gid
+                }
+
+                let liveRef = Firestore.firestore()
+                    .collection("liveGames").document(liveId)
+                    .collection("pitchEvents").document()
+                let liveEventId = liveRef.documentID
+                sharedEvent.id = liveEventId
+
+                liveRef.setData(eventData, merge: false) { err in
+                    if let err {
+                        print("❌ live pitchEvent save failed:", err.localizedDescription)
+                    }
+                }
+
+                if let owner = effectiveGameOwnerUserId,
+                   let gid = selectedGameId,
+                   !owner.isEmpty {
+                    let ownerRef = Firestore.firestore()
+                        .collection("users").document(owner)
+                        .collection("games").document(gid)
+                        .collection("pitchEvents").document(liveEventId)
+                    ownerRef.setData(eventData, merge: false) { err in
+                        if let err {
+                            print("❌ owner pitchEvent save failed:", err.localizedDescription)
+                        }
+                    }
+                } else {
+                    print("⚠️ Owner path unavailable; saved only to liveGames.")
+                }
+
+                // clear pending in live doc
+                LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                    "pending": FieldValue.delete()
+                ])
+            } catch {
+                print("❌ encode event failed:", error)
+            }
+        } else if isGame, let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
+            // Legacy fallback
+            authManager.saveGamePitchEvent(ownerUserId: owner, gameId: gid, event: event)
+            authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+        } else {
+            // Practice
+            authManager.savePitchEvent(event)
+        }
+
+        saveSharedPitcherEventIfAllowed(sharedEvent)
+
+        writeResultSelection(label: event.location)
+
+        sessionManager.incrementCount()
+
+        // ✅ LIVE: do NOT append to local pitchEvents (prevents “saved on participant” feeling).
+        // Owner will show cards from live listener; practice/legacy continue using pitchEvents.
+        if activeLiveId == nil {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                pitchEvents.append(event)
+            }
+            authManager.loadPitchEvents { events in
+                self.pitchEvents = events
+            }
+            if overlayTab == .progress && sessionManager.currentMode == .practice {
+                progressRefreshToken = UUID()
+            }
+        }
+
         resultVisualState = event.location
         activeCalledPitchId = nil
         isRecordingResult = false
@@ -3823,103 +3973,7 @@ struct PitchTrackerView: View {
             selectedPracticeId: selectedPracticeId,
             selectedPitcherId: effectivePitcherIdForSave,
             saveAction: { event in
-                var sharedEvent = event
-                if isGame, let liveId = activeLiveId {
-                    // ✅ Live: save to shared room
-                    let uid = authManager.user?.uid ?? ""
-                    do {
-                        var eventData = try Firestore.Encoder().encode(event)
-                        // Firestore.Encoder already encodes event.timestamp correctly (as a Timestamp).
-                        eventData["createdByUid"] = uid
-                        eventData["liveId"] = liveId
-
-                        // ✅ OPTIONAL: keep a server-side write time in a separate field (doesn't break decoding)
-                        eventData["serverTimestamp"] = FieldValue.serverTimestamp()
-
-                        if let gid = selectedGameId {
-                            eventData["gameId"] = gid
-                        }
-
-                        let liveRef = Firestore.firestore()
-                            .collection("liveGames").document(liveId)
-                            .collection("pitchEvents").document()
-                        let liveEventId = liveRef.documentID
-                        sharedEvent.id = liveEventId
-
-                        liveRef.setData(eventData, merge: false) { err in
-                            if let err {
-                                print("❌ live pitchEvent save failed:", err.localizedDescription)
-                            }
-                        }
-
-                        if let owner = effectiveGameOwnerUserId,
-                           let gid = selectedGameId,
-                           !owner.isEmpty {
-                            let ownerRef = Firestore.firestore()
-                                .collection("users").document(owner)
-                                .collection("games").document(gid)
-                                .collection("pitchEvents").document(liveEventId)
-                            ownerRef.setData(eventData, merge: false) { err in
-                                if let err {
-                                    print("❌ owner pitchEvent save failed:", err.localizedDescription)
-                                }
-                            }
-                        } else {
-                            print("⚠️ Owner path unavailable; saved only to liveGames.")
-                        }
-
-                        // clear pending in live doc
-                        LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
-                            "pending": FieldValue.delete()
-                        ])
-                    } catch {
-                        print("❌ encode event failed:", error)
-                    }
-                } else if isGame, let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
-                    // Legacy fallback
-                    authManager.saveGamePitchEvent(ownerUserId: owner, gameId: gid, event: event)
-                    authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
-                } else {
-                    // Practice
-                    authManager.savePitchEvent(event)
-                }
-
-                saveSharedPitcherEventIfAllowed(sharedEvent)
-
-                writeResultSelection(label: event.location)
-
-                sessionManager.incrementCount()
-
-                // ✅ LIVE: do NOT append to local pitchEvents (prevents “saved on participant” feeling).
-                // Owner will show cards from live listener; practice/legacy continue using pitchEvents.
-                if activeLiveId == nil {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        pitchEvents.append(event)
-                    }
-                    authManager.loadPitchEvents { events in
-                        self.pitchEvents = events
-                    }
-                    if overlayTab == .progress && sessionManager.currentMode == .practice {
-                        progressRefreshToken = UUID()
-                    }
-                }
-
-                resultVisualState = event.location
-                activeCalledPitchId = nil
-                isRecordingResult = false
-                selectedPitch = ""
-                selectedLocation = ""
-                lastTappedPosition = nil
-                calledPitch = nil
-                resultVisualState = nil
-                actualLocationRecorded = nil
-                pendingResultLabel = nil
-                isStrikeSwinging = false
-                isWildPitch = false
-                isPassedBall = false
-                isBall = false
-                selectedOutcome = nil
-                selectedDescriptor = nil
+                persistPitchEvent(event)
             },
             template: selectedTemplate,
             pitcherName: pitchers.first(where: { $0.id == selectedPitcherId })?.name
@@ -5544,7 +5598,7 @@ struct CodeOrderToggle: View {
         HStack(spacing: 8) {
             if !activeColorNames.isEmpty {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 8) {
                         ForEach(Array(activeColorNames.enumerated()), id: \.offset) { item in
                             let name = item.element
                             Button {
@@ -5672,6 +5726,7 @@ struct CalledPitchView: View {
     @Binding var isRecordingResult: Bool
     @Binding var activeCalledPitchId: String?
     @Binding var pitchFirst: Bool
+    @Binding var autoPitchOnlyEnabled: Bool
     let call: PitchCall
     let pitchCodeAssignments: [PitchCodeAssignment]
     let batterSide: BatterSide
@@ -5742,8 +5797,25 @@ struct CalledPitchView: View {
                     }
                     Spacer()
                     
-                    PitchResultBanner(isRecording: isRecordingResult, callColor: callColor)
+                    PitchResultBanner(
+                        isRecording: isRecordingResult,
+                        callColor: callColor
+                    )
                     Spacer()
+
+                    Button {
+                        autoPitchOnlyEnabled.toggle()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("Pitch only")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Image(systemName: autoPitchOnlyEnabled ? "checkmark.circle.fill" : "circle")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
                 // Assigned codes as chips
                 if !displayCodes.isEmpty && (!isPracticeMode || codesEnabled) {
@@ -5903,11 +5975,17 @@ struct PitchResultBanner: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: isRecording ? "checkmark.circle.fill" : "hand.tap.fill")
-                .font(.caption.bold())
+            HStack(spacing: 8) {
+                Image(systemName: "hand.tap.fill")
+                    .font(.caption.bold())
 
-            Text(isRecording ? "Choose a pitch result" : "Tap a Code")
-                .font(.footnote.weight(.semibold))
+                if isRecording {
+                    BlendedStrokeCircle(lineWidth: 3, size: 24)
+                }
+
+                Text(isRecording ? " Tap result" : "Code")
+                    .font(.footnote.weight(.semibold))
+            }
         }
         .foregroundStyle(.primary)
         .padding(.horizontal, 12)
@@ -5924,7 +6002,7 @@ struct PitchResultBanner: View {
         .padding(.top, 6)
         .transition(.opacity.combined(with: .move(edge: .top)))
         .animation(.easeInOut(duration: 0.25), value: isRecording)
-        .accessibilityLabel(isRecording ? "Choose a pitch result" : "Tap a Code")
+        .accessibilityLabel(isRecording ? "Tap result" : "Code")
     }
 }
 private struct CodeShareSheet: View {
@@ -6117,6 +6195,31 @@ private struct CodeShareSheet: View {
 
 
 
+}
+
+struct BlendedStrokeCircle: View {
+    var lineWidth: CGFloat = 3
+    var size: CGFloat = 24
+
+    var body: some View {
+        Circle()
+            .stroke(
+                AngularGradient(
+                    gradient: Gradient(stops: [
+                        .init(color: .green, location: 0.00),
+                        .init(color: .green, location: 0.45),
+                        .init(color: .yellow, location: 0.50),
+                        .init(color: .red, location: 0.55),
+                        .init(color: .red, location: 1.00)
+                    ]),
+                    center: .center,
+                    startAngle: .degrees(-90),
+                    endAngle: .degrees(270)
+                ),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+            )
+            .frame(width: size, height: size)
+    }
 }
 
 struct GameSelectionSheet: View {
