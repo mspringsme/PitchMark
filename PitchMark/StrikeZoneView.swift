@@ -8,6 +8,7 @@ import SwiftUI
 
 struct StrikeZoneView: View {
     let width: CGFloat
+    let height: CGFloat
     @Binding var isGame: Bool
     let batterSide: BatterSide
     let lastTappedPosition: CGPoint?
@@ -36,7 +37,7 @@ struct StrikeZoneView: View {
     var body: some View {
         ZStack {
             Color.clear // 👈 forces fixed size
-                    .frame(width: width, height: 390)
+                    .frame(width: width, height: height)
             GeometryReader { geo in
                 let zoneWidth = geo.size.width * (isGame ? 0.47 : 0.431)
                 let zoneHeight = geo.size.height * 0.6
@@ -44,7 +45,7 @@ struct StrikeZoneView: View {
                 let cellHeight = zoneHeight / 3
                 let buttonSize = min(cellWidth, cellHeight) * 0.8
                 let originX = (geo.size.width - zoneWidth) / 2
-                let originY: CGFloat = 60
+                let originY: CGFloat = geo.size.height * 0.15
                 let labelManager = PitchLabelManager(batterSide: batterSide)
                 
                 ZStack(alignment: .topLeading) {
@@ -133,9 +134,9 @@ struct StrikeZoneView: View {
                     }
                 }
             }
-            .frame(width: width, height: 390)
+            .frame(width: width, height: height)
         }
-        .frame(width: width, height: 390) // ✅ Constrain the ZStack, not just the GeometryReader
+        .frame(width: width, height: height) // ✅ Constrain the ZStack, not just the GeometryReader
 //        .background(Color.white)
 //        .cornerRadius(12)
     }

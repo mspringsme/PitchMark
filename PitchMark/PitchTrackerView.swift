@@ -2343,7 +2343,7 @@ struct PitchTrackerView: View {
         }
         .frame(
             width: screen.width * 0.94,   // 94% of screen width
-            height: screen.height * 0.10 // 10% of screen height
+            height: headerHeight
         )
         .background(
             .thickMaterial,
@@ -2356,6 +2356,18 @@ struct PitchTrackerView: View {
         .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         .padding(.horizontal)
         .padding(.top, 24)
+    }
+
+    private var isCompactHeight: Bool {
+        UIScreen.main.bounds.height <= 700
+    }
+
+    private var headerHeight: CGFloat {
+        isCompactHeight ? 54 : UIScreen.main.bounds.height * 0.10
+    }
+
+    private var strikeZoneHeight: CGFloat {
+        isCompactHeight ? 320 : 390
     }
     
     private var participantHeaderOverlay: some View {
@@ -2876,7 +2888,7 @@ struct PitchTrackerView: View {
                         .padding(.top, 6)
                 }
                 }
-            .frame(width: 60, height: 390)
+            .frame(width: 60, height: strikeZoneHeight)
             .background(.ultraThinMaterial)
             .cornerRadius(10)
             .overlay(
@@ -2977,6 +2989,7 @@ struct PitchTrackerView: View {
     
     private struct StrikeZoneCard: View {
         let SZwidth: CGFloat
+        let strikeZoneHeight: CGFloat
         @Binding var isGame: Bool
         let batterSide: BatterSide
         let lastTappedPosition: CGPoint?
@@ -3006,6 +3019,7 @@ struct PitchTrackerView: View {
             VStack {
                 StrikeZoneView(
                     width: SZwidth,
+                    height: strikeZoneHeight,
                     isGame: $isGame,
                     batterSide: batterSide,
                     lastTappedPosition: lastTappedPosition,
@@ -3032,7 +3046,7 @@ struct PitchTrackerView: View {
                 )
                 .id(colorRefreshToken)
             }
-            .frame(width: SZwidth, height: 390)
+            .frame(width: SZwidth, height: strikeZoneHeight)
             .background(
                 .thickMaterial,
                 in: RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -3050,6 +3064,7 @@ struct PitchTrackerView: View {
         ZStack(alignment: .top) {
             StrikeZoneCard(
                 SZwidth: SZwidth,
+                strikeZoneHeight: strikeZoneHeight,
                 isGame: $isGame,
                 batterSide: batterSide,
                 lastTappedPosition: lastTappedPosition,
@@ -3085,7 +3100,7 @@ struct PitchTrackerView: View {
 
             batterSideOverlay(SZwidth: SZwidth)
         }
-        .frame(width: SZwidth, height: 390)
+        .frame(width: SZwidth, height: strikeZoneHeight)
     }
     private var codeLinkButton: some View {
         Menu {
@@ -3111,7 +3126,7 @@ struct PitchTrackerView: View {
             }
             .frame(
                 width: 40,
-                height: max(0, (UIScreen.main.bounds.height * 0.10) - 22)
+                height: max(0, headerHeight - 22)
             )
             .background(.ultraThinMaterial)
             .clipShape(Capsule())
@@ -3549,7 +3564,14 @@ struct PitchTrackerView: View {
     private var baseBody: some View {
         ZStack {
             backgroundView
-            mainStack
+            if isCompactHeight {
+                ScrollView(.vertical, showsIndicators: false) {
+                    mainStack
+                        .padding(.bottom, 12)
+                }
+            } else {
+                mainStack
+            }
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
