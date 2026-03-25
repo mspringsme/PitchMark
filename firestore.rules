@@ -149,6 +149,20 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────
+    // USER META: /users/{ownerUid}/meta/{docId}
+    // ─────────────────────────────────────────────
+    match /users/{ownerUid}/meta/{docId} {
+      allow get, list, create, update, delete: if signedIn() && ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
+    // DISPLAY STATE: /users/{ownerUid}/displayState/{docId}
+    // ─────────────────────────────────────────────
+    match /users/{ownerUid}/displayState/{docId} {
+      allow get, list, create, update, delete: if signedIn() && ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
     // JOIN CODES: /joinCodes/{code}
     // ─────────────────────────────────────────────
     match /joinCodes/{code} {
@@ -185,6 +199,24 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────
+    // DISPLAY INVITE TOKENS: /displayInviteTokens/{token}
+    // ─────────────────────────────────────────────
+    match /displayInviteTokens/{token} {
+      allow get: if signedIn()
+        && (resource == null || notExpired(resource.data) || resource.data.ownerUid == uid());
+      allow list: if signedIn() && request.query.where("ownerUid", "==", uid());
+
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && request.resource.data.liveId is string
+        && request.resource.data.expiresAt is timestamp;
+
+      allow update, delete: if signedIn()
+        && resource != null
+        && resource.data.ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
     // LIVE GAMES: /liveGames/{liveId}
     // ─────────────────────────────────────────────
     match /liveGames/{liveId} {
@@ -200,7 +232,19 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/liveGames/$(liveId)/participants/$(uid()));
       }
 
-      allow get: if signedIn() && (isOwner() || isParticipant());
+      function isDisplayParticipant() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/liveGames/$(liveId)/displayParticipants/$(uid()));
+      }
+
+      function isDisplayOnlySessionForLive() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/users/$(uid())/meta/activeSession)
+          && get(/databases/$(database)/documents/users/$(uid())/meta/activeSession).data.mode == "displayOnly"
+          && get(/databases/$(database)/documents/users/$(uid())/meta/activeSession).data.liveId == liveId;
+      }
+
+      allow get: if signedIn() && (isOwner() || isParticipant() || isDisplayParticipant() || isDisplayOnlySessionForLive());
       allow list: if false;
 
       allow create: if signedIn()
@@ -239,6 +283,21 @@ service cloud.firestore {
         allow delete: if isOwner() || (signedIn() && uid() == participantUid);
       }
 
+      match /displayParticipants/{participantUid} {
+        allow get: if signedIn() && (isOwner() || uid() == participantUid);
+
+        allow list: if signedIn()
+          && (get(/databases/$(database)/documents/liveGames/$(liveId)).data.ownerUid == uid());
+
+        allow create: if signedIn() && uid() == participantUid;
+
+        allow update: if signedIn()
+          && uid() == participantUid
+          && request.writeFields.hasOnly(["uid", "joinedAt", "lastSeenAt"]);
+
+        allow delete: if isOwner() || (signedIn() && uid() == participantUid);
+      }
+
       match /pitchEvents/{eventId} {
         function liveDoc() {
           return get(/databases/$(database)/documents/liveGames/$(liveId)).data;
@@ -253,7 +312,12 @@ service cloud.firestore {
             && exists(/databases/$(database)/documents/liveGames/$(liveId)/participants/$(uid()));
         }
 
-        allow get, list: if liveOwner() || liveParticipant();
+        function liveDisplayParticipant() {
+          return signedIn()
+            && exists(/databases/$(database)/documents/liveGames/$(liveId)/displayParticipants/$(uid()));
+        }
+
+        allow get, list: if liveOwner() || liveParticipant() || liveDisplayParticipant();
 
         allow create: if signedIn()
           && (liveOwner() || liveParticipant())

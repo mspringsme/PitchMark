@@ -51,6 +51,10 @@ struct RootView: View {
                     UserDefaults.standard.removeObject(forKey: "pendingInviteToken")
                     joinLiveGameByInviteToken(token)
                 }
+                if let token = UserDefaults.standard.string(forKey: "pendingDisplayInviteToken"), !token.isEmpty {
+                    UserDefaults.standard.removeObject(forKey: "pendingDisplayInviteToken")
+                    joinDisplayGameByInviteToken(token)
+                }
                 if let token = UserDefaults.standard.string(forKey: "pendingPitcherInviteToken"), !token.isEmpty {
                     UserDefaults.standard.removeObject(forKey: "pendingPitcherInviteToken")
                     joinPitcherByInviteToken(token)
@@ -65,6 +69,15 @@ struct RootView: View {
                 joinPitcherByInviteToken(token)
             } else {
                 UserDefaults.standard.set(token, forKey: "pendingPitcherInviteToken")
+            }
+            return
+        }
+
+        if let token = displayInviteToken(from: url), !token.isEmpty {
+            if authManager.isSignedIn {
+                joinDisplayGameByInviteToken(token)
+            } else {
+                UserDefaults.standard.set(token, forKey: "pendingDisplayInviteToken")
             }
             return
         }
@@ -98,6 +111,27 @@ struct RootView: View {
         }
     }
 
+    private func joinDisplayGameByInviteToken(_ token: String) {
+        LiveGameService.shared.joinDisplayGameByInviteToken(token: token) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let liveId):
+                    NotificationCenter.default.post(
+                        name: .gameOrSessionChosen,
+                        object: nil,
+                        userInfo: [
+                            "resolved": true,
+                            "type": "display",
+                            "liveId": liveId
+                        ]
+                    )
+                case .failure(let err):
+                    print("❌ Display invite join failed:", err.localizedDescription)
+                }
+            }
+        }
+    }
+
     private func joinPitcherByInviteToken(_ token: String) {
         authManager.joinPitcherByInviteToken(token: token) { result in
             DispatchQueue.main.async {
@@ -116,6 +150,15 @@ struct RootView: View {
         let host = url.host?.lowercased()
         let path = url.path.lowercased()
         guard host == "join" || path == "/join" else { return nil }
+        let token = components?.queryItems?.first(where: { $0.name == "token" })?.value
+        return token
+    }
+
+    private func displayInviteToken(from url: URL) -> String? {
+        let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let host = url.host?.lowercased()
+        let path = url.path.lowercased()
+        guard host == "display" || path == "/display" else { return nil }
         let token = components?.queryItems?.first(where: { $0.name == "token" })?.value
         return token
     }

@@ -137,6 +137,8 @@ struct PitchTrackerView: View {
     @State private var pitcherName: String = ""
     @State private var selectedPitches: Set<String> = []
     @State private var calledPitch: PitchCall? = nil
+    @State private var lastCallInitiatedAt: Date? = nil
+    @State private var lastObservedPendingCallId: String? = nil
     @State private var lastTappedPosition: CGPoint? = nil
     @State private var batterSide: BatterSide = .right
     @State private var pitchCodeAssignments: [PitchCodeAssignment] = []
@@ -160,6 +162,8 @@ struct PitchTrackerView: View {
     @State private var selectedPitcherId: String? = nil
     @State private var isRecordingResult = false
     @State private var activeCalledPitchId: String? = nil
+    @State private var deferredPendingPitch: Game.PendingPitch? = nil
+    @State private var deferredDisplayCode: (colorName: String, code: String)? = nil
     @State private var actualLocationRecorded: String? = nil
     @State private var resultVisualState: String? = nil
     @State private var pendingResultLabel: String? = nil
@@ -245,6 +249,8 @@ struct PitchTrackerView: View {
         static let encryptedByPracticeId = "encryptedByPracticeId"
         static let practiceCodesEnabled = "practiceCodesEnabled"
         static let activeGameOwnerUserId = "activeGameOwnerUserId"
+        static let displayOnlyLiveId = "displayOnlyLiveId"
+        static let displayOnlyMode = "displayOnlyMode"
         static let hiddenTemplateIds = "hiddenTemplateIds"
         static let hiddenPitcherIds = "hiddenPitcherIds"
     }
@@ -255,10 +261,26 @@ struct PitchTrackerView: View {
     @State private var showCodeShareSheet = false
     @State private var showCodeShareModePicker = false
     @State private var codeShareInitialTab: Int = 0 // 0 = Generate, 1 = Enter
+    @State private var showDisplayJoinSheet = false
+    @State private var displayJoinText: String = ""
+    @State private var displayJoinError: String? = nil
     @State private var showSelectGameFirstAlert = false
     @State private var showCodeShareErrorAlert = false
     @State private var codeShareErrorMessage: String = ""
     @State private var shareCode: String = ""
+    @AppStorage(DefaultsKeys.displayOnlyMode) private var isDisplayOnlyMode: Bool = false
+    @AppStorage(DefaultsKeys.displayOnlyLiveId) private var displayOnlyLiveIdStorage: String = ""
+    @State private var displayOnlyLiveId: String? = nil
+    @State private var displayCodePayload: CodeDisplayOverlayPayload? = nil
+    @State private var displayCodeClearWork: DispatchWorkItem? = nil
+    @State private var displayListener: ListenerRegistration? = nil
+    @State private var displayStateListener: ListenerRegistration? = nil
+    @State private var displayHeartbeatTimer: Timer? = nil
+    @State private var displaySessionListener: ListenerRegistration? = nil
+    @State private var showSessionConflictAlert = false
+    @State private var sessionCheckInProgress = false
+    @State private var autoLiveCreateInProgress = false
+    @State private var didAutoCreateLiveSessionForGameId: String? = nil
     @State private var activeGameOwnerUserId: String? = nil
     @State private var gameListener: ListenerRegistration? = nil
     @State private var livePitchEventsListener: ListenerRegistration? = nil
@@ -288,6 +310,7 @@ struct PitchTrackerView: View {
     @State private var them: Int = 0
     @State private var heartbeatTimer: Timer? = nil
     @State private var isJoiningSession: Bool = false
+    @State private var isJoiningDisplaySession: Bool = false
     @State private var pendingRestoreGameId: String? = nil
     @State private var pendingLiveTemplateId: String? = nil
     @State private var pendingLiveTemplateName: String? = nil
@@ -433,16 +456,19 @@ struct PitchTrackerView: View {
 
     private func handleSetCalledPitch(_ newCall: PitchCall?) {
         calledPitch = newCall
+        lastCallInitiatedAt = newCall == nil ? nil : Date()
 
         guard isGame, isOwnerForActiveGame else { return }
 
 
         // If owner cleared the call, clear pending too.
         guard let newCall else {
+            deferredPendingPitch = nil
             if let liveId = activeLiveId {
                 LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
                     "pending": FieldValue.delete(),
-                    "resultSelection": FieldValue.delete()
+                    "resultSelection": FieldValue.delete(),
+                    "displayCode": FieldValue.delete()
                 ])
             } else if let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
                 authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
@@ -471,14 +497,17 @@ struct PitchTrackerView: View {
             isStrike: newCall.isStrike
         )
         guard let liveId = activeLiveId else {
-            print("⚠️ No activeLiveId — refusing to write pending to legacy game doc.")
+            deferredPendingPitch = pending
+            ensureAutoLiveSessionIfNeeded()
+            print("⚠️ No activeLiveId — deferring pending write until live session exists.")
             return
         }
 
         do {
             let pendingData = try Firestore.Encoder().encode(pending)
             LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
-                "pending": pendingData
+                "pending": pendingData,
+                "displayCode": FieldValue.delete()
             ]) { err in
                 if let err { print("❌ pending update error:", err.localizedDescription) }
             }
@@ -558,10 +587,24 @@ struct PitchTrackerView: View {
         let isActive = (pending?["isActive"] as? Bool) == true
         let pendingId = pending?["id"] as? String
 
-        // If pending is gone (or inactive), the participant has saved/canceled — dismiss owner's call UI.
+        if let pendingId {
+            lastObservedPendingCallId = pendingId
+        }
+
+        // If pending is gone (or inactive), the participant has saved/canceled — dismiss owner's call UI
+        // BUT only if we previously saw this exact call id in Firestore.
         if !isActive {
-            if calledPitch != nil || activeCalledPitchId != nil || isRecordingResult || pendingResultLabel != nil {
-                resetCallAndResultUIState()
+            if let startedAt = lastCallInitiatedAt,
+               Date().timeIntervalSince(startedAt) < 1.0 {
+                return
+            }
+
+            if let activeId = activeCalledPitchId,
+               let observedId = lastObservedPendingCallId,
+               activeId == observedId {
+                if calledPitch != nil || activeCalledPitchId != nil || isRecordingResult || pendingResultLabel != nil {
+                    resetCallAndResultUIState()
+                }
             }
             return
         }
@@ -1315,6 +1358,19 @@ struct PitchTrackerView: View {
         selectedLocation = ""
         resultVisualState = nil
         actualLocationRecorded = nil
+        lastCallInitiatedAt = nil
+        lastObservedPendingCallId = nil
+        clearDisplayCodeIfNeeded()
+    }
+
+    private func clearDisplayCodeIfNeeded() {
+        guard isGame, isOwnerForActiveGame, let uid = Auth.auth().currentUser?.uid else { return }
+        Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .collection("displayState")
+            .document("current")
+            .delete()
     }
 
     private func resetLiveTemplateOverrideLock() {
@@ -1367,6 +1423,7 @@ struct PitchTrackerView: View {
         }
 
         activeLiveId = nil
+        updateActiveSessionLiveId(nil)
         livePitcherId = nil
         UserDefaults.standard.removeObject(forKey: "activeLiveId")
 
@@ -1890,6 +1947,21 @@ struct PitchTrackerView: View {
         return trimmed
     }
 
+    private func displayInviteToken(from text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let url = URL(string: trimmed),
+           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+           !token.isEmpty {
+            return token
+        }
+
+        if trimmed.contains("://") { return nil }
+        return trimmed
+    }
+
     private func joinLiveGameFromInvite() {
         inviteJoinError = nil
 
@@ -1918,6 +1990,39 @@ struct PitchTrackerView: View {
 
                 case .failure(let err):
                     self.inviteJoinError = err.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func joinDisplayGameFromInvite() {
+        displayJoinError = nil
+
+        guard let token = displayInviteToken(from: displayJoinText) else {
+            displayJoinError = "Paste a valid display link."
+            return
+        }
+
+        isJoiningDisplaySession = true
+        LiveGameService.shared.joinDisplayGameByInviteToken(token: token) { result in
+            DispatchQueue.main.async {
+                self.isJoiningDisplaySession = false
+
+                switch result {
+                case .success(let liveId):
+                    NotificationCenter.default.post(
+                        name: .gameOrSessionChosen,
+                        object: nil,
+                        userInfo: [
+                            "type": "display",
+                            "liveId": liveId
+                        ]
+                    )
+                    self.displayJoinText = ""
+                    self.showDisplayJoinSheet = false
+
+                case .failure(let err):
+                    self.displayJoinError = err.localizedDescription
                 }
             }
         }
@@ -2283,12 +2388,17 @@ struct PitchTrackerView: View {
                     activeCalledPitchId: $activeCalledPitchId,
                     pitchFirst: $pitchFirst,
                     autoPitchOnlyEnabled: $autoPitchOnlyEnabled,
+                    liveId: activeLiveId,
                     call: call,
                     pitchCodeAssignments: pitchCodeAssignments,
                     batterSide: batterSide,
                     template: selectedTemplate,
                     isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
-                    isPracticeMode: sessionManager.currentMode == .practice
+                    isPracticeMode: sessionManager.currentMode == .practice,
+                    onDeferDisplayCode: { colorName, code in
+                        deferredDisplayCode = (colorName: colorName, code: code)
+                        ensureAutoLiveSessionIfNeeded()
+                    }
                 )
                 .transition(.opacity)
                 .padding(.top, 4)
@@ -3145,10 +3255,21 @@ struct PitchTrackerView: View {
                 showCodeShareSheet = true
             }
 
+            Button("Create Display Link") {
+                codeShareInitialTab = 0
+                showCodeShareSheet = true
+            }
+
             Button("Join via Invite Link") {
                 inviteJoinError = nil
                 inviteJoinText = ""
                 showInviteJoinSheet = true
+            }
+
+            Button("Join Display Link") {
+                displayJoinError = nil
+                displayJoinText = ""
+                showDisplayJoinSheet = true
             }
 
             // ✅ Disconnect (both sides) — only show when currently linked
@@ -3575,6 +3696,376 @@ struct PitchTrackerView: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
+
+    @ViewBuilder
+    private func displayOnlyBody(liveId: String) -> some View {
+        displayLandscape(
+            ZStack {
+                Color.black.ignoresSafeArea()
+
+            if let payload = displayCodePayload {
+                CodeDisplayOverlayView(
+                    colorName: payload.colorName,
+                    code: payload.code,
+                    showsCloseButton: true,
+                    onClose: {
+                        displayCodePayload = nil
+                    }
+                )
+            } else {
+                VStack(spacing: 12) {
+                    Text("Display Mode")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("Waiting for code…")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+            }
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Button("Exit") {
+                        exitDisplayOnlyMode()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white.opacity(0.85))
+                    .padding(.top, 10)
+                    .padding(.trailing, 12)
+                }
+                Spacer()
+            }
+        }
+        )
+        .onAppear {
+            startDisplaySessionListener()
+            startListeningToDisplayState()
+            startDisplayHeartbeat(liveId: liveId)
+        }
+        .onDisappear {
+            stopDisplayOnlyListeners()
+        }
+    }
+
+    private func startListeningToDisplayState() {
+        displayStateListener?.remove()
+        displayStateListener = nil
+
+        guard let uid = authManager.user?.uid, !uid.isEmpty else {
+            print("⚠️ Display state listener missing uid")
+            return
+        }
+
+        print("🖥️ Display state listener attaching to users/\(uid)/displayState/current")
+        let ref = Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .collection("displayState")
+            .document("current")
+
+        displayStateListener = ref.addSnapshotListener { snap, err in
+            if let err {
+                print("❌ Display state listener error:", err.localizedDescription)
+                return
+            }
+            guard let data = snap?.data() else {
+                print("🖥️ Display state cleared / missing. raw=nil")
+                DispatchQueue.main.async {
+                    self.displayCodePayload = nil
+                }
+                return
+            }
+
+            if let colorName = data["colorName"] as? String,
+               let code = data["code"] as? String,
+               !colorName.isEmpty,
+               !code.isEmpty {
+                print("🖥️ Display state received color=\(colorName) code=\(code)")
+                DispatchQueue.main.async {
+                    self.showDisplayCode(colorName: colorName, code: code)
+                }
+            } else {
+                print("🖥️ Display state missing fields raw=\(data)")
+                DispatchQueue.main.async {
+                    self.displayCodePayload = nil
+                }
+            }
+        }
+    }
+
+    private func showDisplayCode(colorName: String, code: String) {
+        displayCodePayload = CodeDisplayOverlayPayload(colorName: colorName, code: code)
+        displayCodeClearWork?.cancel()
+        displayCodeClearWork = nil
+    }
+
+    private func startDisplayHeartbeat(liveId: String) {
+        stopDisplayHeartbeat()
+        // Presence disabled for display-only mode.
+    }
+
+    private func stopDisplayHeartbeat() {
+        displayHeartbeatTimer?.invalidate()
+        displayHeartbeatTimer = nil
+    }
+
+    private func stopDisplayOnlyListeners() {
+        displayListener?.remove()
+        displayListener = nil
+        displayStateListener?.remove()
+        displayStateListener = nil
+        displaySessionListener?.remove()
+        displaySessionListener = nil
+        displayCodePayload = nil
+        displayCodeClearWork?.cancel()
+        displayCodeClearWork = nil
+        stopDisplayHeartbeat()
+    }
+
+    private func enterDisplayOnlyMode(liveId: String) {
+        displayOnlyLiveId = liveId
+        displayOnlyLiveIdStorage = liveId
+        isDisplayOnlyMode = true
+        startDisplaySessionListener()
+    }
+
+    private func exitDisplayOnlyMode() {
+        isDisplayOnlyMode = false
+        displayOnlyLiveId = nil
+        displayOnlyLiveIdStorage = ""
+        stopDisplayOnlyListeners()
+    }
+
+    private func displayLandscape<Content: View>(_ content: Content) -> some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
+            .statusBarHidden(true)
+    }
+
+    private func startDisplaySessionListener() {
+        guard let ref = activeSessionDocRef else { return }
+        displaySessionListener?.remove()
+        displaySessionListener = nil
+        print("🖥️ Display session listener attaching to activeSession")
+        displaySessionListener = ref.addSnapshotListener { snap, err in
+            if let err {
+                print("⚠️ display session listener error:", err.localizedDescription)
+                return
+            }
+            let data = snap?.data() ?? [:]
+            let liveId = data["liveId"] as? String
+            let mode = data["mode"] as? String ?? "<nil>"
+            print("🖥️ Display session update mode=\(mode) liveId=\(liveId ?? "<nil>")")
+            if let liveId, !liveId.isEmpty {
+                if self.displayOnlyLiveId != liveId {
+                    self.displayOnlyLiveId = liveId
+                    self.displayOnlyLiveIdStorage = liveId
+                }
+            } else {
+                self.displayOnlyLiveId = nil
+                self.displayOnlyLiveIdStorage = ""
+            }
+        }
+    }
+
+    private func updateActiveSessionLiveId(_ liveId: String?) {
+        guard !isDisplayOnlyMode, !showSessionConflictAlert else { return }
+        guard let ref = activeSessionDocRef else { return }
+        var payload: [String: Any] = [
+            "deviceId": deviceSessionId,
+            "mode": "primary"
+        ]
+        if let liveId, !liveId.isEmpty {
+            payload["liveId"] = liveId
+        } else {
+            payload["liveId"] = FieldValue.delete()
+        }
+        ref.setData(payload, merge: true)
+    }
+
+    private func ensureAutoLiveSessionIfNeeded() {
+        guard !isDisplayOnlyMode, !showSessionConflictAlert else { return }
+        guard isGame, isOwnerForActiveGame else { return }
+        guard activeLiveId == nil else { return }
+        guard !autoLiveCreateInProgress else { return }
+        guard let gameId = selectedGameId, !gameId.isEmpty else { return }
+        if didAutoCreateLiveSessionForGameId == gameId { return }
+
+        autoLiveCreateInProgress = true
+        LiveGameService.shared.createLiveGameAndJoinCode(
+            ownerGameId: gameId,
+            opponent: opponentName ?? "",
+            templateId: selectedTemplate?.id.uuidString,
+            templateName: selectedTemplate?.name
+        ) { result in
+            DispatchQueue.main.async {
+                self.autoLiveCreateInProgress = false
+                switch result {
+                case .success(let tuple):
+                    self.didAutoCreateLiveSessionForGameId = gameId
+                    NotificationCenter.default.post(
+                        name: .gameOrSessionChosen,
+                        object: nil,
+                        userInfo: [
+                            "resolved": true,
+                            "type": "liveGame",
+                            "liveId": tuple.liveId,
+                            "ownerUid": self.authManager.user?.uid ?? "",
+                            "gameId": gameId,
+                            "opponent": self.opponentName ?? "",
+                            "templateId": self.selectedTemplate?.id.uuidString ?? "",
+                            "templateName": self.selectedTemplate?.name ?? ""
+                        ]
+                    )
+                case .failure(let err):
+                    print("❌ Auto live session create failed:", err.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private var deviceSessionId: String {
+        let key = "deviceSessionId"
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
+            return existing
+        }
+        let newId = UUID().uuidString
+        UserDefaults.standard.set(newId, forKey: key)
+        return newId
+    }
+
+    private var activeSessionDocRef: DocumentReference? {
+        guard let uid = authManager.user?.uid, !uid.isEmpty else { return nil }
+        return Firestore.firestore().collection("users").document(uid).collection("meta").document("activeSession")
+    }
+
+    private func ensurePrimarySessionOrPrompt() {
+        guard !isDisplayOnlyMode else { return }
+        guard authManager.isSignedIn else { return }
+        guard !sessionCheckInProgress else { return }
+        guard let ref = activeSessionDocRef else { return }
+
+        sessionCheckInProgress = true
+        ref.getDocument { snap, err in
+            sessionCheckInProgress = false
+            if let err {
+                print("⚠️ activeSession read failed:", err.localizedDescription)
+                return
+            }
+
+            let data = snap?.data() ?? [:]
+            let existingDevice = data["deviceId"] as? String
+            if existingDevice == nil {
+                claimPrimarySession()
+                return
+            }
+
+            if existingDevice == deviceSessionId {
+                return
+            }
+
+            showSessionConflictAlert = true
+        }
+    }
+
+    private func claimPrimarySession() {
+        guard let ref = activeSessionDocRef else { return }
+        let payload: [String: Any] = [
+            "deviceId": deviceSessionId,
+            "claimedAt": FieldValue.serverTimestamp(),
+            "mode": "primary"
+        ]
+        ref.setData(payload, merge: true) { err in
+            if let err {
+                print("⚠️ activeSession claim failed:", err.localizedDescription)
+                return
+            }
+            self.isDisplayOnlyMode = false
+            self.displayOnlyLiveId = nil
+            self.displayOnlyLiveIdStorage = ""
+        }
+    }
+
+    private var displayOnlyHomeView: some View {
+        displayLandscape(
+            ZStack {
+                Color.black.ignoresSafeArea()
+            VStack(spacing: 16) {
+                Text("Display Only")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("Waiting for codes from the primary device…")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .padding()
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Button("Exit") {
+                        isDisplayOnlyMode = false
+                        displayOnlyLiveId = nil
+                        displayOnlyLiveIdStorage = ""
+                        showSessionConflictAlert = true
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white.opacity(0.85))
+                    .padding(.top, 10)
+                    .padding(.trailing, 12)
+                }
+                Spacer()
+            }
+        }
+        )
+        .onAppear {
+            startDisplaySessionListener()
+            startListeningToDisplayState()
+        }
+    }
+
+    @ViewBuilder
+    private var accountInUseOverlay: some View {
+        if showSessionConflictAlert {
+            ZStack {
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+
+                VStack(spacing: 12) {
+                    Text("Account In Use")
+                        .font(.headline)
+                    let email = authManager.user?.email ?? "this account"
+                    Text("2 devices logged into (\(email))")
+                        .font(.subheadline)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+
+                    Button("Display Codes Only") {
+                        isDisplayOnlyMode = true
+                        displayOnlyLiveId = nil
+                        displayOnlyLiveIdStorage = ""
+                        showSessionConflictAlert = false
+                        startDisplaySessionListener()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Take Over Primary", role: .destructive) {
+                        showSessionConflictAlert = false
+                        claimPrimarySession()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(20)
+                .background(Color(.systemBackground))
+                .cornerRadius(16)
+                .shadow(radius: 20)
+                .padding(.horizontal, 24)
+            }
+            .transition(.opacity)
+        }
+    }
     
     private func handleInitialAppear() {
         // If we aren't signed in yet, do NOT mark anything as presented.
@@ -3584,6 +4075,14 @@ struct PitchTrackerView: View {
             startupPhase = .ready
             return
         }
+
+        if isDisplayOnlyMode, !displayOnlyLiveIdStorage.isEmpty {
+            displayOnlyLiveId = displayOnlyLiveIdStorage
+            startupPhase = .ready
+            return
+        }
+
+        ensurePrimarySessionOrPrompt()
 
         loadBufferedSharedPitcherEvents()
 
@@ -3622,6 +4121,7 @@ struct PitchTrackerView: View {
             print("🔁 Restoring live session:", persistedLiveId)
 
             self.activeLiveId = persistedLiveId
+            self.updateActiveSessionLiveId(persistedLiveId)
             self.startLivePresenceHeartbeat(liveId: persistedLiveId)
             self.ensureLivePresence(liveId: persistedLiveId)
             self.seedLivePitchEventsOnce(liveId: persistedLiveId)
@@ -3683,6 +4183,7 @@ struct PitchTrackerView: View {
                 self.selectedTemplate = loadedTemplates.first
             }
             self.applyPendingLiveTemplateIfPossible()
+            self.ensureAutoLiveSessionIfNeeded()
         }
 
         authManager.loadGames { loadedGames in
@@ -3705,6 +4206,7 @@ struct PitchTrackerView: View {
                 }
 
                 self.pendingRestoreGameId = nil
+                self.ensureAutoLiveSessionIfNeeded()
             }
         }
 
@@ -3847,6 +4349,7 @@ struct PitchTrackerView: View {
                 hydrateChosenGameUI(ownerUid: ownerUid, gameId: gameId)
                 startListeningToActiveGame()
                 startListeningToGamePitchEvents()
+                ensureAutoLiveSessionIfNeeded()
                 showGameSheet = false
             },
 
@@ -3912,6 +4415,41 @@ struct PitchTrackerView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(inviteJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningSession)
+        }
+        .padding()
+        .presentationDetents([.fraction(0.5)])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder private var displayJoinSheetView: some View {
+        VStack(spacing: 16) {
+            Text("Join Display Screen")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Display Link")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                TextField("Paste display link", text: $displayJoinText)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+
+            }
+
+            if let error = displayJoinError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Button(isJoiningDisplaySession ? "Joining..." : "Join Display") {
+                joinDisplayGameFromInvite()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(displayJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningDisplaySession)
         }
         .padding()
         .presentationDetents([.fraction(0.5)])
@@ -4079,6 +4617,7 @@ struct PitchTrackerView: View {
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
         switch newPhase {
         case .active:
+            ensurePrimarySessionOrPrompt()
             resumeLiveSessionIfNeeded()
         case .inactive, .background:
             flushBufferedSharedPitcherEvents(reason: "background")
@@ -4089,6 +4628,18 @@ struct PitchTrackerView: View {
     }
 
     var body: some View {
+        let resolvedDisplayLiveId = displayOnlyLiveId ?? (displayOnlyLiveIdStorage.isEmpty ? nil : displayOnlyLiveIdStorage)
+        let displayCoverBinding = Binding<Bool>(
+            get: { isDisplayOnlyMode },
+            set: { newValue in if !newValue { exitDisplayOnlyMode() } }
+        )
+        let displayCoverView: AnyView = {
+            if let liveId = resolvedDisplayLiveId {
+                return AnyView(displayOnlyBody(liveId: liveId))
+            }
+            return AnyView(displayOnlyHomeView)
+        }()
+
         let synced = baseBody.withGameSync(
             start: {
                 startListeningToActiveGame()
@@ -4188,7 +4739,11 @@ struct PitchTrackerView: View {
             .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
             .eraseToAnyView()
 
-        let v5 = v4
+        let v4b = v4
+            .sheet(isPresented: $showDisplayJoinSheet) { displayJoinSheetView }
+            .eraseToAnyView()
+
+        let v5 = v4b
             .sheet(isPresented: $showPracticeSheet, onDismiss: {
                 refreshGamesList()
                 if sessionManager.currentMode == .practice && practiceName == nil && selectedPracticeId == nil {
@@ -4214,7 +4769,7 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         // Keep alerts + the rest of your observers, then erase one last time
-        return v9
+        return AnyView(v9
             .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -4225,6 +4780,10 @@ struct PitchTrackerView: View {
             } message: {
                 Text(codeShareErrorMessage)
             }
+            .fullScreenCover(isPresented: displayCoverBinding) {
+                displayCoverView
+            }
+            .overlay { accountInUseOverlay }
             .onAppear {
                 handleInitialAppear()
             }
@@ -4243,6 +4802,12 @@ struct PitchTrackerView: View {
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
                 guard let info = note.userInfo as? [String: Any] else { return }
 
+                if let type = info["type"] as? String, type == "display" {
+                    guard let liveId = info["liveId"] as? String else { return }
+                    enterDisplayOnlyMode(liveId: liveId)
+                    return
+                }
+
                 if let type = info["type"] as? String, type == "liveGame" {
                     guard let liveId = info["liveId"] as? String else { return }
 
@@ -4256,9 +4821,38 @@ struct PitchTrackerView: View {
 
                     // ✅ Set in-memory live session id FIRST (this is what your writes check)
                     self.activeLiveId = liveId
+                    self.updateActiveSessionLiveId(liveId)
                     self.startLivePresenceHeartbeat(liveId: liveId)
                     self.ensureLivePresence(liveId: liveId)
                     self.seedLivePitchEventsOnce(liveId: liveId)
+
+                    if let deferred = self.deferredPendingPitch {
+                        do {
+                            let pendingData = try Firestore.Encoder().encode(deferred)
+                            LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                                "pending": pendingData,
+                                "displayCode": FieldValue.delete()
+                            ]) { err in
+                                if let err { print("❌ deferred pending update error:", err.localizedDescription) }
+                            }
+                            self.deferredPendingPitch = nil
+                        } catch {
+                            print("❌ encode deferred pending failed:", error)
+                        }
+                    }
+
+                    if let deferred = self.deferredDisplayCode {
+                        LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                            "displayCode": [
+                                "colorName": deferred.colorName,
+                                "code": deferred.code,
+                                "updatedAt": FieldValue.serverTimestamp()
+                            ]
+                        ]) { err in
+                            if let err { print("❌ deferred displayCode update error:", err.localizedDescription) }
+                        }
+                        self.deferredDisplayCode = nil
+                    }
 
                     // (Optional but recommended) If the notification includes ownerUid, set it
                     if let ownerUid = info["ownerUid"] as? String, !ownerUid.isEmpty {
@@ -4356,6 +4950,7 @@ struct PitchTrackerView: View {
                 }
             }
             .eraseToAnyView()
+        )
     }
     
     struct OwnerCalledPitchRecordContainer: View {
@@ -5677,6 +6272,7 @@ struct CodeOrderToggle: View {
 private struct CodeDisplayOverlayView: View {
     let colorName: String
     let code: String
+    var showsCloseButton: Bool = true
     let onClose: () -> Void
 
     private var backgroundColor: Color {
@@ -5703,6 +6299,7 @@ private struct CodeDisplayOverlayView: View {
                 let characterSpacing = max(18.0, horizontalSpan * 0.09)
                 let fontSize = max(110.0, (verticalSpan - (characterSpacing * 3)) / 2.5)
 
+                let isLandscape = proxy.size.width > proxy.size.height
                 HStack(spacing: characterSpacing) {
                     ForEach(Array(code).map(String.init), id: \.self) { character in
                         Text(character)
@@ -5713,21 +6310,23 @@ private struct CodeDisplayOverlayView: View {
                     }
                 }
                 .fixedSize()
-                .rotationEffect(.degrees(-90))
+                .rotationEffect(isLandscape ? .degrees(0) : .degrees(-90))
                 .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
 
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(.title2.weight(.bold))
-                        .foregroundStyle(foregroundColor)
-                        .padding(12)
-                        .background(
-                            Circle()
-                                .fill(foregroundColor.opacity(0.15))
-                        )
+                if showsCloseButton {
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.title2.weight(.bold))
+                            .foregroundStyle(foregroundColor)
+                            .padding(12)
+                            .background(
+                                Circle()
+                                    .fill(foregroundColor.opacity(0.15))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .padding(20)
                 }
-                .buttonStyle(.plain)
-                .padding(20)
             }
         }
     }
@@ -5749,12 +6348,14 @@ struct CalledPitchView: View {
     @Binding var activeCalledPitchId: String?
     @Binding var pitchFirst: Bool
     @Binding var autoPitchOnlyEnabled: Bool
+    let liveId: String?
     let call: PitchCall
     let pitchCodeAssignments: [PitchCodeAssignment]
     let batterSide: BatterSide
     let template: PitchTemplate?
     let isEncryptedMode: Bool
     let isPracticeMode: Bool
+    let onDeferDisplayCode: ((String, String) -> Void)?
     
     private func reorderedCodeIfNeeded(_ code: String) -> String {
         // When pitchFirst is false (Location 1st), swap first two and last two characters of a 4-char code.
@@ -5772,6 +6373,28 @@ struct CalledPitchView: View {
     private var selectedDisplayedCode: String? {
         guard let tappedCode else { return nil }
         return reorderedCodeIfNeeded(tappedCode)
+    }
+
+    private func broadcastDisplayCode(colorName: String, code: String) {
+        guard !isPracticeMode else {
+            print("⚠️ broadcastDisplayCode skipped (practice mode) color=\(colorName) code=\(code)")
+            return
+        }
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("⚠️ broadcastDisplayCode skipped (missing uid) color=\(colorName) code=\(code)")
+            return
+        }
+        print("📤 broadcastDisplayCode user=\(uid) color=\(colorName) code=\(code)")
+        Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .collection("displayState")
+            .document("current")
+            .setData([
+                "colorName": colorName,
+                "code": code,
+                "updatedAt": FieldValue.serverTimestamp()
+            ], merge: true)
     }
 
     var body: some View {
@@ -5901,6 +6524,7 @@ struct CalledPitchView: View {
                                     colorName: colorName,
                                     code: selectedDisplayedCode
                                 )
+                                broadcastDisplayCode(colorName: colorName, code: selectedDisplayedCode)
                             }
                         )
                     }
@@ -6040,8 +6664,10 @@ private struct CodeShareSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var generated: String
     @State private var inviteLink: String = ""
+    @State private var displayInviteLink: String = ""
     @State private var didWriteSessionDoc = false
     @State private var writeErrorMessage: String? = nil
+    @State private var displayLinkErrorMessage: String? = nil
 
 
     init(
@@ -6074,7 +6700,7 @@ private struct CodeShareSheet: View {
             VStack(spacing: 16) {
 
                 VStack(alignment: .center, spacing: 12) {
-                    Text("Share this invite link:")
+                    Text("Share these invite links:")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -6124,10 +6750,51 @@ private struct CodeShareSheet: View {
                             }
                         }
                     }
+
+                    Divider()
+                        .padding(.vertical, 6)
+
+                    Text("Display-only link:")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+
+                    if !displayInviteLink.isEmpty {
+                        Text(displayInviteLink)
+                            .font(.footnote)
+                            .foregroundStyle(.primary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    if let msg = displayLinkErrorMessage {
+                        Text(msg)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    HStack {
+                        Button {
+                            UIPasteboard.general.string = displayInviteLink
+                        } label: {
+                            Label("Copy Display Link", systemImage: "link")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(displayInviteLink.isEmpty)
+
+                        if let url = URL(string: displayInviteLink) {
+                            ShareLink(item: url) {
+                                Label("Share Display Link", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .onAppear {
                     inviteLink = ""
+                    displayInviteLink = ""
+                    displayLinkErrorMessage = nil
                     generateLiveGameAndCode()
                 }
 
@@ -6160,6 +6827,8 @@ private struct CodeShareSheet: View {
         writeErrorMessage = nil
         generated = ""
         inviteLink = ""
+        displayInviteLink = ""
+        displayLinkErrorMessage = nil
 
         LiveGameService.shared.createLiveGameAndJoinCode(
             ownerGameId: gameId,
@@ -6174,6 +6843,17 @@ private struct CodeShareSheet: View {
                     print("✅ Generated code=\(tuple.code) liveId=\(tuple.liveId)")
                     self.generated = tuple.code
                     self.inviteLink = "pitchmark://join?token=\(tuple.inviteToken)"
+
+                    LiveGameService.shared.createDisplayInviteTokenForLive(liveId: tuple.liveId) { result in
+                        DispatchQueue.main.async {
+                            switch result {
+                            case .success(let token):
+                                self.displayInviteLink = "pitchmark://display?token=\(token)"
+                            case .failure(let err):
+                                self.displayLinkErrorMessage = err.localizedDescription
+                            }
+                        }
+                    }
 
                     // Tell the parent to switch into the live session
                     // We pass the LIVE ID now (not the 6-digit code)

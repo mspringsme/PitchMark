@@ -442,16 +442,49 @@ class AuthManager: ObservableObject {
     }
 
     func signOut() {
+        let uid = Auth.auth().currentUser?.uid ?? ""
+        let defaults = UserDefaults.standard
+        let localDeviceId = defaults.string(forKey: "deviceSessionId") ?? ""
+
+        if !uid.isEmpty {
+            let ref = Firestore.firestore()
+                .collection("users")
+                .document(uid)
+                .collection("meta")
+                .document("activeSession")
+
+            ref.getDocument { snapshot, error in
+                if let error {
+                    print("⚠️ Failed to read activeSession on sign out: \(error.localizedDescription)")
+                    return
+                }
+
+                let existingDevice = snapshot?.data()?["deviceId"] as? String
+                guard !localDeviceId.isEmpty, existingDevice == localDeviceId else { return }
+
+                ref.delete { error in
+                    if let error {
+                        print("⚠️ Failed to clear activeSession on sign out: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+
+        defaults.removeObject(forKey: "displayOnlyMode")
+        defaults.removeObject(forKey: "displayOnlyLiveId")
+        defaults.removeObject(forKey: "activeLiveId")
+        defaults.removeObject(forKey: "activeIsPractice")
+
         do {
             try Auth.auth().signOut()
             print("Signed out from Firebase")
         } catch {
             print("Firebase sign-out failed: \(error.localizedDescription)")
         }
-        
+
         GIDSignIn.sharedInstance.signOut()
         print("Signed out from Google")
-        
+
         self.user = nil
         self.isSignedIn = false
     }
