@@ -11,17 +11,40 @@
 		2307AFC02F12BB3A00690E69 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 2307AFBF2F12BB3A00690E69 /* GoogleSignInSwift */; };
 		232EB1A72F69B81100BE086E /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 232EB1A62F69B81100BE086E /* FirebaseFunctions */; };
 		23652D3B2F57705F00461063 /* firestore.rules in Resources */ = {isa = PBXBuildFile; fileRef = 23652D3A2F57705F00461063 /* firestore.rules */; };
+		23B131CE2F75A50800A70589 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 23B131CD2F75A50800A70589 /* GoogleSignInSwift */; };
+		23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 23B131D12F75A91D00A70589 /* GoogleService-Info.plist */; };
 		23F1A88B2F12C6EF0094E7BC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88A2F12C6EF0094E7BC /* FirebaseAuth */; };
 		23F1A88D2F12C7030094E7BC /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88C2F12C7030094E7BC /* FirebaseFirestore */; };
 		23F1A88F2F12C70B0094E7BC /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88E2F12C70B0094E7BC /* FirebaseAnalytics */; };
 		23F1A8912F12C7140094E7BC /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A8902F12C7140094E7BC /* FirebaseAppCheck */; };
 		23F1A8932F12C7200094E7BC /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A8922F12C7200094E7BC /* FirebaseMessaging */; };
 		23F1A8952F12C7260094E7BC /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A8942F12C7260094E7BC /* FirebaseStorage */; };
+		23F7D2BE2F7586290010D7BF /* DisplayOnlyWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */; };
+		23F7D2C02F758DE70010D7BF /* CodeDisplayOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */; };
+		23F7D2DE2F7597D80010D7BF /* PitchMarkDisplayApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F7D2D72F75979E0010D7BF /* PitchMarkDisplayApp.swift */; };
+		23F7D2DF2F7597E10010D7BF /* DisplayRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F7D2D82F75979E0010D7BF /* DisplayRootView.swift */; };
+		23F7D2E02F7597E80010D7BF /* DisplayOnlyScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F7D2D92F75979E0010D7BF /* DisplayOnlyScreen.swift */; };
+		23F7D2E52F7599F20010D7BF /* CodeDisplayOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */; };
+		23F7D2E82F759BAE0010D7BF /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 23F7D2E72F759BAE0010D7BF /* FirebaseAppCheck */; };
+		23F7D2EA2F759BAE0010D7BF /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 23F7D2E92F759BAE0010D7BF /* FirebaseAuth */; };
+		23F7D2EC2F759BAE0010D7BF /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 23F7D2EB2F759BAE0010D7BF /* FirebaseCore */; };
+		23F7D2EE2F759BAE0010D7BF /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 23F7D2ED2F759BAE0010D7BF /* FirebaseFirestore */; };
+		23F7D2F02F759BAE0010D7BF /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 23F7D2EF2F759BAE0010D7BF /* FirebaseFunctions */; };
+		23F7D2F22F759BAE0010D7BF /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = 23F7D2F12F759BAE0010D7BF /* GoogleSignIn */; };
+		23F7D2F72F759DE90010D7BF /* StrikeZoneButtonLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F7D2F62F759DE90010D7BF /* StrikeZoneButtonLabel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		23652D3A2F57705F00461063 /* firestore.rules */ = {isa = PBXFileReference; lastKnownFileType = text; path = firestore.rules; sourceTree = "<group>"; };
 		239F0B7C2F12B238004E32DD /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		23B131D12F75A91D00A70589 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyWindowView.swift; sourceTree = "<group>"; };
+		23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeDisplayOverlayView.swift; sourceTree = "<group>"; };
+		23F7D2C52F758F710010D7BF /* Pitchmark Display.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Pitchmark Display.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		23F7D2D72F75979E0010D7BF /* PitchMarkDisplayApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PitchMarkDisplayApp.swift; sourceTree = "<group>"; };
+		23F7D2D82F75979E0010D7BF /* DisplayRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRootView.swift; sourceTree = "<group>"; };
+		23F7D2D92F75979E0010D7BF /* DisplayOnlyScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyScreen.swift; sourceTree = "<group>"; };
+		23F7D2F62F759DE90010D7BF /* StrikeZoneButtonLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrikeZoneButtonLabel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -32,6 +55,20 @@
 			);
 			target = 239F0B7B2F12B238004E32DD /* PitchMark */;
 		};
+		23F7D2E22F7599BC0010D7BF /* Exceptions for "PitchMark" folder in "Pitchmark Display" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AuthManager.swift,
+				CalledPitchRecord.swift,
+				Games.swift,
+				Notifications.swift,
+				"Pitch%.swift",
+				PitchSessionManager.swift,
+				SignInView.swift,
+				Utilities.swift,
+			);
+			target = 23F7D2C42F758F710010D7BF /* Pitchmark Display */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -39,8 +76,14 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				2307AFC22F12C5BB00690E69 /* Exceptions for "PitchMark" folder in "PitchMark" target */,
+				23F7D2E22F7599BC0010D7BF /* Exceptions for "PitchMark" folder in "Pitchmark Display" target */,
 			);
 			path = PitchMark;
+			sourceTree = "<group>";
+		};
+		23F7D2C62F758F710010D7BF /* Pitchmark Display */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Pitchmark Display";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -62,6 +105,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		23F7D2C22F758F710010D7BF /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				23F7D2E82F759BAE0010D7BF /* FirebaseAppCheck in Frameworks */,
+				23F7D2EE2F759BAE0010D7BF /* FirebaseFirestore in Frameworks */,
+				23B131CE2F75A50800A70589 /* GoogleSignInSwift in Frameworks */,
+				23F7D2F02F759BAE0010D7BF /* FirebaseFunctions in Frameworks */,
+				23F7D2EC2F759BAE0010D7BF /* FirebaseCore in Frameworks */,
+				23F7D2EA2F759BAE0010D7BF /* FirebaseAuth in Frameworks */,
+				23F7D2F22F759BAE0010D7BF /* GoogleSignIn in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -69,9 +126,14 @@
 			isa = PBXGroup;
 			children = (
 				239F0B7E2F12B238004E32DD /* PitchMark */,
+				23F7D2C62F758F710010D7BF /* Pitchmark Display */,
 				23F1A8892F12C6EF0094E7BC /* Frameworks */,
 				239F0B7D2F12B238004E32DD /* Products */,
 				23652D3A2F57705F00461063 /* firestore.rules */,
+				23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */,
+				23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */,
+				23F7D2DA2F75979E0010D7BF /* PitchMarkDisplay */,
+				23F7D2F62F759DE90010D7BF /* StrikeZoneButtonLabel.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -79,6 +141,7 @@
 			isa = PBXGroup;
 			children = (
 				239F0B7C2F12B238004E32DD /* PitchMark.app */,
+				23F7D2C52F758F710010D7BF /* Pitchmark Display.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -88,6 +151,17 @@
 			children = (
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		23F7D2DA2F75979E0010D7BF /* PitchMarkDisplay */ = {
+			isa = PBXGroup;
+			children = (
+				23F7D2D72F75979E0010D7BF /* PitchMarkDisplayApp.swift */,
+				23F7D2D82F75979E0010D7BF /* DisplayRootView.swift */,
+				23F7D2D92F75979E0010D7BF /* DisplayOnlyScreen.swift */,
+				23B131D12F75A91D00A70589 /* GoogleService-Info.plist */,
+			);
+			path = PitchMarkDisplay;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -124,6 +198,32 @@
 			productReference = 239F0B7C2F12B238004E32DD /* PitchMark.app */;
 			productType = "com.apple.product-type.application";
 		};
+		23F7D2C42F758F710010D7BF /* Pitchmark Display */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 23F7D2CD2F758F720010D7BF /* Build configuration list for PBXNativeTarget "Pitchmark Display" */;
+			buildPhases = (
+				23F7D2C12F758F710010D7BF /* Sources */,
+				23F7D2C22F758F710010D7BF /* Frameworks */,
+				23F7D2C32F758F710010D7BF /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Pitchmark Display";
+			packageProductDependencies = (
+				23F7D2E72F759BAE0010D7BF /* FirebaseAppCheck */,
+				23F7D2E92F759BAE0010D7BF /* FirebaseAuth */,
+				23F7D2EB2F759BAE0010D7BF /* FirebaseCore */,
+				23F7D2ED2F759BAE0010D7BF /* FirebaseFirestore */,
+				23F7D2EF2F759BAE0010D7BF /* FirebaseFunctions */,
+				23F7D2F12F759BAE0010D7BF /* GoogleSignIn */,
+				23B131CD2F75A50800A70589 /* GoogleSignInSwift */,
+			);
+			productName = "Pitchmark Display";
+			productReference = 23F7D2C52F758F710010D7BF /* Pitchmark Display.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -131,11 +231,14 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2620;
+				LastSwiftUpdateCheck = 2630;
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					239F0B7B2F12B238004E32DD = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					23F7D2C42F758F710010D7BF = {
+						CreatedOnToolsVersion = 26.3;
 					};
 				};
 			};
@@ -158,6 +261,7 @@
 			projectRoot = "";
 			targets = (
 				239F0B7B2F12B238004E32DD /* PitchMark */,
+				23F7D2C42F758F710010D7BF /* Pitchmark Display */,
 			);
 		};
 /* End PBXProject section */
@@ -171,6 +275,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		23F7D2C32F758F710010D7BF /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -178,6 +290,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				23F7D2BE2F7586290010D7BF /* DisplayOnlyWindowView.swift in Sources */,
+				23F7D2F72F759DE90010D7BF /* StrikeZoneButtonLabel.swift in Sources */,
+				23F7D2C02F758DE70010D7BF /* CodeDisplayOverlayView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		23F7D2C12F758F710010D7BF /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				23F7D2E02F7597E80010D7BF /* DisplayOnlyScreen.swift in Sources */,
+				23F7D2DE2F7597D80010D7BF /* PitchMarkDisplayApp.swift in Sources */,
+				23F7D2DF2F7597E10010D7BF /* DisplayRootView.swift in Sources */,
+				23F7D2E52F7599F20010D7BF /* CodeDisplayOverlayView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -317,11 +443,13 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = PitchMark/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -356,11 +484,13 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = PitchMark/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -374,6 +504,76 @@
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		23F7D2CE2F758F720010D7BF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E3TJVK4339;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Pitchmark-Display-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "PitchMark Codes";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "app.Pitchmark-Display";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		23F7D2CF2F758F720010D7BF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E3TJVK4339;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Pitchmark-Display-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "PitchMark Codes";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "app.Pitchmark-Display";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -400,6 +600,15 @@
 			buildConfigurations = (
 				239F0B882F12B239004E32DD /* Debug */,
 				239F0B892F12B239004E32DD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		23F7D2CD2F758F720010D7BF /* Build configuration list for PBXNativeTarget "Pitchmark Display" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				23F7D2CE2F758F720010D7BF /* Debug */,
+				23F7D2CF2F758F720010D7BF /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -441,6 +650,11 @@
 			package = 2307AFBB2F12B49800690E69 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseFunctions;
 		};
+		23B131CD2F75A50800A70589 /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2307AFBC2F12BB3A00690E69 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
+		};
 		23F1A88A2F12C6EF0094E7BC /* FirebaseAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 2307AFBB2F12B49800690E69 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
@@ -470,6 +684,36 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 2307AFBB2F12B49800690E69 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseStorage;
+		};
+		23F7D2E72F759BAE0010D7BF /* FirebaseAppCheck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2307AFBB2F12B49800690E69 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAppCheck;
+		};
+		23F7D2E92F759BAE0010D7BF /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2307AFBB2F12B49800690E69 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		23F7D2EB2F759BAE0010D7BF /* FirebaseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2307AFBB2F12B49800690E69 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCore;
+		};
+		23F7D2ED2F759BAE0010D7BF /* FirebaseFirestore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2307AFBB2F12B49800690E69 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFirestore;
+		};
+		23F7D2EF2F759BAE0010D7BF /* FirebaseFunctions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2307AFBB2F12B49800690E69 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFunctions;
+		};
+		23F7D2F12F759BAE0010D7BF /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2307AFBC2F12BB3A00690E69 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

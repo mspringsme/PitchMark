@@ -97,9 +97,7 @@ final class LiveGameService {
         static let liveGames = "liveGames"
         static let joinCodes = "joinCodes"
         static let inviteTokens = "inviteTokens"
-        static let displayInviteTokens = "displayInviteTokens"
         static let participants = "participants"
-        static let displayParticipants = "displayParticipants"
         static let pitchEvents = "pitchEvents"
         static let users = "users"
         static let games = "games"
@@ -329,57 +327,6 @@ final class LiveGameService {
         attempt(0)
     }
 
-    private func createDisplayInviteToken(
-        liveId: String,
-        ownerUid: String,
-        expiresAt: Timestamp,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        func attempt(_ n: Int) {
-            if n > 4 {
-                completion(.failure(LiveGameError.couldNotGenerateUniqueCode.nsError))
-                return
-            }
-
-            let token = randomInviteToken(length: 24)
-            let ref = db.collection(Col.displayInviteTokens).document(token)
-
-            db.runTransaction({ txn, errPtr -> Any? in
-                do {
-                    let snap = try txn.getDocument(ref)
-                    if snap.exists {
-                        errPtr?.pointee = NSError(domain: "DisplayInviteToken", code: 409,
-                                                  userInfo: [NSLocalizedDescriptionKey: "Display invite token collision"])
-                        return nil
-                    }
-
-                    txn.setData([
-                        Key.liveId: liveId,
-                        Key.ownerUid: ownerUid,
-                        Key.expiresAt: expiresAt,
-                        Key.createdAt: FieldValue.serverTimestamp()
-                    ], forDocument: ref)
-                    return nil
-                } catch let e as NSError {
-                    errPtr?.pointee = e
-                    return nil
-                }
-            }) { _, error in
-                if let nsError = error as NSError? {
-                    if nsError.domain == "DisplayInviteToken", nsError.code == 409 {
-                        attempt(n + 1)
-                        return
-                    }
-                    completion(.failure(nsError))
-                    return
-                }
-                completion(.success(token))
-            }
-        }
-
-        attempt(0)
-    }
-    
     private func seedLiveLineupFromOwnerGame(ownerUid: String, ownerGameId: String, liveId: String) {
         let gameRef = db.collection(Col.users).document(ownerUid)
             .collection(Col.games).document(ownerGameId)
@@ -454,7 +401,6 @@ final class LiveGameService {
         let now = Timestamp(date: Date())
         cleanupExpired(in: Col.joinCodes, ownerUid: uid, now: now)
         cleanupExpired(in: Col.inviteTokens, ownerUid: uid, now: now)
-        cleanupExpired(in: Col.displayInviteTokens, ownerUid: uid, now: now)
     }
 
     private func cleanupExpired(in collection: String, ownerUid: String, now: Timestamp) {
@@ -629,76 +575,6 @@ final class LiveGameService {
         }
     }
 
-    func createDisplayInviteTokenForLive(
-        liveId: String,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        guard let ownerUid = Auth.auth().currentUser?.uid else {
-            completion(.failure(LiveGameError.notSignedIn.nsError))
-            return
-        }
-
-        let liveRef = db.collection(Col.liveGames).document(liveId)
-        liveRef.getDocument { [weak self] snap, err in
-            guard let self else { return }
-            if let err { completion(.failure(err)); return }
-            guard let data = snap?.data() else {
-                completion(.failure(NSError(domain: "LiveGame", code: 404,
-                                            userInfo: [NSLocalizedDescriptionKey: "Live game not found"])))
-                return
-            }
-
-            let expires = (data[Key.expiresAt] as? Timestamp)
-                ?? Timestamp(date: Date().addingTimeInterval(2 * 60 * 60))
-
-            self.createDisplayInviteToken(
-                liveId: liveId,
-                ownerUid: ownerUid,
-                expiresAt: expires,
-                completion: completion
-            )
-        }
-    }
-
-    func joinDisplayGameByInviteToken(
-        token: String,
-        completion: @escaping (Result<String, Error>) -> Void
-    ) {
-        guard let uid = Auth.auth().currentUser?.uid else {
-            completion(.failure(LiveGameError.notSignedIn.nsError))
-            return
-        }
-
-        let ref = db.collection(Col.displayInviteTokens).document(token)
-        ref.getDocument { [weak self] snap, err in
-            guard let self else { return }
-            if let err { completion(.failure(err)); return }
-            guard let snap, snap.exists, let data = snap.data() else {
-                completion(.failure(LiveGameError.inviteTokenNotFound.nsError))
-                return
-            }
-
-            if let expiresAt = data[Key.expiresAt] as? Timestamp, expiresAt.dateValue() < Date() {
-                completion(.failure(LiveGameError.inviteTokenExpired.nsError))
-                return
-            }
-
-            guard let liveId = data[Key.liveId] as? String else {
-                completion(.failure(LiveGameError.malformedInviteToken.nsError))
-                return
-            }
-
-            self.upsertDisplayPresence(liveId: liveId, uid: uid) { result in
-                switch result {
-                case .success:
-                    completion(.success(liveId))
-                case .failure(let e):
-                    completion(.failure(e))
-                }
-            }
-        }
-    }
-
     // MARK: - Presence
 
     private func upsertPresence(
@@ -730,35 +606,10 @@ final class LiveGameService {
         }
     }
 
-    private func upsertDisplayPresence(
-        liveId: String,
-        uid: String,
-        completion: @escaping (Result<Void, Error>) -> Void
-    ) {
-        let presenceRef = db.collection(Col.liveGames).document(liveId)
-            .collection(Col.displayParticipants).document(uid)
-
-        presenceRef.setData([
-            Key.uid: uid,
-            Key.joinedAt: FieldValue.serverTimestamp(),
-            Key.lastSeenAt: FieldValue.serverTimestamp()
-        ], merge: true) { err in
-            if let err { completion(.failure(err)); return }
-            completion(.success(()))
-        }
-    }
-
     func heartbeatPresence(liveId: String) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let presenceRef = db.collection(Col.liveGames).document(liveId)
             .collection(Col.participants).document(uid)
-        presenceRef.setData([Key.lastSeenAt: FieldValue.serverTimestamp()], merge: true)
-    }
-
-    func heartbeatDisplayPresence(liveId: String) {
-        guard let uid = Auth.auth().currentUser?.uid else { return }
-        let presenceRef = db.collection(Col.liveGames).document(liveId)
-            .collection(Col.displayParticipants).document(uid)
         presenceRef.setData([Key.lastSeenAt: FieldValue.serverTimestamp()], merge: true)
     }
 

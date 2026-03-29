@@ -223,6 +223,10 @@ struct PitchTrackerView: View {
     // Added according to instructions
     @State private var showTemplateChangeWarning = false
     @State private var pendingTemplateSelection: PitchTemplate? = nil
+    @State private var lastAppliedTemplateId: UUID? = nil
+    @State private var pendingGameConfirmation: PendingSessionConfirmation? = nil
+    @State private var pendingConfirmationPitcherId: String? = nil
+    @State private var pendingConfirmationTemplateId: UUID? = nil
 
     // Added per instructions:
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
@@ -245,6 +249,8 @@ struct PitchTrackerView: View {
         static let activePracticeId = "activePracticeId"
         static let storedPracticeSessions = "storedPracticeSessions"
         static let lastPitcherId = "lastPitcherId"
+        static let lastTemplateByGameId = "lastTemplateByGameId"
+        static let lastPitcherByGameId = "lastPitcherByGameId"
         static let encryptedByGameId = "encryptedByGameId"
         static let encryptedByPracticeId = "encryptedByPracticeId"
         static let practiceCodesEnabled = "practiceCodesEnabled"
@@ -253,6 +259,8 @@ struct PitchTrackerView: View {
         static let displayOnlyMode = "displayOnlyMode"
         static let hiddenTemplateIds = "hiddenTemplateIds"
         static let hiddenPitcherIds = "hiddenPitcherIds"
+        static let lastBackgroundAt = "lastBackgroundAt"
+        static let forceSettingsOnNextLaunch = "forceSettingsOnNextLaunch"
     }
     @State private var isSelecting: Bool = false
     @State private var selectedEventIDs: Set<String> = []
@@ -261,9 +269,6 @@ struct PitchTrackerView: View {
     @State private var showCodeShareSheet = false
     @State private var showCodeShareModePicker = false
     @State private var codeShareInitialTab: Int = 0 // 0 = Generate, 1 = Enter
-    @State private var showDisplayJoinSheet = false
-    @State private var displayJoinText: String = ""
-    @State private var displayJoinError: String? = nil
     @State private var showSelectGameFirstAlert = false
     @State private var showCodeShareErrorAlert = false
     @State private var codeShareErrorMessage: String = ""
@@ -278,6 +283,7 @@ struct PitchTrackerView: View {
     @State private var displayHeartbeatTimer: Timer? = nil
     @State private var displaySessionListener: ListenerRegistration? = nil
     @State private var showSessionConflictAlert = false
+    @State private var showDisplayAppMissingAlert = false
     @State private var sessionCheckInProgress = false
     @State private var autoLiveCreateInProgress = false
     @State private var didAutoCreateLiveSessionForGameId: String? = nil
@@ -310,7 +316,6 @@ struct PitchTrackerView: View {
     @State private var them: Int = 0
     @State private var heartbeatTimer: Timer? = nil
     @State private var isJoiningSession: Bool = false
-    @State private var isJoiningDisplaySession: Bool = false
     @State private var pendingRestoreGameId: String? = nil
     @State private var pendingLiveTemplateId: String? = nil
     @State private var pendingLiveTemplateName: String? = nil
@@ -1167,23 +1172,7 @@ struct PitchTrackerView: View {
                 let liveTemplateName = data["templateName"] as? String
                 self.pendingLiveTemplateId = liveTemplateId
                 self.pendingLiveTemplateName = liveTemplateName
-
-                if let tid = liveTemplateId, !tid.isEmpty {
-                    if self.selectedTemplate?.id.uuidString != tid {
-                        if let t = self.templates.first(where: { $0.id.uuidString == tid }) {
-                            self.applyTemplate(t, source: .live)
-                        } else {
-                            // templates not loaded yet or participant doesn't have it
-                            print("⚠️ Live templateId not found locally:", tid, "name:", liveTemplateName ?? "nil")
-                        }
-                    }
-                } else if let tname = liveTemplateName, !tname.isEmpty {
-                    // Fallback match by name
-                    if self.selectedTemplate?.name != tname,
-                       let t = self.templates.first(where: { $0.name == tname }) {
-                        self.applyTemplate(t, source: .live)
-                    }
-                }
+                self.applyPendingLiveTemplateIfPossible()
                 // ✅ selected batter comes over Firestore as STRING uuid
                 if let idStr = data["selectedBatterId"] as? String, let uuid = UUID(uuidString: idStr) {
                     self.selectedBatterId = uuid
@@ -1568,6 +1557,16 @@ struct PitchTrackerView: View {
         } else {
             defaults.removeObject(forKey: DefaultsKeys.lastTemplateId)
         }
+
+        if let gameId = selectedGameId, !gameId.isEmpty {
+            var map = defaults.dictionary(forKey: DefaultsKeys.lastTemplateByGameId) as? [String: String] ?? [:]
+            if let id = template?.id.uuidString {
+                map[gameId] = id
+            } else {
+                map.removeValue(forKey: gameId)
+            }
+            defaults.set(map, forKey: DefaultsKeys.lastTemplateByGameId)
+        }
     }
 
     private func persistSelectedPitcherId(_ id: String?) {
@@ -1576,6 +1575,31 @@ struct PitchTrackerView: View {
             defaults.set(id, forKey: DefaultsKeys.lastPitcherId)
         } else {
             defaults.removeObject(forKey: DefaultsKeys.lastPitcherId)
+        }
+
+        if let gameId = selectedGameId, !gameId.isEmpty {
+            var map = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String] ?? [:]
+            if let id {
+                map[gameId] = id
+            } else {
+                map.removeValue(forKey: gameId)
+            }
+            defaults.set(map, forKey: DefaultsKeys.lastPitcherByGameId)
+        }
+    }
+
+    private func applyStoredSelections(for gameId: String) {
+        let defaults = UserDefaults.standard
+        if let templateMap = defaults.dictionary(forKey: DefaultsKeys.lastTemplateByGameId) as? [String: String],
+           let templateId = templateMap[gameId],
+           let template = templates.first(where: { $0.id.uuidString == templateId }) {
+            applyTemplate(template)
+        }
+
+        if let pitcherMap = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String],
+           let pitcherId = pitcherMap[gameId],
+           let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
+            applySelectedPitcher(pitcher)
         }
     }
 
@@ -1822,6 +1846,7 @@ struct PitchTrackerView: View {
     // MARK: - Template Apply Helper
     private func applyTemplate(_ template: PitchTemplate, source: TemplateSelectionSource = .user) {
         selectedTemplate = template
+        lastAppliedTemplateId = template.id
         let fallbackList = availablePitches(for: template)
         if useEncrypted(for: template) {
             // In encrypted mode, always show the full set derived from encrypted assignments
@@ -1840,10 +1865,13 @@ struct PitchTrackerView: View {
 
         if source == .user {
             liveTemplateOverrideLocked = true
+            if isGame {
+                syncLiveTemplateSelectionIfOwner()
+            }
         }
     }
 
-    private func applySelectedPitcher(_ pitcher: Pitcher) {
+    private func applySelectedPitcher(_ pitcher: Pitcher, allowTemplateOverride: Bool = true) {
         if isGame && !pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
             return
         }
@@ -1854,6 +1882,7 @@ struct PitchTrackerView: View {
             syncLivePitcherSelectionIfOwner()
         }
 
+        guard allowTemplateOverride else { return }
         guard !(isGame && !isOwnerForActiveGame) else { return }
         if let tid = pitcher.templateId,
            let template = templates.first(where: { $0.id.uuidString == tid }),
@@ -1947,21 +1976,6 @@ struct PitchTrackerView: View {
         return trimmed
     }
 
-    private func displayInviteToken(from text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        if let url = URL(string: trimmed),
-           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-           let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
-           !token.isEmpty {
-            return token
-        }
-
-        if trimmed.contains("://") { return nil }
-        return trimmed
-    }
-
     private func joinLiveGameFromInvite() {
         inviteJoinError = nil
 
@@ -1995,37 +2009,215 @@ struct PitchTrackerView: View {
         }
     }
 
-    private func joinDisplayGameFromInvite() {
-        displayJoinError = nil
+    private func chooseGame(gameId: String, ownerUid: String) {
+        if activeLiveId != nil {
+            endLiveSessionLocally(keepCurrentGame: false)
+        }
+        // ✅ Runtime state
+        activeGameOwnerUserId = ownerUid
+        selectedGameId = gameId
 
-        guard let token = displayInviteToken(from: displayJoinText) else {
-            displayJoinError = "Paste a valid display link."
+        isGame = true
+        sessionManager.switchMode(to: .game)
+        suppressNextGameSheet = true
+
+        // ✅ Persist "active game" so relaunch restores correctly
+        let defaults = UserDefaults.standard
+        defaults.set(gameId, forKey: DefaultsKeys.activeGameId)
+        defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
+        defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
+        defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
+        defaults.set("tracker", forKey: DefaultsKeys.lastView)
+
+        hydrateChosenGameUI(ownerUid: ownerUid, gameId: gameId)
+        startListeningToActiveGame()
+        startListeningToGamePitchEvents()
+        applyStoredSelections(for: gameId)
+        ensureAutoLiveSessionIfNeeded()
+    }
+
+    private func choosePractice(practiceId: String, practiceName: String?) {
+        if activeLiveId != nil {
+            endLiveSessionLocally(keepCurrentGame: false)
+        }
+        resetCallAndResultUIState()
+
+        selectedGameId = nil
+        opponentName = nil
+        activeGameOwnerUserId = nil
+
+        isGame = false
+        sessionManager.switchMode(to: .practice)
+
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: DefaultsKeys.activeIsPractice)
+        defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+        defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
+        defaults.set("tracker", forKey: DefaultsKeys.lastView)
+
+        if practiceId == "__GENERAL__" {
+            selectedPracticeId = nil
+            self.practiceName = nil
+            persistActivePracticeId(nil)
             return
         }
 
-        isJoiningDisplaySession = true
-        LiveGameService.shared.joinDisplayGameByInviteToken(token: token) { result in
-            DispatchQueue.main.async {
-                self.isJoiningDisplaySession = false
+        selectedPracticeId = practiceId
+        self.practiceName = practiceName
+        persistActivePracticeId(practiceId)
+    }
 
-                switch result {
-                case .success(let liveId):
-                    NotificationCenter.default.post(
-                        name: .gameOrSessionChosen,
-                        object: nil,
-                        userInfo: [
-                            "type": "display",
-                            "liveId": liveId
-                        ]
-                    )
-                    self.displayJoinText = ""
-                    self.showDisplayJoinSheet = false
+    fileprivate enum PendingSessionKind {
+        case game
+        case practice
+    }
 
-                case .failure(let err):
-                    self.displayJoinError = err.localizedDescription
-                }
+    fileprivate struct PendingSessionConfirmation: Identifiable {
+        let id = UUID()
+        let kind: PendingSessionKind
+        let gameId: String?
+        let ownerUid: String?
+        let opponentName: String?
+        let practiceId: String?
+        let practiceName: String?
+    }
+
+    private func requestGameConfirmation(gameId: String, ownerUid: String) {
+        let opponent = games.first(where: { $0.id == gameId })?.opponent ?? opponentName
+        let defaults = UserDefaults.standard
+        if let map = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String],
+           let pitcherId = map[gameId] {
+            pendingConfirmationPitcherId = pitcherId
+        } else {
+            pendingConfirmationPitcherId = selectedPitcherId
+        }
+        if let map = defaults.dictionary(forKey: DefaultsKeys.lastTemplateByGameId) as? [String: String],
+           let templateId = map[gameId],
+           let uuid = UUID(uuidString: templateId) {
+            pendingConfirmationTemplateId = uuid
+        } else {
+            pendingConfirmationTemplateId = selectedTemplate?.id
+        }
+        pendingGameConfirmation = PendingSessionConfirmation(
+            kind: .game,
+            gameId: gameId,
+            ownerUid: ownerUid,
+            opponentName: opponent,
+            practiceId: nil,
+            practiceName: nil
+        )
+    }
+
+    private func requestPracticeConfirmation(practiceId: String, practiceName: String?) {
+        pendingConfirmationPitcherId = selectedPitcherId
+        pendingConfirmationTemplateId = selectedTemplate?.id
+        pendingGameConfirmation = PendingSessionConfirmation(
+            kind: .practice,
+            gameId: nil,
+            ownerUid: nil,
+            opponentName: nil,
+            practiceId: practiceId,
+            practiceName: practiceName
+        )
+    }
+
+    private func confirmSessionSelection(
+        _ item: PendingSessionConfirmation,
+        selectedPitcherId: String?,
+        selectedTemplateId: UUID?
+    ) {
+        let defaults = UserDefaults.standard
+
+        if case .game = item.kind, let gameId = item.gameId {
+            if let templateId = selectedTemplateId {
+                var map = defaults.dictionary(forKey: DefaultsKeys.lastTemplateByGameId) as? [String: String] ?? [:]
+                map[gameId] = templateId.uuidString
+                defaults.set(map, forKey: DefaultsKeys.lastTemplateByGameId)
+            }
+            if let pitcherId = selectedPitcherId {
+                var map = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String] ?? [:]
+                map[gameId] = pitcherId
+                defaults.set(map, forKey: DefaultsKeys.lastPitcherByGameId)
             }
         }
+
+        switch item.kind {
+        case .game:
+            if let gid = item.gameId, let ownerUid = item.ownerUid {
+                chooseGame(gameId: gid, ownerUid: ownerUid)
+            }
+            if let templateId = selectedTemplateId,
+               let template = templates.first(where: { $0.id == templateId }) {
+                applyTemplate(template)
+            }
+            if let pitcherId = selectedPitcherId,
+               let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
+                applySelectedPitcher(pitcher, allowTemplateOverride: selectedTemplateId == nil)
+            }
+        case .practice:
+            let pid = item.practiceId ?? "__GENERAL__"
+            choosePractice(practiceId: pid, practiceName: item.practiceName)
+            if let templateId = selectedTemplateId,
+               let template = templates.first(where: { $0.id == templateId }) {
+                applyTemplate(template)
+            }
+            if let pitcherId = selectedPitcherId,
+               let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
+                applySelectedPitcher(pitcher, allowTemplateOverride: selectedTemplateId == nil)
+            }
+        }
+
+        persistSelectedTemplate(selectedTemplate)
+        persistSelectedPitcherId(self.selectedPitcherId)
+        pendingGameConfirmation = nil
+    }
+
+    private func resolvedGameName(for item: PendingSessionConfirmation) -> String {
+        if let gameId = item.gameId {
+            if let match = games.first(where: { $0.id == gameId })?.opponent, !match.isEmpty {
+                return match
+            }
+        }
+        if let opponent = item.opponentName, !opponent.isEmpty {
+            return opponent
+        }
+        return "Unknown"
+    }
+
+    private func resolvedPracticeName(for item: PendingSessionConfirmation) -> String {
+        if let name = item.practiceName, !name.isEmpty {
+            return name
+        }
+        if let pid = item.practiceId, pid != "__GENERAL__" {
+            let sessions = loadPracticeSessions()
+            if let session = sessions.first(where: { $0.id == pid }) {
+                return session.name
+            }
+        }
+        return "General"
+    }
+
+    private func resolvedTemplateName(for templateId: UUID?) -> String {
+        if let templateId,
+           let template = templates.first(where: { $0.id == templateId }) {
+            return template.name
+        }
+        if let template = selectedTemplate {
+            return template.name
+        }
+        return "Not set"
+    }
+
+    private func resolvedPitcherName(for pitcherId: String?) -> String {
+        if let pitcherId,
+           let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
+            return pitcher.name
+        }
+        if let pitcherId = selectedPitcherId,
+           let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
+            return pitcher.name
+        }
+        return "Not set"
     }
 
     // Tiny factory to reduce type-checker work when creating bindings
@@ -2249,6 +2441,21 @@ struct PitchTrackerView: View {
         )
     }
 
+    private func syncLiveTemplateSelectionIfOwner() {
+        guard isOwnerForActiveGame,
+              let liveId = activeLiveId,
+              let template = selectedTemplate
+        else { return }
+
+        LiveGameService.shared.updateLiveFields(
+            liveId: liveId,
+            fields: [
+                "templateId": template.id.uuidString,
+                "templateName": template.name
+            ]
+        )
+    }
+
     private var effectivePitcherIdForSave: String? {
         if isGame && activeLiveId != nil { return livePitcherId ?? selectedPitcherId }
         return selectedPitcherId
@@ -2446,7 +2653,7 @@ struct PitchTrackerView: View {
 
 
     private var headerContainer: some View {
-        let screen = UIScreen.main.bounds
+        let screen = effectiveScreenSize
         
         return VStack(spacing: 4) {
             topBar
@@ -2469,11 +2676,11 @@ struct PitchTrackerView: View {
     }
 
     private var isCompactHeight: Bool {
-        UIScreen.main.bounds.height <= 700
+        effectiveScreenSize.height <= 700
     }
 
     private var headerHeight: CGFloat {
-        isCompactHeight ? 54 : UIScreen.main.bounds.height * 0.10
+        isCompactHeight ? 54 : effectiveScreenSize.height * 0.10
     }
 
     private var strikeZoneHeight: CGFloat {
@@ -2510,7 +2717,7 @@ struct PitchTrackerView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: UIScreen.main.bounds.height * 0.15)
+                .frame(height: effectiveScreenSize.height * 0.15)
                 .background(
                     .ultraThickMaterial,
                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -2570,13 +2777,7 @@ struct PitchTrackerView: View {
                 Text(isGame ? "Game" : "Practice")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button(action: {
-                    if isGame {
-                        showGameSheet = true
-                    } else {
-                        showPracticeSheet = true
-                    }
-                }) {
+                Button(action: {}) {
                     HStack(spacing: 6) {
                         Text(isGame ? (opponentName ?? "Game") : (practiceName ?? "Practice"))
                             .font(.subheadline)
@@ -2594,6 +2795,8 @@ struct PitchTrackerView: View {
                     .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
                 }
                 .buttonStyle(.plain)
+                .disabled(true)
+                .opacity(0.7)
                 }
 
                 if !(isGame && !isOwnerForActiveGame) {
@@ -2759,9 +2962,35 @@ struct PitchTrackerView: View {
             Text("You're currently in a practice session:")
         }
     }
+
+    private func sessionConfirmationSheet(
+        pending: PendingSessionConfirmation
+    ) -> some View {
+        SessionConfirmationSheet(
+            pending: pending,
+            pitchers: visiblePitchers,
+            templates: visibleTemplates,
+            selectedPitcherId: $pendingConfirmationPitcherId,
+            selectedTemplateId: $pendingConfirmationTemplateId,
+            resolvedPitcherName: resolvedPitcherName(for: pendingConfirmationPitcherId),
+            resolvedTemplateName: resolvedTemplateName(for: pendingConfirmationTemplateId),
+            resolvedGameName: resolvedGameName(for: pending),
+            resolvedPracticeName: resolvedPracticeName(for: pending),
+            onConfirm: {
+                confirmSessionSelection(
+                    pending,
+                    selectedPitcherId: pendingConfirmationPitcherId,
+                    selectedTemplateId: pendingConfirmationTemplateId
+                )
+            },
+            onCancel: {
+                pendingGameConfirmation = nil
+            }
+        )
+    }
     
     private var mainStrikeZoneSection: some View {
-        let deviceWidth = UIScreen.main.bounds.width
+        let deviceWidth = effectiveScreenSize.width
         let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
 
         return VStack {
@@ -2857,6 +3086,17 @@ struct PitchTrackerView: View {
                                                             "batterIds": batterIds
                                                         ]
                                                     )
+                                                    if let gameId = selectedGameId,
+                                                       let owner = effectiveGameOwnerUserId,
+                                                       !owner.isEmpty,
+                                                       isOwnerForActiveGame {
+                                                        authManager.updateGameLineup(
+                                                            ownerUserId: owner,
+                                                            gameId: gameId,
+                                                            jerseyNumbers: jerseys,
+                                                            batterIds: batterIds
+                                                        )
+                                                    }
                                                 } else if let gameId = selectedGameId,
                                                           let owner = effectiveGameOwnerUserId,
                                                           !owner.isEmpty {
@@ -2958,6 +3198,17 @@ struct PitchTrackerView: View {
                                                     "batterIds": batterIds
                                                 ]
                                             )
+                                            if let gameId = selectedGameId,
+                                               let owner = effectiveGameOwnerUserId,
+                                               !owner.isEmpty,
+                                               isOwnerForActiveGame {
+                                                authManager.updateGameLineup(
+                                                    ownerUserId: owner,
+                                                    gameId: gameId,
+                                                    jerseyNumbers: jerseys,
+                                                    batterIds: batterIds
+                                                )
+                                            }
                                         } else if let gameId = selectedGameId,
                                                   let owner = effectiveGameOwnerUserId,
                                                   !owner.isEmpty {
@@ -3255,21 +3506,10 @@ struct PitchTrackerView: View {
                 showCodeShareSheet = true
             }
 
-            Button("Create Display Link") {
-                codeShareInitialTab = 0
-                showCodeShareSheet = true
-            }
-
             Button("Join via Invite Link") {
                 inviteJoinError = nil
                 inviteJoinText = ""
                 showInviteJoinSheet = true
-            }
-
-            Button("Join Display Link") {
-                displayJoinError = nil
-                displayJoinText = ""
-                showDisplayJoinSheet = true
             }
 
             // ✅ Disconnect (both sides) — only show when currently linked
@@ -3685,16 +3925,24 @@ struct PitchTrackerView: View {
     private var baseBody: some View {
         ZStack {
             backgroundView
+                .ignoresSafeArea()
             if isCompactHeight {
-                ScrollView(.vertical, showsIndicators: false) {
-                    mainStack
-                        .padding(.bottom, 12)
-                }
+                padPortraitContainer(
+                    ScrollView(.vertical, showsIndicators: false) {
+                        mainStack
+                            .padding(.bottom, 12)
+                    }
+                )
             } else {
-                mainStack
+                padPortraitContainer(mainStack)
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .onAppear {
+            if isPad && !isDisplayOnlyMode {
+                forceOrientation(.portrait)
+            }
+        }
     }
 
     @ViewBuilder
@@ -3739,12 +3987,14 @@ struct PitchTrackerView: View {
         }
         )
         .onAppear {
+            forceOrientation(.landscapeRight)
             startDisplaySessionListener()
             startListeningToDisplayState()
             startDisplayHeartbeat(liveId: liveId)
         }
         .onDisappear {
             stopDisplayOnlyListeners()
+            forceOrientation(.portrait)
         }
     }
 
@@ -3835,6 +4085,9 @@ struct PitchTrackerView: View {
         displayOnlyLiveId = nil
         displayOnlyLiveIdStorage = ""
         stopDisplayOnlyListeners()
+        if isPad {
+            NotificationCenter.default.post(name: .displayOnlyExitRequested, object: nil)
+        }
     }
 
     private func displayLandscape<Content: View>(_ content: Content) -> some View {
@@ -3842,6 +4095,52 @@ struct PitchTrackerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .ignoresSafeArea()
             .statusBarHidden(true)
+    }
+
+    private var isPad: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
+
+    private var effectiveScreenSize: CGSize {
+        if isPad && !isDisplayOnlyMode {
+            return iPhoneProMaxPortraitSize
+        }
+        return UIScreen.main.bounds.size
+    }
+
+    private func forceOrientation(_ orientation: UIInterfaceOrientation) {
+        UIDevice.current.setValue(orientation.rawValue, forKey: "orientation")
+        activeWindowRootViewController()?.setNeedsUpdateOfSupportedInterfaceOrientations()
+    }
+
+    private func activeWindowRootViewController() -> UIViewController? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        return scene?.windows.first(where: { $0.isKeyWindow })?.rootViewController
+    }
+
+    private let iPhoneProMaxPortraitSize = CGSize(width: 430, height: 932)
+
+    @ViewBuilder
+    private func padPortraitContainer<Content: View>(_ content: Content) -> some View {
+        if isPad && !isDisplayOnlyMode {
+            GeometryReader { proxy in
+                let target = iPhoneProMaxPortraitSize
+                let scale = min(1, proxy.size.height / target.height)
+                content
+                    .frame(width: target.width, height: target.height, alignment: .top)
+                    .fixedSize()
+                    .scaleEffect(scale, anchor: .top)
+                    .frame(width: target.width * scale, height: target.height * scale, alignment: .top)
+                    .position(
+                        x: proxy.size.width / 2,
+                        y: (target.height * scale) / 2
+                    )
+            }
+        } else {
+            content
+        }
     }
 
     private func startDisplaySessionListener() {
@@ -4021,6 +4320,7 @@ struct PitchTrackerView: View {
         }
         )
         .onAppear {
+            forceOrientation(.landscapeRight)
             startDisplaySessionListener()
             startListeningToDisplayState()
         }
@@ -4042,12 +4342,14 @@ struct PitchTrackerView: View {
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.secondary)
 
-                    Button("Display Codes Only") {
-                        isDisplayOnlyMode = true
-                        displayOnlyLiveId = nil
-                        displayOnlyLiveIdStorage = ""
+                    Button("Open Display App") {
                         showSessionConflictAlert = false
-                        startDisplaySessionListener()
+                        guard let url = URL(string: "pitchmarkdisplay://") else { return }
+                        if UIApplication.shared.canOpenURL(url) {
+                            UIApplication.shared.open(url)
+                        } else {
+                            showDisplayAppMissingAlert = true
+                        }
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -4064,6 +4366,11 @@ struct PitchTrackerView: View {
                 .padding(.horizontal, 24)
             }
             .transition(.opacity)
+            .alert("Display App Not Installed", isPresented: $showDisplayAppMissingAlert) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Install and open Pitchmark Display to use this option.")
+            }
         }
     }
     
@@ -4074,6 +4381,10 @@ struct PitchTrackerView: View {
             print("⏳ handleInitialAppear: not signed in yet — deferring boot flow")
             startupPhase = .ready
             return
+        }
+
+        if shouldForceSettingsOnLaunch() {
+            showSettings = true
         }
 
         if isDisplayOnlyMode, !displayOnlyLiveIdStorage.isEmpty {
@@ -4183,6 +4494,9 @@ struct PitchTrackerView: View {
                 self.selectedTemplate = loadedTemplates.first
             }
             self.applyPendingLiveTemplateIfPossible()
+            if let gameId = self.selectedGameId {
+                self.applyStoredSelections(for: gameId)
+            }
             self.ensureAutoLiveSessionIfNeeded()
         }
 
@@ -4221,6 +4535,10 @@ struct PitchTrackerView: View {
                 self.applySelectedPitcher(pitcher)
             } else if let first = loadedPitchers.first {
                 self.applySelectedPitcher(first)
+            }
+
+            if let gameId = self.selectedGameId {
+                self.applyStoredSelections(for: gameId)
             }
         }
 
@@ -4302,7 +4620,7 @@ struct PitchTrackerView: View {
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .frame(height: UIScreen.main.bounds.height * 0.33)
+                    .frame(height: effectiveScreenSize.height * 0.33)
                     .background(.regularMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 8)
@@ -4330,26 +4648,7 @@ struct PitchTrackerView: View {
             onChoose: { gameId in
                 let ownerUid = authManager.user?.uid ?? ""
 
-                // ✅ Runtime state
-                activeGameOwnerUserId = ownerUid
-                selectedGameId = gameId
-
-                isGame = true
-                sessionManager.switchMode(to: .game)
-                suppressNextGameSheet = true
-
-                // ✅ Persist "active game" so relaunch restores correctly
-                let defaults = UserDefaults.standard
-                defaults.set(gameId, forKey: DefaultsKeys.activeGameId)
-                defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
-                defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
-                defaults.removeObject(forKey: DefaultsKeys.activePracticeId)   // optional safety
-                defaults.set("tracker", forKey: DefaultsKeys.lastView)
-
-                hydrateChosenGameUI(ownerUid: ownerUid, gameId: gameId)
-                startListeningToActiveGame()
-                startListeningToGamePitchEvents()
-                ensureAutoLiveSessionIfNeeded()
+                requestGameConfirmation(gameId: gameId, ownerUid: ownerUid)
                 showGameSheet = false
             },
 
@@ -4415,41 +4714,6 @@ struct PitchTrackerView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(inviteJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningSession)
-        }
-        .padding()
-        .presentationDetents([.fraction(0.5)])
-        .presentationDragIndicator(.visible)
-    }
-
-    @ViewBuilder private var displayJoinSheetView: some View {
-        VStack(spacing: 16) {
-            Text("Join Display Screen")
-                .font(.headline)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Display Link")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                TextField("Paste display link", text: $displayJoinText)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .textFieldStyle(.roundedBorder)
-
-            }
-
-            if let error = displayJoinError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Button(isJoiningDisplaySession ? "Joining..." : "Join Display") {
-                joinDisplayGameFromInvite()
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(displayJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningDisplaySession)
         }
         .padding()
         .presentationDetents([.fraction(0.5)])
@@ -4619,7 +4883,10 @@ struct PitchTrackerView: View {
         case .active:
             ensurePrimarySessionOrPrompt()
             resumeLiveSessionIfNeeded()
+            evaluateIdleAndMaybeShowSettings()
+            clearForceSettingsFlagOnResume()
         case .inactive, .background:
+            markBackgroundTimestamp()
             flushBufferedSharedPitcherEvents(reason: "background")
             pauseLiveSessionForBackground()
         @unknown default:
@@ -4627,10 +4894,45 @@ struct PitchTrackerView: View {
         }
     }
 
+    private func markBackgroundTimestamp() {
+        let defaults = UserDefaults.standard
+        defaults.set(Date().timeIntervalSince1970, forKey: DefaultsKeys.lastBackgroundAt)
+        defaults.set(true, forKey: DefaultsKeys.forceSettingsOnNextLaunch)
+    }
+
+    private func clearForceSettingsFlagOnResume() {
+        UserDefaults.standard.set(false, forKey: DefaultsKeys.forceSettingsOnNextLaunch)
+    }
+
+    private func shouldForceSettingsOnLaunch() -> Bool {
+        let defaults = UserDefaults.standard
+        let lastBackgroundAt = defaults.double(forKey: DefaultsKeys.lastBackgroundAt)
+        let forceFlag = defaults.bool(forKey: DefaultsKeys.forceSettingsOnNextLaunch)
+        if forceFlag {
+            defaults.set(false, forKey: DefaultsKeys.forceSettingsOnNextLaunch)
+            return true
+        }
+        if lastBackgroundAt > 0 {
+            let idleSeconds = Date().timeIntervalSince1970 - lastBackgroundAt
+            return idleSeconds >= 15 * 60
+        }
+        return false
+    }
+
+    private func evaluateIdleAndMaybeShowSettings() {
+        let defaults = UserDefaults.standard
+        let lastBackgroundAt = defaults.double(forKey: DefaultsKeys.lastBackgroundAt)
+        guard lastBackgroundAt > 0 else { return }
+        let idleSeconds = Date().timeIntervalSince1970 - lastBackgroundAt
+        if idleSeconds >= 15 * 60 {
+            showSettings = true
+        }
+    }
+
     var body: some View {
         let resolvedDisplayLiveId = displayOnlyLiveId ?? (displayOnlyLiveIdStorage.isEmpty ? nil : displayOnlyLiveIdStorage)
         let displayCoverBinding = Binding<Bool>(
-            get: { isDisplayOnlyMode },
+            get: { isDisplayOnlyMode && !isPad },
             set: { newValue in if !newValue { exitDisplayOnlyMode() } }
         )
         let displayCoverView: AnyView = {
@@ -4670,6 +4972,17 @@ struct PitchTrackerView: View {
             }
             .onChange(of: pendingResultLabel) { _, newValue in
                 handlePendingResultChange(newValue)
+            }
+            .onChange(of: selectedTemplate?.id) { _, newValue in
+                guard !isRestoringState else { return }
+                guard let newValue else {
+                    persistSelectedTemplate(nil)
+                    return
+                }
+                if lastAppliedTemplateId != newValue,
+                   let template = templates.first(where: { $0.id == newValue }) {
+                    applyTemplate(template, source: .user)
+                }
             }
             .onChange(of: selectedPitches) { _, newValue in
                 if let template = selectedTemplate {
@@ -4715,6 +5028,12 @@ struct PitchTrackerView: View {
                     progressRefreshToken = UUID()
                 }
             }
+            .onChange(of: isDisplayOnlyMode) { _, newValue in
+                forceOrientation(newValue ? .landscapeRight : .portrait)
+                if isPad && newValue {
+                    NotificationCenter.default.post(name: .displayOnlyPresentRequested, object: nil)
+                }
+            }
             .eraseToAnyView()
 
         let v2 = v1
@@ -4740,7 +5059,6 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v4b = v4
-            .sheet(isPresented: $showDisplayJoinSheet) { displayJoinSheetView }
             .eraseToAnyView()
 
         let v5 = v4b
@@ -4783,6 +5101,9 @@ struct PitchTrackerView: View {
             .fullScreenCover(isPresented: displayCoverBinding) {
                 displayCoverView
             }
+            .sheet(item: $pendingGameConfirmation) { item in
+                sessionConfirmationSheet(pending: item)
+            }
             .overlay { accountInUseOverlay }
             .onAppear {
                 handleInitialAppear()
@@ -4799,12 +5120,31 @@ struct PitchTrackerView: View {
                     self.pitchers = loaded
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .displayOnlyExitRequested)) { _ in
+                if isDisplayOnlyMode {
+                    exitDisplayOnlyMode()
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
                 guard let info = note.userInfo as? [String: Any] else { return }
 
                 if let type = info["type"] as? String, type == "display" {
                     guard let liveId = info["liveId"] as? String else { return }
                     enterDisplayOnlyMode(liveId: liveId)
+                    return
+                }
+
+                if let type = info["type"] as? String, type == "game" {
+                    guard let gameId = info["gameId"] as? String else { return }
+                    let ownerUid = (info["ownerUserId"] as? String) ?? (authManager.user?.uid ?? "")
+                    requestGameConfirmation(gameId: gameId, ownerUid: ownerUid)
+                    return
+                }
+
+                if let type = info["type"] as? String, type == "practice" {
+                    let practiceId = (info["practiceId"] as? String) ?? "__GENERAL__"
+                    let practiceName = info["practiceName"] as? String
+                    requestPracticeConfirmation(practiceId: practiceId, practiceName: practiceName)
                     return
                 }
 
@@ -4915,35 +5255,8 @@ struct PitchTrackerView: View {
                     guard !ownerUid.isEmpty else { return }
 
                     print("✅ Resolver received game:", gid, "owner:", ownerUid)
-                    // If the sender already knew the opponent name, reflect it immediately
-                    if let opp = info["opponent"] as? String {
-                        self.opponentName = opp
-                    }
-
-                    // 🔴 Clear any stale practice UI state before switching
                     self.resetCallAndResultUIState()
-
-                    // ✅ Set IDs first
-                    self.activeGameOwnerUserId = ownerUid
-                    self.selectedGameId = gid
-                    // ✅ Persist active game selection
-                    let defaults = UserDefaults.standard
-                    defaults.set(gid, forKey: DefaultsKeys.activeGameId)
-                    defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
-                    defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
-                    defaults.set("tracker", forKey: DefaultsKeys.lastView)
-
-                    // ✅ Force GAME mode (order matters!)
-                    self.suppressNextGameSheet = true
-                    self.isGame = true
-                    self.sessionManager.switchMode(to: .game)
-
-                    DispatchQueue.main.async {
-                        self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: gid)
-                        self.startListeningToActiveGame()
-                        self.startListeningToGamePitchEvents()
-                    }
-
+                    self.requestGameConfirmation(gameId: gid, ownerUid: ownerUid)
 
                     return
 
@@ -5924,6 +6237,18 @@ struct JerseyRow: View {
                                         "jerseyNumbers": jerseys,
                                         "batterIds": batterIds
                                     ])
+                                    if let owner = effectiveGameOwnerUserId,
+                                       let gameId = selectedGameId,
+                                       let myUid = authManager.user?.uid,
+                                       !owner.isEmpty,
+                                       owner == myUid {
+                                        authManager.updateGameLineup(
+                                            ownerUserId: owner,
+                                            gameId: gameId,
+                                            jerseyNumbers: jerseys,
+                                            batterIds: batterIds
+                                        )
+                                    }
                                 }
 
                             }
@@ -5959,6 +6284,18 @@ struct JerseyRow: View {
                                         "jerseyNumbers": jerseys,
                                         "batterIds": batterIds
                                     ])
+                                    if let owner = effectiveGameOwnerUserId,
+                                       let gameId = selectedGameId,
+                                       let myUid = authManager.user?.uid,
+                                       !owner.isEmpty,
+                                       owner == myUid {
+                                        authManager.updateGameLineup(
+                                            ownerUserId: owner,
+                                            gameId: gameId,
+                                            jerseyNumbers: jerseys,
+                                            batterIds: batterIds
+                                        )
+                                    }
                                 }
 
                             }
@@ -6024,6 +6361,18 @@ struct JerseyRow: View {
                                     "batterIds": batterIds
                                 ]
                             )
+                            if let owner = effectiveGameOwnerUserId,
+                               let gameId = selectedGameId,
+                               let myUid = authManager.user?.uid,
+                               !owner.isEmpty,
+                               owner == myUid {
+                                authManager.updateGameLineup(
+                                    ownerUserId: owner,
+                                    gameId: gameId,
+                                    jerseyNumbers: jerseys,
+                                    batterIds: batterIds
+                                )
+                            }
 
                             // Optional: if you also want to clear live selected batter when deleted
                             // (only needed if you store selectedBatterId on live doc)
@@ -6269,69 +6618,6 @@ struct CodeOrderToggle: View {
     }
 }
 
-private struct CodeDisplayOverlayView: View {
-    let colorName: String
-    let code: String
-    var showsCloseButton: Bool = true
-    let onClose: () -> Void
-
-    private var backgroundColor: Color {
-        templatePaletteColor(colorName)
-    }
-
-    private var foregroundColor: Color {
-        switch colorName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "black", "blue", "red":
-            return .white
-        default:
-            return .black
-        }
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .topTrailing) {
-                backgroundColor
-                    .ignoresSafeArea()
-
-                let horizontalSpan = max(120.0, proxy.size.width - 48)
-                let verticalSpan = max(120.0, proxy.size.height - 48)
-                let characterSpacing = max(18.0, horizontalSpan * 0.09)
-                let fontSize = max(110.0, (verticalSpan - (characterSpacing * 3)) / 2.5)
-
-                let isLandscape = proxy.size.width > proxy.size.height
-                HStack(spacing: characterSpacing) {
-                    ForEach(Array(code).map(String.init), id: \.self) { character in
-                        Text(character)
-                            .font(.system(size: fontSize, weight: .black, design: .rounded))
-                            .foregroundStyle(foregroundColor)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                    }
-                }
-                .fixedSize()
-                .rotationEffect(isLandscape ? .degrees(0) : .degrees(-90))
-                .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-
-                if showsCloseButton {
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .font(.title2.weight(.bold))
-                            .foregroundStyle(foregroundColor)
-                            .padding(12)
-                            .background(
-                                Circle()
-                                    .fill(foregroundColor.opacity(0.15))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .padding(20)
-                }
-            }
-        }
-    }
-}
-
 private struct CodeDisplayOverlayPayload: Identifiable {
     let id = UUID()
     let colorName: String
@@ -6393,6 +6679,21 @@ struct CalledPitchView: View {
             .setData([
                 "colorName": colorName,
                 "code": code,
+                "updatedAt": FieldValue.serverTimestamp()
+            ], merge: true)
+    }
+
+    private func clearDisplayCode() {
+        guard !isPracticeMode else { return }
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .collection("displayState")
+            .document("current")
+            .setData([
+                "colorName": FieldValue.delete(),
+                "code": FieldValue.delete(),
                 "updatedAt": FieldValue.serverTimestamp()
             ], merge: true)
     }
@@ -6590,6 +6891,7 @@ struct CalledPitchView: View {
                 code: payload.code,
                 onClose: {
                     codeDisplayOverlayPayload = nil
+                    clearDisplayCode()
                 }
             )
         }
@@ -6609,6 +6911,7 @@ struct CalledPitchView: View {
         .onChange(of: tappedCode) { _, newValue in
             if newValue == nil {
                 codeDisplayOverlayPayload = nil
+                clearDisplayCode()
             }
         }
         
@@ -6664,10 +6967,8 @@ private struct CodeShareSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var generated: String
     @State private var inviteLink: String = ""
-    @State private var displayInviteLink: String = ""
     @State private var didWriteSessionDoc = false
     @State private var writeErrorMessage: String? = nil
-    @State private var displayLinkErrorMessage: String? = nil
 
 
     init(
@@ -6751,50 +7052,10 @@ private struct CodeShareSheet: View {
                         }
                     }
 
-                    Divider()
-                        .padding(.vertical, 6)
-
-                    Text("Display-only link:")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    if !displayInviteLink.isEmpty {
-                        Text(displayInviteLink)
-                            .font(.footnote)
-                            .foregroundStyle(.primary)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
-                            .multilineTextAlignment(.center)
-                    }
-
-                    if let msg = displayLinkErrorMessage {
-                        Text(msg)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
-                    }
-
-                    HStack {
-                        Button {
-                            UIPasteboard.general.string = displayInviteLink
-                        } label: {
-                            Label("Copy Display Link", systemImage: "link")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(displayInviteLink.isEmpty)
-
-                        if let url = URL(string: displayInviteLink) {
-                            ShareLink(item: url) {
-                                Label("Share Display Link", systemImage: "square.and.arrow.up")
-                            }
-                        }
-                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .onAppear {
                     inviteLink = ""
-                    displayInviteLink = ""
-                    displayLinkErrorMessage = nil
                     generateLiveGameAndCode()
                 }
 
@@ -6827,8 +7088,6 @@ private struct CodeShareSheet: View {
         writeErrorMessage = nil
         generated = ""
         inviteLink = ""
-        displayInviteLink = ""
-        displayLinkErrorMessage = nil
 
         LiveGameService.shared.createLiveGameAndJoinCode(
             ownerGameId: gameId,
@@ -6843,17 +7102,6 @@ private struct CodeShareSheet: View {
                     print("✅ Generated code=\(tuple.code) liveId=\(tuple.liveId)")
                     self.generated = tuple.code
                     self.inviteLink = "pitchmark://join?token=\(tuple.inviteToken)"
-
-                    LiveGameService.shared.createDisplayInviteTokenForLive(liveId: tuple.liveId) { result in
-                        DispatchQueue.main.async {
-                            switch result {
-                            case .success(let token):
-                                self.displayInviteLink = "pitchmark://display?token=\(token)"
-                            case .failure(let err):
-                                self.displayLinkErrorMessage = err.localizedDescription
-                            }
-                        }
-                    }
 
                     // Tell the parent to switch into the live session
                     // We pass the LIVE ID now (not the 6-digit code)
@@ -7213,6 +7461,102 @@ struct AddPracticeCard: View {
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(radius: 10)
+    }
+}
+
+private struct SessionConfirmationSheet: View {
+    let pending: PitchTrackerView.PendingSessionConfirmation
+    let pitchers: [Pitcher]
+    let templates: [PitchTemplate]
+    @Binding var selectedPitcherId: String?
+    @Binding var selectedTemplateId: UUID?
+    let resolvedPitcherName: String
+    let resolvedTemplateName: String
+    let resolvedGameName: String
+    let resolvedPracticeName: String
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    private var headerText: String {
+        switch pending.kind {
+        case .game:
+            return "Confirm Game"
+        case .practice:
+            return "Confirm Practice"
+        }
+    }
+
+    private var sessionLabel: String {
+        switch pending.kind {
+        case .game:
+            return "Game: \(resolvedGameName)"
+        case .practice:
+            return "Practice: \(resolvedPracticeName)"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(headerText)
+                .font(.headline)
+
+            Text(sessionLabel)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pitcher")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Pitcher", selection: $selectedPitcherId) {
+                    Text("Not set").tag(String?.none)
+                    ForEach(pitchers) { pitcher in
+                        Text(pitcher.name).tag(pitcher.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Grid Key")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Grid Key", selection: $selectedTemplateId) {
+                    Text("Not set").tag(UUID?.none)
+                    ForEach(templates) { template in
+                        Text(template.name).tag(Optional(template.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Selected Pitcher: \(resolvedPitcherName)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("Selected Grid Key: \(resolvedTemplateName)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                Button("Cancel", role: .cancel) {
+                    onCancel()
+                }
+                Spacer()
+                Button("Confirm") {
+                    onConfirm()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .presentationDetents([.fraction(0.35)])
+        .presentationDragIndicator(.visible)
     }
 }
 

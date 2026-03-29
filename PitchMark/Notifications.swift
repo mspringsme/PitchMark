@@ -21,4 +21,10 @@ extension Notification.Name {
 
     // Fired when pitcher sharing/ownership updates should refresh UI
     static let pitcherSharedUpdated = Notification.Name("pitcherSharedUpdated")
+
+    // Fired to close the display-only window
+    static let displayOnlyExitRequested = Notification.Name("displayOnlyExitRequested")
+
+    // Fired to present the display-only full-screen view
+    static let displayOnlyPresentRequested = Notification.Name("displayOnlyPresentRequested")
 }

@@ -4,4 +4,17 @@
    <FileRef
       location = "self:">
    </FileRef>
+   <Group
+      location = "group:PitchMarkDisplay"
+      name = "PitchMarkDisplay">
+      <FileRef
+         location = "group:PitchMarkDisplayApp.swift">
+      </FileRef>
+      <FileRef
+         location = "group:DisplayRootView.swift">
+      </FileRef>
+      <FileRef
+         location = "group:DisplayOnlyScreen.swift">
+      </FileRef>
+   </Group>
 </Workspace>

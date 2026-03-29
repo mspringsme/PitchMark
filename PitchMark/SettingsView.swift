@@ -77,8 +77,6 @@ struct SettingsView: View {
     @State private var showDeleteAlert = false
     @Environment(\.dismiss) private var dismiss
     
-    @State private var templatePendingLaunch: PitchTemplate? = nil
-    @State private var showModeChoice = false
     @State private var showGameChooser = false
     @State private var showPracticeChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
@@ -104,6 +102,13 @@ struct SettingsView: View {
     @State private var inviteJoinText: String = ""
     @State private var inviteJoinError: String? = nil
     @State private var isJoiningInvite = false
+
+    private static let quickLaunchDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 
     @State private var copyPitcherTarget: Pitcher? = nil
     @State private var showCopyPitcherConfirm = false
@@ -271,6 +276,88 @@ struct SettingsView: View {
         }
     }
 
+    private func launchGame(_ game: Game) {
+        guard let gameId = game.id else { return }
+        let ownerUid = authManager.user?.uid ?? ""
+
+        let defaults = UserDefaults.standard
+        defaults.set(gameId, forKey: PitchTrackerView.DefaultsKeys.activeGameId)
+        defaults.set(ownerUid, forKey: PitchTrackerView.DefaultsKeys.activeGameOwnerUserId)
+        defaults.set(false, forKey: PitchTrackerView.DefaultsKeys.activeIsPractice)
+        defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activePracticeId)
+        defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
+
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NotificationCenter.default.post(
+                name: .gameOrSessionChosen,
+                object: nil,
+                userInfo: [
+                    "type": "game",
+                    "gameId": gameId,
+                    "ownerUserId": ownerUid
+                ]
+            )
+        }
+    }
+
+    private func quickLaunchDateCaption(for game: Game) -> String {
+        Self.quickLaunchDateFormatter.string(from: game.date)
+    }
+
+    private func quickLaunchId(for game: Game) -> String {
+        if let id = game.id, !id.isEmpty { return id }
+        return "\(game.opponent)|\(game.date.timeIntervalSince1970)"
+    }
+
+    private struct QuickLaunchGame: Identifiable {
+        let id: String
+        let game: Game
+    }
+
+    private struct QuickLaunchPractice: Identifiable {
+        let id: String
+        let session: PracticeSession?
+    }
+
+    private func practiceQuickLaunchItems() -> [QuickLaunchPractice] {
+        let sessions = loadPracticeSessions().sorted { $0.date > $1.date }
+        return sessions.map { QuickLaunchPractice(id: $0.id ?? UUID().uuidString, session: $0) }
+    }
+
+    private func launchPractice(_ session: PracticeSession?) {
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: PitchTrackerView.DefaultsKeys.activeIsPractice)
+        defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activeGameId)
+        defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activeGameOwnerUserId)
+        defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
+
+        if let session, let pid = session.id {
+            defaults.set(pid, forKey: PitchTrackerView.DefaultsKeys.activePracticeId)
+            NotificationCenter.default.post(
+                name: .gameOrSessionChosen,
+                object: nil,
+                userInfo: [
+                    "type": "practice",
+                    "practiceId": pid,
+                    "practiceName": session.name
+                ]
+            )
+        } else {
+            defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activePracticeId)
+            NotificationCenter.default.post(
+                name: .gameOrSessionChosen,
+                object: nil,
+                userInfo: [
+                    "type": "practice",
+                    "practiceId": "__GENERAL__",
+                    "practiceName": "General"
+                ]
+            )
+        }
+        dismiss()
+    }
+
     private func qrImage(for text: String) -> UIImage? {
         let data = Data(text.utf8)
         guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
@@ -393,6 +480,15 @@ struct SettingsView: View {
         VStack(spacing: 16) {
             Text("Join a Live Game")
                 .font(.headline)
+
+            VStack(spacing: 6) {
+                Text("You'll join as a participant.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("Tip: scan the primary user's code to open quickly.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Invite Link")
@@ -647,12 +743,6 @@ struct SettingsView: View {
 
                 if let template = selected {
                     HStack(spacing: 8) {
-                        Button("Launch") {
-                            templatePendingLaunch = template
-                            showModeChoice = true
-                        }
-                        .buttonStyle(.borderedProminent)
-
                         Button("Share") {
                             beginShareTemplate(template)
                         }
@@ -1035,7 +1125,111 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         Color.clear.frame(height: 0)
-                        
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Quick Launch – Games")
+                                    .font(.headline)
+                                Spacer()
+                                Button {
+                                    showGameChooser = true
+                                } label: {
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.subheadline)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal)
+
+                            if !games.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 12) {
+                                        let sorted = games.sorted(by: { $0.date > $1.date })
+                                        let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
+                                        ForEach(quickGames) { item in
+                                            Button {
+                                                launchGame(item.game)
+                                            } label: {
+                                                VStack(spacing: 4) {
+                                                    Text(item.game.opponent)
+                                                        .font(.subheadline.weight(.semibold))
+                                                        .foregroundStyle(.primary)
+                                                        .lineLimit(1)
+                                                    Text(quickLaunchDateCaption(for: item.game))
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                .padding(.horizontal, 12)
+                                                .padding(.vertical, 10)
+                                                .frame(minWidth: 120)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                        .fill(Color.black.opacity(0.06))
+                                                )
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                        .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                                                )
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                    .padding(.horizontal)
+                                }
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Quick Launch – Practice")
+                                    .font(.headline)
+                                Spacer()
+                                Button {
+                                    showPracticeChooser = true
+                                } label: {
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.subheadline)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal)
+
+                            let quickPractice = practiceQuickLaunchItems()
+                            if !quickPractice.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 12) {
+                                        ForEach(quickPractice) { item in
+                                            Button {
+                                                launchPractice(item.session)
+                                            } label: {
+                                                VStack(spacing: 4) {
+                                                    Text(item.session?.name ?? "Practice")
+                                                        .font(.subheadline.weight(.semibold))
+                                                        .foregroundStyle(.primary)
+                                                        .lineLimit(1)
+                                                    Text(item.session.map { Self.quickLaunchDateFormatter.string(from: $0.date) } ?? "")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                }
+                                                .padding(.horizontal, 12)
+                                                .padding(.vertical, 10)
+                                                .frame(minWidth: 120)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                        .fill(Color.black.opacity(0.06))
+                                                )
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                        .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                                                )
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                    .padding(.horizontal)
+                                }
+                            }
+                        }
 
                         // 🔹 Templates Header
                         templatesHeader
@@ -1252,15 +1446,6 @@ struct SettingsView: View {
             } message: {
                 Text("This creates a new pitcher profile you own, with the same stats. It won’t affect the shared pitcher.")
             }
-            .confirmationDialog("Launch as…", isPresented: $showModeChoice, titleVisibility: .visible) {
-                Button("Game") {
-                    showGameChooser = true
-                }
-                Button("Practice") {
-                    showPracticeChooser = true
-                }
-                Button("Cancel", role: .cancel) {}
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -1383,25 +1568,6 @@ struct SettingsView: View {
                         authManager.saveGame(newGame)
                     },
                     onChoose: { gameId in
-                        if let tmpl = templatePendingLaunch {
-                            selectedTemplate = tmpl
-                            NotificationCenter.default.post(
-                                name: .templateSelectionDidChange,
-                                object: nil,
-                                userInfo: [
-                                    "templateId": tmpl.id.uuidString
-                                ]
-                            )
-
-                            if let ownerUid = authManager.user?.uid {
-                                authManager.updateGameTemplateName(
-                                    ownerUserId: ownerUid,
-                                    gameId: gameId,
-                                    templateName: tmpl.name
-                                )
-                            }
-                        }
-
                         let ownerUid = authManager.user?.uid ?? ""
                         NotificationCenter.default.post(
                             name: .gameOrSessionChosen,
@@ -1440,22 +1606,13 @@ struct SettingsView: View {
                         savePracticeSessions(sessions)
                     },
                     onChoose: { practiceId in
-                        encryptedSelectionByPracticeId[practiceId] = true
                         if practiceId == "__GENERAL__" {
-                            selectedTemplate = nil
-                            let defaults = UserDefaults.standard
-                            defaults.set(true, forKey: PitchTrackerView.DefaultsKeys.activeIsPractice)
-                            defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activeGameId)
-                            defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
+                            launchPractice(nil)
                             return
                         }
                         let sessions = loadPracticeSessions()
                         if let session = sessions.first(where: { $0.id == practiceId }) {
-                            selectedTemplate = templates.first(where: { $0.id.uuidString == session.templateId })
-                            let defaults = UserDefaults.standard
-                            defaults.set(true, forKey: PitchTrackerView.DefaultsKeys.activeIsPractice)
-                            defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activeGameId)
-                            defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
+                            launchPractice(session)
                         }
                     },
                     onCancel: {
