@@ -4156,7 +4156,22 @@ struct PitchTrackerView: View {
             let data = snap?.data() ?? [:]
             let liveId = data["liveId"] as? String
             let mode = data["mode"] as? String ?? "<nil>"
+            let claimedDevice = data["deviceId"] as? String
             print("🖥️ Display session update mode=\(mode) liveId=\(liveId ?? "<nil>")")
+
+            if !self.isDisplayOnlyMode {
+                if let claimedDevice, !claimedDevice.isEmpty, claimedDevice != self.deviceSessionId {
+                    if !self.showSessionConflictAlert {
+                        self.dismissAllTopLevelSheets()
+                        self.showSessionConflictAlert = true
+                    }
+                } else if claimedDevice == self.deviceSessionId {
+                    if self.showSessionConflictAlert {
+                        self.showSessionConflictAlert = false
+                    }
+                }
+            }
+
             if let liveId, !liveId.isEmpty {
                 if self.displayOnlyLiveId != liveId {
                     self.displayOnlyLiveId = liveId
@@ -4265,6 +4280,7 @@ struct PitchTrackerView: View {
                 return
             }
 
+            dismissAllTopLevelSheets()
             showSessionConflictAlert = true
         }
     }
@@ -4343,7 +4359,6 @@ struct PitchTrackerView: View {
                         .foregroundStyle(.secondary)
 
                     Button("Open Display App") {
-                        showSessionConflictAlert = false
                         guard let url = URL(string: "pitchmarkdisplay://") else { return }
                         if UIApplication.shared.canOpenURL(url) {
                             UIApplication.shared.open(url)
@@ -4383,6 +4398,12 @@ struct PitchTrackerView: View {
             return
         }
 
+        startDisplaySessionListener()
+        ensurePrimarySessionOrPrompt()
+        if showSessionConflictAlert {
+            return
+        }
+
         if shouldForceSettingsOnLaunch() {
             showSettings = true
         }
@@ -4392,8 +4413,6 @@ struct PitchTrackerView: View {
             startupPhase = .ready
             return
         }
-
-        ensurePrimarySessionOrPrompt()
 
         loadBufferedSharedPitcherEvents()
 
@@ -5088,6 +5107,7 @@ struct PitchTrackerView: View {
 
         // Keep alerts + the rest of your observers, then erase one last time
         return AnyView(v9
+            .allowsHitTesting(!showSessionConflictAlert)
             .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
