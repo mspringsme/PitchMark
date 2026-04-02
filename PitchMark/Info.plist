@@ -29,6 +29,8 @@
 	<array>
 		<string>pitchmarkdisplay</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Use the camera to capture the owner&apos;s QR code for joining a live game.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

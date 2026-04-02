@@ -10,6 +10,7 @@ import FirebaseAuth
 import UIKit
 import CoreImage
 import FirebaseFirestore
+import AVFoundation
 
 struct PitcherPitchStats: Codable {
     var count: Int
@@ -102,6 +103,9 @@ struct SettingsView: View {
     @State private var inviteJoinText: String = ""
     @State private var inviteJoinError: String? = nil
     @State private var isJoiningInvite = false
+    @State private var showQRScanner = false
+    @State private var showCameraUnavailableAlert = false
+    @State private var showCameraPermissionAlert = false
 
     private static let quickLaunchDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -273,6 +277,48 @@ struct SettingsView: View {
                     self.inviteJoinError = err.localizedDescription
                 }
             }
+        }
+    }
+
+    private func openCameraForJoin() {
+        if showInviteJoinSheet {
+            showInviteJoinSheet = false
+        }
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                showCameraUnavailableAlert = true
+            }
+            return
+        }
+
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        switch status {
+        case .authorized:
+            presentCameraFromJoin()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        presentCameraFromJoin()
+                    } else {
+                        showCameraPermissionAlert = true
+                    }
+                }
+            }
+        case .denied, .restricted:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                showCameraPermissionAlert = true
+            }
+        @unknown default:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                showCameraPermissionAlert = true
+            }
+        }
+    }
+
+    private func presentCameraFromJoin() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            showQRScanner = true
         }
     }
 
@@ -507,6 +553,11 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            Button("Scan QR Code") {
+                openCameraForJoin()
+            }
+            .buttonStyle(.bordered)
 
             Button(isJoiningInvite ? "Joining..." : "Join") {
                 joinLiveGameFromInvite()
@@ -1297,6 +1348,30 @@ struct SettingsView: View {
                 }
             }
             .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
+            .fullScreenCover(isPresented: $showQRScanner) {
+                QRScannerView { scanned in
+                    inviteJoinText = scanned
+                    inviteJoinError = nil
+                    showQRScanner = false
+                    joinLiveGameFromInvite()
+                } onCancel: {
+                    showQRScanner = false
+                }
+            }
+            .alert("Camera Unavailable", isPresented: $showCameraUnavailableAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("This device doesn’t have a camera available.")
+            }
+            .alert("Camera Access Needed", isPresented: $showCameraPermissionAlert) {
+                Button("Open Settings") {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Enable Camera access in Settings to scan the owner’s QR code.")
+            }
             .sheet(isPresented: $showAccountActionsSheet) { accountActionsSheetView }
             .sheet(isPresented: $showChangeEmailSheet) { changeEmailSheetView }
             .sheet(isPresented: $showDeleteAccountSheet) { deleteAccountSheetView }

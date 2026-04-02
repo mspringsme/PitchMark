@@ -12,6 +12,7 @@ import FirebaseFirestore
 import FirebaseAuth
 import UniformTypeIdentifiers
 import UIKit
+import AVFoundation
 import CoreImage.CIFilterBuiltins
 
 //Hi
@@ -158,6 +159,10 @@ struct PitchTrackerView: View {
     @State private var showInviteJoinSheet = false
     @State private var inviteJoinText: String = ""
     @State private var inviteJoinError: String? = nil
+    @State private var showCameraPicker = false
+    @State private var showCameraUnavailableAlert = false
+    @State private var showCameraPermissionAlert = false
+    @State private var showQRScanner = false
     @State private var pitchers: [Pitcher] = []
     @State private var selectedPitcherId: String? = nil
     @State private var isRecordingResult = false
@@ -2193,6 +2198,48 @@ struct PitchTrackerView: View {
         // Allow raw token input (no URL scheme)
         if trimmed.contains("://") { return nil }
         return trimmed
+    }
+
+    private func openCameraForJoin() {
+        if showInviteJoinSheet {
+            showInviteJoinSheet = false
+        }
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                showCameraUnavailableAlert = true
+            }
+            return
+        }
+
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        switch status {
+        case .authorized:
+            presentCameraFromJoin()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        presentCameraFromJoin()
+                    } else {
+                        showCameraPermissionAlert = true
+                    }
+                }
+            }
+        case .denied, .restricted:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                showCameraPermissionAlert = true
+            }
+        @unknown default:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                showCameraPermissionAlert = true
+            }
+        }
+    }
+
+    private func presentCameraFromJoin() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            showQRScanner = true
+        }
     }
 
     private func joinLiveGameFromInvite() {
@@ -5076,6 +5123,11 @@ struct PitchTrackerView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            Button("Scan QR Code") {
+                openCameraForJoin()
+            }
+            .buttonStyle(.bordered)
+
             Button(isJoiningSession ? "Joining..." : "Join") {
                 joinLiveGameFromInvite()
             }
@@ -5423,6 +5475,30 @@ struct PitchTrackerView: View {
 
         let v4 = v3
             .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
+            .fullScreenCover(isPresented: $showQRScanner) {
+                QRScannerView { scanned in
+                    inviteJoinText = scanned
+                    inviteJoinError = nil
+                    showQRScanner = false
+                    joinLiveGameFromInvite()
+                } onCancel: {
+                    showQRScanner = false
+                }
+            }
+            .alert("Camera Unavailable", isPresented: $showCameraUnavailableAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("This device doesn’t have a camera available.")
+            }
+            .alert("Camera Access Needed", isPresented: $showCameraPermissionAlert) {
+                Button("Open Settings") {
+                    guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                    UIApplication.shared.open(url)
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Enable Camera access in Settings to scan the owner’s QR code.")
+            }
             .eraseToAnyView()
 
         let v4b = v4
@@ -7936,6 +8012,173 @@ private struct SessionConfirmationSheet: View {
                 selectedTemplateId = first.id
             }
         }
+    }
+}
+
+private struct CameraPicker: UIViewControllerRepresentable {
+    let onComplete: (UIImage?) -> Void
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onComplete: onComplete)
+    }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let onComplete: (UIImage?) -> Void
+
+        init(onComplete: @escaping (UIImage?) -> Void) {
+            self.onComplete = onComplete
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            onComplete(nil)
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            let image = info[.originalImage] as? UIImage
+            onComplete(image)
+        }
+    }
+}
+
+struct QRScannerView: UIViewControllerRepresentable {
+    let onScan: (String) -> Void
+    let onCancel: () -> Void
+
+    func makeUIViewController(context: Context) -> QRScannerViewController {
+        let controller = QRScannerViewController()
+        controller.onScan = onScan
+        controller.onCancel = onCancel
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: QRScannerViewController, context: Context) {
+    }
+}
+
+final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    var onScan: ((String) -> Void)?
+    var onCancel: (() -> Void)?
+
+    private let session = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var didScan = false
+    private let overlayLayer = CAShapeLayer()
+    private let borderLayer = CAShapeLayer()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        guard let device = AVCaptureDevice.default(for: .video),
+              let input = try? AVCaptureDeviceInput(device: device),
+              session.canAddInput(input) else {
+            onCancel?()
+            return
+        }
+
+        session.addInput(input)
+
+        let metadataOutput = AVCaptureMetadataOutput()
+        guard session.canAddOutput(metadataOutput) else {
+            onCancel?()
+            return
+        }
+
+        session.addOutput(metadataOutput)
+        metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+        metadataOutput.metadataObjectTypes = [.qr]
+
+        let preview = AVCaptureVideoPreviewLayer(session: session)
+        preview.videoGravity = .resizeAspectFill
+        preview.frame = view.bounds
+        view.layer.addSublayer(preview)
+        previewLayer = preview
+
+        overlayLayer.fillRule = .evenOdd
+        overlayLayer.fillColor = UIColor.black.withAlphaComponent(0.5).cgColor
+        view.layer.addSublayer(overlayLayer)
+
+        borderLayer.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        borderLayer.fillColor = UIColor.clear.cgColor
+        borderLayer.lineWidth = 2
+        view.layer.addSublayer(borderLayer)
+
+        let closeButton = UIButton(type: .system)
+        closeButton.setTitle("Close", for: .normal)
+        closeButton.setTitleColor(.white, for: .normal)
+        closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        closeButton.layer.cornerRadius = 14
+        closeButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(closeButton)
+
+        NSLayoutConstraint.activate([
+            closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            closeButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12)
+        ])
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+        updateOverlayMask()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        didScan = false
+        if !session.isRunning {
+            session.startRunning()
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if session.isRunning {
+            session.stopRunning()
+        }
+    }
+
+    @objc private func closeTapped() {
+        onCancel?()
+    }
+
+    private func updateOverlayMask() {
+        let size = min(view.bounds.width, view.bounds.height) * 0.6
+        let rect = CGRect(
+            x: (view.bounds.width - size) / 2,
+            y: (view.bounds.height - size) / 2,
+            width: size,
+            height: size
+        )
+
+        let path = UIBezierPath(rect: view.bounds)
+        path.append(UIBezierPath(roundedRect: rect, cornerRadius: 12))
+        overlayLayer.path = path.cgPath
+
+        let borderPath = UIBezierPath(roundedRect: rect, cornerRadius: 12)
+        borderLayer.path = borderPath.cgPath
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        guard !didScan else { return }
+        guard let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              object.type == .qr,
+              let value = object.stringValue else { return }
+        didScan = true
+        onScan?(value)
     }
 }
 
