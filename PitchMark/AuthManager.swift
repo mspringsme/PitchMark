@@ -1980,6 +1980,13 @@ extension AuthManager {
             if let error = error { print("Error updating them score: \(error)") }
         }
     }
+
+    func updateGameProgressTimestamp(ownerUserId: String?, gameId: String) {
+        guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
+        ref.updateData(["progressUpdatedAt": FieldValue.serverTimestamp()]) { error in
+            if let error = error { print("Error updating progress timestamp: \(error)") }
+        }
+    }
     
     func updateGameCounts(
         ownerUserId: String?,
@@ -2000,6 +2007,7 @@ extension AuthManager {
         if let strikes = strikes { data["strikes"] = strikes }
         if let us = us { data["us"] = us }
         if let them = them { data["them"] = them }
+        data["progressUpdatedAt"] = FieldValue.serverTimestamp()
         guard !data.isEmpty else { return }
         
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }

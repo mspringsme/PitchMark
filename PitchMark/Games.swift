@@ -62,6 +62,7 @@ struct Game: Identifiable, Codable {
     var inning: Int = 1
     var us: Int = 0
     var them: Int = 0
+    var progressUpdatedAt: Date? = nil
 
     // Shared “pending pitch” state (owner sets; joiner reads; joiner can clear)
     var pending: PendingPitch? = nil
@@ -102,4 +103,3 @@ struct Game: Identifiable, Codable {
         self.batterIds = batterIds
     }
 }
-

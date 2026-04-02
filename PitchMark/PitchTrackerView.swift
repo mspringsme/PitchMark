@@ -261,6 +261,18 @@ struct PitchTrackerView: View {
         static let hiddenPitcherIds = "hiddenPitcherIds"
         static let lastBackgroundAt = "lastBackgroundAt"
         static let forceSettingsOnNextLaunch = "forceSettingsOnNextLaunch"
+        static let lastProgressByGameId = "lastProgressByGameId"
+    }
+
+    private struct LocalProgressSnapshot: Codable {
+        let balls: Int
+        let strikes: Int
+        let inning: Int
+        let hits: Int
+        let walks: Int
+        let us: Int
+        let them: Int
+        let updatedAt: TimeInterval
     }
     @State private var isSelecting: Bool = false
     @State private var selectedEventIDs: Set<String> = []
@@ -292,6 +304,7 @@ struct PitchTrackerView: View {
     @State private var livePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEvents: [PitchEvent] = []
+    @State private var lastLocalProgressUpdate: Date? = nil
     @State private var bufferedSharedPitcherEvents: [BufferedPitcherEvent] = []
     @State private var lastObservedResultSelectionId: String? = nil
     @State private var codeShareSheetID = UUID()
@@ -866,33 +879,53 @@ struct PitchTrackerView: View {
             do {
                 let updated = try snap.data(as: Game.self)
                 DispatchQueue.main.async {
+                    var merged = updated
+                    let shouldApplyProgress = self.activeLiveId == nil
+                        && self.shouldApplyProgressFromSnapshot(updated.progressUpdatedAt)
+
+                    if self.activeLiveId == nil {
+                        if shouldApplyProgress {
+                            print("🧭[PROG] gameSnap APPLY gid=\(gid) snapStamp=\(String(describing: updated.progressUpdatedAt)) localStamp=\(String(describing: self.lastLocalProgressUpdate)) snap=\(updated.balls)/\(updated.strikes)/\(updated.inning)/\(updated.hits)/\(updated.walks)/\(updated.us)/\(updated.them)")
+                            self.balls = updated.balls
+                            self.strikes = updated.strikes
+                            self.inning = updated.inning
+                            self.hits = updated.hits
+                            self.walks = updated.walks
+                            self.us = updated.us
+                            self.them = updated.them
+                            if let stamp = updated.progressUpdatedAt {
+                                self.lastLocalProgressUpdate = stamp
+                            }
+                        } else {
+                            print("🧭[PROG] gameSnap SKIP gid=\(gid) snapStamp=\(String(describing: updated.progressUpdatedAt)) localStamp=\(String(describing: self.lastLocalProgressUpdate)) keep=\(self.balls)/\(self.strikes)/\(self.inning)/\(self.hits)/\(self.walks)/\(self.us)/\(self.them)")
+                            merged.balls = self.balls
+                            merged.strikes = self.strikes
+                            merged.inning = self.inning
+                            merged.hits = self.hits
+                            merged.walks = self.walks
+                            merged.us = self.us
+                            merged.them = self.them
+                            merged.progressUpdatedAt = self.lastLocalProgressUpdate
+                        }
+                    }
+
                     // Keep games[] in sync so currentGame works
                     if let idx = self.games.firstIndex(where: { $0.id == gid }) {
-                        self.games[idx] = updated
+                        self.games[idx] = merged
                     } else {
-                        self.games.append(updated)
+                        self.games.append(merged)
                     }
 
                     // If not in live mode, you can optionally mirror into local UI state
                     // (ONLY needed if your UI depends on these @State vars outside live mode)
-                    if self.activeLiveId == nil {
-                        self.balls = updated.balls
-                        self.strikes = updated.strikes
-                        self.inning = updated.inning
-                        self.hits = updated.hits
-                        self.walks = updated.walks
-                        self.us = updated.us
-                        self.them = updated.them
-                    }
-
                     // Ensure owner still sees the lineup if local cells are empty
                     if self.jerseyCells.isEmpty {
-                        if let ids = updated.batterIds, ids.count == updated.jerseyNumbers.count {
-                            self.jerseyCells = zip(ids, updated.jerseyNumbers).map { (idStr, num) in
+                        if let ids = merged.batterIds, ids.count == merged.jerseyNumbers.count {
+                            self.jerseyCells = zip(ids, merged.jerseyNumbers).map { (idStr, num) in
                                 JerseyCell(id: UUID(uuidString: idStr) ?? UUID(), jerseyNumber: num)
                             }
                         } else {
-                            self.jerseyCells = updated.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
+                            self.jerseyCells = merged.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
                         }
                     }
                 }
@@ -1121,14 +1154,23 @@ struct PitchTrackerView: View {
             }
 
             DispatchQueue.main.async {
-                // ✅ Use existing value as fallback (prevents partial writes from zeroing fields)
-                self.balls   = data["balls"]   as? Int ?? self.balls
-                self.strikes = data["strikes"] as? Int ?? self.strikes
-                self.inning  = data["inning"]  as? Int ?? self.inning
-                self.hits    = data["hits"]    as? Int ?? self.hits
-                self.walks   = data["walks"]   as? Int ?? self.walks
-                self.us      = data["us"]      as? Int ?? self.us
-                self.them    = data["them"]    as? Int ?? self.them
+                let liveStamp = (data["progressUpdatedAt"] as? Timestamp)?.dateValue()
+                let shouldApplyLiveProgress = self.shouldApplyProgressFromSnapshot(liveStamp)
+                    || self.lastLocalProgressUpdate == nil
+                if shouldApplyLiveProgress {
+                    self.balls   = data["balls"]   as? Int ?? self.balls
+                    self.strikes = data["strikes"] as? Int ?? self.strikes
+                    self.inning  = data["inning"]  as? Int ?? self.inning
+                    self.hits    = data["hits"]    as? Int ?? self.hits
+                    self.walks   = data["walks"]   as? Int ?? self.walks
+                    self.us      = data["us"]      as? Int ?? self.us
+                    self.them    = data["them"]    as? Int ?? self.them
+                    if let liveStamp {
+                        self.lastLocalProgressUpdate = liveStamp
+                    }
+                } else {
+                    print("🧭[PROG] liveSnap SKIP stamp=\(String(describing: liveStamp)) localStamp=\(String(describing: self.lastLocalProgressUpdate))")
+                }
                 // ✅ FIX: restore opponent label for the Game button in LIVE mode
                 if let opp = data["opponent"] as? String, !opp.isEmpty {
                     self.opponentName = opp
@@ -1151,6 +1193,11 @@ struct PitchTrackerView: View {
                     self.uiConnected = connected
                 } else {
                     self.uiConnected = false
+                }
+
+                if !self.uiConnected, !self.isOwnerForActiveGame, self.activeLiveId == liveId {
+                    self.endLiveSessionLocally(keepCurrentGame: false)
+                    return
                 }
 
                 if self.uiConnected && self.isOwnerForActiveGame {
@@ -1371,6 +1418,10 @@ struct PitchTrackerView: View {
 
         flushBufferedSharedPitcherEvents(reason: "endLiveSession")
 
+        if isOwnerForActiveGame {
+            flushProgressToGameIfOwner()
+        }
+
         LiveGameService.shared.updateLiveFields(
             liveId: liveId,
             fields: [
@@ -1422,6 +1473,167 @@ struct PitchTrackerView: View {
         } else {
             isGame = false
             sessionManager.switchMode(to: .practice)
+        }
+
+        if !isOwnerForActiveGame {
+            dismissAllTopLevelSheets()
+            showSettings = true
+        }
+    }
+
+    private func flushProgressToGameIfOwner() {
+        guard let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: balls)
+        authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: strikes)
+        authManager.updateGameInning(ownerUserId: owner, gameId: gid, inning: inning)
+        authManager.updateGameHits(ownerUserId: owner, gameId: gid, hits: hits)
+        authManager.updateGameWalks(ownerUserId: owner, gameId: gid, walks: walks)
+        authManager.updateGameUs(ownerUserId: owner, gameId: gid, us: us)
+        authManager.updateGameThem(ownerUserId: owner, gameId: gid, them: them)
+        markLocalProgressChange()
+
+        if let idx = games.firstIndex(where: { $0.id == gid }) {
+            games[idx].balls = balls
+            games[idx].strikes = strikes
+            games[idx].inning = inning
+            games[idx].hits = hits
+            games[idx].walks = walks
+            games[idx].us = us
+            games[idx].them = them
+            games[idx].progressUpdatedAt = lastLocalProgressUpdate
+        }
+    }
+
+    private func shouldApplyProgressFromSnapshot(_ snapshotStamp: Date?) -> Bool {
+        guard let localStamp = lastLocalProgressUpdate else { return true }
+        guard let snapshotStamp else { return false }
+        return snapshotStamp >= localStamp
+    }
+
+    private func loadLocalProgressSnapshot(for gameId: String) -> LocalProgressSnapshot? {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: "\(DefaultsKeys.lastProgressByGameId).\(gameId)"),
+           let snapshot = try? JSONDecoder().decode(LocalProgressSnapshot.self, from: data) {
+            return snapshot
+        }
+        return nil
+    }
+
+    private func persistLocalProgressSnapshot() {
+        guard let gid = selectedGameId else { return }
+        let snapshot = LocalProgressSnapshot(
+            balls: balls,
+            strikes: strikes,
+            inning: inning,
+            hits: hits,
+            walks: walks,
+            us: us,
+            them: them,
+            updatedAt: Date().timeIntervalSince1970
+        )
+        if let data = try? JSONEncoder().encode(snapshot) {
+            UserDefaults.standard.set(data, forKey: "\(DefaultsKeys.lastProgressByGameId).\(gid)")
+        }
+    }
+
+    private func mergeLoadedGamesPreservingProgress(_ loaded: [Game]) -> [Game] {
+        guard let gid = selectedGameId else { return loaded }
+
+        var merged = loaded
+        if let idx = merged.firstIndex(where: { $0.id == gid }) {
+            print("🧭[PROG] mergeLoadedGames gid=\(gid) localStamp=\(String(describing: lastLocalProgressUpdate)) snapshotStamp=\(String(describing: merged[idx].progressUpdatedAt)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them) snap=\(merged[idx].balls)/\(merged[idx].strikes)/\(merged[idx].inning)/\(merged[idx].hits)/\(merged[idx].walks)/\(merged[idx].us)/\(merged[idx].them)")
+            if lastLocalProgressUpdate == nil, let local = loadLocalProgressSnapshot(for: gid) {
+                balls = local.balls
+                strikes = local.strikes
+                inning = local.inning
+                hits = local.hits
+                walks = local.walks
+                us = local.us
+                them = local.them
+                lastLocalProgressUpdate = Date(timeIntervalSince1970: local.updatedAt)
+            }
+
+            if lastLocalProgressUpdate == nil {
+                if let stamp = merged[idx].progressUpdatedAt {
+                    lastLocalProgressUpdate = stamp
+                } else if merged[idx].balls != 0
+                            || merged[idx].strikes != 0
+                            || merged[idx].inning != 1
+                            || merged[idx].hits != 0
+                            || merged[idx].walks != 0
+                            || merged[idx].us != 0
+                            || merged[idx].them != 0 {
+                    lastLocalProgressUpdate = Date()
+                }
+            }
+
+            if let localStamp = lastLocalProgressUpdate {
+                let snapshotStamp = merged[idx].progressUpdatedAt
+                if snapshotStamp == nil || (snapshotStamp ?? Date.distantPast) < localStamp {
+                    merged[idx].balls = balls
+                    merged[idx].strikes = strikes
+                    merged[idx].inning = inning
+                    merged[idx].hits = hits
+                    merged[idx].walks = walks
+                    merged[idx].us = us
+                    merged[idx].them = them
+                    merged[idx].progressUpdatedAt = localStamp
+                }
+            }
+        }
+        return merged
+    }
+
+    private func markLocalProgressChange() {
+        lastLocalProgressUpdate = Date()
+        persistLocalProgressSnapshot()
+        print("🧭[PROG] markLocalProgressChange gid=\(selectedGameId ?? "<nil>") stamp=\(String(describing: lastLocalProgressUpdate)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
+        persistProgressSnapshotToOwnerGameAndLive()
+    }
+
+    private func persistProgressSnapshotToOwnerGameAndLive() {
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                "balls": balls,
+                "strikes": strikes,
+                "inning": inning,
+                "hits": hits,
+                "walks": walks,
+                "us": us,
+                "them": them,
+                "progressUpdatedAt": FieldValue.serverTimestamp()
+            ])
+        }
+
+        guard isOwnerForActiveGame else { return }
+        guard let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        authManager.updateGameCounts(
+            ownerUserId: owner,
+            gameId: gid,
+            inning: inning,
+            hits: hits,
+            walks: walks,
+            balls: balls,
+            strikes: strikes,
+            us: us,
+            them: them
+        )
+
+        if let idx = games.firstIndex(where: { $0.id == gid }) {
+            games[idx].balls = balls
+            games[idx].strikes = strikes
+            games[idx].inning = inning
+            games[idx].hits = hits
+            games[idx].walks = walks
+            games[idx].us = us
+            games[idx].them = them
+            games[idx].progressUpdatedAt = lastLocalProgressUpdate
         }
     }
 
@@ -1591,15 +1803,21 @@ struct PitchTrackerView: View {
     private func applyStoredSelections(for gameId: String) {
         let defaults = UserDefaults.standard
         if let templateMap = defaults.dictionary(forKey: DefaultsKeys.lastTemplateByGameId) as? [String: String],
-           let templateId = templateMap[gameId],
-           let template = templates.first(where: { $0.id.uuidString == templateId }) {
-            applyTemplate(template)
+           let templateId = templateMap[gameId] {
+            if !hiddenTemplateIdSet.contains(templateId),
+               let template = templates.first(where: { $0.id.uuidString == templateId }) {
+                applyTemplate(template)
+            }
         }
 
         if let pitcherMap = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String],
            let pitcherId = pitcherMap[gameId],
            let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
             applySelectedPitcher(pitcher)
+        }
+        if let selected = selectedTemplate,
+           hiddenTemplateIdSet.contains(selected.id.uuidString) {
+            selectedTemplate = visibleTemplates.first ?? templates.first
         }
     }
 
@@ -1810,10 +2028,11 @@ struct PitchTrackerView: View {
 
     private func refreshGamesList() {
         authManager.loadGames { loaded in
-            self.games = loaded
+            let merged = self.mergeLoadedGamesPreservingProgress(loaded)
+            self.games = merged
 
             if let selectedId = self.selectedGameId,
-               !loaded.contains(where: { $0.id == selectedId }) {
+               !merged.contains(where: { $0.id == selectedId }) {
                 self.selectedGameId = nil
                 self.opponentName = nil
                 self.activeGameOwnerUserId = nil
@@ -2016,6 +2235,7 @@ struct PitchTrackerView: View {
         // ✅ Runtime state
         activeGameOwnerUserId = ownerUid
         selectedGameId = gameId
+        print("🧭[PROG] chooseGame gid=\(gameId) owner=\(ownerUid)")
 
         isGame = true
         sessionManager.switchMode(to: .game)
@@ -2028,6 +2248,38 @@ struct PitchTrackerView: View {
         defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
         defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
         defaults.set("tracker", forKey: DefaultsKeys.lastView)
+
+        if let local = loadLocalProgressSnapshot(for: gameId) {
+            balls = local.balls
+            strikes = local.strikes
+            inning = local.inning
+            hits = local.hits
+            walks = local.walks
+            us = local.us
+            them = local.them
+            lastLocalProgressUpdate = Date(timeIntervalSince1970: local.updatedAt)
+            print("🧭[PROG] chooseGame loadLocalSnapshot gid=\(gameId) stamp=\(lastLocalProgressUpdate!) values=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
+        } else if let cached = games.first(where: { $0.id == gameId }) {
+            balls = cached.balls
+            strikes = cached.strikes
+            inning = cached.inning
+            hits = cached.hits
+            walks = cached.walks
+            us = cached.us
+            them = cached.them
+            if let stamp = cached.progressUpdatedAt {
+                lastLocalProgressUpdate = stamp
+            } else if cached.balls != 0
+                        || cached.strikes != 0
+                        || cached.inning != 1
+                        || cached.hits != 0
+                        || cached.walks != 0
+                        || cached.us != 0
+                        || cached.them != 0 {
+                lastLocalProgressUpdate = Date()
+            }
+            print("🧭[PROG] chooseGame loadCached gid=\(gameId) stamp=\(String(describing: lastLocalProgressUpdate)) values=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
+        }
 
         hydrateChosenGameUI(ownerUid: ownerUid, gameId: gameId)
         startListeningToActiveGame()
@@ -2098,6 +2350,18 @@ struct PitchTrackerView: View {
         } else {
             pendingConfirmationTemplateId = selectedTemplate?.id
         }
+        if let selected = pendingConfirmationTemplateId,
+           hiddenTemplateIdSet.contains(selected.uuidString) {
+            pendingConfirmationTemplateId = nil
+        }
+        if pendingConfirmationTemplateId == nil, let first = visibleTemplates.first ?? templates.first {
+            pendingConfirmationTemplateId = first.id
+        }
+        if let selected = pendingConfirmationTemplateId,
+           !templates.contains(where: { $0.id == selected }),
+           let first = visibleTemplates.first ?? templates.first {
+            pendingConfirmationTemplateId = first.id
+        }
         pendingGameConfirmation = PendingSessionConfirmation(
             kind: .game,
             gameId: gameId,
@@ -2111,6 +2375,18 @@ struct PitchTrackerView: View {
     private func requestPracticeConfirmation(practiceId: String, practiceName: String?) {
         pendingConfirmationPitcherId = selectedPitcherId
         pendingConfirmationTemplateId = selectedTemplate?.id
+        if let selected = pendingConfirmationTemplateId,
+           hiddenTemplateIdSet.contains(selected.uuidString) {
+            pendingConfirmationTemplateId = nil
+        }
+        if pendingConfirmationTemplateId == nil, let first = visibleTemplates.first ?? templates.first {
+            pendingConfirmationTemplateId = first.id
+        }
+        if let selected = pendingConfirmationTemplateId,
+           !templates.contains(where: { $0.id == selected }),
+           let first = visibleTemplates.first ?? templates.first {
+            pendingConfirmationTemplateId = first.id
+        }
         pendingGameConfirmation = PendingSessionConfirmation(
             kind: .practice,
             gameId: nil,
@@ -2235,13 +2511,48 @@ struct PitchTrackerView: View {
         }
     }
 
+    private func mirrorLiveProgressToGame(field: String, value: Int) {
+        guard isOwnerForActiveGame,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId
+        else { return }
+
+        switch field {
+        case "inning":
+            authManager.updateGameInning(ownerUserId: owner, gameId: gid, inning: value)
+            if let idx = games.firstIndex(where: { $0.id == gid }) { games[idx].inning = value }
+        case "hits":
+            authManager.updateGameHits(ownerUserId: owner, gameId: gid, hits: value)
+            if let idx = games.firstIndex(where: { $0.id == gid }) { games[idx].hits = value }
+        case "walks":
+            authManager.updateGameWalks(ownerUserId: owner, gameId: gid, walks: value)
+            if let idx = games.firstIndex(where: { $0.id == gid }) { games[idx].walks = value }
+        case "balls":
+            authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: value)
+            if let idx = games.firstIndex(where: { $0.id == gid }) { games[idx].balls = value }
+        case "strikes":
+            authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: value)
+            if let idx = games.firstIndex(where: { $0.id == gid }) { games[idx].strikes = value }
+        case "us":
+            authManager.updateGameUs(ownerUserId: owner, gameId: gid, us: value)
+            if let idx = games.firstIndex(where: { $0.id == gid }) { games[idx].us = value }
+        case "them":
+            authManager.updateGameThem(ownerUserId: owner, gameId: gid, them: value)
+            if let idx = games.firstIndex(where: { $0.id == gid }) { games[idx].them = value }
+        default:
+            break
+        }
+        markLocalProgressChange()
+    }
+
     private var inningBinding: Binding<Int> {
         intBinding(
-            get: { activeLiveId != nil ? inning : (currentGame?.inning ?? 1) },
+            get: { inning },
             set: { newValue in
                 if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["inning": newValue])
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["inning": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
                     inning = newValue
+                    mirrorLiveProgressToGame(field: "inning", value: newValue)
                     return
                 }
 
@@ -2252,6 +2563,8 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].inning = newValue
                 }
+                print("🧭[PROG] set inning=\(newValue) gid=\(gid)")
+                markLocalProgressChange()
             }
         )
     }
@@ -2259,11 +2572,12 @@ struct PitchTrackerView: View {
 
     private var hitsBinding: Binding<Int> {
         intBinding(
-            get: { activeLiveId != nil ? hits : (currentGame?.hits ?? 0) },
+            get: { hits },
             set: { newValue in
                 if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["hits": newValue])
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["hits": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
                     hits = newValue
+                    mirrorLiveProgressToGame(field: "hits", value: newValue)
                     return
                 }
 
@@ -2274,6 +2588,8 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].hits = newValue
                 }
+                print("🧭[PROG] set hits=\(newValue) gid=\(gid)")
+                markLocalProgressChange()
             }
         )
     }
@@ -2281,11 +2597,12 @@ struct PitchTrackerView: View {
     
     private var walksBinding: Binding<Int> {
         intBinding(
-            get: { activeLiveId != nil ? walks : (currentGame?.walks ?? 0) },
+            get: { walks },
             set: { newValue in
                 if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["walks": newValue])
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["walks": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
                     walks = newValue
+                    mirrorLiveProgressToGame(field: "walks", value: newValue)
                     return
                 }
 
@@ -2296,17 +2613,20 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].walks = newValue
                 }
+                print("🧭[PROG] set walks=\(newValue) gid=\(gid)")
+                markLocalProgressChange()
             }
         )
     }
 
     private var ballsBinding: Binding<Int> {
         intBinding(
-            get: { activeLiveId != nil ? balls : (currentGame?.balls ?? 0) },
+            get: { balls },
             set: { newValue in
                 if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["balls": newValue])
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["balls": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
                     balls = newValue
+                    mirrorLiveProgressToGame(field: "balls", value: newValue)
                     return
                 }
 
@@ -2317,17 +2637,20 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].balls = newValue
                 }
+                print("🧭[PROG] set balls=\(newValue) gid=\(gid)")
+                markLocalProgressChange()
             }
         )
     }
 
     private var strikesBinding: Binding<Int> {
         intBinding(
-            get: { activeLiveId != nil ? strikes : (currentGame?.strikes ?? 0) },
+            get: { strikes },
             set: { newValue in
                 if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["strikes": newValue])
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["strikes": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
                     strikes = newValue
+                    mirrorLiveProgressToGame(field: "strikes", value: newValue)
                     return
                 }
 
@@ -2338,17 +2661,20 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].strikes = newValue
                 }
+                print("🧭[PROG] set strikes=\(newValue) gid=\(gid)")
+                markLocalProgressChange()
             }
         )
     }
 
     private var usBinding: Binding<Int> {
         intBinding(
-            get: { activeLiveId != nil ? us : (currentGame?.us ?? 0) },
+            get: { us },
             set: { newValue in
                 if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["us": newValue])
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["us": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
                     us = newValue
+                    mirrorLiveProgressToGame(field: "us", value: newValue)
                     return
                 }
 
@@ -2359,17 +2685,20 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].us = newValue
                 }
+                print("🧭[PROG] set us=\(newValue) gid=\(gid)")
+                markLocalProgressChange()
             }
         )
     }
 
     private var themBinding: Binding<Int> {
         intBinding(
-            get: { activeLiveId != nil ? them : (currentGame?.them ?? 0) },
+            get: { them },
             set: { newValue in
                 if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["them": newValue])
+                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["them": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
                     them = newValue
+                    mirrorLiveProgressToGame(field: "them", value: newValue)
                     return
                 }
 
@@ -2380,6 +2709,8 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].them = newValue
                 }
+                print("🧭[PROG] set them=\(newValue) gid=\(gid)")
+                markLocalProgressChange()
             }
         )
     }
@@ -2644,7 +2975,10 @@ struct PitchTrackerView: View {
                 walks: walksBinding,
                 us: usBinding,
                 them: themBinding,
-                selectedGameId: $selectedGameId
+                selectedGameId: $selectedGameId,
+                onProgressChange: {
+                    markLocalProgressChange()
+                }
             )
             .environmentObject(authManager)
             .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
@@ -4300,6 +4634,8 @@ struct PitchTrackerView: View {
             self.isDisplayOnlyMode = false
             self.displayOnlyLiveId = nil
             self.displayOnlyLiveIdStorage = ""
+            self.dismissAllTopLevelSheets()
+            self.showSettings = true
         }
     }
 
@@ -4428,7 +4764,7 @@ struct PitchTrackerView: View {
             }
             if games.isEmpty {
                 authManager.loadGames { loaded in
-                    self.games = loaded
+                    self.games = self.mergeLoadedGamesPreservingProgress(loaded)
                 }
             }
             return
@@ -4510,7 +4846,19 @@ struct PitchTrackerView: View {
             print("✅ Loaded templates:", loadedTemplates.count)
             self.templates = loadedTemplates
             if self.selectedTemplate == nil {
-                self.selectedTemplate = loadedTemplates.first
+                self.selectedTemplate = self.visibleTemplates.first ?? loadedTemplates.first
+            } else if let current = self.selectedTemplate,
+                      self.hiddenTemplateIdSet.contains(current.id.uuidString) {
+                self.selectedTemplate = self.visibleTemplates.first ?? loadedTemplates.first
+            }
+            if self.pendingGameConfirmation != nil {
+                let hasMatch = self.pendingConfirmationTemplateId.flatMap { id in
+                    loadedTemplates.first(where: { $0.id == id })
+                } != nil
+                if self.pendingConfirmationTemplateId == nil || !hasMatch {
+                    let fallback = self.visibleTemplates.first ?? loadedTemplates.first
+                    self.pendingConfirmationTemplateId = fallback?.id
+                }
             }
             self.applyPendingLiveTemplateIfPossible()
             if let gameId = self.selectedGameId {
@@ -4520,7 +4868,7 @@ struct PitchTrackerView: View {
         }
 
         authManager.loadGames { loadedGames in
-            self.games = loadedGames
+            self.games = self.mergeLoadedGamesPreservingProgress(loadedGames)
 
             // Apply deferred restore (if needed)
             if let gid = self.pendingRestoreGameId,
@@ -5128,6 +5476,11 @@ struct PitchTrackerView: View {
             .onAppear {
                 handleInitialAppear()
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .background || newPhase == .inactive {
+                    flushProgressToGameIfOwner()
+                }
+            }
             .onChange(of: authManager.isSignedIn) { _, newValue in
                 if newValue {
                     // ✅ If sign-in/restore completes AFTER first appear,
@@ -5382,6 +5735,7 @@ private struct ProgressGameView: View {
     @Binding var us: Int
     @Binding var them: Int
     @Binding var selectedGameId: String?
+    let onProgressChange: () -> Void
 
     @EnvironmentObject var authManager: AuthManager
 
@@ -5446,10 +5800,7 @@ private struct ProgressGameView: View {
             let newCount = newValue.filter { $0 }.count
             if balls != newCount {
                 balls = newCount
-
-                withOwnerAndGame { owner, gid in
-                    authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: newCount)
-                }
+                onProgressChange()
             }
         }
 
@@ -5457,10 +5808,7 @@ private struct ProgressGameView: View {
             let newCount = newValue.filter { $0 }.count
             if strikes != newCount {
                 strikes = newCount
-
-                withOwnerAndGame { owner, gid in
-                    authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: newCount)
-                }
+                onProgressChange()
             }
         }
 
@@ -5489,13 +5837,6 @@ private struct ProgressGameView: View {
                 strikeToggles = (0..<2).map { $0 < newStrikes }
             }
         }
-    }
-
-    // MARK: - Helpers
-    private func withOwnerAndGame(_ action: (_ owner: String, _ gameId: String) -> Void) {
-        guard let owner = ownerUserId, !owner.isEmpty else { return }
-        guard let gid = selectedGameId, !gid.isEmpty else { return }
-        action(owner, gid)
     }
 
     private func ballBinding(index: Int) -> Binding<Bool> {
@@ -7577,6 +7918,24 @@ private struct SessionConfirmationSheet: View {
         .padding()
         .presentationDetents([.fraction(0.35)])
         .presentationDragIndicator(.visible)
+        .onAppear {
+            if selectedTemplateId == nil, let first = templates.first {
+                selectedTemplateId = first.id
+            } else if let selected = selectedTemplateId,
+                      !templates.contains(where: { $0.id == selected }),
+                      let first = templates.first {
+                selectedTemplateId = first.id
+            }
+        }
+        .onChange(of: templates.count) { _, _ in
+            if selectedTemplateId == nil, let first = templates.first {
+                selectedTemplateId = first.id
+            } else if let selected = selectedTemplateId,
+                      !templates.contains(where: { $0.id == selected }),
+                      let first = templates.first {
+                selectedTemplateId = first.id
+            }
+        }
     }
 }
 
