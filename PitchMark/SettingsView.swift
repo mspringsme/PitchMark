@@ -61,6 +61,7 @@ struct SettingsView: View {
     @Binding var showCodeShareModePicker: Bool
     
     @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var showSignOutConfirmation = false
     @State private var showChangeEmailSheet = false
     @State private var changeEmailText: String = ""
@@ -102,6 +103,7 @@ struct SettingsView: View {
     @State private var showInviteJoinSheet = false
     @State private var inviteJoinText: String = ""
     @State private var inviteJoinError: String? = nil
+    @State private var showProPaywall = false
     @State private var isJoiningInvite = false
     @State private var showQRScanner = false
     @State private var showCameraUnavailableAlert = false
@@ -248,6 +250,11 @@ struct SettingsView: View {
 
     private func joinLiveGameFromInvite() {
         inviteJoinError = nil
+
+        if !subscriptionManager.isPro {
+            showProPaywall = true
+            return
+        }
 
         guard let token = inviteToken(from: inviteJoinText) else {
             inviteJoinError = "Paste a valid invite link."
@@ -1375,6 +1382,13 @@ struct SettingsView: View {
             .sheet(isPresented: $showAccountActionsSheet) { accountActionsSheetView }
             .sheet(isPresented: $showChangeEmailSheet) { changeEmailSheetView }
             .sheet(isPresented: $showDeleteAccountSheet) { deleteAccountSheetView }
+            .sheet(isPresented: $showProPaywall) {
+                ProPaywallView(
+                    title: "PitchMark Pro",
+                    message: "Invite links and participant connections require PitchMark Pro.",
+                    allowsClose: true
+                )
+            }
             .onAppear {
                 loadHiddenIds()
                 startPitchersListenerIfNeeded()

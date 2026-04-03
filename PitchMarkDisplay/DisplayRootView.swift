@@ -2,13 +2,30 @@ import SwiftUI
 
 struct DisplayRootView: View {
     @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
 
     var body: some View {
         Group {
             if authManager.isCheckingAuth {
                 DisplaySplashView()
             } else if authManager.isSignedIn {
-                DisplayOnlyScreen()
+                if subscriptionManager.isPro {
+                    DisplayOnlyScreen()
+                } else {
+                    VStack(spacing: 16) {
+                        ProPaywallView(
+                            title: "PitchMark Pro Required",
+                            message: "Display app access is included with PitchMark Pro.",
+                            allowsClose: false
+                        )
+
+                        Button("Sign Out") {
+                            authManager.signOut()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding()
+                }
             } else {
                 SignInView()
             }

@@ -29,11 +29,13 @@ class DisplayAppDelegate: NSObject, UIApplicationDelegate {
 struct PitchMarkDisplayApp: App {
     @UIApplicationDelegateAdaptor(DisplayAppDelegate.self) var appDelegate
     @StateObject private var authManager = AuthManager()
+    @StateObject private var subscriptionManager = SubscriptionManager()
 
     var body: some Scene {
         WindowGroup {
             DisplayRootView()
                 .environmentObject(authManager)
+                .environmentObject(subscriptionManager)
         }
     }
 }

@@ -280,7 +280,7 @@ final class TopRowValidationCoordinator: ObservableObject {
         
         for first in shuffled {
             guard let (f1, f2) = digits(of: first) else { continue }
-            var used1: Set<Character> = [f1, f2]
+            let used1: Set<Character> = [f1, f2]
             for second in shuffled where second != first {
                 guard let (s1, s2) = digits(of: second) else { continue }
                 if used1.contains(s1) || used1.contains(s2) { continue }
@@ -446,6 +446,9 @@ struct TemplateEditorView: View {
     @State private var showNoPitchAlert = false
     @State private var hiddenShieldTarget: ShieldedGridTarget? = nil
     @State private var shieldRestoreWorkItem: DispatchWorkItem? = nil
+    @State private var showProPaywall = false
+
+    private let freePitchLimit = 2
     
     // Added new states for encrypted share sheet
     @State private var showEncryptedShare = false
@@ -462,6 +465,7 @@ struct TemplateEditorView: View {
     
     @StateObject private var topRowCoordinator = TopRowValidationCoordinator()
     @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
     
     let allPitches: [String]
     let templateID: UUID
@@ -478,6 +482,11 @@ struct TemplateEditorView: View {
     }
     
     private func saveTemplate() {
+        if !subscriptionManager.isPro && selectedPitches.count > freePitchLimit {
+            showProPaywall = true
+            return
+        }
+
         if !selectedCodes.isEmpty && !selectedPitch.isEmpty && !selectedLocation.isEmpty {
             let newAssignments = selectedCodes.map {
                 PitchCodeAssignment(code: $0, pitch: selectedPitch, location: selectedLocation)
@@ -566,6 +575,11 @@ struct TemplateEditorView: View {
     private func addCustomPitch() {
         let trimmed = customPitchName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        if !subscriptionManager.isPro && selectedPitches.count >= freePitchLimit {
+            showProPaywall = true
+            return
+        }
         
         // Check if it already exists (case-insensitive) in the base list
         if let existingBase = pitchOrder.first(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
@@ -860,6 +874,10 @@ struct TemplateEditorView: View {
                                     if isSelected {
                                         selectedPitches.remove(pitch)
                                     } else {
+                                        if !subscriptionManager.isPro && selectedPitches.count >= freePitchLimit {
+                                            showProPaywall = true
+                                            return
+                                        }
                                         selectedPitches.insert(pitch)
                                     }
                                 }) {
@@ -867,8 +885,6 @@ struct TemplateEditorView: View {
                                 }
                             }
                         } label: {
-                            let hasSelection = !selectedPitches.isEmpty
-                            //let title = hasSelection ? "Pitches (\(selectedPitches.count))" : "Pitches"
                             let title = "Pitches"
                             HStack(spacing: 8) {
                                 Text(title)
@@ -975,7 +991,6 @@ struct TemplateEditorView: View {
                                 let ballsTop = topRowCoordinator.ballsTopRow
                                 let ballsRows = topRowCoordinator.ballsRows
                                 let snapshot = pitchGridSnapshotProvider?()
-                                let headers = snapshot?.headers ?? []
                                 let grid = snapshot?.grid ?? []
                                 
                                 let printable = PrintableEncryptedGridsView(
@@ -1033,6 +1048,13 @@ struct TemplateEditorView: View {
                         if let encryptedShareImage {
                             ShareSheet(items: [encryptedShareImage])
                         }
+                    }
+                    .sheet(isPresented: $showProPaywall) {
+                        ProPaywallView(
+                            title: "PitchMark Pro",
+                            message: "Add more than two pitches to grid keys with PitchMark Pro.",
+                            allowsClose: true
+                        )
                     }
                     Spacer()
                     

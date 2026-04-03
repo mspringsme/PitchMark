@@ -65,6 +65,7 @@
 				"Pitch%.swift",
 				PitchSessionManager.swift,
 				SignInView.swift,
+				SubscriptionManager.swift,
 				Utilities.swift,
 			);
 			target = 23F7D2C42F758F710010D7BF /* Pitchmark Display */;

@@ -6,58 +6,106 @@
 //
 import SwiftUI
 import UIKit
+import StoreKit
 
-@ViewBuilder
-var Storefront: some View {
-    NavigationStack {
-        List {
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Pitcher Grid Key Inserts")
-                        .font(.largeTitle.bold())
-                    Text("Purchase template card inserts designed for pitcher wristbands.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+struct StorefrontView: View {
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
+
+    private var annualPrice: String {
+        subscriptionManager.annualProduct?.displayPrice ?? "$19.99"
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Pitcher Grid Key Inserts")
+                            .font(.largeTitle.bold())
+                        Text("Purchase template card inserts designed for pitcher wristbands.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 8)
                 }
-                .padding(.vertical, 8)
-            }
 
-            Section(header: Text("Templates")) {
-                ForEach(sampleTemplates) { template in
-                    NavigationLink(value: template) {
-                        HStack(spacing: 12) {
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(.gray.opacity(0.15))
-                                .frame(width: 56, height: 56)
-                                .overlay(
-                                    Image(systemName: template.icon)
-                                        .font(.title3)
-                                        .foregroundStyle(.secondary)
-                                )
+                Section(header: Text("PitchMark Pro")) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Annual Access")
+                            .font(.headline)
+                        Text("Unlock full grid keys, live participant connection, and the display app.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text("Price: \(annualPrice)/year")
+                            .font(.subheadline.weight(.semibold))
 
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(template.name)
-                                    .font(.headline)
-                                Text(template.subtitle)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                        if subscriptionManager.isPro {
+                            Text("Active subscription")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        } else {
+                            Button {
+                                Task { await subscriptionManager.purchaseAnnual() }
+                            } label: {
+                                Label("Start Pro Annual", systemImage: "crown.fill")
+                                    .frame(maxWidth: .infinity)
                             }
+                            .buttonStyle(.borderedProminent)
 
-                            Spacer()
-
-                            Text(template.price, format: .currency(code: "USD"))
-                                .font(.subheadline.weight(.semibold))
+                            Button("Restore Purchases") {
+                                Task { await subscriptionManager.restorePurchases() }
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .padding(.vertical, 4)
+                    }
+                    .padding(.vertical, 6)
+                }
+
+                Section(header: Text("Templates")) {
+                    ForEach(sampleTemplates) { template in
+                        NavigationLink(value: template) {
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(.gray.opacity(0.15))
+                                    .frame(width: 56, height: 56)
+                                    .overlay(
+                                        Image(systemName: template.icon)
+                                            .font(.title3)
+                                            .foregroundStyle(.secondary)
+                                    )
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(template.name)
+                                        .font(.headline)
+                                    Text(template.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Text(template.price, format: .currency(code: "USD"))
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .padding(.vertical, 4)
+                        }
                     }
                 }
             }
+            .navigationTitle("Store")
+            .navigationDestination(for: StoreTemplate.self) { template in
+                TemplateDetailView(template: template)
+            }
         }
-        .navigationTitle("Store")
-        .navigationDestination(for: StoreTemplate.self) { template in
-            TemplateDetailView(template: template)
+        .task {
+            await subscriptionManager.refresh()
         }
     }
+}
+
+@ViewBuilder
+var Storefront: some View {
+    StorefrontView()
 }
 
 // MARK: - Models used by Storefront
@@ -200,9 +248,9 @@ private struct TemplateDetailView: View {
 
                 Button {
                     // Ensure a PitchTemplate is selected before purchase
-                    guard let chosenTemplate = selectedTemplate else { return }
-                    // TODO: Hook up to StoreKit purchase using chosenTemplate info
-                    // e.g., await purchase(templateId: chosenTemplate.id.uuidString)
+                    guard selectedTemplate != nil else { return }
+                    // TODO: Hook up to StoreKit purchase using selectedTemplate info
+                    // e.g., await purchase(templateId: selectedTemplate.id.uuidString)
                 } label: {
                     Label("Buy for \(template.price, format: .currency(code: "USD"))", systemImage: "cart")
                         .frame(maxWidth: .infinity)

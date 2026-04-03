@@ -17,7 +17,9 @@ private final class PitchMarkAppCheckProviderFactory: NSObject, AppCheckProvider
 
 struct RootView: View {
     @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var showDisplayCover = false
+    @State private var showProPaywall = false
 
     var body: some View {
         Group {
@@ -32,6 +34,13 @@ struct RootView: View {
         .fullScreenCover(isPresented: $showDisplayCover) {
             DisplayOnlyWindowView()
                 .environmentObject(authManager)
+        }
+        .sheet(isPresented: $showProPaywall) {
+            ProPaywallView(
+                title: "PitchMark Pro",
+                message: "Invite links and participant connections require PitchMark Pro.",
+                allowsClose: true
+            )
         }
         .onAppear {
             authManager.restoreSignIn() // ✅ safe here
@@ -91,6 +100,11 @@ struct RootView: View {
     }
 
     private func joinLiveGameByInviteToken(_ token: String) {
+        guard subscriptionManager.isPro else {
+            showProPaywall = true
+            return
+        }
+
         LiveGameService.shared.joinLiveGameByInviteToken(token: token) { result in
             DispatchQueue.main.async {
                 switch result {
@@ -195,10 +209,13 @@ struct PitchMarkApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     @StateObject private var authManager = AuthManager()
+    @StateObject private var subscriptionManager = SubscriptionManager()
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(authManager)
+                .environmentObject(subscriptionManager)
         }
     }
 }

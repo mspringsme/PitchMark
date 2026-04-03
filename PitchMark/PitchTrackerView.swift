@@ -151,6 +151,7 @@ struct PitchTrackerView: View {
     @State private var showProfile = false
     @State private var templates: [PitchTemplate] = []
     @EnvironmentObject var authManager: AuthManager
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
     @Environment(\.scenePhase) private var scenePhase
     @State private var showProfileSheet = false
     @State private var showSignOutConfirmation = false
@@ -159,6 +160,7 @@ struct PitchTrackerView: View {
     @State private var showInviteJoinSheet = false
     @State private var inviteJoinText: String = ""
     @State private var inviteJoinError: String? = nil
+    @State private var showProPaywall = false
     @State private var showCameraPicker = false
     @State private var showCameraUnavailableAlert = false
     @State private var showCameraPermissionAlert = false
@@ -2147,6 +2149,11 @@ struct PitchTrackerView: View {
     private func consumeShareCode(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        if !subscriptionManager.isPro {
+            showProPaywall = true
+            return
+        }
+
         // Accept only exactly 6 digits
         let isSixDigits = trimmed.count == 6 && trimmed.allSatisfy({ $0.isNumber })
         guard isSixDigits else {
@@ -2244,6 +2251,11 @@ struct PitchTrackerView: View {
 
     private func joinLiveGameFromInvite() {
         inviteJoinError = nil
+
+        if !subscriptionManager.isPro {
+            showProPaywall = true
+            return
+        }
 
         guard let token = inviteToken(from: inviteJoinText) else {
             inviteJoinError = "Paste a valid invite link."
@@ -4455,6 +4467,11 @@ struct PitchTrackerView: View {
     }
 
     private func enterDisplayOnlyMode(liveId: String) {
+        guard subscriptionManager.isPro else {
+            showProPaywall = true
+            return
+        }
+
         displayOnlyLiveId = liveId
         displayOnlyLiveIdStorage = liveId
         isDisplayOnlyMode = true
@@ -4585,6 +4602,7 @@ struct PitchTrackerView: View {
         guard isGame, isOwnerForActiveGame else { return }
         guard activeLiveId == nil else { return }
         guard !autoLiveCreateInProgress else { return }
+        guard subscriptionManager.isPro else { return }
         guard let gameId = selectedGameId, !gameId.isEmpty else { return }
         if didAutoCreateLiveSessionForGameId == gameId { return }
 
@@ -5248,6 +5266,7 @@ struct PitchTrackerView: View {
               showCodeShareModePicker: $showCodeShareModePicker
           )
         .environmentObject(authManager)
+        .environmentObject(subscriptionManager)
     }
 
     @ViewBuilder private var gameStatsSheetView: some View {
@@ -5475,6 +5494,13 @@ struct PitchTrackerView: View {
 
         let v4 = v3
             .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
+            .sheet(isPresented: $showProPaywall) {
+                ProPaywallView(
+                    title: "PitchMark Pro",
+                    message: "Connect participants, unlock full grid keys, and use the display app with PitchMark Pro.",
+                    allowsClose: true
+                )
+            }
             .fullScreenCover(isPresented: $showQRScanner) {
                 QRScannerView { scanned in
                     inviteJoinText = scanned
@@ -7402,10 +7428,12 @@ private struct CodeShareSheet: View {
     let templateName: String?
     let onConsume: (String) -> Void
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var generated: String
     @State private var inviteLink: String = ""
     @State private var didWriteSessionDoc = false
     @State private var writeErrorMessage: String? = nil
+    @State private var showProPaywall = false
 
 
     init(
@@ -7506,6 +7534,13 @@ private struct CodeShareSheet: View {
                 }
             }
         }
+        .sheet(isPresented: $showProPaywall) {
+            ProPaywallView(
+                title: "PitchMark Pro",
+                message: "Invite links require PitchMark Pro.",
+                allowsClose: true
+            )
+        }
     }
     
     private func buildShareCode() -> String {
@@ -7515,6 +7550,12 @@ private struct CodeShareSheet: View {
     @State private var isGenerating: Bool = false
 
     private func generateLiveGameAndCode() {
+        if !subscriptionManager.isPro {
+            writeErrorMessage = "PitchMark Pro is required to create invite links."
+            showProPaywall = true
+            return
+        }
+
         guard let gameId = gameId else {
             writeErrorMessage = "Select a game first before generating an invite link."
             return
@@ -8117,10 +8158,20 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
         let closeButton = UIButton(type: .system)
         closeButton.setTitle("Close", for: .normal)
         closeButton.setTitleColor(.white, for: .normal)
-        closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.6)
-        closeButton.layer.cornerRadius = 14
-        closeButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+
+        if #available(iOS 15.0, *) {
+            var config = UIButton.Configuration.filled()
+            config.baseForegroundColor = .white
+            config.baseBackgroundColor = UIColor.black.withAlphaComponent(0.6)
+            config.cornerStyle = .medium
+            config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+            closeButton.configuration = config
+        } else {
+            closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+            closeButton.layer.cornerRadius = 14
+            closeButton.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        }
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(closeButton)
 
