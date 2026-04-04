@@ -104,6 +104,8 @@ struct SettingsView: View {
     @State private var inviteJoinText: String = ""
     @State private var inviteJoinError: String? = nil
     @State private var showProPaywall = false
+    @State private var showProGateAlert = false
+    @State private var proGateMessage: String = ""
     @State private var isJoiningInvite = false
     @State private var showQRScanner = false
     @State private var showCameraUnavailableAlert = false
@@ -115,6 +117,20 @@ struct SettingsView: View {
         formatter.timeStyle = .none
         return formatter
     }()
+
+    private func sectionCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.black.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+            )
+            .padding(.horizontal)
+    }
 
     @State private var copyPitcherTarget: Pitcher? = nil
     @State private var showCopyPitcherConfirm = false
@@ -581,9 +597,8 @@ struct SettingsView: View {
     private var templatesHeader: some View {
         HStack {
             Text("Code Grid Keys")
-                .font(.title2)
+                .font(.headline)
                 .bold()
-                .padding(.horizontal)
             Spacer()
             Button {
                 guard !isRefreshingTemplates else { return }
@@ -601,15 +616,18 @@ struct SettingsView: View {
             }
             .buttonStyle(.bordered)
             .disabled(isRefreshingTemplates)
-            Button("New Key") {
+            Button {
                 editorTemplate = PitchTemplate(
                     id: UUID(),
                     name: "",
                     pitches: [],
                     codeAssignments: []
                 )
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.subheadline)
             }
-            .padding(.horizontal)
+            .buttonStyle(.plain)
         }
     }
 
@@ -617,16 +635,46 @@ struct SettingsView: View {
     private var pitchersHeader: some View {
         HStack {
             Text("Pitchers")
-                .font(.title2)
+                .font(.headline)
                 .bold()
-                .padding(.horizontal)
             Spacer()
-            Button("New Pitcher") {
+            Button {
                 editingPitcher = nil
                 newPitcherName = ""
                 showAddPitcher = true
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.subheadline)
             }
-            .padding(.horizontal)
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var templatesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            templatesHeader
+                .padding(.horizontal, 4)
+            templatesListView
+
+            if showHiddenTemplates {
+                if !hiddenTemplates.isEmpty {
+                    hiddenTemplatesSection
+                }
+            }
+        }
+    }
+
+    private var pitchersSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            pitchersHeader
+                .padding(.horizontal, 4)
+            pitchersListView
+
+            if showHiddenPitchers {
+                if !hiddenPitchers.isEmpty {
+                    hiddenPitchersSection
+                }
+            }
         }
     }
 
@@ -735,12 +783,6 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.horizontal)
-                } else {
-                    Text("Select a pitcher to manage")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.leading)
-                        .padding(.trailing, 4)
                 }
 
                 Spacer().frame(height: 8)
@@ -829,11 +871,6 @@ struct SettingsView: View {
                         .font(.caption)
                     }
                     .padding(.horizontal)
-                } else {
-                    Text("Select a Grid Key to start a game or manage")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
                 }
 
                 Spacer().frame(height: 8)
@@ -904,18 +941,13 @@ struct SettingsView: View {
     @ViewBuilder
     private var storeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Store")
-                .font(.title2)
-                .bold()
-                .padding(.horizontal)
-
             NavigationLink {
                 Storefront
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "cart")
                         .font(.subheadline.weight(.semibold))
-                    Text("Template Inserts")
+                    Text("store")
                         .font(.subheadline.weight(.semibold))
                     Spacer()
                     Image(systemName: "chevron.right")
@@ -1184,143 +1216,126 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         Color.clear.frame(height: 0)
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("Quick Launch – Games")
-                                    .font(.headline)
-                                Spacer()
-                                Button {
-                                    showGameChooser = true
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.subheadline)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(.horizontal)
-
-                            if !games.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 12) {
-                                        let sorted = games.sorted(by: { $0.date > $1.date })
-                                        let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
-                                        ForEach(quickGames) { item in
-                                            Button {
-                                                launchGame(item.game)
-                                            } label: {
-                                                VStack(spacing: 4) {
-                                                    Text(item.game.opponent)
-                                                        .font(.subheadline.weight(.semibold))
-                                                        .foregroundStyle(.primary)
-                                                        .lineLimit(1)
-                                                    Text(quickLaunchDateCaption(for: item.game))
-                                                        .font(.caption2)
-                                                        .foregroundStyle(.secondary)
-                                                }
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 10)
-                                                .frame(minWidth: 120)
-                                                .background(
-                                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                        .fill(Color.black.opacity(0.06))
-                                                )
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                        .stroke(Color.black.opacity(0.12), lineWidth: 1)
-                                                )
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
+                        sectionCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text("Quick Launch – Games")
+                                        .font(.headline)
+                                    Spacer()
+                                    Button {
+                                        showGameChooser = true
+                                    } label: {
+                                        Image(systemName: "plus.circle.fill")
+                                            .font(.subheadline)
                                     }
-                                    .padding(.horizontal)
+                                    .buttonStyle(.plain)
                                 }
-                            }
-                        }
+                                .padding(.horizontal)
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("Quick Launch – Practice")
-                                    .font(.headline)
-                                Spacer()
-                                Button {
-                                    showPracticeChooser = true
-                                } label: {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.subheadline)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(.horizontal)
-
-                            let quickPractice = practiceQuickLaunchItems()
-                            if !quickPractice.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 12) {
-                                        ForEach(quickPractice) { item in
-                                            Button {
-                                                launchPractice(item.session)
-                                            } label: {
-                                                VStack(spacing: 4) {
-                                                    Text(item.session?.name ?? "Practice")
-                                                        .font(.subheadline.weight(.semibold))
-                                                        .foregroundStyle(.primary)
-                                                        .lineLimit(1)
-                                                    Text(item.session.map { Self.quickLaunchDateFormatter.string(from: $0.date) } ?? "")
-                                                        .font(.caption2)
-                                                        .foregroundStyle(.secondary)
+                                if !games.isEmpty {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 12) {
+                                            let sorted = games.sorted(by: { $0.date > $1.date })
+                                            let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
+                                            ForEach(quickGames) { item in
+                                                Button {
+                                                    launchGame(item.game)
+                                                } label: {
+                                                    VStack(spacing: 4) {
+                                                        Text(item.game.opponent)
+                                                            .font(.subheadline.weight(.semibold))
+                                                            .foregroundStyle(.primary)
+                                                            .lineLimit(1)
+                                                        Text(quickLaunchDateCaption(for: item.game))
+                                                            .font(.caption2)
+                                                            .foregroundStyle(.secondary)
+                                                    }
+                                                    .padding(.horizontal, 12)
+                                                    .padding(.vertical, 10)
+                                                    .frame(minWidth: 120)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                            .fill(Color.black.opacity(0.06))
+                                                    )
+                                                    .overlay(
+                                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                            .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                                                    )
                                                 }
-                                                .padding(.horizontal, 12)
-                                                .padding(.vertical, 10)
-                                                .frame(minWidth: 120)
-                                                .background(
-                                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                        .fill(Color.black.opacity(0.06))
-                                                )
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                        .stroke(Color.black.opacity(0.12), lineWidth: 1)
-                                                )
+                                                .buttonStyle(.plain)
                                             }
-                                            .buttonStyle(.plain)
                                         }
+                                        .padding(.horizontal)
                                     }
-                                    .padding(.horizontal)
                                 }
                             }
                         }
 
-                        // 🔹 Templates Header
-                        templatesHeader
+                        sectionCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack {
+                                    Text("Quick Launch – Practice")
+                                        .font(.headline)
+                                    Spacer()
+                                    Button {
+                                        showPracticeChooser = true
+                                    } label: {
+                                        Image(systemName: "plus.circle.fill")
+                                            .font(.subheadline)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal)
 
-                        // 🔹 Templates List / Empty State
-                        templatesListView
-
-                        if showHiddenTemplates {
-                            if !hiddenTemplates.isEmpty {
-                                hiddenTemplatesSection
+                                let quickPractice = practiceQuickLaunchItems()
+                                if !quickPractice.isEmpty {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 12) {
+                                            ForEach(quickPractice) { item in
+                                                Button {
+                                                    launchPractice(item.session)
+                                                } label: {
+                                                    VStack(spacing: 4) {
+                                                        Text(item.session?.name ?? "Practice")
+                                                            .font(.subheadline.weight(.semibold))
+                                                            .foregroundStyle(.primary)
+                                                            .lineLimit(1)
+                                                        Text(item.session.map { Self.quickLaunchDateFormatter.string(from: $0.date) } ?? "")
+                                                            .font(.caption2)
+                                                            .foregroundStyle(.secondary)
+                                                    }
+                                                    .padding(.horizontal, 12)
+                                                    .padding(.vertical, 10)
+                                                    .frame(minWidth: 120)
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                            .fill(Color.black.opacity(0.06))
+                                                    )
+                                                    .overlay(
+                                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                            .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                                                    )
+                                                }
+                                                .buttonStyle(.plain)
+                                            }
+                                        }
+                                        .padding(.horizontal)
+                                    }
+                                }
                             }
                         }
 
-                        Divider()
-                            .padding(.horizontal)
-
-                        // 🔹 Pitchers Header
-                        pitchersHeader
-
-                        // 🔹 Pitchers List / Empty State
-                        pitchersListView
-
-                        if showHiddenPitchers {
-                            if !hiddenPitchers.isEmpty {
-                                hiddenPitchersSection
-                            }
+                        sectionCard {
+                            templatesSection
                         }
 
-                        Divider()
-                            .padding(.horizontal)
-                        
-                        storeSection
-                        Divider()
+                        sectionCard {
+                            pitchersSection
+                        }
+
+                        sectionCard {
+                            storeSection
+                        }
                     }
                     .padding(.top, 4)
                 }
@@ -1388,6 +1403,14 @@ struct SettingsView: View {
                     message: "Invite links and participant connections require PitchMark Pro.",
                     allowsClose: true
                 )
+            }
+            .alert("Upgrade to Pro", isPresented: $showProGateAlert) {
+                Button("Not Now", role: .cancel) { }
+                Button("Upgrade") {
+                    showProPaywall = true
+                }
+            } message: {
+                Text(proGateMessage)
             }
             .onAppear {
                 loadHiddenIds()
@@ -1538,6 +1561,11 @@ struct SettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
+                        if !subscriptionManager.isPro {
+                            proGateMessage = "Joining games requires PitchMark Pro."
+                            showProGateAlert = true
+                            return
+                        }
                         inviteJoinError = nil
                         inviteJoinText = ""
                         showInviteJoinSheet = true

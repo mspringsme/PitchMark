@@ -161,6 +161,8 @@ struct PitchTrackerView: View {
     @State private var inviteJoinText: String = ""
     @State private var inviteJoinError: String? = nil
     @State private var showProPaywall = false
+    @State private var showProGateAlert = false
+    @State private var proGateMessage: String = ""
     @State private var showCameraPicker = false
     @State private var showCameraUnavailableAlert = false
     @State private var showCameraPermissionAlert = false
@@ -3859,6 +3861,11 @@ struct PitchTrackerView: View {
     private var codeLinkButton: some View {
         Menu {
             Button {
+                if !subscriptionManager.isPro {
+                    proGateMessage = "Code links require PitchMark Pro."
+                    showProGateAlert = true
+                    return
+                }
                 showCodeShareModePicker = true
             } label: {
                 Label("Code Link", systemImage: "key.sensor.tag.radiowaves.left.and.right.fill")
@@ -3900,6 +3907,11 @@ struct PitchTrackerView: View {
             }
 
             Button("Join via Invite Link") {
+                if !subscriptionManager.isPro {
+                    proGateMessage = "Joining games requires PitchMark Pro."
+                    showProGateAlert = true
+                    return
+                }
                 inviteJoinError = nil
                 inviteJoinText = ""
                 showInviteJoinSheet = true
@@ -5147,6 +5159,11 @@ struct PitchTrackerView: View {
             .buttonStyle(.bordered)
 
             Button(isJoiningSession ? "Joining..." : "Join") {
+                if !subscriptionManager.isPro {
+                    proGateMessage = "Joining games requires PitchMark Pro."
+                    showProGateAlert = true
+                    return
+                }
                 joinLiveGameFromInvite()
             }
             .buttonStyle(.borderedProminent)
@@ -5558,6 +5575,14 @@ struct PitchTrackerView: View {
         // Keep alerts + the rest of your observers, then erase one last time
         return AnyView(v9
             .allowsHitTesting(!showSessionConflictAlert)
+            .alert("Upgrade to Pro", isPresented: $showProGateAlert) {
+                Button("Not Now", role: .cancel) { }
+                Button("Upgrade") {
+                    showProPaywall = true
+                }
+            } message: {
+                Text(proGateMessage)
+            }
             .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -8464,9 +8489,10 @@ struct PracticeSelectionSheet: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: { showAddPopover = true }) {
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundColor(.green)
-                            .font(.system(size: 25))
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus.circle.fill")
+                            Text("New Practice")
+                        }
                     }
                     .accessibilityLabel("Add Practice Session")
                 }

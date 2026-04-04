@@ -4,7 +4,7 @@ import Combine
 
 @MainActor
 final class SubscriptionManager: ObservableObject {
-    static let annualProductId = "com.pitchmarklive.annual"
+    static let annualProductId = "com.pitchmark.pro.annual"
 
     enum Status {
         case loading

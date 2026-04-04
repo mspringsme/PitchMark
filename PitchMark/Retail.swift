@@ -43,7 +43,13 @@ struct StorefrontView: View {
                             Text("Active subscription")
                                 .font(.caption)
                                 .foregroundStyle(.green)
+                            Text("Debug: isPro = true")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         } else {
+                            Text("Debug: isPro = false")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                             Button {
                                 Task { await subscriptionManager.purchaseAnnual() }
                             } label: {
