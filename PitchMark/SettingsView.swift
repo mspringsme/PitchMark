@@ -149,6 +149,8 @@ struct SettingsView: View {
     @State private var ownedPitchersListener: ListenerRegistration? = nil
     @State private var sharedPitchersListener: ListenerRegistration? = nil
     @State private var livePitchersById: [String: Pitcher] = [:]
+    @State private var storeGlowAngle: Double = 0
+    @State private var storeGlowPulse = false
     
     private var sortedTemplates: [PitchTemplate] {
         templates.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
@@ -963,7 +965,29 @@ struct SettingsView: View {
                 .overlay(
                     Capsule().stroke(Color.black, lineWidth: 1)
                 )
+                .overlay(
+                    Capsule()
+                        .stroke(
+                            AngularGradient(
+                                gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
+                                center: .center,
+                                angle: .degrees(storeGlowAngle)
+                            ),
+                            lineWidth: 2
+                        )
+                        .blur(radius: 2)
+                        .opacity(0.9)
+                )
+                .shadow(color: Color.cyan.opacity(storeGlowPulse ? 0.6 : 0.3), radius: storeGlowPulse ? 10 : 4)
                 .padding(.horizontal)
+                .onAppear {
+                    withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+                        storeGlowAngle = 360
+                    }
+                    withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                        storeGlowPulse = true
+                    }
+                }
             }
         }
     }

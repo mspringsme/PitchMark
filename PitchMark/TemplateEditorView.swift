@@ -2565,30 +2565,29 @@ import SwiftUI
 /// - Skips printing the trailing "+" pitch column (if present in grid[0].last)
 struct PrintableEncryptedGridsView: View {
     let grid: [[String]]
-    
+
     let strikeTopRow: [String]
     let strikeRows: [[String]]   // expects count == 4, uses rows 1..3
-    
+
     let ballsTopRow: [String]
     let ballsRows: [[String]]    // expects count == 4, uses rows 1..3
     let pitchFirstColors: [String]
     let locationFirstColors: [String]
+    let outerPadding: CGFloat
+    let scale: CGFloat
+    let textScale: CGFloat
     
     // Your screenshot has a fixed green block in Balls at (row 2, col 1) in the 4x3 grid
     // (i.e., body row 2, col 1). Keep this default for drop-in compatibility.
     let selectedBallBodyCell: (row: Int, col: Int) = (1, 1)
     
-    private let bodyFontSize: CGFloat = 18
-    private let headerFontSize: CGFloat = 22   // ← for circled cells
-    
-    
-    private let printFontSize: CGFloat = 20 // font size
-    
-    
-    private let cellW: CGFloat = 70
-    private let cellH: CGFloat = 48
-    private let corner: CGFloat = 10
-    private let lineW: CGFloat = 2.0
+    private let baseBodyFontSize: CGFloat = 18
+    private let baseHeaderFontSize: CGFloat = 22
+    private let basePrintFontSize: CGFloat = 20
+    private let baseCellW: CGFloat = 70
+    private let baseCellH: CGFloat = 48
+    private let baseCorner: CGFloat = 10
+    private let baseLineW: CGFloat = 2.0
 
     init(
         grid: [[String]],
@@ -2597,7 +2596,10 @@ struct PrintableEncryptedGridsView: View {
         ballsTopRow: [String],
         ballsRows: [[String]],
         pitchFirstColors: [String] = [],
-        locationFirstColors: [String] = []
+        locationFirstColors: [String] = [],
+        outerPadding: CGFloat = 24,
+        scale: CGFloat = 1.0,
+        textScale: CGFloat = 1.0
     ) {
         self.grid = grid
         self.strikeTopRow = strikeTopRow
@@ -2606,19 +2608,64 @@ struct PrintableEncryptedGridsView: View {
         self.ballsRows = ballsRows
         self.pitchFirstColors = pitchFirstColors
         self.locationFirstColors = locationFirstColors
+        self.outerPadding = outerPadding
+        self.scale = scale
+        self.textScale = textScale
     }
     
-    private let topBlockHeight: CGFloat = 228
-    private let bottomBlockHeight: CGFloat = 214
+    private let baseTopBlockHeight: CGFloat = 228
+    private let baseBottomBlockHeight: CGFloat = 214
+    
+    private var scaled: CGFloat { max(scale, 0.1) }
+    private func s(_ value: CGFloat) -> CGFloat { value * scaled }
+    
+    private var bodyFontSize: CGFloat { baseBodyFontSize * scaled * textScale }
+    private var headerFontSize: CGFloat { baseHeaderFontSize * scaled * textScale }
+    private var printFontSize: CGFloat { basePrintFontSize * scaled * textScale }
+    private var cellW: CGFloat { baseCellW * scaled }
+    private var cellH: CGFloat { baseCellH * scaled }
+    private var corner: CGFloat { baseCorner * scaled }
+    private var lineW: CGFloat { baseLineW * scaled }
+    private var topBlockHeight: CGFloat { baseTopBlockHeight * scaled }
+    private var bottomBlockHeight: CGFloat { baseBottomBlockHeight * scaled }
+
+    static func baseContentSize(for grid: [[String]]) -> CGSize {
+        let cellW: CGFloat = 70
+        let cellH: CGFloat = 48
+        let topBlockHeight: CGFloat = 228
+        let bottomBlockHeight: CGFloat = 214
+        let paletteWidth: CGFloat = 24
+        let paletteHeight = topBlockHeight + bottomBlockHeight + 22
+
+        let headerRow = grid.first ?? [""]
+        let lastIsPlus = headerRow.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "+"
+        let pitchCols = max(0, headerRow.count - 1 - (lastIsPlus ? 1 : 0))
+        let leftSpacerWidth: CGFloat = 5
+        let gridWidth = (cellW * CGFloat(max(1, pitchCols + 1))) + leftSpacerWidth
+
+        let pitchTitleHeight = UIFont.systemFont(ofSize: 18, weight: .medium).lineHeight
+        let pitchBlockHeight = pitchTitleHeight + 8 + (cellH * 4)
+
+        let locationTitleHeight = UIFont.systemFont(ofSize: 16, weight: .regular).lineHeight
+        let locationBlockHeight = (cellH * 4) + 8 + locationTitleHeight + 5
+        let locationsWidth = (cellW * 3 * 2) + 50
+
+        let rightWidth = max(gridWidth, locationsWidth)
+        let rightHeight = pitchBlockHeight + 22 + locationBlockHeight + 4
+
+        let totalWidth = paletteWidth + 28 + rightWidth
+        let totalHeight = max(paletteHeight, rightHeight)
+        return CGSize(width: totalWidth, height: totalHeight)
+    }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 28) {
+        HStack(alignment: .top, spacing: s(28)) {
             palettePreviewColumn()
 
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: s(22)) {
                 pitchSelectionBlock()
 
-                HStack(alignment: .top, spacing: 50) {
+                HStack(alignment: .top, spacing: s(50)) {
                     locationBlock(
                         title: "Strikes",
                         header: strikeTopRow,
@@ -2635,10 +2682,10 @@ struct PrintableEncryptedGridsView: View {
                         highlightBodyCell: selectedBallBodyCell
                     )
                 }
-                .padding(.top, 4)
+                .padding(.top, s(4))
             }
         }
-        .padding(24)
+        .padding(outerPadding * scaled)
         .background(Color.white)
         .foregroundColor(.black)
     }
@@ -2646,30 +2693,30 @@ struct PrintableEncryptedGridsView: View {
 
 private extension PrintableEncryptedGridsView {
     func palettePreviewColumn() -> some View {
-        VStack(spacing: 22) {
-            VStack(spacing: 14) {
+        VStack(spacing: s(22)) {
+            VStack(spacing: s(14)) {
                 ForEach(0..<2, id: \.self) { index in
                     palettePreviewCircle(at: index)
                 }
             }
-            .frame(width: 24, height: topBlockHeight, alignment: .center)
+            .frame(width: s(24), height: topBlockHeight, alignment: .center)
 
-            VStack(spacing: 14) {
+            VStack(spacing: s(14)) {
                 ForEach(2..<5, id: \.self) { index in
                     palettePreviewCircle(at: index)
                 }
             }
-            .frame(width: 24, height: bottomBlockHeight, alignment: .center)
+            .frame(width: s(24), height: bottomBlockHeight, alignment: .center)
         }
     }
 
     func palettePreviewCircle(at index: Int) -> some View {
         Circle()
             .fill(palettePreviewColor(at: index))
-            .frame(width: 24, height: 24)
+            .frame(width: s(24), height: s(24))
             .overlay(
                 Circle()
-                    .stroke(Color.black, lineWidth: 1.5)
+                    .stroke(Color.black, lineWidth: s(1.5))
             )
     }
 
@@ -2698,16 +2745,19 @@ private extension PrintableEncryptedGridsView {
             let pitchCols = printablePitchColumnCount(from: headerRow) // excludes leading "" and trailing "+"
             let headers = printablePitchHeaders(from: headerRow)        // size == pitchCols
             
+            let leftSpacerWidth = s(5)
             return AnyView(
-                VStack(alignment: .center, spacing: 8) {
-                                Text("Pitch Selection")
-                                    .font(.system(size: 18, weight: .medium))
-                                    .foregroundColor(.black)
+                VStack(alignment: .center, spacing: s(8)) {
+                    Text("Pitch Selection")
+                        .font(.system(size: s(18), weight: .medium))
+                        .foregroundColor(.black)
                     
                     VStack(spacing: 0) {
                         // Header row: blank borderless + pitch headers
                         HStack(spacing: 0) {
                             cell("", stroke: .clear, fill: .clear, bold: false, borderless: true)
+                            Color.clear
+                                .frame(width: leftSpacerWidth, height: cellH)
                             
                             ForEach(headers.indices, id: \.self) { i in
                                 cell(headers[i], stroke: .black, fill: .white, bold: true)
@@ -2719,6 +2769,8 @@ private extension PrintableEncryptedGridsView {
                             HStack(spacing: 0) {
                                 // Left label (col 0)
                                 cell(value(in: grid, row: r, col: 0), stroke: .black, fill: .white, bold: true, emphasized: true)
+                                Color.clear
+                                    .frame(width: leftSpacerWidth, height: cellH)
                                 
                                 // Code columns (col 1...pitchCols) — this automatically skips the "+" col
                                 ForEach(1...pitchCols, id: \.self) { c in
@@ -2758,6 +2810,7 @@ private extension PrintableEncryptedGridsView {
                         )
                     }
                 }
+                .padding(.bottom, s(5))
                 
                 // Body rows correspond to rows[1], rows[2], rows[3] in your coordinator storage.
                 // We render them as bodyRowIndex 0..2, mapping to sourceRow = bodyRowIndex + 1.
@@ -2786,8 +2839,8 @@ private extension PrintableEncryptedGridsView {
                 }
             }
             
-            Text(title)
-                .font(.system(size: 16))
+        Text(title)
+                .font(.system(size: s(16)))
                 .foregroundColor(.black)
         }
     }
