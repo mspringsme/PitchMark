@@ -26,6 +26,10 @@ enum EncryptedGridKind {
 /// The function returns the generated calls and also prints them for debugging.
 struct EncryptedCodeGenerator {
 
+    private static func sanitize(_ value: String) -> String {
+        value.uppercased().filter { $0.isNumber || ($0.isLetter && $0.isASCII) }
+    }
+
     /// Generate C1C2C3C4 codes given the template, selected pitch, and tap mapping.
     /// - Parameters:
     ///   - template: The `PitchTemplate` containing encrypted grid data.
@@ -107,6 +111,11 @@ struct EncryptedCodeGenerator {
         }()
         print("[GENERATOR] bottom headers=\(bottomHeaders) rows count=\(bottomRows.count) firstRow=\(bottomRows.first ?? [])")
 
+        // Sanitize grid content to remove interpuncts and non-alnum chars
+        let sanitizedBottomHeaders = bottomHeaders.map { sanitize($0) }
+        let sanitizedBottomRows = bottomRows.map { row in row.map { sanitize($0) } }
+        let sanitizedPitchGridValues = template.pitchGridValues.map { row in row.map { sanitize($0) } }
+
         guard bottomHeaders.count == 3 else {
             print("EncryptedCodeGenerator: bottom header count != 3 (\(bottomHeaders.count))")
             return []
@@ -117,7 +126,7 @@ struct EncryptedCodeGenerator {
         }
 
         // C3 from header’s first character of tapped column
-        let header = bottomHeaders[columnIndex]
+        let header = sanitizedBottomHeaders[columnIndex]
         guard let c3 = header.first else {
             print("EncryptedCodeGenerator: tapped column header is empty at col=\(columnIndex)")
             return []
@@ -125,7 +134,7 @@ struct EncryptedCodeGenerator {
         print("[GENERATOR] tapped header='\(header)' C3='\(c3)'")
 
         // C4 options from each character in the tapped cell
-        let tappedCell = bottomRows[rowIndex][columnIndex]
+        let tappedCell = sanitizedBottomRows[rowIndex][columnIndex]
         let c4Options = tappedCell.map { String($0) }
         if c4Options.isEmpty {
             print("EncryptedCodeGenerator: tapped cell is empty at (r=\(rowIndex), c=\(columnIndex))")
@@ -136,7 +145,7 @@ struct EncryptedCodeGenerator {
         var results: [String] = []
 
         // Iterate each top-grid row to form C1, C2
-        for (rowIdx, row) in template.pitchGridValues.enumerated() {
+        for (rowIdx, row) in sanitizedPitchGridValues.enumerated() {
             // Row must at least contain the leading cell and the selected pitch column
             guard row.count > max(0, pitchCol) else {
                 print("EncryptedCodeGenerator: top grid row \(rowIdx) has insufficient columns")
@@ -179,4 +188,3 @@ struct EncryptedCodeGenerator {
         return results
     }
 }
-

@@ -7131,22 +7131,30 @@ struct CalledPitchView: View {
     let isPracticeMode: Bool
     let onDeferDisplayCode: ((String, String) -> Void)?
     
-    private func reorderedCodeIfNeeded(_ code: String) -> String {
-        // When pitchFirst is false (Location 1st), swap first two and last two characters of a 4-char code.
-        // If the code isn't exactly 4 characters, leave it unchanged.
-        if !pitchFirst, code.count == 4 {
-            let start = code.startIndex
-            let mid = code.index(start, offsetBy: 2)
-            let firstTwo = code[start..<mid]
-            let lastTwo = code[mid..<code.endIndex]
-            return String(lastTwo + firstTwo)
-        }
-        return code
+    private func normalizeCode(_ code: String) -> String {
+        let cleaned = code.uppercased().filter { $0.isNumber || ($0.isLetter && $0.isASCII) }
+        let base = String(cleaned.prefix(4))
+        guard !pitchFirst, base.count == 4 else { return base }
+        let start = base.startIndex
+        let mid = base.index(start, offsetBy: 2)
+        let firstTwo = base[start..<mid]
+        let lastTwo = base[mid..<base.endIndex]
+        return String(lastTwo + firstTwo)
+    }
+
+    private func displayCode(_ code: String) -> String {
+        let normalized = normalizeCode(code)
+        guard normalized.count == 4 else { return normalized }
+        let start = normalized.startIndex
+        let mid = normalized.index(start, offsetBy: 2)
+        let firstTwo = normalized[start..<mid]
+        let lastTwo = normalized[mid..<normalized.endIndex]
+        return "\(firstTwo)·\(lastTwo)"
     }
 
     private var selectedDisplayedCode: String? {
         guard let tappedCode else { return nil }
-        return reorderedCodeIfNeeded(tappedCode)
+        return displayCode(tappedCode)
     }
 
     private func broadcastDisplayCode(colorName: String, code: String) {
@@ -7256,7 +7264,7 @@ struct CalledPitchView: View {
                        ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(displayCodes, id: \.self) { code in
-                                let shown = reorderedCodeIfNeeded(code)
+                                let shown = displayCode(code)
                                 Button {
                                     // Haptic feedback + trigger recording
                                     let generator = UIImpactFeedbackGenerator(style: .medium)
