@@ -219,7 +219,6 @@ struct PitchTrackerView: View {
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
-    @State private var pitchesFacedBatterId: UUID? = nil
     @State private var showResetConfirm = false
     // Removed @State private var isReset = false here as per instructions
 
@@ -2853,31 +2852,6 @@ struct PitchTrackerView: View {
         return selectedPitcherId
     }
 
-    private var pitchesFacedTitle: String {
-        if let num = selectedJerseyNumberDisplay, !num.isEmpty {
-            return "Pitches Faced – #\(num)"
-        }
-        return "Pitches Faced"
-    }
-
-    private var filteredPitchesFacedEvents: [PitchEvent] {
-        let batterIdStr = selectedBatterId?.uuidString
-        let normalizedSelectedJersey = normalizeJersey(selectedJerseyNumberDisplay)
-
-        return pitchEvents
-            .filter { event in
-                if let gid = selectedGameId, event.gameId != gid { return false }
-                if let idStr = batterIdStr, let evId = event.opponentBatterId, evId == idStr { return true }
-                if let selJersey = normalizedSelectedJersey, let evJersey = normalizeJersey(event.opponentJersey), selJersey == evJersey {
-                    return true
-                }
-                return false
-            }
-            .sorted { lhs, rhs in
-                lhs.timestamp > rhs.timestamp
-            }
-    }
-    
     private var cardsAndOverlay: some View {
         ZStack {
             VStack(spacing: 8) {
@@ -3426,7 +3400,6 @@ struct PitchTrackerView: View {
                                     selectedGameId: selectedGameId,
                                     effectiveGameOwnerUserId: effectiveGameOwnerUserId,
                                     activeLiveId: activeLiveId,
-                                    pitchesFacedBatterId: $pitchesFacedBatterId,
                                     isReordering: $isReorderingMode
                                 )
                                 .environmentObject(authManager)
@@ -4075,8 +4048,8 @@ struct PitchTrackerView: View {
             battedBallTapX: nil,
             battedBallTapY: nil,
             gameId: nil,
-            opponentJersey: nil,
-            opponentBatterId: nil,
+            opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
+            opponentBatterId: selectedBatterId?.uuidString,
             practiceId: selectedPracticeId,
             pitcherId: selectedPitcherId
         )
@@ -4156,12 +4129,22 @@ struct PitchTrackerView: View {
     }
 
     private func persistPitchEvent(_ event: PitchEvent) {
-        var sharedEvent = event
+        var eventToPersist = event
+        let fallbackBatterId = selectedBatterId?.uuidString
+        let fallbackJersey = jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber ?? selectedBatterJersey
+        if eventToPersist.opponentBatterId == nil {
+            eventToPersist.opponentBatterId = fallbackBatterId
+        }
+        if eventToPersist.opponentJersey == nil {
+            eventToPersist.opponentJersey = fallbackJersey
+        }
+
+        var sharedEvent = eventToPersist
         if isGame, let liveId = activeLiveId {
             // ✅ Live: save to shared room
             let uid = authManager.user?.uid ?? ""
             do {
-                var eventData = try Firestore.Encoder().encode(event)
+                var eventData = try Firestore.Encoder().encode(eventToPersist)
                 // Firestore.Encoder already encodes event.timestamp correctly (as a Timestamp).
                 eventData["createdByUid"] = uid
                 eventData["liveId"] = liveId
@@ -4210,16 +4193,16 @@ struct PitchTrackerView: View {
             }
         } else if isGame, let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
             // Legacy fallback
-            authManager.saveGamePitchEvent(ownerUserId: owner, gameId: gid, event: event)
+            authManager.saveGamePitchEvent(ownerUserId: owner, gameId: gid, event: eventToPersist)
             authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
         } else {
             // Practice
-            authManager.savePitchEvent(event)
+            authManager.savePitchEvent(eventToPersist)
         }
 
         saveSharedPitcherEventIfAllowed(sharedEvent)
 
-        writeResultSelection(label: event.location)
+        writeResultSelection(label: eventToPersist.location)
 
         sessionManager.incrementCount()
 
@@ -4227,7 +4210,7 @@ struct PitchTrackerView: View {
         // Owner will show cards from live listener; practice/legacy continue using pitchEvents.
         if activeLiveId == nil {
             withAnimation(.easeInOut(duration: 0.3)) {
-                pitchEvents.append(event)
+                pitchEvents.append(eventToPersist)
             }
             authManager.loadPitchEvents { events in
                 self.pitchEvents = events
@@ -5011,72 +4994,6 @@ struct PitchTrackerView: View {
 
     }
 
-    private var pitchesFacedOverlay: some View {
-        Group {
-            if let batterId = pitchesFacedBatterId {
-                ZStack(alignment: .bottom) {
-                    // Backdrop to allow tap-to-dismiss
-                    Color.black.opacity(0.25)
-                        .ignoresSafeArea()
-                        .onTapGesture { withAnimation { pitchesFacedBatterId = nil } }
-
-                    // Compute title and events based on the specific batter id that triggered the sheet
-                    let jerseyNumber = jerseyCells.first(where: { $0.id == batterId })?.jerseyNumber ?? ""
-                    let normalizedSelectedJersey = normalizeJersey(jerseyNumber)
-                    let events = pitchEvents
-                        .filter { event in
-                            if let gid = selectedGameId, event.gameId != gid { return false }
-                            if let evId = event.opponentBatterId, evId == batterId.uuidString { return true }
-                            if let selJersey = normalizedSelectedJersey, let evJersey = normalizeJersey(event.opponentJersey), selJersey == evJersey { return true }
-                            return false
-                        }
-                        .sorted { $0.timestamp > $1.timestamp }
-
-                    VStack(spacing: 0) {
-                        HStack {
-                            Text(isGame ? ("vs. \(opponentName ?? "Game")") : ("Practice – \(practiceName ?? "Session")"))
-                                .font(.headline)
-                            Spacer()
-                            Button {
-                                withAnimation { pitchesFacedBatterId = nil }
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.title3)
-                                    .foregroundColor(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal)
-                        .padding(.top, 12)
-                        .padding(.bottom, 8)
-
-                        Divider()
-
-                        ScrollView {
-                            PitchesFacedGridView(
-                                title: jerseyNumber.isEmpty ? "Pitches Faced" : "Pitches Faced – #\(jerseyNumber)",
-                                events: events,
-                                templates: templates
-                            )
-                            .padding(.horizontal)
-                            .padding(.top, 8)
-                            .padding(.bottom, 12)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: effectiveScreenSize.height * 0.33)
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .shadow(color: .black.opacity(0.2), radius: 10, x: 0, y: 8)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
-                }
-                .animation(.easeInOut(duration: 0.25), value: pitchesFacedBatterId)
-            }
-        }
-    }
-    
     @ViewBuilder private var gameSheetView: some View {
         GameSelectionSheet(
             onCreate: { name, date in
@@ -6624,7 +6541,6 @@ struct JerseyRow: View {
     let selectedGameId: String?
     let effectiveGameOwnerUserId: String?
     let activeLiveId: String?
-    @Binding var pitchesFacedBatterId: UUID?
     @Binding var isReordering: Bool
 
     @State private var showActionsSheet: Bool = false
@@ -6660,26 +6576,7 @@ struct JerseyRow: View {
                         .padding(.bottom, 4)
                         
                     HStack {
-                        Button {
-                            // Pitches Faced
-                            selectedBatterId = cell.id
-                            pitchesFacedBatterId = cell.id
-                            showActionsSheet = false
-                        } label: {
-                            Label("Pitches Faced", systemImage: "baseball")
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 12)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-
                         Spacer()
-
                         Button {
                             // Edit Number
                             editingCell = cell
@@ -6698,6 +6595,7 @@ struct JerseyRow: View {
                             Capsule()
                                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
                         )
+                        Spacer()
                     }
 
                     Divider()
@@ -6808,10 +6706,23 @@ struct JerseyRow: View {
                     
                     Color.clear.frame(height: 8)
                     
-                    Button(role: .destructive) {
-                        showDeleteConfirm = true
-                    } label: {
-                        Label("Delete", systemImage: "trash")
+                    HStack {
+                        Spacer()
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 12)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                        Spacer()
                     }
                 }
                 .padding()
@@ -6833,7 +6744,6 @@ struct JerseyRow: View {
 
                         if selectedBatterId == removedId {
                             selectedBatterId = nil
-                            pitchesFacedBatterId = nil
                         }
 
                         // 2) Persist lineup so BOTH devices update
@@ -8263,96 +8173,6 @@ final class QRScannerViewController: UIViewController, AVCaptureMetadataOutputOb
               let value = object.stringValue else { return }
         didScan = true
         onScan?(value)
-    }
-}
-
-struct PitchesFacedGridView: View {
-    let title: String
-    let events: [PitchEvent]
-    let templates: [PitchTemplate]
-
-    private static let columns: [GridItem] = [
-        GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading),
-        GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading),
-        GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading),
-        GridItem(.flexible(minimum: 80), spacing: 8, alignment: .leading)
-    ]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "baseball")
-                    .foregroundStyle(.green)
-                Text(title.isEmpty ? "Pitches Faced" : title)
-                    .font(.headline)
-                Spacer()
-                Text("\(events.count)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            if events.isEmpty {
-                Text("No pitches recorded for this batter yet.")
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 8)
-            } else {
-                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 8) {
-                    // Header
-                    Text("Pitch Called").font(.subheadline.bold())
-                    Text("Result").font(.subheadline.bold())
-                    Text("Batter Outcome").font(.subheadline.bold())
-                    Text("Pitcher").font(.subheadline.bold())
-
-                    ForEach(events, id: \.id) { event in
-                        // Column 1: Pitch Called
-                        Text(event.pitch)
-                            .font(.body)
-                            .lineLimit(1)
-
-                        // Column 2: Result (Strike/Ball/Foul if available)
-                        Text(resultText(for: event))
-                            .font(.body)
-                            .lineLimit(1)
-
-                        // Column 3: Batter Outcome
-                        Text(outcomeText(for: event))
-                            .font(.body)
-                            .lineLimit(1)
-
-                        // Column 4: Pitcher (Template Name)
-                        Text(templateName(for: event))
-                            .font(.body)
-                            .lineLimit(1)
-                    }
-                }
-            }
-        }
-        .padding(16)
-    }
-
-    // Helpers
-    private func resultText(for event: PitchEvent) -> String {
-        if event.strikeLooking == true { return "Strike Looking" }
-        if event.strikeSwinging == true { return "Strike Swinging" }
-        if event.isStrike == true { return "Strike" }
-        if event.wildPitch == true { return "Wild Pitch" }
-        if event.passedBall == true { return "Passed Ball" }
-        // Fallback: use calledPitch type if present, else "Ball"
-        if let type = event.calledPitch?.type, !type.isEmpty { return type }
-        return "Ball"
-    }
-
-    private func outcomeText(for event: PitchEvent) -> String {
-        if let outcome = event.outcome, !outcome.isEmpty { return outcome }
-        if let descriptor = event.descriptor, !descriptor.isEmpty { return descriptor }
-        return "-"
-    }
-    
-    private func templateName(for event: PitchEvent) -> String {
-        if let tid = event.templateId, let t = templates.first(where: { $0.id.uuidString == tid }) {
-            return t.name
-        }
-        return "-"
     }
 }
 

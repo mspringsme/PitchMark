@@ -424,6 +424,7 @@ struct PitchResultCard: View {
     let templateName: String
     let isParticipant: Bool
     let selectedPlayerName: String
+    let pitcherNameById: [String: String]
     @State private var showDetails = false
     
     @Binding var isSelecting: Bool
@@ -435,6 +436,7 @@ struct PitchResultCard: View {
         games: [Game],
         templateName: String,
         selectedPlayerName: String,
+        pitcherNameById: [String: String],
         isSelecting: Binding<Bool> = .constant(false),
         isSelected: Binding<Bool> = .constant(false),
         isParticipant: Bool = false
@@ -444,6 +446,7 @@ struct PitchResultCard: View {
         self.games = games
         self.templateName = templateName
         self.selectedPlayerName = selectedPlayerName
+        self.pitcherNameById = pitcherNameById
         self._isSelecting = isSelecting
         self._isSelected = isSelected
         self.isParticipant = isParticipant
@@ -572,11 +575,16 @@ struct PitchResultCard: View {
             )
         }
         .padding(.horizontal, 8)
-        .popover(isPresented: $showDetails) {
-            PitchEventDetailPopover(event: event, allEvents: allEvents, templateName: templateName)
-                .padding()
-                .presentationDetents([.fraction(0.70), .large])
-                .presentationDragIndicator(.visible)
+        .sheet(isPresented: $showDetails) {
+            PitchEventDetailPopover(
+                event: event,
+                allEvents: allEvents,
+                templateName: templateName,
+                pitcherNameById: pitcherNameById
+            )
+            .padding()
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
     }
     
@@ -660,6 +668,7 @@ struct PitchEventDetailPopover: View {
     let event: PitchEvent
     let allEvents: [PitchEvent]
     let templateName: String
+    let pitcherNameById: [String: String]
 
     var batterEvents: [PitchEvent] {
         let sameGame = allEvents.filter { $0.gameId == event.gameId }
@@ -703,6 +712,14 @@ struct PitchEventDetailPopover: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 let calledLabel = evt.calledPitch.map { "\($0.type) \($0.location)" }
                                 let resultLabel = "\(evt.isStrike ? "Strike" : "Ball") \(evt.location)"
+                                let pitcherName: String = {
+                                    if let pid = evt.pitcherId,
+                                       let name = pitcherNameById[pid],
+                                       !name.isEmpty {
+                                        return name
+                                    }
+                                    return "-"
+                                }()
                                 VStack(alignment: .leading, spacing: 2) {
                                     if let calledLabel {
                                         Text("(Coach): \(calledLabel)")
@@ -711,6 +728,10 @@ struct PitchEventDetailPopover: View {
                                             .lineLimit(1)
                                     }
                                     Text("(Result): \(resultLabel)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    Text("(Pitcher): \(pitcherName)")
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
@@ -1375,6 +1396,7 @@ struct PitchResultSheet: View {
                 games: games,
                 templateName: templateName,
                 selectedPlayerName: pitcherNameForEvent,
+                pitcherNameById: pitcherNameById,
                 isSelecting: $isSelecting,
                 isSelected: isSelectedBinding,
                 isParticipant: isParticipant
