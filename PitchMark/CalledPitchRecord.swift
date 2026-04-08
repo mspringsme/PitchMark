@@ -424,8 +424,6 @@ struct PitchResultCard: View {
     let templateName: String
     let isParticipant: Bool
     let selectedPlayerName: String
-    let pitcherNameById: [String: String]
-    @State private var showDetails = false
     
     @Binding var isSelecting: Bool
     @Binding var isSelected: Bool
@@ -436,7 +434,6 @@ struct PitchResultCard: View {
         games: [Game],
         templateName: String,
         selectedPlayerName: String,
-        pitcherNameById: [String: String],
         isSelecting: Binding<Bool> = .constant(false),
         isSelected: Binding<Bool> = .constant(false),
         isParticipant: Bool = false
@@ -446,7 +443,6 @@ struct PitchResultCard: View {
         self.games = games
         self.templateName = templateName
         self.selectedPlayerName = selectedPlayerName
-        self.pitcherNameById = pitcherNameById
         self._isSelecting = isSelecting
         self._isSelected = isSelected
         self.isParticipant = isParticipant
@@ -571,21 +567,10 @@ struct PitchResultCard: View {
                 gameTitle: derivedGameTitle(from: event),
                 practiceTitle: practiceTitle(for: event),
                 hideHeader: isParticipant,
-                onLongPress: { showDetails = true }
+                onLongPress: { }
             )
         }
         .padding(.horizontal, 8)
-        .sheet(isPresented: $showDetails) {
-            PitchEventDetailPopover(
-                event: event,
-                allEvents: allEvents,
-                templateName: templateName,
-                pitcherNameById: pitcherNameById
-            )
-            .padding()
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-        }
     }
     
     private func derivedGameTitle(from event: PitchEvent) -> String? {
@@ -669,6 +654,7 @@ struct PitchEventDetailPopover: View {
     let allEvents: [PitchEvent]
     let templateName: String
     let pitcherNameById: [String: String]
+    @State private var batterNotes: String = ""
 
     var batterEvents: [PitchEvent] {
         let sameGame = allEvents.filter { $0.gameId == event.gameId }
@@ -685,18 +671,17 @@ struct PitchEventDetailPopover: View {
         return matches.sorted { $0.timestamp < $1.timestamp }
     }
 
-    var body: some View {
-        let timestampText: String = {
-            let formatter = DateFormatter()
-            let calendar = Calendar.current
-            if calendar.isDateInToday(event.timestamp) {
-                formatter.dateFormat = "'Today,' h:mm a"
-            } else {
-                formatter.dateFormat = "MM/dd/yy h:mm a"
-            }
-            return formatter.string(from: event.timestamp)
-        }()
+    private var batterNotesKey: String? {
+        if let id = event.opponentBatterId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            return "batterNotes_id_\(id)"
+        }
+        if let jersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
+            return "batterNotes_jersey_\(jersey)"
+        }
+        return nil
+    }
 
+    var body: some View {
         let eventsWithCoords = batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil }
         let hasIdentity = (batterEvents.first?.opponentBatterId?.isEmpty == false) || (batterEvents.first?.opponentJersey?.isEmpty == false)
         let jerseyEvents = batterEvents.filter { $0.opponentJersey == event.opponentJersey }
@@ -704,6 +689,60 @@ struct PitchEventDetailPopover: View {
         
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Batter notes")
+                        .font(.subheadline.weight(.semibold))
+                    TextEditor(text: $batterNotes)
+                        .font(.system(size: 16))
+                        .frame(minHeight: 120)
+                        .padding(8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color(.systemBackground))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.black.opacity(0.12), lineWidth: 1)
+                        )
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Batter spray chart")
+                            .font(.subheadline).bold()
+                        Spacer()
+                        if hasIdentity {
+                            let count = eventsWithCoords.count
+                            let hitLabel = (count == 1) ? "hit" : "hits"
+                            Text("\(count) \(hitLabel)")
+                                .font(.subheadline).bold()
+                        }
+                    }
+                    ZStack {
+                        // Background rounded container that clips content
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+
+                        // Centered, size-aware spray overlay
+                        FieldSprayOverlay(
+                            fieldImageName: "FieldImage",
+                            events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
+                            homePlateNormalized: CGPoint(x: 0.5, y: 0.69),
+                            focalNormalized: CGPoint(x: 0.5, y: 0.5),
+                            overscan: 1.12
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 415, maxHeight: .infinity)
+                    .clipped()
+                }
+
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         ForEach(Array(playerEvents.reversed().enumerated()), id: \.offset) { item in
@@ -760,45 +799,16 @@ struct PitchEventDetailPopover: View {
                     .padding(.vertical, 8)
                 }
                 .frame(minHeight: 160)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Batter spray chart")
-                            .font(.subheadline).bold()
-                        Spacer()
-                        if hasIdentity {
-                            let count = eventsWithCoords.count
-                            let hitLabel = (count == 1) ? "hit" : "hits"
-                            Text("\(count) \(hitLabel)")
-                                .font(.subheadline).bold()
-                        }
-                    }
-                    ZStack {
-                        // Background rounded container that clips content
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
-
-                        // Centered, size-aware spray overlay
-                        FieldSprayOverlay(
-                            fieldImageName: "FieldImage",
-                            events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
-                            homePlateNormalized: CGPoint(x: 0.5, y: 0.69),
-                            focalNormalized: CGPoint(x: 0.5, y: 0.5),
-                            overscan: 1.12
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 415, maxHeight: .infinity)
-                    .clipped()
-                }
             }
             .frame(maxWidth: .infinity)
+        }
+        .onAppear {
+            guard let key = batterNotesKey else { return }
+            batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
+        }
+        .onChange(of: batterNotes) { _, newValue in
+            guard let key = batterNotesKey else { return }
+            UserDefaults.standard.set(newValue, forKey: key)
         }
     }
 }
@@ -1396,7 +1406,6 @@ struct PitchResultSheet: View {
                 games: games,
                 templateName: templateName,
                 selectedPlayerName: pitcherNameForEvent,
-                pitcherNameById: pitcherNameById,
                 isSelecting: $isSelecting,
                 isSelected: isSelectedBinding,
                 isParticipant: isParticipant

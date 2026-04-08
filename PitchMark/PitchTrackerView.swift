@@ -216,6 +216,10 @@ struct PitchTrackerView: View {
     @State private var bulkJerseyNumbers: String = ""
     @State private var selectedBatterId: UUID? = nil
     @State private var selectedBatterJersey: String? = nil
+    @State private var jerseyDetailEvent: PitchEvent? = nil
+    @State private var showJerseyDetailSheet = false
+    @State private var showNoJerseyEventsAlert = false
+    @State private var noJerseyEventsMessage = ""
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
@@ -2852,6 +2856,19 @@ struct PitchTrackerView: View {
         return selectedPitcherId
     }
 
+    private func latestEvent(for cell: JerseyCell) -> PitchEvent? {
+        let normalizedSelectedJersey = normalizeJersey(cell.jerseyNumber)
+        let sourceEvents = isGame ? gamePitchEvents : pitchEvents
+        let filtered = sourceEvents.filter { event in
+            if isGame, let gid = selectedGameId, event.gameId != gid { return false }
+            if !isGame, let pid = selectedPracticeId, event.practiceId != pid { return false }
+            if let evId = event.opponentBatterId, evId == cell.id.uuidString { return true }
+            if let selJersey = normalizedSelectedJersey, let evJersey = normalizeJersey(event.opponentJersey), selJersey == evJersey { return true }
+            return false
+        }
+        return filtered.sorted { $0.timestamp > $1.timestamp }.first
+    }
+
     private var cardsAndOverlay: some View {
         ZStack {
             VStack(spacing: 8) {
@@ -3400,7 +3417,16 @@ struct PitchTrackerView: View {
                                     selectedGameId: selectedGameId,
                                     effectiveGameOwnerUserId: effectiveGameOwnerUserId,
                                     activeLiveId: activeLiveId,
-                                    isReordering: $isReorderingMode
+                                    isReordering: $isReorderingMode,
+                                    onViewDetails: { cell in
+                                        if let event = latestEvent(for: cell) {
+                                            jerseyDetailEvent = event
+                                            showJerseyDetailSheet = true
+                                        } else {
+                                            noJerseyEventsMessage = "No pitches recorded for this batter yet."
+                                            showNoJerseyEventsAlert = true
+                                        }
+                                    }
                                 )
                                 .environmentObject(authManager)
                             }
@@ -5510,6 +5536,35 @@ struct PitchTrackerView: View {
             } message: {
                 Text(codeShareErrorMessage)
             }
+            .alert("No pitches found", isPresented: $showNoJerseyEventsAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(noJerseyEventsMessage)
+            }
+            .sheet(isPresented: $showJerseyDetailSheet) {
+                if let event = jerseyDetailEvent {
+                    let sourceEvents = isGame ? gamePitchEvents : pitchEvents
+                    let templateName = templates.first(where: { $0.id.uuidString == event.templateId })?.name ?? "Template"
+                    let pitcherNameById: [String: String] = {
+                        var map: [String: String] = [:]
+                        for pitcher in pitchers {
+                            if let id = pitcher.id {
+                                map[id] = pitcher.name
+                            }
+                        }
+                        return map
+                    }()
+                    PitchEventDetailPopover(
+                        event: event,
+                        allEvents: sourceEvents,
+                        templateName: templateName,
+                        pitcherNameById: pitcherNameById
+                    )
+                    .padding()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                }
+            }
             .fullScreenCover(isPresented: displayCoverBinding) {
                 displayCoverView
             }
@@ -6542,9 +6597,11 @@ struct JerseyRow: View {
     let effectiveGameOwnerUserId: String?
     let activeLiveId: String?
     @Binding var isReordering: Bool
+    let onViewDetails: (JerseyCell) -> Void
 
     @State private var showActionsSheet: Bool = false
     @State private var showDeleteConfirm: Bool = false
+    @State private var showLongPressDialog: Bool = false
 
     @EnvironmentObject var authManager: AuthManager
     
@@ -6565,9 +6622,23 @@ struct JerseyRow: View {
             }
             .onLongPressGesture {
                 selectedBatterId = cell.id
-                showActionsSheet = true
+                showLongPressDialog = true
             }
             .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
+            .confirmationDialog(
+                "Batter #\(cell.jerseyNumber)",
+                isPresented: $showLongPressDialog,
+                titleVisibility: .visible
+            ) {
+                Button("Edit") {
+                    showActionsSheet = true
+                }
+                Button("View Pitch Detail") {
+                    showActionsSheet = false
+                    onViewDetails(cell)
+                }
+                Button("Cancel", role: .cancel) { }
+            }
             .sheet(isPresented: $showActionsSheet) {
                 VStack(alignment: .leading, spacing: 12) {
                     
@@ -6859,8 +6930,6 @@ struct JerseyRow: View {
                 "selectedBatterJersey": cell.jerseyNumber
             ], merge: true)
     }
-
-
 
 }
 
