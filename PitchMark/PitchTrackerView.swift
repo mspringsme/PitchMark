@@ -5558,7 +5558,9 @@ struct PitchTrackerView: View {
                         event: event,
                         allEvents: sourceEvents,
                         templateName: templateName,
-                        pitcherNameById: pitcherNameById
+                        pitcherNameById: pitcherNameById,
+                        gameIdFilter: selectedGameId,
+                        practiceIdFilter: selectedPracticeId
                     )
                     .padding()
                     .presentationDetents([.large])

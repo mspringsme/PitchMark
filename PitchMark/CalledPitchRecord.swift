@@ -654,10 +654,26 @@ struct PitchEventDetailPopover: View {
     let allEvents: [PitchEvent]
     let templateName: String
     let pitcherNameById: [String: String]
+    let gameIdFilter: String?
+    let practiceIdFilter: String?
     @State private var batterNotes: String = ""
 
     var batterEvents: [PitchEvent] {
-        let sameGame = allEvents.filter { $0.gameId == event.gameId }
+        let sameGame = allEvents.filter { evt in
+            if let gid = gameIdFilter {
+                return evt.gameId == gid
+            }
+            if let pid = practiceIdFilter {
+                return evt.practiceId == pid
+            }
+            if let gid = event.gameId {
+                return evt.gameId == gid
+            }
+            if let pid = event.practiceId {
+                return evt.practiceId == pid
+            }
+            return false
+        }
 
         let idToMatch = (event.opponentBatterId?.isEmpty == false) ? event.opponentBatterId : nil
         let jerseyToMatch = (event.opponentJersey?.isEmpty == false) ? event.opponentJersey : nil
