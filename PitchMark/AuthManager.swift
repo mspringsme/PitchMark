@@ -1516,6 +1516,33 @@ class AuthManager: ObservableObject {
             }
         }
     }
+
+    func updateGameLastSelections(ownerUserId: String, gameId: String, templateId: String?, pitcherId: String?) {
+        let ref = Firestore.firestore()
+            .collection("users").document(ownerUserId)
+            .collection("games").document(gameId)
+        guard let currentUid = user?.uid else { return }
+        if ownerUserId != currentUid {
+            print("⏭️ Skipping updateGameLastSelections (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
+            return
+        }
+        var updates: [String: Any] = [:]
+        if let templateId {
+            updates["lastTemplateId"] = templateId
+        } else {
+            updates["lastTemplateId"] = FieldValue.delete()
+        }
+        if let pitcherId {
+            updates["lastPitcherId"] = pitcherId
+        } else {
+            updates["lastPitcherId"] = FieldValue.delete()
+        }
+        ref.updateData(updates) { err in
+            if let err {
+                print("❌ updateGameLastSelections:", err.localizedDescription)
+            }
+        }
+    }
     
     func saveGamePitchEvent(ownerUserId: String, gameId: String, event: PitchEvent) {
         let db = Firestore.firestore()

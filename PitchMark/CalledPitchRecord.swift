@@ -661,10 +661,12 @@ struct PitchEventDetailPopover: View {
     var batterEvents: [PitchEvent] {
         let sameGame = allEvents.filter { evt in
             if let gid = gameIdFilter {
-                return evt.gameId == gid
+                if let evGid = evt.gameId, !evGid.isEmpty { return evGid == gid }
+                return true
             }
             if let pid = practiceIdFilter {
-                return evt.practiceId == pid
+                if let evPid = evt.practiceId, !evPid.isEmpty { return evPid == pid }
+                return true
             }
             if let gid = event.gameId {
                 return evt.gameId == gid
@@ -682,6 +684,10 @@ struct PitchEventDetailPopover: View {
             let idMatch = (idToMatch != nil) ? (other.opponentBatterId == idToMatch) : false
             let jerseyMatch = (jerseyToMatch != nil) ? (other.opponentJersey == jerseyToMatch) : false
             return idMatch || jerseyMatch
+        }
+
+        if matches.isEmpty {
+            return sameGame.sorted { $0.timestamp < $1.timestamp }
         }
 
         return matches.sorted { $0.timestamp < $1.timestamp }

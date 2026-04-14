@@ -579,16 +579,16 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Button("Scan QR Code") {
-                openCameraForJoin()
-            }
-            .buttonStyle(.bordered)
-
             Button(isJoiningInvite ? "Joining..." : "Join") {
                 joinLiveGameFromInvite()
             }
             .buttonStyle(.borderedProminent)
             .disabled(inviteJoinText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isJoiningInvite)
+
+            Button("Scan QR Code") {
+                openCameraForJoin()
+            }
+            .buttonStyle(.bordered)
         }
         .padding()
         .presentationDetents([.fraction(0.5)])
@@ -1395,13 +1395,22 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
             .fullScreenCover(isPresented: $showQRScanner) {
-                QRScannerView { scanned in
-                    inviteJoinText = scanned
-                    inviteJoinError = nil
-                    showQRScanner = false
-                    joinLiveGameFromInvite()
-                } onCancel: {
-                    showQRScanner = false
+                ZStack(alignment: .bottom) {
+                    QRScannerView { scanned in
+                        inviteJoinText = scanned
+                        inviteJoinError = nil
+                        showQRScanner = false
+                        joinLiveGameFromInvite()
+                    } onCancel: {
+                        showQRScanner = false
+                    }
+
+                    Button("Paste invite link") {
+                        showQRScanner = false
+                        showInviteJoinSheet = true
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.bottom, 24)
                 }
             }
             .alert("Camera Unavailable", isPresented: $showCameraUnavailableAlert) {
@@ -1592,7 +1601,7 @@ struct SettingsView: View {
                         }
                         inviteJoinError = nil
                         inviteJoinText = ""
-                        showInviteJoinSheet = true
+                        showQRScanner = true
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "person.2")
