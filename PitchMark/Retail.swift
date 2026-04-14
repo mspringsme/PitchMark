@@ -18,18 +18,12 @@ struct StorefrontView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Pitcher Grid Key Inserts")
-                            .font(.title.bold())
-                        Text("Purchase template card inserts designed for pitcher armbands.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 8)
-                }
+                Section(header: Text("Pitcher Grid Key Inserts")) {
+                    Text("Armband grid key inserts; Master pitch call sheet")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 8, trailing: 16))
 
-                Section(header: Text("Grid Keys")) {
                     ForEach(gridKeyTemplates) { template in
                         NavigationLink(value: template) {
                             HStack(spacing: 12) {
@@ -58,9 +52,7 @@ struct StorefrontView: View {
                             .padding(.vertical, 4)
                         }
                     }
-                }
 
-                Section(header: Text("Printable Sheets")) {
                     ForEach(printableSheetTemplates) { template in
                         NavigationLink(value: template) {
                             HStack(spacing: 12) {
@@ -90,6 +82,7 @@ struct StorefrontView: View {
                         }
                     }
                 }
+
 
                 Section(header: Text("PitchMark Pro")) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -129,14 +122,18 @@ struct StorefrontView: View {
                     .padding(.vertical, 6)
                 }
             }
-            .navigationTitle("Store")
+            .listStyle(.insetGrouped)
+            .listSectionSpacing(.compact)
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
-                    Text("Store")
-                        .font(.system(size: 16, weight: .semibold))
+                    Text("PitchMark Store")
+                        .font(.system(size: 17, weight: .semibold))
+                        .padding(.top, -20)
                 }
             }
+
             .navigationDestination(for: StoreTemplate.self) { template in
                 switch template.kind {
                 case .gridKey:
@@ -155,6 +152,13 @@ struct StorefrontView: View {
 @ViewBuilder
 var Storefront: some View {
     StorefrontView()
+}
+
+struct StorefrontView_Previews: PreviewProvider {
+    static var previews: some View {
+        StorefrontView()
+            .environmentObject(SubscriptionManager())
+    }
 }
 
 // MARK: - Models used by Storefront
@@ -179,7 +183,7 @@ private let gridKeyTemplates: [StoreTemplate] = [
 ]
 
 private let printableSheetTemplates: [StoreTemplate] = [
-    .init(name: "Printable Sheet (8.5 x 11)", subtitle: "Strikes on one side, Balls on the other", icon: "doc.plaintext", price: 12, kind: .printableSheet)
+    .init(name: "Printable Sheet (8.5 x 11)", subtitle: "Strikes on one side, Balls on the other (2 copies)", icon: "doc.plaintext", price: 12, kind: .printableSheet)
 ]
 
 // MARK: - Detail View

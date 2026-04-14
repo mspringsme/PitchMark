@@ -17,6 +17,207 @@ struct PitcherPitchStats: Codable {
     var hitSpotCount: Int
 }
 
+private struct SettingsGameSummarySheetView: View {
+    let pitcherName: String
+    let game: Game
+    let events: [PitchEvent]
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var showShareSheet = false
+
+    private var totalPitches: Int { events.count }
+    private var strikes: Int {
+        events.filter { $0.isStrike || $0.strikeLooking || $0.strikeSwinging }.count
+    }
+    private var balls: Int {
+        events.filter { event in
+            if let isBall = event.isBall { return isBall }
+            return !(event.isStrike || event.strikeLooking || event.strikeSwinging)
+        }.count
+    }
+    private var hitSpots: Int {
+        events.filter { isLocationMatch($0) }.count
+    }
+    private var strikeLooking: Int { events.filter { $0.strikeLooking }.count }
+    private var strikeSwinging: Int { events.filter { $0.strikeSwinging }.count }
+    private var walks: Int {
+        events.filter { event in
+            guard let outcome = event.outcome?.lowercased() else { return false }
+            return outcome.contains("walk") || outcome == "bb"
+        }.count
+    }
+    private var wildPitches: Int { events.filter { $0.wildPitch }.count }
+    private var passedBalls: Int { events.filter { $0.passedBall }.count }
+    private var pitchBreakdown: [(name: String, count: Int)] {
+        Dictionary(grouping: events, by: { $0.pitch.isEmpty ? "-" : $0.pitch })
+            .map { (name: $0.key, count: $0.value.count) }
+            .sorted { lhs, rhs in
+                if lhs.count == rhs.count { return lhs.name < rhs.name }
+                return lhs.count > rhs.count
+            }
+    }
+
+    private var outcomeBreakdown: [(name: String, count: Int)] {
+        Dictionary(grouping: events, by: { event in
+            let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return outcome.isEmpty ? "No outcome" : outcome
+        })
+        .map { (name: $0.key, count: $0.value.count) }
+        .sorted { lhs, rhs in
+            if lhs.count == rhs.count { return lhs.name < rhs.name }
+            return lhs.count > rhs.count
+        }
+    }
+
+    private func percent(_ part: Int, _ total: Int) -> String {
+        guard total > 0 else { return "0%" }
+        let value = (Double(part) / Double(total)) * 100.0
+        return String(format: "%.0f%%", value.rounded())
+    }
+
+    private var shareText: String {
+        let pitchLines = pitchBreakdown.isEmpty ? "None" : pitchBreakdown.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
+        let outcomeLines = outcomeBreakdown.isEmpty ? "None" : outcomeBreakdown.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
+        return """
+        PitchMark Game Summary
+        Pitcher: \(pitcherName)
+        Opponent: \(game.opponent)
+        Date: \(game.date.formatted(date: .abbreviated, time: .omitted))
+
+        Pitches: \(totalPitches)
+        Strikes: \(strikes) of \(totalPitches) (\(percent(strikes, totalPitches)))
+        Balls: \(balls) of \(totalPitches) (\(percent(balls, totalPitches)))
+        Hit Spot: \(hitSpots) of \(totalPitches) (\(percent(hitSpots, totalPitches)))
+
+        Strike Looking: \(strikeLooking)
+        Strike Swinging: \(strikeSwinging)
+        Walks: \(walks)
+        Wild Pitches: \(wildPitches)
+        Passed Balls: \(passedBalls)
+
+        Metric Definitions:
+        Strike % = Strikes / Total Pitches
+        Ball % = Balls / Total Pitches
+        Hit Spot % = Location matches / Total Pitches
+
+        Pitch Breakdown: \(pitchLines)
+        Outcome Breakdown: \(outcomeLines)
+        """
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(pitcherName)
+                            .font(.title3.weight(.semibold))
+                        Text("vs \(game.opponent)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text(game.date.formatted(date: .abbreviated, time: .omitted))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Group {
+                        summaryRow("Total Pitches", "\(totalPitches)")
+                        summaryRow("Strike %", "\(percent(strikes, totalPitches)) (\(strikes)/\(totalPitches))")
+                        summaryRow("Ball %", "\(percent(balls, totalPitches)) (\(balls)/\(totalPitches))")
+                        summaryRow("Hit Spot %", "\(percent(hitSpots, totalPitches)) (\(hitSpots)/\(totalPitches))")
+                    }
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Metric Definitions")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Strike % = Strikes / Total Pitches")
+                        Text("Ball % = Balls / Total Pitches")
+                        Text("Hit Spot % = Location matches / Total Pitches")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    Group {
+                        summaryRow("Strike Looking", "\(strikeLooking)")
+                        summaryRow("Strike Swinging", "\(strikeSwinging)")
+                        summaryRow("Walks", "\(walks)")
+                        summaryRow("Wild Pitches", "\(wildPitches)")
+                        summaryRow("Passed Balls", "\(passedBalls)")
+                    }
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Pitch Breakdown")
+                            .font(.headline)
+                        if pitchBreakdown.isEmpty {
+                            Text("No pitches recorded.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(Array(pitchBreakdown.enumerated()), id: \.offset) { _, item in
+                                summaryRow(item.name, "\(item.count)")
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Outcome Breakdown")
+                            .font(.headline)
+                        if outcomeBreakdown.isEmpty {
+                            Text("No outcomes recorded.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(Array(outcomeBreakdown.enumerated()), id: \.offset) { _, item in
+                                summaryRow(item.name, "\(item.count)")
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .padding()
+            }
+            .navigationTitle("Game Summary")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(totalPitches == 0)
+                }
+            }
+            .sheet(isPresented: $showShareSheet) {
+                ShareSheet(items: [shareText])
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func summaryRow(_ title: String, _ value: String) -> some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.subheadline)
+            Spacer()
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+        }
+    }
+}
+
 struct PitcherOutcomeStats: Codable {
     var count: Int
     var jerseys: [String]
@@ -1619,6 +1820,11 @@ struct SettingsView: View {
                             Capsule().stroke(Color.black, lineWidth: 1)
                         )
                     }
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+                    .animation(nil, value: storeGlowAngle)
+                    .animation(nil, value: storeGlowPulse)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
@@ -1640,6 +1846,11 @@ struct SettingsView: View {
                         Image(systemName: "xmark")
                             .imageScale(.medium)
                     }
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+                    .animation(nil, value: storeGlowAngle)
+                    .animation(nil, value: storeGlowPulse)
                     .accessibilityLabel("Close Settings")
                 }
             }
@@ -1789,7 +2000,6 @@ struct PitcherStatsSheetView: View {
     }
 
     enum StatScope: String, CaseIterable, Identifiable {
-        case all = "All"
         case games = "Games"
         case practice = "Practice"
 
@@ -1839,8 +2049,10 @@ struct PitcherStatsSheetView: View {
     @State private var sharedPitcherEventsListener: ListenerRegistration? = nil
     @State private var cachedStats: PitcherStatsDoc? = nil
     @State private var isLoading = false
+    @State private var hasLoadedEvents = false
     @State private var loadEventsToken = UUID()
     @State private var summaryDetail: SummaryDetail? = nil
+    @State private var showGameSummarySheet = false
 
     private var sortedGames: [Game] {
         games.sorted { $0.date > $1.date }
@@ -1881,14 +2093,20 @@ struct PitcherStatsSheetView: View {
         Set(practiceSessions.compactMap { $0.id } + ["__GENERAL__"])
     }
 
+    private var validGameIds: Set<String> {
+        Set(sortedGames.compactMap { $0.id })
+    }
+
+    private var validPracticeIds: Set<String> {
+        Set(practiceSessions.compactMap { $0.id })
+    }
+
     private func formattedDate(_ date: Date) -> String {
         Self.shortDateFormatter.string(from: date)
     }
 
     private var scopeSelectionLabel: String {
         switch scope {
-        case .all:
-            return "All"
         case .games:
             if selectedGameIds.count == 1,
                let id = selectedGameIds.first,
@@ -1942,8 +2160,6 @@ struct PitcherStatsSheetView: View {
 
         let allForPitcher: [PitchEvent] = {
             switch scope {
-            case .all:
-                return combinedPracticeEvents + combinedGameEvents
             case .practice:
                 return combinedPracticeEvents
             case .games:
@@ -1953,8 +2169,6 @@ struct PitcherStatsSheetView: View {
 
         let byScopeSelection: [PitchEvent] = {
             switch scope {
-            case .all:
-                return allForPitcher
             case .practice:
                 if selectedPracticeIds.isEmpty { return allForPitcher }
                 return allForPitcher.filter { event in
@@ -1963,9 +2177,10 @@ struct PitcherStatsSheetView: View {
                     return selectedPracticeIds.contains(normalized)
                 }
             case .games:
-                if selectedGameIds.isEmpty { return allForPitcher }
+                let effectiveGameIds = selectedGameIds.isEmpty ? allGameIds : selectedGameIds
+                if effectiveGameIds.isEmpty { return [] }
                 return allForPitcher.filter { event in
-                    if let gid = event.gameId { return selectedGameIds.contains(gid) }
+                    if let gid = event.gameId { return effectiveGameIds.contains(gid) }
                     return false
                 }
             }
@@ -1991,7 +2206,10 @@ struct PitcherStatsSheetView: View {
     }
 
     private var activeStats: PitcherStatsDoc? {
-        cachedStats
+        // Use cached aggregates only before events have loaded for this sheet session.
+        // After loading completes, always render from filteredEvents so date/scope filters
+        // immediately reflect user changes (including zero-result ranges).
+        hasLoadedEvents ? nil : cachedStats
     }
 
     private var strikeCount: Int {
@@ -2063,7 +2281,10 @@ struct PitcherStatsSheetView: View {
                 let jerseys = value.jerseys.sorted().joined(separator: ", ")
                 return (label: key, count: value.count, jerseys: jerseys)
             }
-            .sorted { $0.count > $1.count }
+            .sorted {
+                if $0.count != $1.count { return $0.count > $1.count }
+                return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+            }
         }
 
         var counts: [String: Int] = [:]
@@ -2080,7 +2301,28 @@ struct PitcherStatsSheetView: View {
             let jerseys = jerseysByOutcome[key, default: []].sorted().joined(separator: ", ")
             return (label: key, count: value, jerseys: jerseys)
         }
-        .sorted { $0.count > $1.count }
+        .sorted {
+            if $0.count != $1.count { return $0.count > $1.count }
+            return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+    }
+
+    private var selectedSingleGameIdForSummary: String? {
+        if let locked = lockToGameId, !locked.isEmpty { return locked }
+        guard scope == .games, selectedGameIds.count == 1 else { return nil }
+        return selectedGameIds.first
+    }
+
+    private var selectedSingleGameForSummary: Game? {
+        guard let gameId = selectedSingleGameIdForSummary else { return nil }
+        return games.first(where: { $0.id == gameId })
+    }
+
+    private var selectedGameSummaryEvents: [PitchEvent] {
+        guard let gameId = selectedSingleGameIdForSummary else { return [] }
+        return combinedGameEvents
+            .filter { ($0.gameId ?? "") == gameId }
+            .sorted { $0.timestamp > $1.timestamp }
     }
 
     private var pitchStats: [(name: String, count: Int, hitSpotPct: Int)] {
@@ -2090,7 +2332,10 @@ struct PitcherStatsSheetView: View {
                 let hitSpotPct = total == 0 ? 0 : Int(Double(value.hitSpotCount) / Double(total) * 100)
                 return (key, total, hitSpotPct)
             }
-            return rows.sorted { $0.1 > $1.1 }
+            return rows.sorted {
+                if $0.1 != $1.1 { return $0.1 > $1.1 }
+                return $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending
+            }
         }
 
         let grouped = Dictionary(grouping: filteredEvents, by: { $0.pitch })
@@ -2101,7 +2346,10 @@ struct PitcherStatsSheetView: View {
             let hitSpotPct = total == 0 ? 0 : Int(Double(hitSpots) / Double(total) * 100)
             rows.append((pitch, total, hitSpotPct))
         }
-        return rows.sorted { $0.1 > $1.1 }
+        return rows.sorted {
+            if $0.1 != $1.1 { return $0.1 > $1.1 }
+            return $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending
+        }
     }
 
     private func summaryDetailRows(
@@ -2135,63 +2383,57 @@ struct PitcherStatsSheetView: View {
         }
     }
 
-    private func hitSpotDetailRows() -> [(pitch: String, location: String, count: Int, jerseys: String)] {
-        if let stats = activeStats {
-            let rows: [(pitch: String, location: String, count: Int, jerseys: String)] = stats.pitchLocationStats.flatMap { key, value in
-                let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
-                let pitch = parts.first ?? "Unknown Pitch"
-                let location = parts.count > 1 ? parts[1] : "Unknown Location"
-                let jerseys = value.jerseys.sorted().joined(separator: ", ")
+    private func hitSpotDetailRows() -> [(pitch: String, location: String, intended: String, count: Int, jerseys: String)] {
+        // Hit-Spot detail should list each pitch in sequence.
+        var seenEventKeys: Set<String> = []
 
-                let hitRow = (pitch: pitch, location: "Hit: \(location)", count: value.hitCount, jerseys: jerseys)
-                let missRow = (pitch: pitch, location: "Miss: \(location)", count: value.missCount, jerseys: jerseys)
-                return [hitRow, missRow]
-            }
-
-            return rows.sorted { lhs, rhs in
-                if lhs.count == rhs.count { return lhs.pitch < rhs.pitch }
-                return lhs.count > rhs.count
-            }
-        }
-
-        var hitCounts: [String: Int] = [:]
-        var missCounts: [String: Int] = [:]
-
-        for event in filteredEvents {
-            let pitch = event.pitch.trimmingCharacters(in: .whitespacesAndNewlines)
-            let location = event.location.trimmingCharacters(in: .whitespacesAndNewlines)
-            let safePitch = pitch.isEmpty ? "Unknown Pitch" : pitch
-            let safeLocation = location.isEmpty ? "Unknown Location" : location
-            let key = "\(safePitch)|\(safeLocation)"
-
-            if strictIsLocationMatch(event) {
-                hitCounts[key, default: 0] += 1
+        let dedupedEvents: [PitchEvent] = filteredEvents.filter { event in
+            let key: String
+            if let id = event.id, !id.isEmpty {
+                key = "id:\(id)"
             } else {
-                missCounts[key, default: 0] += 1
+                let calledPitch = event.calledPitch?.pitch ?? ""
+                let calledLocation = event.calledPitch?.location ?? ""
+                key = [
+                    String(event.timestamp.timeIntervalSince1970),
+                    event.pitch,
+                    event.location,
+                    calledPitch,
+                    calledLocation,
+                    event.pitcherId ?? "",
+                    event.gameId ?? "",
+                    event.practiceId ?? ""
+                ].joined(separator: "|")
             }
-        }
 
-        func rows(from counts: [String: Int], prefix: String) -> [(pitch: String, location: String, count: Int, jerseys: String)] {
-            counts.map { key, count in
-                let parts = key.split(separator: "|", maxSplits: 1).map(String.init)
-                let pitch = parts.first ?? "Unknown Pitch"
-                let location = parts.count > 1 ? parts[1] : "Unknown Location"
-                return (pitch, "\(prefix) \(location)", count, "")
-            }
-            .sorted { lhs, rhs in
-                if lhs.count == rhs.count { return lhs.pitch < rhs.pitch }
-                return lhs.count > rhs.count
-            }
+            guard !seenEventKeys.contains(key) else { return false }
+            seenEventKeys.insert(key)
+            return true
         }
+        .sorted { $0.timestamp < $1.timestamp }
 
-        let hits = rows(from: hitCounts, prefix: "Hit:")
-        let misses = rows(from: missCounts, prefix: "Miss:")
-        return hits + misses
+        return dedupedEvents.enumerated().map { index, event in
+            let pitch = event.pitch.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resultLocation = event.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            let intendedLocation = event.calledPitch?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            let safePitch = pitch.isEmpty ? "Unknown Pitch" : pitch
+            let safeResult = resultLocation.isEmpty ? "Unknown Location" : resultLocation
+            let safeIntended = intendedLocation.isEmpty ? "Unknown Intended" : intendedLocation
+            let resultPrefix = strictIsLocationMatch(event) ? "Hit: " : "Miss: "
+            return (
+                pitch: safePitch,
+                location: "\(resultPrefix)\(safeResult)",
+                intended: safeIntended,
+                count: index + 1,
+                jerseys: ""
+            )
+        }
     }
 
-    private func hitSpotRowColor(_ row: (pitch: String, location: String, count: Int, jerseys: String)) -> Color {
-        if row.location.lowercased().hasPrefix("hit:") { return .green }
-        if row.location.lowercased().hasPrefix("miss:") { return .red }
+    private func hitSpotRowColor(forLocation location: String) -> Color {
+        if location.lowercased().hasPrefix("hit:") { return .green }
+        if location.lowercased().hasPrefix("miss:") { return .red }
         return .secondary
     }
 
@@ -2210,13 +2452,32 @@ struct PitcherStatsSheetView: View {
         }
 
         let includeJerseyNumbers = detail == .swingK || detail == .lookK
-        let rows: [(pitch: String, location: String, count: Int, jerseys: String)] = {
+        let includeIntended = detail == .hitSpot
+        let rows: [(id: String, pitch: String, location: String, intended: String?, count: Int, jerseys: String)] = {
             if detail == .hitSpot {
-                return hitSpotDetailRows()
+                return hitSpotDetailRows().map { row in
+                    (
+                        id: "\(row.pitch)|\(row.location)|\(row.intended)",
+                        pitch: row.pitch,
+                        location: row.location,
+                        intended: row.intended,
+                        count: row.count,
+                        jerseys: row.jerseys
+                    )
+                }
             }
-            return summaryDetailRows(for: events, includeJerseyNumbers: includeJerseyNumbers)
+            return summaryDetailRows(for: events, includeJerseyNumbers: includeJerseyNumbers).map { row in
+                (
+                    id: "\(row.pitch)|\(row.location)|\(row.jerseys)",
+                    pitch: row.pitch,
+                    location: row.location,
+                    intended: nil,
+                    count: row.count,
+                    jerseys: row.jerseys
+                )
+            }
         }()
-        let rowWidth: CGFloat = includeJerseyNumbers ? 400 : 300
+        let rowWidth: CGFloat = includeJerseyNumbers ? 400 : (includeIntended ? 430 : 300)
 
         return VStack(alignment: .leading, spacing: 12) {
             Text(detail?.rawValue ?? "Details")
@@ -2243,7 +2504,13 @@ struct PitcherStatsSheetView: View {
                             Text("Location")
                                 .font(.caption.weight(.semibold))
                                 .foregroundColor(.secondary)
-                                .frame(width: 150, alignment: .leading)
+                                .frame(width: includeIntended ? 130 : 150, alignment: .leading)
+                            if includeIntended {
+                                Text("Intended")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 130, alignment: .leading)
+                            }
                             if includeJerseyNumbers {
                                 Text("Batters")
                                     .font(.caption.weight(.semibold))
@@ -2252,7 +2519,7 @@ struct PitcherStatsSheetView: View {
                             }
                         }
                         .frame(width: rowWidth, alignment: .center)
-                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        ForEach(rows, id: \.id) { row in
                             HStack(spacing: 8) {
                                 Text("\(row.count)")
                                     .font(.caption.weight(.semibold))
@@ -2263,8 +2530,14 @@ struct PitcherStatsSheetView: View {
                                     .frame(width: 90, alignment: .leading)
                                 Text(row.location)
                                     .font(.subheadline)
-                                    .foregroundColor(hitSpotRowColor(row))
-                                    .frame(width: 150, alignment: .leading)
+                                    .foregroundColor(hitSpotRowColor(forLocation: row.location))
+                                    .frame(width: includeIntended ? 130 : 150, alignment: .leading)
+                                if includeIntended {
+                                    Text((row.intended ?? "").isEmpty ? "—" : (row.intended ?? "—"))
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 130, alignment: .leading)
+                                }
                                 if includeJerseyNumbers {
                                     Text(row.jerseys.isEmpty ? "—" : row.jerseys)
                                         .font(.subheadline)
@@ -2302,14 +2575,36 @@ struct PitcherStatsSheetView: View {
                                     }
                                 }
                                 .pickerStyle(.segmented)
-                                .fixedSize()
+                            .fixedSize()
 
-                                if scope != .all {
-                                    scopeSelectionMenu
-                                }
+                                scopeSelectionMenu
                             }
                         }
                         .padding(.horizontal)
+
+                        if scope == .games {
+                            HStack {
+                                Spacer()
+                                Button {
+                                    showGameSummarySheet = true
+                                } label: {
+                                    Label("Game Summary", systemImage: "doc.text")
+                                        .font(.subheadline.weight(.semibold))
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(selectedSingleGameIdForSummary == nil)
+                                Spacer()
+                            }
+                            .padding(.horizontal)
+
+                            if selectedSingleGameIdForSummary == nil {
+                                Text("Select one game to open the game summary.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                                    .padding(.horizontal)
+                            }
+                        }
 
                         summarySection
                         statsPickerSection
@@ -2363,6 +2658,26 @@ struct PitcherStatsSheetView: View {
             }
             .sheet(item: $summaryDetail) { _ in
                 summaryDetailContent
+            }
+            .sheet(isPresented: $showGameSummarySheet) {
+                if let game = selectedSingleGameForSummary {
+                    SettingsGameSummarySheetView(
+                        pitcherName: pitcher.name,
+                        game: game,
+                        events: selectedGameSummaryEvents
+                    )
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                        Text("Select one game to view a game summary.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding()
+                    .presentationDetents([.fraction(0.3)])
+                }
             }
             .overlay {
                 if isLoading {
@@ -2457,8 +2772,6 @@ struct PitcherStatsSheetView: View {
                         }
                     }
                 }
-            case .all:
-                EmptyView()
             }
         } label: {
             HStack(spacing: 8) {
@@ -2729,6 +3042,17 @@ struct PitcherStatsSheetView: View {
                 statCard(title: "Balls", value: "\(ballCount)")
             }
             .padding(.horizontal)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Metric Definitions")
+                    .font(.subheadline.weight(.semibold))
+                Text("Strike % = Strikes (\(strikeCount)) / Total Pitches (\(totalCount))")
+                Text("Ball % = Balls (\(ballCount)) / Total Pitches (\(totalCount))")
+                Text("Hit-Spot % = Location matches (\(hitSpotCount)) / Total Pitches (\(totalCount))")
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .padding(.horizontal)
         }
     }
 
@@ -2866,12 +3190,9 @@ struct PitcherStatsSheetView: View {
         let ids = sortedGames.compactMap { $0.id }
         selectedGameIds = Set(ids)
 
-        let practiceIds = practiceSessions.compactMap { $0.id }
-        if practiceIds.isEmpty {
-            selectedPracticeIds = ["__GENERAL__"]
-        } else {
-            selectedPracticeIds = Set(practiceIds + ["__GENERAL__"])
-        }
+        // Treat empty selection as "All Practices" so historical practice events
+        // are not excluded when session IDs are missing/stale in local metadata.
+        selectedPracticeIds = []
     }
 
     private func loadEvents() {
@@ -2880,6 +3201,7 @@ struct PitcherStatsSheetView: View {
         loadEventsToken = requestToken
 
         isLoading = true
+        hasLoadedEvents = false
         practiceEvents = []
         gameEvents = []
         liveEvents = []
@@ -2910,7 +3232,10 @@ struct PitcherStatsSheetView: View {
             }
 
             guard let ownerUid = authManager.user?.uid else {
-                DispatchQueue.main.async { self.isLoading = false }
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    self.hasLoadedEvents = true
+                }
                 return
             }
 
@@ -2933,7 +3258,7 @@ struct PitcherStatsSheetView: View {
                 switch scope {
                 case .practice:
                     return []
-                case .all, .games:
+                case .games:
                     return selectedGameIds.isEmpty ? sortedGames.compactMap { $0.id } : Array(selectedGameIds)
                 }
             }()
@@ -2959,16 +3284,28 @@ struct PitcherStatsSheetView: View {
                     self.cachedGameIdsWithEvents.formUnion(ids)
                 }
                 self.isLoading = false
+                self.hasLoadedEvents = true
             }
         }
     }
 
     private var combinedGameEvents: [PitchEvent] {
-        mergeUnique([gameEvents, liveEvents, sharedGameEvents])
+        mergeUnique([gameEvents, liveEvents, sharedGameEvents]).filter { event in
+            if let gid = event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines), !gid.isEmpty {
+                return validGameIds.contains(gid)
+            }
+            return lockToGameId != nil && liveId != nil
+        }
     }
 
     private var combinedPracticeEvents: [PitchEvent] {
-        mergeUnique([practiceEvents, sharedPracticeEvents])
+        mergeUnique([practiceEvents, sharedPracticeEvents]).filter { event in
+            let pid = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if pid == nil || pid == "" {
+                return true
+            }
+            return validPracticeIds.contains(pid!)
+        }
     }
 
     private func statsScopeKey() -> (scope: String, scopeId: String)? {
@@ -2977,8 +3314,6 @@ struct PitcherStatsSheetView: View {
         }
 
         switch scope {
-        case .all:
-            return ("overall", "overall")
         case .games:
             if selectedGameIds.count == 1, let gid = selectedGameIds.first {
                 return ("game", gid)
@@ -3113,12 +3448,39 @@ struct PitcherStatsSheetView: View {
         var merged: [PitchEvent] = []
         for group in groups {
             for event in group {
-                let key = event.identity
+                let key = logicalEventKey(for: event)
                 guard !seen.contains(key) else { continue }
                 seen.insert(key)
                 merged.append(event)
             }
         }
         return merged
+    }
+
+    // Use a logical key so mirrored copies of the same pitch event (different Firestore doc IDs)
+    // are counted once in stats sheets.
+    private func logicalEventKey(for event: PitchEvent) -> String {
+        let ts = String(format: "%.6f", event.timestamp.timeIntervalSince1970)
+        let mode = event.mode.rawValue
+        let gameId = event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let practiceId = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let pitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let batterId = event.opponentBatterId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let jersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let calledPitch = event.calledPitch?.pitch.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let calledLocation = event.calledPitch?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return [
+            ts,
+            mode,
+            event.pitch,
+            event.location,
+            calledPitch,
+            calledLocation,
+            gameId,
+            practiceId,
+            pitcherId,
+            batterId,
+            jersey
+        ].joined(separator: "|")
     }
 }

@@ -84,6 +84,8 @@ func outcomeSummaryLines(for event: PitchEvent) -> [String] {
 }
 
 struct OutcomeSummaryBackground: View {
+    let isPositive: Bool
+
     var body: some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
             .fill(Color(.white))
@@ -91,7 +93,12 @@ struct OutcomeSummaryBackground: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Color.black.opacity(0.1), lineWidth: 1)
             )
-            .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 3)
+            .shadow(
+                color: isPositive ? Color.green.opacity(0.35) : Color.red.opacity(0.35),
+                radius: 4,
+                x: 0,
+                y: 3
+            )
     }
 }
 
@@ -104,6 +111,14 @@ struct OutcomeSummaryView: View {
         self.lines = lines
         self.jerseyNumber = jerseyNumber
         self.minHeight = minHeight
+    }
+
+    private var isPositiveOutcome: Bool {
+        let text = lines.joined(separator: " ").lowercased()
+        return text.contains("swinging")
+            || text.contains("looking")
+            || text.contains("out")
+            || text.contains("foul")
     }
 
     var body: some View {
@@ -149,7 +164,7 @@ struct OutcomeSummaryView: View {
         .frame(minWidth: 80, minHeight: minHeight)
         .padding(.horizontal, 8)
         .padding(.vertical, 2)
-        .background(OutcomeSummaryBackground())
+        .background(OutcomeSummaryBackground(isPositive: isPositiveOutcome))
         .padding(.trailing, 10)
     }
 }
@@ -714,18 +729,32 @@ struct PitchEventDetailPopover: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Batter notes")
                         .font(.subheadline.weight(.semibold))
-                    TextEditor(text: $batterNotes)
-                        .font(.system(size: 16))
-                        .frame(minHeight: 120)
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color(.systemBackground))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.black.opacity(0.12), lineWidth: 1)
-                        )
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $batterNotes)
+                            .font(.system(size: 16))
+                            .padding(8)
+                            .scrollContentBackground(.hidden)
+                            .background(Color.clear)
+
+                        if batterNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("Add notes for this batter...")
+                                .font(.system(size: 15))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 16)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .frame(minHeight: 60)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(.secondarySystemBackground))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            )
+                            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+                    )
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -1019,6 +1048,7 @@ struct PitchResultSheet: View {
     @State private var localTemplateOverrides: [String: String] = [:]
     @State private var pendingTemplateSelection: PitchTemplate? = nil
     
+    @State private var pitcherFilter: String = ""
     @State private var jerseyFilter: String = ""
     @State private var pitchFilter: String = ""
 
@@ -1051,6 +1081,19 @@ struct PitchResultSheet: View {
         return unique.sorted { lhs, rhs in
             lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
         }
+    }
+
+    private var availablePitchers: [(id: String, name: String)] {
+        let ids = Set(
+            allEvents.compactMap { event -> String? in
+                guard event.mode == .game else { return nil }
+                guard let id = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else { return nil }
+                return id
+            }
+        )
+        return ids
+            .map { id in (id: id, name: pitcherNameById[id] ?? "Unknown Pitcher") }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     
     private var pitchTypeSuccessPercent: [String: Int] {
@@ -1086,11 +1129,21 @@ struct PitchResultSheet: View {
             }
         }()
 
+        // Apply pitcher filter in game mode if provided
+        let trimmedPitcher = pitcherFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pitcherScoped: [PitchEvent] = {
+            if sessionManager.currentMode != .game || trimmedPitcher.isEmpty { return practiceScoped }
+            return practiceScoped.filter { event in
+                guard let id = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else { return false }
+                return id == trimmedPitcher
+            }
+        }()
+
         // Apply jersey filter if provided (trimmed and case-insensitive)
         let trimmedJersey = jerseyFilter.trimmingCharacters(in: .whitespacesAndNewlines)
         let jerseyScoped: [PitchEvent] = {
-            if trimmedJersey.isEmpty { return practiceScoped }
-            return practiceScoped.filter { evt in
+            if trimmedJersey.isEmpty { return pitcherScoped }
+            return pitcherScoped.filter { evt in
                 guard let jersey = evt.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty else { return false }
                 return jersey.caseInsensitiveCompare(trimmedJersey) == .orderedSame
             }
@@ -1172,6 +1225,29 @@ struct PitchResultSheet: View {
 
                             if sessionManager.currentMode == .game {
                                 Menu {
+                                    if !pitcherFilter.isEmpty {
+                                        Button(role: .destructive) {
+                                            pitcherFilter = ""
+                                        } label: {
+                                            Label("Clear Pitcher Filter", systemImage: "xmark.circle")
+                                        }
+                                    }
+
+                                    ForEach(availablePitchers, id: \.id) { pitcher in
+                                        Button {
+                                            pitcherFilter = pitcher.id
+                                        } label: {
+                                            HStack {
+                                                Text(pitcher.name)
+                                                if pitcherFilter == pitcher.id {
+                                                    Image(systemName: "checkmark")
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Divider()
+
                                     // Clear option
                                     if !jerseyFilter.isEmpty {
                                         Button(role: .destructive) {
@@ -1222,7 +1298,7 @@ struct PitchResultSheet: View {
                                         }
                                     }
                                 } label: {
-                                    let hasActiveFilters = !jerseyFilter.isEmpty || !pitchFilter.isEmpty
+                                    let hasActiveFilters = !pitcherFilter.isEmpty || !jerseyFilter.isEmpty || !pitchFilter.isEmpty
                                     Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                                         .foregroundStyle(hasActiveFilters ? Color.blue : .primary)
                                         .shadow(color: hasActiveFilters ? Color.blue.opacity(0.35) : .clear, radius: hasActiveFilters ? 6 : 0)
