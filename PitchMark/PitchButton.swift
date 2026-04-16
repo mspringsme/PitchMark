@@ -29,12 +29,12 @@ private struct PitchButtonView: View {
     let resultVisualState: String?
     let setResultVisualState: (String?) -> Void
     let pendingResultLabel: Binding<String?>
+    let showResultConfirmation: Binding<Bool>
     let showConfirmSheet: Binding<Bool>
+    let onResultLocationPicked: (String) -> Void
     let isEncryptedMode: Bool
     let template: PitchTemplate?
     let canInitiateCall: Bool
-
-    @State private var showMenuSheet = false
 
     var body: some View {
         let tappedPoint = CGPoint(x: x, y: y)
@@ -87,6 +87,7 @@ private struct PitchButtonView: View {
                 Button(action: {
                     print("🔆 fullLabel=", fullLabel)
                     pendingResultLabel.wrappedValue = fullLabel
+                    onResultLocationPicked(fullLabel)
                     showConfirmSheet.wrappedValue = true
                 }) {
                     StrikeZoneButtonLabel(
@@ -108,7 +109,40 @@ private struct PitchButtonView: View {
                 Group {
                     if canInitiateCall {
                         Button(action: {
-                            showMenuSheet = true
+                            guard !selectedPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+                            let selected = selectedPitch
+                            let assignedCodes = pitchCodeAssignments
+                                .filter { $0.pitch == selected && $0.location == fullLabel }
+                                .map(\.code)
+
+                            let callCodes: [String] = {
+                                guard isEncryptedMode else { return assignedCodes }
+                                guard let template else { return [] }
+                                let labelForGrid = adjustedLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(label: labelForGrid, isStrike: location.isStrike) else {
+                                    return []
+                                }
+                                return EncryptedCodeGenerator.generateCalls(
+                                    template: template,
+                                    selectedPitch: selected,
+                                    gridKind: gridKind,
+                                    columnIndex: columnIndex,
+                                    rowIndex: rowIndex
+                                )
+                            }()
+
+                            let newCall = PitchCall(
+                                pitch: selected,
+                                location: adjustedLabel,
+                                isStrike: location.isStrike,
+                                codes: callCodes
+                            )
+
+                            // Never clear the active call via strike-zone re-tap in composer flow.
+                            // Re-tap should keep/update call state, not dismiss the sheet.
+                            setLastTapped(tappedPoint)
+                            setCalledPitch(newCall)
                         }) {
                             ZStack {
                                 StrikeZoneButtonLabel(
@@ -129,64 +163,6 @@ private struct PitchButtonView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .sheet(isPresented: $showMenuSheet) {
-                            VStack(spacing: 12) {
-                                HStack {
-                                    Spacer(minLength: 0)
-                                    HStack(spacing: 6) {
-                                        Text(location.isStrike ? "Strike:  " : "Ball:  ")
-                                            .font(.title)
-                                            .fontWeight(.bold)
-                                            .foregroundStyle(.secondary)
-                                        Text(labelManager.adjustedLabel(from: location.label))
-                                            .font(.title)
-                                            .fontWeight(.bold)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .fixedSize()
-                                    Spacer(minLength: 0)
-                                }
-                                .multilineTextAlignment(.center)
-
-                                HStack {
-                                    Spacer(minLength: 0)
-                                    PitchMenuContent(
-                                        adjustedLabel: adjustedLabel,
-                                        tappedPoint: tappedPoint,
-                                        location: location,
-                                        setLastTapped: setLastTapped,
-                                        setCalledPitch: setCalledPitch,
-                                        selectedPitches: selectedPitches,
-                                        pitchCodeAssignments: pitchCodeAssignments,
-                                        lastTappedPosition: lastTappedPosition,
-                                        calledPitch: calledPitch,
-                                        setSelectedPitch: setSelectedPitch,
-                                        isEncryptedMode: isEncryptedMode,
-                                        generateEncryptedCodes: { selectedPitch, gridKind, columnIndex, rowIndex in
-                                            if let template = template {
-                                                return EncryptedCodeGenerator.generateCalls(
-                                                    template: template,
-                                                    selectedPitch: selectedPitch,
-                                                    gridKind: gridKind,
-                                                    columnIndex: columnIndex,
-                                                    rowIndex: rowIndex
-                                                )
-                                            }
-                                            return []
-                                        },
-                                        onSelection: {
-                                            showMenuSheet = false
-                                        }
-                                    )
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.bottom, 8)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .presentationDetents([.fraction(0.6), .medium])
-                            .presentationDragIndicator(.visible)
-                        }
 
                     } else {
                         // Joiner: no pitch-selection menu
@@ -210,6 +186,31 @@ private struct PitchButtonView: View {
         }
         .position(x: x, y: y)
         .zIndex(1)
+    }
+
+    private func mapLabelToGridInfo(label: String, isStrike: Bool) -> (gridKind: EncryptedGridKind, columnIndex: Int, rowIndex: Int)? {
+        let cleaned = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let strikeRows = [
+            ["Up & Out", "Up", "Up & In"],
+            ["Out", "Middle", "In"],
+            ["↓ & Out", "↓", "↓ & In"]
+        ]
+        let ballRows = [
+            ["Up & Out", "Up", "Up & In"],
+            ["Out", "", "In"],
+            ["↓ & Out", "↓", "↓ & In"]
+        ]
+        let rows = isStrike ? strikeRows : ballRows
+        let kind: EncryptedGridKind = isStrike ? .strikes : .balls
+        for (r, row) in rows.enumerated() {
+            for (c, value) in row.enumerated() {
+                if value == cleaned {
+                    if !isStrike && value.isEmpty { return nil }
+                    return (kind, c, r)
+                }
+            }
+        }
+        return nil
     }
 }
 
@@ -236,7 +237,9 @@ func pitchButton(
     resultVisualState: String?,
     setResultVisualState: @escaping (String?) -> Void,
     pendingResultLabel: Binding<String?>,
+    showResultConfirmation: Binding<Bool>,
     showConfirmSheet: Binding<Bool>,
+    onResultLocationPicked: @escaping (String) -> Void,
     isEncryptedMode: Bool,
     template: PitchTemplate?,
     canInitiateCall: Bool
@@ -264,10 +267,11 @@ func pitchButton(
         resultVisualState: resultVisualState,
         setResultVisualState: setResultVisualState,
         pendingResultLabel: pendingResultLabel,
+        showResultConfirmation: showResultConfirmation,
         showConfirmSheet: showConfirmSheet,
+        onResultLocationPicked: onResultLocationPicked,
         isEncryptedMode: isEncryptedMode,
         template: template,
         canInitiateCall: canInitiateCall
     )
 }
-

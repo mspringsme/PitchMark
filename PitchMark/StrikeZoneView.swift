@@ -29,6 +29,7 @@ struct StrikeZoneView: View {
     let pendingResultLabel: Binding<String?>
     let showResultConfirmation: Binding<Bool>
     let showConfirmSheet: Binding<Bool>
+    let onResultLocationPicked: (String) -> Void
     let isEncryptedMode: Bool
     let template: PitchTemplate?
     let canInitiateCall: Bool
@@ -83,7 +84,9 @@ struct StrikeZoneView: View {
                             resultVisualState: resultVisualState,
                             setResultVisualState: setResultVisualState,
                             pendingResultLabel: pendingResultLabel,
+                            showResultConfirmation: showResultConfirmation,
                             showConfirmSheet: showConfirmSheet,
+                            onResultLocationPicked: onResultLocationPicked,
                             isEncryptedMode: isEncryptedMode,
                             template: template,
                             canInitiateCall: canInitiateCall
@@ -126,7 +129,9 @@ struct StrikeZoneView: View {
                             resultVisualState: resultVisualState,
                             setResultVisualState: setResultVisualState,
                             pendingResultLabel: pendingResultLabel,
+                            showResultConfirmation: showResultConfirmation,
                             showConfirmSheet: showConfirmSheet,
+                            onResultLocationPicked: onResultLocationPicked,
                             isEncryptedMode: isEncryptedMode,
                             template: template,
                             canInitiateCall: canInitiateCall
@@ -304,4 +309,3 @@ struct RotatingGlowModifier: AnimatableModifier {
             )
     }
 }
-

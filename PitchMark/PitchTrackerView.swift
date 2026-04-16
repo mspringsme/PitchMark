@@ -185,6 +185,7 @@ struct PitchTrackerView: View {
     @State private var games: [Game] = []
     @State private var showPitchResults = false
     @State private var showConfirmSheet = false
+    @State private var calledPitchComposerDetent: PresentationDetent = .fraction(0.28)
     @State private var isStrikeSwinging = false
     @State private var isStrikeLooking = false
     @State private var isWildPitch = false
@@ -492,6 +493,11 @@ struct PitchTrackerView: View {
 
     private func handleSetCalledPitch(_ newCall: PitchCall?) {
         calledPitch = newCall
+        showConfirmSheet = (newCall != nil)
+        isRecordingResult = (newCall != nil)
+        if newCall != nil {
+            calledPitchComposerDetent = .fraction(0.28)
+        }
         lastCallInitiatedAt = newCall == nil ? nil : Date()
 
         guard isGame, isOwnerForActiveGame else { return }
@@ -516,7 +522,7 @@ struct PitchTrackerView: View {
 
         let callId = UUID().uuidString
         activeCalledPitchId = callId
-        isRecordingResult = false
+        isRecordingResult = true
         
         let prefix = newCall.isStrike ? "Strike" : "Ball"
         let fullLabel = "\(prefix) \(newCall.location)"
@@ -553,6 +559,75 @@ struct PitchTrackerView: View {
 
 
     }
+
+    private func refreshCalledPitchForSelectedPitch() {
+        guard let currentCall = calledPitch else { return }
+
+        let selected = selectedPitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selected.isEmpty else { return }
+
+        let fullLabel = "\(currentCall.isStrike ? "Strike" : "Ball") \(currentCall.location)"
+        let refreshedCodes: [String] = {
+            if let template = selectedTemplate, useEncrypted(for: template) {
+                if let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(
+                    label: currentCall.location,
+                    isStrike: currentCall.isStrike
+                ) {
+                    return EncryptedCodeGenerator.generateCalls(
+                        template: template,
+                        selectedPitch: selected,
+                        gridKind: gridKind,
+                        columnIndex: columnIndex,
+                        rowIndex: rowIndex
+                    )
+                }
+                return []
+            }
+
+            return pitchCodeAssignments
+                .filter { $0.pitch == selected && $0.location == fullLabel }
+                .map(\.code)
+        }()
+
+        let updatedCall = PitchCall(
+            pitch: selected,
+            location: currentCall.location,
+            isStrike: currentCall.isStrike,
+            codes: refreshedCodes
+        )
+
+        if isGame, isOwnerForActiveGame {
+            handleSetCalledPitch(updatedCall)
+        } else {
+            calledPitch = updatedCall
+        }
+    }
+
+    private func mapLabelToGridInfo(label: String, isStrike: Bool) -> (gridKind: EncryptedGridKind, columnIndex: Int, rowIndex: Int)? {
+        let cleaned = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let strikeRows = [
+            ["Up & Out", "Up", "Up & In"],
+            ["Out", "Middle", "In"],
+            ["↓ & Out", "↓", "↓ & In"]
+        ]
+        let ballRows = [
+            ["Up & Out", "Up", "Up & In"],
+            ["Out", "", "In"],
+            ["↓ & Out", "↓", "↓ & In"]
+        ]
+        let rows = isStrike ? strikeRows : ballRows
+        let kind: EncryptedGridKind = isStrike ? .strikes : .balls
+
+        for (r, row) in rows.enumerated() {
+            for (c, value) in row.enumerated() {
+                if value == cleaned {
+                    if !isStrike && value.isEmpty { return nil }
+                    return (kind, c, r)
+                }
+            }
+        }
+        return nil
+    }
     private func applyPendingFromLiveData(_ data: [String: Any]) {
         guard isGame else { return }
         guard !isOwnerForActiveGame else { return } // owner already has full call with codes
@@ -562,6 +637,7 @@ struct PitchTrackerView: View {
               let pitch = pending["pitch"] as? String,
               let loc = pending["location"] as? String
         else {
+            if showConfirmSheet { return }
             // no pending: clear joiner UI
             pendingResultLabel = nil
             calledPitch = nil
@@ -595,9 +671,18 @@ struct PitchTrackerView: View {
             isStrike: (pending["isStrike"] as? Bool) ?? true,
             codes: [] // joiner never sees codes
         )
+        showConfirmSheet = true
+        calledPitchComposerDetent = .fraction(0.28)
 
         activeCalledPitchId = callId
         isRecordingResult = true
+    }
+
+    private func expandCalledPitchComposerToLarge() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            guard calledPitch != nil else { return }
+            calledPitchComposerDetent = .large
+        }
     }
 
     private func applyResultSelectionFromLiveData(_ data: [String: Any]) {
@@ -611,6 +696,9 @@ struct PitchTrackerView: View {
         if !label.isEmpty {
             // Optionally: keep a local var if you have one
             // self.lastResultSelectionLabel = label
+            if calledPitch != nil {
+                expandCalledPitchComposerToLarge()
+            }
         }
     }
     /// Owner-side: keep CalledPitchView in sync with the shared live doc.
@@ -630,6 +718,7 @@ struct PitchTrackerView: View {
         // If pending is gone (or inactive), the participant has saved/canceled — dismiss owner's call UI
         // BUT only if we previously saw this exact call id in Firestore.
         if !isActive {
+            if showConfirmSheet { return }
             if let startedAt = lastCallInitiatedAt,
                Date().timeIntervalSince(startedAt) < 1.0 {
                 return
@@ -665,6 +754,7 @@ struct PitchTrackerView: View {
             let pitch = pending.pitch,
             let loc = pending.location
         else {
+            if showConfirmSheet { return }
             pendingResultLabel = nil
             calledPitch = nil
             activeCalledPitchId = nil
@@ -2141,6 +2231,7 @@ struct PitchTrackerView: View {
         persistSelectedTemplate(template)
         // Force chips/strike zone to refresh colors and content
         colorRefreshToken = UUID()
+        syncSelectedPitchWithVisibleOptions()
 
         if source == .user {
             liveTemplateOverrideLocked = true
@@ -3060,8 +3151,6 @@ struct PitchTrackerView: View {
             .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
             .transition(.opacity)
 
-            calledPitchLayer
-
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.horizontal])   // ✅ CHANGED (removed .bottom)
@@ -3147,27 +3236,40 @@ struct PitchTrackerView: View {
     private var calledPitchLayer: some View {
         Group {
             if let call = calledPitch {
-                CalledPitchView(
-                    isRecordingResult: $isRecordingResult,
-                    activeCalledPitchId: $activeCalledPitchId,
-                    pitchFirst: $pitchFirst,
-                    autoPitchOnlyEnabled: $autoPitchOnlyEnabled,
-                    liveId: activeLiveId,
-                    call: call,
-                    pitchCodeAssignments: pitchCodeAssignments,
-                    batterSide: batterSide,
-                    template: selectedTemplate,
-                    isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
-                    isPracticeMode: sessionManager.currentMode == .practice,
-                    onDeferDisplayCode: { colorName, code in
-                        deferredDisplayCode = (colorName: colorName, code: code)
-                        ensureAutoLiveSessionIfNeeded()
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 8) {
+                        CalledPitchView(
+                            isRecordingResult: $isRecordingResult,
+                            activeCalledPitchId: $activeCalledPitchId,
+                            pitchFirst: $pitchFirst,
+                            autoPitchOnlyEnabled: $autoPitchOnlyEnabled,
+                            liveId: activeLiveId,
+                            call: call,
+                            pitchCodeAssignments: pitchCodeAssignments,
+                            batterSide: batterSide,
+                            template: selectedTemplate,
+                            isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
+                            isPracticeMode: sessionManager.currentMode == .practice,
+                            onDeferDisplayCode: { colorName, code in
+                                deferredDisplayCode = (colorName: colorName, code: code)
+                                ensureAutoLiveSessionIfNeeded()
+                            }
+                        )
+                        .transition(.opacity)
+                        .padding(.top, 4)
+                        .onAppear { handleCalledPitchAppear() }
+                        .onDisappear { handleCalledPitchDisappear() }
+
+                        if showConfirmSheet {
+                            pitchResultSheetView
+                                .padding(.horizontal, 12)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
                     }
-                )
-                .transition(.opacity)
-                .padding(.top, 4)
-                .onAppear { handleCalledPitchAppear() }
-                .onDisappear { handleCalledPitchDisappear() }
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 8)
+                }
+                .frame(maxHeight: effectiveScreenSize.height * 0.78)
             }
         }
         .frame(maxWidth: .infinity, alignment: .bottom)  // ✅ remove maxHeight: .infinity
@@ -3298,7 +3400,6 @@ struct PitchTrackerView: View {
 
     private var contentSection: some View {
         Group {
-            batterAndModeBar
             mainStrikeZoneSection
             Spacer(minLength: 16)
             cardsAndOverlay
@@ -3327,6 +3428,52 @@ struct PitchTrackerView: View {
                 }
             }
         )
+    }
+
+    private var calledPitchComposerBinding: Binding<Bool> {
+        Binding<Bool>(
+            get: { calledPitch != nil },
+            set: { newValue in
+                if !newValue {
+                    resetCallAndResultUIState()
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var calledPitchComposerSheetView: some View {
+        if let call = calledPitch {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 8) {
+                    CalledPitchView(
+                        isRecordingResult: $isRecordingResult,
+                        activeCalledPitchId: $activeCalledPitchId,
+                        pitchFirst: $pitchFirst,
+                        autoPitchOnlyEnabled: $autoPitchOnlyEnabled,
+                        liveId: activeLiveId,
+                        call: call,
+                        pitchCodeAssignments: pitchCodeAssignments,
+                        batterSide: batterSide,
+                        template: selectedTemplate,
+                        isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
+                        isPracticeMode: sessionManager.currentMode == .practice,
+                        onDeferDisplayCode: { colorName, code in
+                            deferredDisplayCode = (colorName: colorName, code: code)
+                            ensureAutoLiveSessionIfNeeded()
+                        }
+                    )
+                    .padding(.top, 4)
+
+                    pitchResultSheetView
+                        .padding(.horizontal, 12)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 8)
+            }
+        } else {
+            Color.clear.frame(height: 1)
+        }
     }
     
     // MARK: - Extracted subviews to help type-checker
@@ -3562,13 +3709,92 @@ struct PitchTrackerView: View {
         let deviceWidth = effectiveScreenSize.width
         let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
 
-        return VStack {
+        return VStack(spacing: 8) {
+            if !activePitchChipOptions.isEmpty {
+                HStack(alignment: .center, spacing: 8) {
+                    if isGame {
+                        // Keep chips aligned with strike-zone card (to the right of At Bat sidebar).
+                        Color.clear.frame(width: 60)
+                    }
+                    pitchSelectionStrip(width: SZwidth)
+                }
+            }
+
             HStack(alignment: .top, spacing: 8) {
                 atBatSidebar
                 strikeZoneArea(width: SZwidth)
             }
         }
         .padding(.horizontal, 12)
+    }
+
+    private var activePitchChipOptions: [String] {
+        let ordered = orderedPitchesForTemplate
+        guard !ordered.isEmpty else { return [] }
+
+        let active = effectivePitchesForStrikeZone
+        let filtered = ordered.filter { active.contains($0) }
+        return filtered.isEmpty ? ordered : filtered
+    }
+
+    @ViewBuilder
+    private func pitchSelectionStrip(width: CGFloat) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(activePitchChipOptions, id: \.self) { pitch in
+                    let isSelectedChip = selectedPitch == pitch
+                    let chipColor = colorForPitch(pitch)
+
+                    Button {
+                        selectedPitch = pitch
+                    } label: {
+                        Text(pitch)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(isSelectedChip ? Color.white : Color.primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(
+                                Capsule()
+                                    .fill(isSelectedChip ? chipColor : Color(.systemGray6))
+                            )
+                            .overlay(
+                                Capsule()
+                                    .stroke(
+                                        isSelectedChip ? chipColor.opacity(0.9) : Color.black.opacity(0.12),
+                                        lineWidth: isSelectedChip ? 1.5 : 1
+                                    )
+                            )
+                            .shadow(
+                                color: isSelectedChip ? chipColor.opacity(0.35) : .clear,
+                                radius: isSelectedChip ? 5 : 0,
+                                x: 0,
+                                y: 2
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+        }
+        .frame(width: width, height: 42, alignment: .leading)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+    }
+
+    private func syncSelectedPitchWithVisibleOptions() {
+        let options = activePitchChipOptions
+        guard !options.isEmpty else {
+            selectedPitch = ""
+            return
+        }
+        if !options.contains(selectedPitch) {
+            selectedPitch = options[0]
+        }
     }
     
     @ViewBuilder
@@ -3858,7 +4084,6 @@ struct PitchTrackerView: View {
             ResetPitchButton {
                 // ✅ 1) Reset owner local UI
                 isRecordingResult = false
-                selectedPitch = ""
                 selectedLocation = ""
                 lastTappedPosition = nil
                 calledPitch = nil
@@ -3979,6 +4204,7 @@ struct PitchTrackerView: View {
         @Binding var pendingResultLabel: String?
         @Binding var showResultConfirmation: Bool
         var showConfirmSheet: Binding<Bool>
+        let onResultLocationPicked: (String) -> Void
         let isEncryptedMode: Bool
         let colorRefreshToken: UUID
         let template: PitchTemplate?
@@ -4009,6 +4235,7 @@ struct PitchTrackerView: View {
                     pendingResultLabel: $pendingResultLabel,
                     showResultConfirmation: $showResultConfirmation,
                     showConfirmSheet: showConfirmSheet,
+                    onResultLocationPicked: onResultLocationPicked,
                     isEncryptedMode: isEncryptedMode,
                     template: template,
                     canInitiateCall: canInitiateCall
@@ -4054,6 +4281,12 @@ struct PitchTrackerView: View {
                 pendingResultLabel: $pendingResultLabel,
                 showResultConfirmation: $showResultConfirmation,
                 showConfirmSheet: confirmSheetBinding,
+                onResultLocationPicked: { pickedLabel in
+                    expandCalledPitchComposerToLarge()
+                    if sessionManager.currentMode == .game, !isOwnerForActiveGame {
+                        writeResultSelection(label: pickedLabel)
+                    }
+                },
                 isEncryptedMode: {
                     if let t = selectedTemplate {
                         return useEncrypted(for: t)
@@ -4236,6 +4469,11 @@ struct PitchTrackerView: View {
         // Auto-save in Practice, notify owner in Game (participant side)
         guard newValue != nil else { return }
 
+        // Composer flow owns save/submit now; do not auto-dismiss via legacy paths.
+        if calledPitch != nil {
+            return
+        }
+
         if autoPitchOnlyEnabled,
            sessionManager.currentMode == .game,
            let value = newValue,
@@ -4316,7 +4554,6 @@ struct PitchTrackerView: View {
         resultVisualState = event.location
         activeCalledPitchId = nil
         isRecordingResult = false
-        selectedPitch = ""
         selectedLocation = ""
         lastTappedPosition = nil
         calledPitch = nil
@@ -4463,7 +4700,6 @@ struct PitchTrackerView: View {
         resultVisualState = event.location
         activeCalledPitchId = nil
         isRecordingResult = false
-        selectedPitch = ""
         selectedLocation = ""
         lastTappedPosition = nil
         calledPitch = nil
@@ -5869,6 +6105,10 @@ struct PitchTrackerView: View {
                 if let template = selectedTemplate {
                     persistActivePitches(for: template.id, active: newValue)
                 }
+                syncSelectedPitchWithVisibleOptions()
+            }
+            .onChange(of: selectedPitch) { _, _ in
+                refreshCalledPitchForSelectedPitch()
             }
             .onChange(of: selectedPitcherId) { _, _ in
                 if isGame {
@@ -5900,6 +6140,7 @@ struct PitchTrackerView: View {
                     } else {
                         selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
                     }
+                    syncSelectedPitchWithVisibleOptions()
                     colorRefreshToken = UUID()
                 }
             }
@@ -5912,6 +6153,7 @@ struct PitchTrackerView: View {
                     } else {
                         selectedPitches = loadActivePitches(for: t.id, fallback: fallbackList)
                     }
+                    syncSelectedPitchWithVisibleOptions()
                     colorRefreshToken = UUID()
                 }
             }
@@ -6003,7 +6245,6 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v6 = v5
-            .sheet(isPresented: confirmSheetBinding) { pitchResultSheetView }
             .eraseToAnyView()
 
         let v7 = v6
@@ -6023,6 +6264,13 @@ struct PitchTrackerView: View {
                 gameSummarySheetView
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: calledPitchComposerBinding) {
+                calledPitchComposerSheetView
+                    .presentationDetents([.fraction(0.28), .fraction(0.5), .large], selection: $calledPitchComposerDetent)
+                    .presentationDragIndicator(.visible)
+                    .presentationBackgroundInteraction(.enabled)
+                    .interactiveDismissDisabled(true)
             }
             .eraseToAnyView()
 

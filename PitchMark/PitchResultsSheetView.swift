@@ -92,46 +92,80 @@ private struct ToggleSection: View {
     @Binding var selectedOutcome: String?
     @Binding var showOverlay: Bool
 
+    private func toggleButton(
+        _ title: String,
+        isOn: Bool,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity)
+                .frame(height: 32)
+                .background(isOn ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                .cornerRadius(6)
+                .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.45 : 1)
+    }
+
     var body: some View {
-        ZStack {
-            HStack {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Strike Swinging", isOn: $isStrikeSwinging)
-                        .onChange(of: isStrikeSwinging) { _, newValue in
-                            if newValue { isStrikeLooking = false }
-                        }
-                    Toggle("Strike Looking", isOn: $isStrikeLooking)
-                        .onChange(of: isStrikeLooking) { _, newValue in
-                            if newValue { isStrikeSwinging = false }
-                        }
-                    Toggle("Ball", isOn: $isBall)
-                    Toggle("Wild Pitch", isOn: $isWildPitch)
-                        .onChange(of: isWildPitch) { _, newValue in
-                            if newValue { isPassedBall = false }
-                        }
-                    Toggle("Passed Ball", isOn: $isPassedBall)
-                        .onChange(of: isPassedBall) { _, newValue in
-                            if newValue { isWildPitch = false }
-                        }
-                    Toggle(
-                        "Hit batter",
-                        isOn: Binding(
-                            get: { selectedOutcome == "HBP" },
-                            set: { selectedOutcome = $0 ? "HBP" : nil }
-                        )
-                    )
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Text("Strike:")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 52, alignment: .leading)
+
+                toggleButton("Swinging", isOn: isStrikeSwinging) {
+                    let next = !isStrikeSwinging
+                    isStrikeSwinging = next
+                    if next { isStrikeLooking = false }
                 }
-                .padding(.horizontal)
-                Spacer()
+
+                toggleButton("Looking", isOn: isStrikeLooking) {
+                    let next = !isStrikeLooking
+                    isStrikeLooking = next
+                    if next { isStrikeSwinging = false }
+                }
+
                 Image("FieldImage")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 100, height: 100)
+                    .frame(width: 72, height: 72)
                     .onTapGesture {
                         withAnimation(.easeOut) { showOverlay = true }
                     }
             }
+
+            HStack(spacing: 8) {
+                toggleButton("Ball", isOn: isBall) {
+                    isBall.toggle()
+                }
+
+                toggleButton("Wild Pitch", isOn: isWildPitch) {
+                    let next = !isWildPitch
+                    isWildPitch = next
+                    if next { isPassedBall = false }
+                }
+
+                toggleButton("Passed Ball", isOn: isPassedBall) {
+                    let next = !isPassedBall
+                    isPassedBall = next
+                    if next { isWildPitch = false }
+                }
+
+                toggleButton("Hit Batter", isOn: selectedOutcome == "HBP") {
+                    selectedOutcome = (selectedOutcome == "HBP") ? nil : "HBP"
+                }
+            }
         }
+        .padding(.horizontal)
     }
 }
 
@@ -456,39 +490,16 @@ struct PitchResultSheetView: View {
 
     var body: some View {
         AnyView(
-            VStack(spacing: 14) {
-                HStack {
-                    Text("Save Pitch")
-                        .font(.title2.weight(.bold))
-                    Spacer()
-                    Button {
-                        isPresented = false
-                        resetSelections()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 32, height: 32)
-                            .background(
-                                Circle()
-                                    .fill(Color(.systemGray6))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Close")
-                }
-
+            VStack(spacing: 10) {
                 HStack(spacing: 12) {
-                    if let name = pitcherName, !name.isEmpty {
-                        Text(name)
-                            .font(.headline)
-                            .foregroundColor(.secondary)
-                    }
                     if let label = pendingResultLabel {
                         Text("Location: \(label)")
-                            .font(.headline)
+                            .font(.subheadline.weight(.semibold))
                             .foregroundColor(.blue)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
+                    Spacer(minLength: 0)
                 }
 
                 Divider()
@@ -555,7 +566,7 @@ struct PitchResultSheetView: View {
                 }
 
             }
-                .padding()
+                .padding(12)
                 .fullScreenCover(isPresented: $showFieldOverlay) {
                     FieldOverlayView(
                         isPresented: $showFieldOverlay,
