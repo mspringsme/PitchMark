@@ -1493,6 +1493,7 @@ struct PitchTrackerView: View {
     private func resetCallAndResultUIState() {
         lastTappedPosition = nil
         calledPitch = nil
+        calledPitchComposerDetent = .fraction(0.28)
         activeCalledPitchId = nil
         pendingResultLabel = nil
         showConfirmSheet = false
@@ -1845,7 +1846,15 @@ struct PitchTrackerView: View {
     }
 
     private var visiblePitchers: [Pitcher] {
-        pitchers.filter { !hiddenPitcherIdSet.contains($0.id ?? "") }
+        var seenIds: Set<String> = []
+        return pitchers.filter { pitcher in
+            if let id = pitcher.id {
+                if seenIds.contains(id) { return false }
+                seenIds.insert(id)
+                return !hiddenPitcherIdSet.contains(id)
+            }
+            return true
+        }
     }
 
     // MARK: - Template Version Indicator
@@ -2943,8 +2952,12 @@ struct PitchTrackerView: View {
     private func normalizeJersey(_ s: String?) -> String? {
         guard let s = s else { return nil }
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.allSatisfy({ $0 == "0" }) {
+            return trimmed
+        }
         let noLeadingZeros = trimmed.drop { $0 == "0" }
-        return String(noLeadingZeros.isEmpty ? "0" : noLeadingZeros)
+        return String(noLeadingZeros)
     }
 
     private var selectedJerseyNumberDisplay: String? {
@@ -3037,15 +3050,120 @@ struct PitchTrackerView: View {
         let event: PitchEvent
     }
 
-    private func openJerseyDetail(for cell: JerseyCell) async {
+    private func syncSelectedBatterFromDetail(_ cell: JerseyCell?) {
+        selectedBatterId = cell?.id
+        selectedBatterJersey = cell?.jerseyNumber
+
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            var fields: [String: Any] = [:]
+            if let cell {
+                fields["selectedBatterId"] = cell.id.uuidString
+                fields["selectedBatterJersey"] = cell.jerseyNumber
+            } else {
+                fields["selectedBatterId"] = FieldValue.delete()
+                fields["selectedBatterJersey"] = FieldValue.delete()
+            }
+            LiveGameService.shared.updateLiveFields(liveId: liveId, fields: fields)
+            return
+        }
+
+        guard
+            let gameId = selectedGameId,
+            let owner = effectiveGameOwnerUserId,
+            !owner.isEmpty
+        else { return }
+
+        authManager.updateGameSelectedBatter(
+            ownerUserId: owner,
+            gameId: gameId,
+            selectedBatterId: cell?.id.uuidString,
+            selectedBatterJersey: cell?.jerseyNumber
+        )
+    }
+
+    private func persistLineupFromDetail() {
+        let jerseys = jerseyCells.map { $0.jerseyNumber }
+        let batterIds = jerseyCells.map { $0.id.uuidString }
+
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            LiveGameService.shared.updateLiveFields(
+                liveId: liveId,
+                fields: [
+                    "jerseyNumbers": jerseys,
+                    "batterIds": batterIds
+                ]
+            )
+            if let owner = effectiveGameOwnerUserId,
+               let gameId = selectedGameId,
+               let myUid = authManager.user?.uid,
+               !owner.isEmpty,
+               owner == myUid {
+                authManager.updateGameLineup(
+                    ownerUserId: owner,
+                    gameId: gameId,
+                    jerseyNumbers: jerseys,
+                    batterIds: batterIds
+                )
+            }
+            return
+        }
+
+        if let gameId = selectedGameId,
+           let owner = effectiveGameOwnerUserId,
+           !owner.isEmpty {
+            authManager.updateGameLineup(
+                ownerUserId: owner,
+                gameId: gameId,
+                jerseyNumbers: jerseys,
+                batterIds: batterIds
+            )
+        }
+    }
+
+    private func moveBatterFromDetail(_ cell: JerseyCell, direction: Int) {
+        guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else { return }
+        let target = idx + direction
+        guard target >= 0, target < jerseyCells.count else { return }
+
+        withAnimation {
+            let item = jerseyCells.remove(at: idx)
+            jerseyCells.insert(item, at: target)
+        }
+        persistLineupFromDetail()
+    }
+
+    private func deleteBatterFromDetail(_ cell: JerseyCell) {
+        guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else { return }
+        let removed = jerseyCells.remove(at: idx)
+        persistLineupFromDetail()
+
+        if selectedBatterId == removed.id {
+            let fallback = jerseyCells.indices.contains(min(idx, max(jerseyCells.count - 1, 0)))
+                ? jerseyCells[min(idx, max(jerseyCells.count - 1, 0))]
+                : nil
+            syncSelectedBatterFromDetail(fallback)
+            if let fallback {
+                Task { await openJerseyDetail(for: fallback, keepSheetVisible: true) }
+            } else {
+                jerseyDetailPayload = nil
+            }
+        }
+    }
+
+    private func openJerseyDetail(for cell: JerseyCell, keepSheetVisible: Bool = false) async {
+        let placeholder = await MainActor.run { placeholderEvent(for: cell) }
         await MainActor.run {
             pendingJerseyDetailCell = cell
             didAutoRetryJerseyDetail = false
             selectedBatterId = cell.id
             selectedBatterJersey = cell.jerseyNumber
-            jerseyDetailEvent = nil
-            jerseyDetailPayload = nil
-            showJerseyDetailSheet = false
+            jerseyDetailEvent = placeholder
+            if !keepSheetVisible {
+                jerseyDetailPayload = nil
+                showJerseyDetailSheet = false
+            }
+            // Open immediately so no-data batters don't wait on fetch/listener retries.
+            jerseyDetailPayload = JerseyDetailPayload(event: placeholder)
         }
 
         if isGame {
@@ -3077,7 +3195,7 @@ struct PitchTrackerView: View {
             }
         }
 
-        let maxAttempts = 20
+        let maxAttempts = 8
         for _ in 0..<maxAttempts {
             let event = await MainActor.run { latestEvent(for: cell) }
             if let event {
@@ -3089,12 +3207,39 @@ struct PitchTrackerView: View {
             }
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
+    }
 
-        await MainActor.run {
-            showJerseyDetailSheet = false
-            noJerseyEventsMessage = "No pitches recorded for this batter yet."
-            showNoJerseyEventsAlert = true
-        }
+    private func placeholderEvent(for cell: JerseyCell) -> PitchEvent {
+        PitchEvent(
+            id: nil,
+            timestamp: Date(),
+            pitch: "No pitches yet",
+            location: "-",
+            codes: [],
+            isStrike: false,
+            isBall: nil,
+            mode: isGame ? .game : .practice,
+            calledPitch: nil,
+            batterSide: .right,
+            templateId: selectedTemplate?.id.uuidString,
+            strikeSwinging: false,
+            wildPitch: false,
+            passedBall: false,
+            strikeLooking: false,
+            outcome: nil,
+            descriptor: nil,
+            errorOnPlay: false,
+            battedBallRegion: nil,
+            battedBallType: nil,
+            battedBallTapX: nil,
+            battedBallTapY: nil,
+            gameId: selectedGameId,
+            opponentJersey: cell.jerseyNumber,
+            opponentBatterId: cell.id.uuidString,
+            practiceId: selectedPracticeId,
+            pitcherId: selectedPitcherId,
+            createdByUid: authManager.user?.uid
+        )
     }
 
     private func loadGamePitchEventsAsync(ownerUserId: String, gameId: String) async -> [PitchEvent] {
@@ -5245,6 +5390,12 @@ struct PitchTrackerView: View {
                         claimPrimarySession()
                     }
                     .buttonStyle(.bordered)
+
+                    Button("Sign Out", role: .destructive) {
+                        showSessionConflictAlert = false
+                        authManager.signOut()
+                    }
+                    .buttonStyle(.bordered)
                 }
                 .padding(20)
                 .background(Color(.systemBackground))
@@ -6320,7 +6471,27 @@ struct PitchTrackerView: View {
                     templateName: templateName,
                     pitcherNameById: pitcherNameById,
                     gameIdFilter: selectedGameId,
-                    practiceIdFilter: selectedPracticeId
+                    practiceIdFilter: selectedPracticeId,
+                    lineupBatters: jerseyCells,
+                    selectedLineupBatterId: selectedBatterId,
+                    onSelectLineupBatter: { cell in
+                        syncSelectedBatterFromDetail(cell)
+                    },
+                    onEditLineupBatter: { cell in
+                        editingCell = cell
+                        newJerseyNumber = cell.jerseyNumber
+                        showAddJerseyPopover = true
+                        jerseyDetailPayload = nil
+                    },
+                    onMoveLineupBatterUp: { cell in
+                        moveBatterFromDetail(cell, direction: -1)
+                    },
+                    onMoveLineupBatterDown: { cell in
+                        moveBatterFromDetail(cell, direction: 1)
+                    },
+                    onDeleteLineupBatter: { cell in
+                        deleteBatterFromDetail(cell)
+                    }
                 )
                 .padding()
                 .presentationDetents([.large])
@@ -7387,7 +7558,8 @@ struct JerseyRow: View {
                     y: 0)
             .onTapGesture {
                 guard !isReordering else { return }
-                syncSelection(isSelected ? nil : cell.id)
+                syncSelection(cell.id)
+                onViewDetails(cell)
             }
             .onAppear {
                 if isSelected {

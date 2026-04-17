@@ -358,7 +358,15 @@ struct SettingsView: View {
     }
 
     private var sortedPitchers: [Pitcher] {
-        pitchers.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+        var seenIds: Set<String> = []
+        let deduped = pitchers.filter { pitcher in
+            if let id = pitcher.id {
+                if seenIds.contains(id) { return false }
+                seenIds.insert(id)
+            }
+            return true
+        }
+        return deduped.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
     private func isTemplateEditable(_ template: PitchTemplate) -> Bool {

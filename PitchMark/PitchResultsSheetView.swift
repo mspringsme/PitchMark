@@ -89,8 +89,8 @@ private struct ToggleSection: View {
     @Binding var isWildPitch: Bool
     @Binding var isPassedBall: Bool
     @Binding var isBall: Bool
+    @Binding var isHitBatter: Bool
     @Binding var selectedOutcome: String?
-    @Binding var showOverlay: Bool
 
     private func toggleButton(
         _ title: String,
@@ -127,27 +127,24 @@ private struct ToggleSection: View {
                     isStrikeSwinging = next
                     if next { isStrikeLooking = false }
                 }
+                .frame(width: 98)
 
                 toggleButton("Looking", isOn: isStrikeLooking) {
                     let next = !isStrikeLooking
                     isStrikeLooking = next
                     if next { isStrikeSwinging = false }
                 }
+                .frame(width: 98)
 
-                Image("FieldImage")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 72, height: 72)
-                    .onTapGesture {
-                        withAnimation(.easeOut) { showOverlay = true }
-                    }
-            }
-
-            HStack(spacing: 8) {
                 toggleButton("Ball", isOn: isBall) {
                     isBall.toggle()
                 }
+                .frame(width: 86)
 
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
                 toggleButton("Wild Pitch", isOn: isWildPitch) {
                     let next = !isWildPitch
                     isWildPitch = next
@@ -160,9 +157,15 @@ private struct ToggleSection: View {
                     if next { isWildPitch = false }
                 }
 
-                toggleButton("Hit Batter", isOn: selectedOutcome == "HBP") {
-                    selectedOutcome = (selectedOutcome == "HBP") ? nil : "HBP"
+                toggleButton("Hit Batter", isOn: isHitBatter) {
+                    let next = !isHitBatter
+                    isHitBatter = next
+                    if next {
+                        selectedOutcome = "1B"
+                    }
                 }
+
+                Spacer(minLength: 0)
             }
         }
         .padding(.horizontal)
@@ -245,6 +248,7 @@ struct PitchResultSheetView: View {
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
     @Binding var isError: Bool
+    @State private var isHitBatter = false
 
     @State private var battedBallRegionName: String? = nil
     @State private var battedBallSelection: OverlaySelection? = nil
@@ -302,6 +306,7 @@ struct PitchResultSheetView: View {
         isWildPitch = false
         isPassedBall = false
         isBall = false
+        isHitBatter = false
         selectedOutcome = nil
         selectedDescriptor = nil
         isError = false
@@ -311,9 +316,6 @@ struct PitchResultSheetView: View {
     }
 
     private func isOutcomeDisabled(_ label: String) -> Bool {
-        if selectedOutcome == "HBP" {
-                return label != "HBP"
-            }
         if selectedOutcome == "ꓘ" && label == "Foul" {
             return true
         }
@@ -329,20 +331,11 @@ struct PitchResultSheetView: View {
         // Base outcome group that should be mutually exclusive among themselves
         let baseOutcomeGroup: Set<String> = ["1B", "2B", "3B", "HR"]
 
-        // Special rule: If HR is selected
+        // Special rule: If HR is selected, only Line and Fly remain available.
+        // Keep HR itself enabled so the user can deselect it.
         if selectedOutcome == "HR" {
-            // Among descriptors, only allow Line or Fly; disable others.
-            let allowedDescriptors: Set<String> = ["Line", "Fly"]
-            if descriptorGroup.contains(label) {
-                return !allowedDescriptors.contains(label)
-            }
-            // Disable the following non-descriptor outcomes when HR is selected
-            let disallowedWhenHR: Set<String> = [
-                "BB", "Walk", "Bunt", "E", "Foul", "K", "ꓘ", "HBP", "Safe", "Out"
-            ]
-            if disallowedWhenHR.contains(label) {
-                return true
-            }
+            let allowedWhenHR: Set<String> = ["HR", "Line", "Fly"]
+            return !allowedWhenHR.contains(label)
         }
         
 
@@ -424,7 +417,7 @@ struct PitchResultSheetView: View {
             wildPitch: isWildPitch,
             passedBall: isPassedBall,
             strikeLooking: isStrikeLooking,
-            outcome: selectedOutcome,
+            outcome: isHitBatter ? "HBP" : selectedOutcome,
             descriptor: selectedDescriptor,
             errorOnPlay: isError,
             battedBallRegion: battedBallRegionName,
@@ -453,6 +446,7 @@ struct PitchResultSheetView: View {
         @Binding var isWildPitch: Bool
         @Binding var isPassedBall: Bool
         @Binding var isBall: Bool
+        @Binding var isHitBatter: Bool
         @Binding var selectedOutcome: String?
         @Binding var selectedDescriptor: String?
         @Binding var isError: Bool
@@ -470,15 +464,13 @@ struct PitchResultSheetView: View {
                 .onChange(of: isWildPitch) { _, _ in deselectIfDisabled() }
                 .onChange(of: isPassedBall) { _, _ in deselectIfDisabled() }
                 .onChange(of: isBall) { _, _ in deselectIfDisabled() }
+                .onChange(of: isHitBatter) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedOutcome) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedDescriptor) { _, _ in deselectIfDisabled() }
                 .onChange(of: isError) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedOutcome) { _, newValue in
-                    if newValue == "HBP" {
-                        isWildPitch = true
-                        isStrikeSwinging = false
-                        isStrikeLooking = false
-                        isPassedBall = false
+                    if isHitBatter && newValue != "1B" {
+                        isHitBatter = false
                     }
                     if newValue == "ꓘ" && selectedDescriptor == "Foul" {
                         selectedDescriptor = nil
@@ -490,7 +482,8 @@ struct PitchResultSheetView: View {
 
     var body: some View {
         AnyView(
-            VStack(spacing: 10) {
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(spacing: 10) {
                 HStack(spacing: 12) {
                     if let label = pendingResultLabel {
                         Text("Location: \(label)")
@@ -510,8 +503,8 @@ struct PitchResultSheetView: View {
                     isWildPitch: $isWildPitch,
                     isPassedBall: $isPassedBall,
                     isBall: $isBall,
-                    selectedOutcome: $selectedOutcome,
-                    showOverlay: $showFieldOverlay
+                    isHitBatter: $isHitBatter,
+                    selectedOutcome: $selectedOutcome
                 )
 
                 Divider()
@@ -537,12 +530,6 @@ struct PitchResultSheetView: View {
                     isBall
                 }()
                 
-                if !( (battedBallRegionName != nil) || (selectedOutcome != nil) || (selectedDescriptor != nil) || isError ) {
-                    Text("Select an outcome to enable 'Save Event'.")
-                        .font(.footnote)
-                        .foregroundColor(.secondary)
-                }
-
                 HStack(alignment: .center, spacing: 12) {
                     HoldActionButton(
                         title: "Pitch Only",
@@ -565,37 +552,59 @@ struct PitchResultSheetView: View {
                     )
                 }
 
-            }
-                .padding(12)
-                .fullScreenCover(isPresented: $showFieldOverlay) {
-                    FieldOverlayView(
-                        isPresented: $showFieldOverlay,
-                        colorMapImage: colorMapImage,
-                        colorMapping: colorMapping,
-                        selectedOutcome: $selectedOutcome,
-                        selectedDescriptor: $selectedDescriptor,
-                        isError: $isError,
-                        battedBallRegionName: $battedBallRegionName,
-                        battedBallSelection: $battedBallSelection,
-                        battedBallTapNormalized: $battedBallTapNormalized
-                    )
-                    .ignoresSafeArea()
+                Divider()
+                    .padding(.top, -6)
+
+                HStack(spacing: 8) {
+                    Text("Ball in play location")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        battedBallRegionName = nil
+                        battedBallSelection = nil
+                        battedBallTapNormalized = nil
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .presentationDetents([.large])
-                .modifier(
-                    OutcomeChangeHandlers(
-                        isPresented: $isPresented,
-                        isStrikeSwinging: $isStrikeSwinging,
-                        isStrikeLooking: $isStrikeLooking,
-                        isWildPitch: $isWildPitch,
-                        isPassedBall: $isPassedBall,
-                        isBall: $isBall,
-                        selectedOutcome: $selectedOutcome,
-                        selectedDescriptor: $selectedDescriptor,
-                        isError: $isError,
-                        deselectIfDisabled: { self.deselectIfDisabled() }
-                    )
+
+                FieldOverlayView(
+                    isPresented: .constant(true),
+                    colorMapImage: colorMapImage,
+                    colorMapping: colorMapping,
+                    selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
+                    isError: $isError,
+                    battedBallRegionName: $battedBallRegionName,
+                    battedBallSelection: $battedBallSelection,
+                    battedBallTapNormalized: $battedBallTapNormalized,
+                    showsDismissControls: false
                 )
+                .frame(height: 520)
+                .padding(.horizontal, -12)
+                .padding(.top, -12)
+
+                }
+                .padding(12)
+            }
+            .modifier(
+                OutcomeChangeHandlers(
+                    isPresented: $isPresented,
+                    isStrikeSwinging: $isStrikeSwinging,
+                    isStrikeLooking: $isStrikeLooking,
+                    isWildPitch: $isWildPitch,
+                    isPassedBall: $isPassedBall,
+                    isBall: $isBall,
+                    isHitBatter: $isHitBatter,
+                    selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
+                    isError: $isError,
+                    deselectIfDisabled: { self.deselectIfDisabled() }
+                )
+            )
         )
     }
     private func deselectIfDisabled() {
@@ -618,25 +627,51 @@ private struct OutcomeButtonsSection: View {
     var isOutcomeDisabled: (String) -> Bool
     
     var body: some View {
+        let safeLinkedOutcomes: Set<String> = ["1B", "2B", "3B", "HR"]
+        let isSafeActive = selectedOutcome == "Safe" || safeLinkedOutcomes.contains(selectedOutcome ?? "")
+
         VStack(spacing: 12) {
             HStack(spacing: 8) {
-                OutcomeButton(label: "Safe", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Safe"), usesDescriptorSelection: false)
+                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
+                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Foul", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Foul"), usesDescriptorSelection: false)
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Button {
+                    selectedOutcome = (selectedOutcome == "Safe") ? nil : "Safe"
+                } label: {
+                    Text("Safe")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(isSafeActive ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOutcomeDisabled("Safe"))
                 OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
                 Spacer()
             }
             HStack(spacing: 8) {
+                Text("Safe:")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, alignment: .leading)
                 OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("1B"), usesDescriptorSelection: false)
-                OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Pop"), usesDescriptorSelection: true)
-                OutcomeButton(label: "BB", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("BB"), usesDescriptorSelection: false)
-            }
-            HStack(spacing: 8) {
                 OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("2B"), usesDescriptorSelection: false)
-                OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Line"), usesDescriptorSelection: true)
-                OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Bunt"), usesDescriptorSelection: true)
+                OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("3B"), usesDescriptorSelection: false)
             }
             HStack(spacing: 8) {
-                OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("3B"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)
+                OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Line"), usesDescriptorSelection: true)
+                OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Pop"), usesDescriptorSelection: true)
                 OutcomeButton(label: "Fly", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Fly"), usesDescriptorSelection: true)
+            }
+            HStack(spacing: 8) {
+                OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Bunt"), usesDescriptorSelection: true)
                 Button {
                     isError.toggle()
                 } label: {
@@ -650,16 +685,7 @@ private struct OutcomeButtonsSection: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isOutcomeDisabled("E"))
-            }
-            HStack(spacing: 8) {
                 OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
-                OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)
-                OutcomeButton(label: "Foul", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Foul"), usesDescriptorSelection: false)
-            }
-            HStack(spacing: 8) {
-                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
-                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
-                OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
             }
         }
     }
@@ -676,8 +702,7 @@ private struct FieldOverlayView: View {
     @Binding var battedBallRegionName: String?
     @Binding var battedBallSelection: OverlaySelection?
     @Binding var battedBallTapNormalized: CGPoint?
-
-    @State private var overlayTapPoint: CGPoint? = nil
+    var showsDismissControls: Bool = true
 
     private func handleTap(at location: CGPoint, in imageRect: CGRect) {
         guard imageRect.contains(location) else { return }
@@ -691,7 +716,6 @@ private struct FieldOverlayView: View {
             if let uiColor = img.pixelColor(at: CGPoint(x: floor(px), y: floor(py))) {
                 let key = colorKey(from: uiColor)
                 if let mapped = colorMapping[key] {
-                    overlayTapPoint = location
                     battedBallSelection = mapped.selection
                     battedBallRegionName = mapped.label
                     // normalized 0...1 coordinates relative to imageRect
@@ -701,7 +725,14 @@ private struct FieldOverlayView: View {
                     if let out = mapped.outcome {
                         // Only override selections when the map explicitly dictates an outcome
                         selectedOutcome = out
-                        selectedDescriptor = nil
+                        if out == "HR" {
+                            let allowedHRDescriptors: Set<String> = ["Line", "Fly"]
+                            if !allowedHRDescriptors.contains(selectedDescriptor ?? "") {
+                                selectedDescriptor = nil
+                            }
+                        } else {
+                            selectedDescriptor = nil
+                        }
                         isError = false
                     }
                     return
@@ -712,7 +743,6 @@ private struct FieldOverlayView: View {
             }
         }
 
-        overlayTapPoint = location
         battedBallSelection = .field
         battedBallRegionName = colorMapImage == nil ? "No color map" : "Unmapped"
         let clampedX = max(0, min(1, nx))
@@ -725,20 +755,36 @@ private struct FieldOverlayView: View {
         GeometryReader { proxy in
             let availableWidth = proxy.size.width
             let availableHeight = proxy.size.height
-            let baseCenter = CGPoint(x: availableWidth / 2, y: availableHeight / 2)
+            let baseCenterX = availableWidth / 2
             // Prefer the color map's aspect to ensure tap sampling aligns with the displayed image
             let drivingImage: UIImage? = colorMapImage ?? UIImage(named: "FieldImage")
             let aspect: CGFloat = {
                 if let img = drivingImage { return img.size.width / max(img.size.height, 1) }
                 return 1
             }()
-            // Fit by height with slight scale-down to make the image a bit smaller, still allowing horizontal clipping
-            let scale: CGFloat = 0.92
-            let finalHeight: CGFloat = availableHeight * scale
-            let finalWidth: CGFloat = finalHeight * aspect
+            // Fill available space (aspect-fill style) and zoom in so the field is much larger.
+            let fittedSize: (width: CGFloat, height: CGFloat) = {
+                let zoom: CGFloat = 1.28
+
+                let widthFitW = availableWidth * zoom
+                let widthFitH = widthFitW / max(aspect, 0.001)
+
+                let heightFitH = availableHeight * zoom
+                let heightFitW = heightFitH * aspect
+
+                // Choose the variant that covers the container (aspectFill behavior).
+                if widthFitH >= availableHeight {
+                    return (widthFitW, widthFitH)
+                } else {
+                    return (heightFitW, heightFitH)
+                }
+            }()
+            let finalWidth = fittedSize.width
+            let finalHeight = fittedSize.height
+            let topPadding: CGFloat = -130 + (availableHeight * 0.03)
             let imageRect = CGRect(
-                x: baseCenter.x - finalWidth / 2,
-                y: baseCenter.y - finalHeight / 2,
+                x: baseCenterX - finalWidth / 2,
+                y: topPadding,
                 width: finalWidth,
                 height: finalHeight
             )
@@ -768,12 +814,6 @@ private struct FieldOverlayView: View {
                 .padding()
                 .allowsHitTesting(false)
 
-                Rectangle()
-                    .stroke(Color.purple.opacity(0.25), lineWidth: 1)
-                    .frame(width: imageRect.width, height: imageRect.height)
-                    .position(x: imageRect.midX, y: imageRect.midY)
-                    .allowsHitTesting(false)
-
                 Image("FieldImage")
                     .resizable()
                     .scaledToFit()
@@ -788,57 +828,64 @@ private struct FieldOverlayView: View {
                     .position(x: imageRect.midX, y: imageRect.midY)
                     .contentShape(Rectangle())
                     .gesture(
-                        DragGesture(minimumDistance: 0)
+                        SpatialTapGesture()
                             .onEnded { value in
                                 handleTap(at: value.location, in: imageRect)
                             }
                     )
 
-                if let point = overlayTapPoint {
+                if let normalized = battedBallTapNormalized {
+                    let point = CGPoint(
+                        x: imageRect.minX + (normalized.x * imageRect.width),
+                        y: imageRect.minY + (normalized.y * imageRect.height)
+                    )
                     Circle()
                         .fill(Color.red)
                         .frame(width: 14, height: 14)
                         .overlay(Circle().stroke(Color.white, lineWidth: 2))
                         .position(x: point.x, y: point.y)
 
-                    let labelText: String = battedBallRegionName ?? ""
-                    Text(labelText)
-                        .font(.headline)
-                        .padding(8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .position(x: min(max(point.x, 60), proxy.size.width - 60), y: min(point.y + 28, proxy.size.height - 24))
-                }
-
-                VStack {
-                    Spacer()
-                    Text("Ball in play location")
-                    HStack{
-                        Spacer()
-                        Button {
-                            withAnimation(.easeOut) { isPresented = false }
-                        } label: {
-                            Text("Save")
-                                .font(.headline)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                        .padding(.bottom, 24)
-                        Spacer()
-                        Button {
-                            withAnimation(.easeOut) { isPresented = false }
-                        } label: {
-                            Text("Cancel")
-                                .font(.headline)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                        .padding(.bottom, 24)
-                        Spacer()
+                    if let labelText = battedBallRegionName, !labelText.isEmpty {
+                        Text(labelText)
+                            .font(.headline)
+                            .padding(8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .position(x: min(max(point.x, 60), proxy.size.width - 60), y: min(point.y + 28, proxy.size.height - 24))
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if showsDismissControls {
+                    VStack {
+                        Spacer()
+                        Text("Ball in play location")
+                        HStack{
+                            Spacer()
+                            Button {
+                                withAnimation(.easeOut) { isPresented = false }
+                            } label: {
+                                Text("Save")
+                                    .font(.headline)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                            .padding(.bottom, 24)
+                            Spacer()
+                            Button {
+                                withAnimation(.easeOut) { isPresented = false }
+                            } label: {
+                                Text("Cancel")
+                                    .font(.headline)
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                            .padding(.bottom, 24)
+                            Spacer()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
             .contentShape(Rectangle())
             .clipped()

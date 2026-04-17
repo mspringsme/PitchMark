@@ -671,7 +671,44 @@ struct PitchEventDetailPopover: View {
     let pitcherNameById: [String: String]
     let gameIdFilter: String?
     let practiceIdFilter: String?
+    let lineupBatters: [JerseyCell]
+    let selectedLineupBatterId: UUID?
+    let onSelectLineupBatter: (JerseyCell) -> Void
+    let onEditLineupBatter: (JerseyCell) -> Void
+    let onMoveLineupBatterUp: (JerseyCell) -> Void
+    let onMoveLineupBatterDown: (JerseyCell) -> Void
+    let onDeleteLineupBatter: (JerseyCell) -> Void
     @State private var batterNotes: String = ""
+    @FocusState private var isBatterNotesFocused: Bool
+
+    private var activeLineupCell: JerseyCell? {
+        if let id = selectedLineupBatterId,
+           let matched = lineupBatters.first(where: { $0.id == id }) {
+            return matched
+        }
+        if let eid = event.opponentBatterId,
+           let uuid = UUID(uuidString: eid),
+           let matched = lineupBatters.first(where: { $0.id == uuid }) {
+            return matched
+        }
+        return lineupBatters.first
+    }
+
+    private var activeBatterIdString: String? {
+        if let activeLineupCell { return activeLineupCell.id.uuidString }
+        if let id = event.opponentBatterId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            return id
+        }
+        return nil
+    }
+
+    private var activeJersey: String? {
+        if let activeLineupCell { return activeLineupCell.jerseyNumber }
+        if let jersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
+            return jersey
+        }
+        return nil
+    }
 
     var batterEvents: [PitchEvent] {
         let sameGame = allEvents.filter { evt in
@@ -692,8 +729,8 @@ struct PitchEventDetailPopover: View {
             return false
         }
 
-        let idToMatch = (event.opponentBatterId?.isEmpty == false) ? event.opponentBatterId : nil
-        let jerseyToMatch = (event.opponentJersey?.isEmpty == false) ? event.opponentJersey : nil
+        let idToMatch = activeBatterIdString
+        let jerseyToMatch = activeJersey
 
         let matches = sameGame.filter { other in
             let idMatch = (idToMatch != nil) ? (other.opponentBatterId == idToMatch) : false
@@ -701,18 +738,19 @@ struct PitchEventDetailPopover: View {
             return idMatch || jerseyMatch
         }
 
-        if matches.isEmpty {
+        if idToMatch == nil && jerseyToMatch == nil {
             return sameGame.sorted { $0.timestamp < $1.timestamp }
         }
 
+        if matches.isEmpty { return [] }
         return matches.sorted { $0.timestamp < $1.timestamp }
     }
 
     private var batterNotesKey: String? {
-        if let id = event.opponentBatterId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+        if let id = activeBatterIdString {
             return "batterNotes_id_\(id)"
         }
-        if let jersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
+        if let jersey = activeJersey {
             return "batterNotes_jersey_\(jersey)"
         }
         return nil
@@ -721,8 +759,7 @@ struct PitchEventDetailPopover: View {
     var body: some View {
         let eventsWithCoords = batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil }
         let hasIdentity = (batterEvents.first?.opponentBatterId?.isEmpty == false) || (batterEvents.first?.opponentJersey?.isEmpty == false)
-        let jerseyEvents = batterEvents.filter { $0.opponentJersey == event.opponentJersey }
-        let playerEvents = jerseyEvents.isEmpty ? batterEvents : jerseyEvents
+        let playerEvents = batterEvents
         
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -735,6 +772,7 @@ struct PitchEventDetailPopover: View {
                             .padding(8)
                             .scrollContentBackground(.hidden)
                             .background(Color.clear)
+                            .focused($isBatterNotesFocused)
 
                         if batterNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             Text("Add notes for this batter...")
@@ -755,6 +793,10 @@ struct PitchEventDetailPopover: View {
                             )
                             .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
                     )
+                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .onTapGesture {
+                        isBatterNotesFocused = true
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -784,13 +826,13 @@ struct PitchEventDetailPopover: View {
                             fieldImageName: "FieldImage",
                             events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
                             homePlateNormalized: CGPoint(x: 0.5, y: 0.69),
-                            focalNormalized: CGPoint(x: 0.5, y: 0.5),
-                            overscan: 1.12
+                            focalNormalized: CGPoint(x: 0.5, y: 0.45),
+                            overscan: 1.0
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                     }
-                    .frame(maxWidth: .infinity, minHeight: 415, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, minHeight: 330, maxHeight: 330)
                     .clipped()
                 }
 
@@ -799,7 +841,7 @@ struct PitchEventDetailPopover: View {
                         ForEach(Array(playerEvents.reversed().enumerated()), id: \.offset) { item in
                             let evt = item.element
                             let isSource = (evt.id != nil && evt.id == event.id) || (evt.id == nil && event.id == nil && evt.timestamp == event.timestamp)
-                            VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top, spacing: 10) {
                                 let calledLabel = evt.calledPitch.map { "\($0.type) \($0.location)" }
                                 let resultLabel = "\(evt.isStrike ? "Strike" : "Ball") \(evt.location)"
                                 let pitcherName: String = {
@@ -826,13 +868,14 @@ struct PitchEventDetailPopover: View {
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
                                 }
-                                .padding(.bottom, 4)
+                                .frame(maxWidth: 150, alignment: .leading)
 
                                 OutcomeSummaryView(
                                     lines: outcomeSummaryLines(for: evt),
                                     jerseyNumber: evt.opponentJersey,
                                     minHeight: 0
                                 )
+                                .frame(width: 112)
                             }
                             .padding(12)
                             .background(
@@ -850,9 +893,80 @@ struct PitchEventDetailPopover: View {
                     .padding(.vertical, 8)
                 }
                 .frame(minHeight: 160)
+
+                if !lineupBatters.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            if let activeCell = activeLineupCell {
+                                Button {
+                                    onEditLineupBatter(activeCell)
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    onMoveLineupBatterUp(activeCell)
+                                } label: {
+                                    Label("Up", systemImage: "arrow.up")
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    onMoveLineupBatterDown(activeCell)
+                                } label: {
+                                    Label("Down", systemImage: "arrow.down")
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button(role: .destructive) {
+                                    onDeleteLineupBatter(activeCell)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            Spacer()
+                        }
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(lineupBatters) { cell in
+                                    let isSelected = cell.id == selectedLineupBatterId
+                                    Button {
+                                        onSelectLineupBatter(cell)
+                                    } label: {
+                                        Text(cell.jerseyNumber)
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                                            .frame(width: 42, height: 36)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                    .fill(isSelected ? Color.blue : Color(.systemGray6))
+                                            )
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                    .stroke(isSelected ? Color.blue.opacity(0.95) : Color.black.opacity(0.12), lineWidth: isSelected ? 2 : 1)
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .padding(.bottom, 18)
+                }
             }
             .frame(maxWidth: .infinity)
         }
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                if isBatterNotesFocused {
+                    isBatterNotesFocused = false
+                }
+            }
+        )
         .onAppear {
             guard let key = batterNotesKey else { return }
             batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
@@ -1044,9 +1158,21 @@ struct PitchResultSheet: View {
 
     @State private var isSelecting = false
     @State private var selectedEventIDs: Set<String> = Set<String>()
-    @State private var showTemplatePicker = false
+    @State private var showPitcherPicker = false
+    @State private var showBatterPicker = false
     @State private var localTemplateOverrides: [String: String] = [:]
-    @State private var pendingTemplateSelection: PitchTemplate? = nil
+    @State private var pendingPitcherSelection: Pitcher? = nil
+    @State private var pendingBatterSelection: String? = nil
+    @State private var showEditPitchSheet = false
+    @State private var editTargetEvent: PitchEvent? = nil
+    @State private var editIsStrikeSwinging = false
+    @State private var editIsStrikeLooking = false
+    @State private var editIsWildPitch = false
+    @State private var editIsPassedBall = false
+    @State private var editIsBall = false
+    @State private var editSelectedOutcome: String? = nil
+    @State private var editSelectedDescriptor: String? = nil
+    @State private var editIsError = false
     
     @State private var pitcherFilter: String = ""
     @State private var jerseyFilter: String = ""
@@ -1177,37 +1303,52 @@ struct PitchResultSheet: View {
 
                     HStack {
                         if isSelecting {
-                            Spacer()
-                            
-                            Button("Done") {
-                                withAnimation(.easeInOut) {
-                                    if let template = pendingTemplateSelection {
-                                        reassignSelectedEvents(to: template)
-                                        pendingTemplateSelection = nil
-                                    } else {
-                                        selectedEventIDs.removeAll()
-                                        isSelecting = false
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 14) {
+                                    Button("Done") {
+                                        withAnimation(.easeInOut) {
+                                            if let pitcher = pendingPitcherSelection {
+                                                reassignSelectedEvents(toPitcher: pitcher)
+                                                pendingPitcherSelection = nil
+                                            } else if let batterJersey = pendingBatterSelection {
+                                                reassignSelectedEvents(toBatterJersey: batterJersey)
+                                                pendingBatterSelection = nil
+                                            } else {
+                                                selectedEventIDs.removeAll()
+                                                isSelecting = false
+                                            }
+                                        }
                                     }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(Color(.black))
+
+                                    Button("Change Pitcher") {
+                                        withAnimation(.easeInOut) {
+                                            showPitcherPicker = true
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(Color(.blue))
+                                    .disabled(selectedEventIDs.isEmpty || !isSelecting)
+
+                                    Button("Change Batter") {
+                                        withAnimation(.easeInOut) {
+                                            showBatterPicker = true
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(Color(.blue))
+                                    .disabled(selectedEventIDs.isEmpty || !isSelecting)
+
+                                    Button("Edit Pitch") {
+                                        prepareEditForSelectedEvent()
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(Color(.blue))
+                                    .disabled(selectedEventIDs.count != 1 || !isSelecting)
                                 }
+                                .padding(.horizontal, 4)
                             }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Color(.black))
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                            
-                            Spacer()
-                                .frame(width: 50)
-                            
-                            Button("Change Template") {
-                                withAnimation(.easeInOut) {
-                                    showTemplatePicker = true
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Color(.blue))
-                            .disabled(selectedEventIDs.isEmpty || !isSelecting)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                            
-                            Spacer()
                         } else {
                             Button {
                                 withAnimation(.easeInOut) {
@@ -1348,8 +1489,7 @@ struct PitchResultSheet: View {
                     .padding(.horizontal, 20)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 75)
-                .padding(.vertical, -66)
+                .padding(.vertical, 8)
 
                 ScrollView(.vertical) {
                     VStack(spacing: 12) {
@@ -1373,35 +1513,88 @@ struct PitchResultSheet: View {
             }
         }
         .padding(.horizontal, 10)
-        .sheet(isPresented: $showTemplatePicker) {
+        .sheet(isPresented: $showPitcherPicker) {
             NavigationView {
-                List(templates) { template in
-                    Button(template.name) {
-                        print("Picker: Chosen template id=\(template.id) name=\(template.name)")
-                        pendingTemplateSelection = template
-                        showTemplatePicker = false
+                List(pitchers) { pitcher in
+                    Button(pitcher.name) {
+                        pendingPitcherSelection = pitcher
+                        showPitcherPicker = false
                     }
                 }
-                .navigationTitle("Select Template")
+                .navigationTitle("Select Pitcher")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") {
-                            print("Picker: Cancel tapped")
-                            showTemplatePicker = false
+                            showPitcherPicker = false
                         }
                     }
                 }
             }
             .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showBatterPicker) {
+            NavigationView {
+                List(availableJerseyNumbers, id: \.self) { jersey in
+                    Button("#\(jersey)") {
+                        pendingBatterSelection = jersey
+                        showBatterPicker = false
+                    }
+                }
+                .navigationTitle("Select Batter")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            showBatterPicker = false
+                        }
+                    }
+                }
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showEditPitchSheet) {
+            if let target = editTargetEvent {
+                PitchResultSheetView(
+                    isPresented: $showEditPitchSheet,
+                    isStrikeSwinging: $editIsStrikeSwinging,
+                    isStrikeLooking: $editIsStrikeLooking,
+                    isWildPitch: $editIsWildPitch,
+                    isPassedBall: $editIsPassedBall,
+                    isBall: $editIsBall,
+                    selectedOutcome: $editSelectedOutcome,
+                    selectedDescriptor: $editSelectedDescriptor,
+                    isError: $editIsError,
+                    pendingResultLabel: target.location,
+                    pitchCall: target.calledPitch ?? PitchCall(
+                        pitch: target.pitch,
+                        location: target.location,
+                        isStrike: target.isStrike,
+                        codes: target.codes
+                    ),
+                    batterSide: target.batterSide,
+                    selectedTemplateId: target.templateId,
+                    currentMode: target.mode,
+                    selectedGameId: target.gameId,
+                    selectedOpponentJersey: target.opponentJersey,
+                    selectedOpponentBatterId: target.opponentBatterId,
+                    selectedPracticeId: target.practiceId,
+                    selectedPitcherId: target.pitcherId,
+                    saveAction: { edited in
+                        saveEditedEvent(edited, original: target)
+                    },
+                    template: nil,
+                    pitcherName: selectedPlayerName
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
+        }
     }
     
-    private func reassignSelectedEvents(to template: PitchTemplate) {
-        print("Batch: Starting reassignSelectedEvents. templateId=\(template.id.uuidString) name=\(template.name)")
-        print("Batch: Current selectedEventIDs=\(Array(selectedEventIDs))")
+    private func reassignSelectedEvents(toPitcher pitcher: Pitcher) {
+        guard let pitcherId = pitcher.id else { return }
         guard let uid = Auth.auth().currentUser?.uid else {
-            print("Batch: No authenticated user; aborting reassignment.")
             return
         }
         
@@ -1412,35 +1605,116 @@ struct PitchResultSheet: View {
             guard let eid = event.id else { return false }
             return selectedEventIDs.contains(eid)
         }
-        print("Batch: selectedEvents count=\(selectedEvents.count)")
-
         for event in selectedEvents {
-            guard let eid = event.id else {
-                print("Batch: Skipping event with nil id")
-                continue
-            }
-            print("Batch: Updating eventId=\(eid) -> templateId=\(template.id.uuidString)")
+            guard let eid = event.id else { continue }
             let ref = db.collection("users").document(uid).collection("pitchEvents").document(eid)
-            batch.updateData(["templateId": template.id.uuidString], forDocument: ref)
+            batch.updateData(["pitcherId": pitcherId], forDocument: ref)
         }
 
         batch.commit { error in
-            if let error = error {
-                print("Batch: Commit failed with error: \(error)")
-            } else {
-                print("Batch: Commit succeeded. Updating localTemplateOverrides and clearing selection.")
-                // Update local UI state for immediate feedback
-                for event in selectedEvents {
-                    if let eid = event.id {
-                        localTemplateOverrides[eid] = template.id.uuidString
-                        print("Batch: localTemplateOverrides[\(eid)] = \(template.id.uuidString)")
-                    }
-                }
-                // Clear selection and exit selection mode
+            if error == nil {
                 selectedEventIDs.removeAll()
                 isSelecting = false
-                print("Batch: isSelecting set to false, selection cleared.")
             }
+        }
+    }
+
+    private func reassignSelectedEvents(toBatterJersey jersey: String) {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        let trimmed = jersey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let db = Firestore.firestore()
+        let batch = db.batch()
+
+        let selectedEvents = allEvents.filter { event in
+            guard let eid = event.id else { return false }
+            return selectedEventIDs.contains(eid)
+        }
+
+        for event in selectedEvents {
+            guard let eid = event.id else { continue }
+            let ref = db.collection("users").document(uid).collection("pitchEvents").document(eid)
+            batch.updateData([
+                "opponentJersey": trimmed,
+                "opponentBatterId": FieldValue.delete()
+            ], forDocument: ref)
+        }
+
+        batch.commit { error in
+            if error == nil {
+                selectedEventIDs.removeAll()
+                isSelecting = false
+            }
+        }
+    }
+
+    private func prepareEditForSelectedEvent() {
+        guard selectedEventIDs.count == 1,
+              let selectedId = selectedEventIDs.first,
+              let event = allEvents.first(where: { $0.id == selectedId }) else {
+            return
+        }
+        editTargetEvent = event
+        editIsStrikeSwinging = event.strikeSwinging
+        editIsStrikeLooking = event.strikeLooking
+        editIsWildPitch = event.wildPitch
+        editIsPassedBall = event.passedBall
+        editIsBall = event.isBall ?? false
+        editSelectedOutcome = event.outcome
+        editSelectedDescriptor = event.descriptor
+        editIsError = event.errorOnPlay
+        showEditPitchSheet = true
+    }
+
+    private func saveEditedEvent(_ edited: PitchEvent, original: PitchEvent) {
+        guard let uid = Auth.auth().currentUser?.uid,
+              let originalId = original.id else { return }
+
+        var updated = PitchEvent(
+            id: originalId,
+            timestamp: original.timestamp,
+            pitch: edited.pitch,
+            location: edited.location,
+            codes: edited.codes,
+            isStrike: edited.isStrike,
+            isBall: edited.isBall,
+            mode: edited.mode,
+            calledPitch: edited.calledPitch,
+            batterSide: edited.batterSide,
+            templateId: edited.templateId,
+            strikeSwinging: edited.strikeSwinging,
+            wildPitch: edited.wildPitch,
+            passedBall: edited.passedBall,
+            strikeLooking: edited.strikeLooking,
+            outcome: edited.outcome,
+            descriptor: edited.descriptor,
+            errorOnPlay: edited.errorOnPlay,
+            battedBallRegion: edited.battedBallRegion,
+            battedBallType: edited.battedBallType,
+            battedBallTapX: edited.battedBallTapX,
+            battedBallTapY: edited.battedBallTapY,
+            gameId: edited.gameId,
+            opponentJersey: edited.opponentJersey,
+            opponentBatterId: edited.opponentBatterId,
+            practiceId: edited.practiceId,
+            pitcherId: edited.pitcherId,
+            createdByUid: edited.createdByUid
+        )
+        updated.id = originalId
+
+        let ref = Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .collection("pitchEvents")
+            .document(originalId)
+
+        do {
+            try ref.setData(from: updated, merge: false)
+            selectedEventIDs.removeAll()
+            isSelecting = false
+        } catch {
+            print("❌ saveEditedEvent encode failed: \(error)")
         }
     }
     
