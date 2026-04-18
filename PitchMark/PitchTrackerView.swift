@@ -3046,8 +3046,22 @@ struct PitchTrackerView: View {
     }
 
     private struct JerseyDetailPayload: Identifiable {
-        let id = UUID()
+        let id: String
         let event: PitchEvent
+
+        init(event: PitchEvent) {
+            let batterId = event.opponentBatterId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let jersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let batterId, !batterId.isEmpty {
+                self.id = "batter:\(batterId)"
+            } else if let jersey, !jersey.isEmpty {
+                self.id = "jersey:\(jersey)"
+            } else {
+                // Fallback keeps a stable item id when upstream data is sparse.
+                self.id = "detail"
+            }
+            self.event = event
+        }
     }
 
     private func syncSelectedBatterFromDetail(_ cell: JerseyCell?) {
@@ -5793,6 +5807,7 @@ struct PitchTrackerView: View {
             selectedOpponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             selectedOpponentBatterId: selectedBatterId?.uuidString,
             selectedPracticeId: selectedPracticeId,
+            lineupBatters: jerseyCells,
             selectedPitcherId: effectivePitcherIdForSave,
             saveAction: { event in
                 persistPitchEvent(event)
@@ -7533,7 +7548,6 @@ struct JerseyRow: View {
 
     @State private var showActionsSheet: Bool = false
     @State private var showDeleteConfirm: Bool = false
-    @State private var showLongPressDialog: Bool = false
     @State private var selectedPulse: Bool = false
 
     @EnvironmentObject var authManager: AuthManager
@@ -7559,7 +7573,6 @@ struct JerseyRow: View {
             .onTapGesture {
                 guard !isReordering else { return }
                 syncSelection(cell.id)
-                onViewDetails(cell)
             }
             .onAppear {
                 if isSelected {
@@ -7580,24 +7593,11 @@ struct JerseyRow: View {
                 }
             }
             .onLongPressGesture {
-                selectedBatterId = cell.id
-                showLongPressDialog = true
+                guard !isReordering else { return }
+                syncSelection(cell.id)
+                onViewDetails(cell)
             }
             .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))
-            .confirmationDialog(
-                "Batter #\(cell.jerseyNumber)",
-                isPresented: $showLongPressDialog,
-                titleVisibility: .visible
-            ) {
-                Button("Edit") {
-                    showActionsSheet = true
-                }
-                Button("View Pitch Detail") {
-                    showActionsSheet = false
-                    onViewDetails(cell)
-                }
-                Button("Cancel", role: .cancel) { }
-            }
             .sheet(isPresented: $showActionsSheet) {
                 VStack(alignment: .leading, spacing: 12) {
                     

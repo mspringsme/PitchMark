@@ -54,15 +54,47 @@ func outcomeSummaryLines(for event: PitchEvent) -> [String] {
     }
 
     // Primary flags
-    if event.strikeSwinging { addUnique("Strike — Swinging") }
-    if event.strikeLooking { addUnique("Strike — Looking") }
+    if event.strikeSwinging {
+        let marker = event.strikeSwingingMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let marker, !marker.isEmpty {
+            addUnique("\(marker) Strike — Swinging", sanitizeText: false)
+        } else {
+            addUnique("Strike — Swinging")
+        }
+    }
+    if event.strikeLooking {
+        let marker = event.strikeLookingMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let marker, !marker.isEmpty {
+            addUnique("\(marker) Strike — Looking", sanitizeText: false)
+        } else {
+            addUnique("Strike — Looking")
+        }
+    }
     if event.wildPitch { addUnique("Wild Pitch") }
     if event.passedBall { addUnique("Passed Ball") }
     if event.errorOnPlay { addUnique("Error on play") }
-    if event.isBall == true { addUnique("Ball") }
+    if event.isBall == true {
+        let marker = event.ballMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let marker, !marker.isEmpty {
+            addUnique("\(marker) Ball", sanitizeText: false)
+        } else {
+            addUnique("Ball")
+        }
+    }
 
     // Outcome/descriptor first (sanitize these to remove labels like "field --")
-    addUnique(event.outcome, sanitizeText: true)
+    let rawOutcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let isFoulOutcome = rawOutcome?.caseInsensitiveCompare("Foul") == .orderedSame
+    if isFoulOutcome {
+        let marker = event.foulMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let marker, !marker.isEmpty {
+            addUnique("\(marker) Foul", sanitizeText: false)
+        } else {
+            addUnique(event.outcome, sanitizeText: true)
+        }
+    } else {
+        addUnique(event.outcome, sanitizeText: true)
+    }
     addUnique(event.descriptor, sanitizeText: true)
 
     // Batted ball details — show only the region label in cards (ignore type)
@@ -146,18 +178,35 @@ struct OutcomeSummaryView: View {
                 .padding(.bottom, 6)
             }
             ForEach(lines, id: \.self) { line in
+                let tokens = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                let firstToken = tokens.first.map(String.init) ?? ""
+                let hasSymbolPrefix = firstToken.hasSuffix(".circle") || firstToken == "f.circle"
+                let displayText: String = {
+                    guard hasSymbolPrefix else { return line }
+                    if tokens.count > 1 { return String(tokens[1]) }
+                    return line
+                }()
+
                 let showRunner: Bool = ["1B", "2B", "3B", "HR"].contains { prefix in
-                    line.uppercased().hasPrefix(prefix)
+                    displayText.uppercased().hasPrefix(prefix)
                 }
+
                 HStack(spacing: 4) {
+                    if hasSymbolPrefix {
+                        Image(systemName: firstToken)
+                            .font(.caption2)
+                            .foregroundColor(.black)
+                    }
                     if showRunner {
                         Image(systemName: "figure.run")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.black)
                     }
-                    Text(line)
+                    Text(displayText)
                         .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
+                        .foregroundColor(.black)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -244,7 +293,7 @@ struct PitchCardView: View {
                     }())
                         .font(.caption)
                         .fontWeight(.bold)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(.black)
                         .padding(.top, 8)
                         .padding(.leading, 8)
                     Spacer()
@@ -252,7 +301,7 @@ struct PitchCardView: View {
                         Text("Pitch #\(pitchNumber)")
                             .font(.caption)
                             .fontWeight(.bold)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(.black)
                             .padding(.trailing, 8)
                             .padding(.top, 8)
                     }
@@ -1579,6 +1628,7 @@ struct PitchResultSheet: View {
                     selectedOpponentJersey: target.opponentJersey,
                     selectedOpponentBatterId: target.opponentBatterId,
                     selectedPracticeId: target.practiceId,
+                    lineupBatters: [],
                     selectedPitcherId: target.pitcherId,
                     saveAction: { edited in
                         saveEditedEvent(edited, original: target)
@@ -1820,6 +1870,11 @@ struct PitchEvent: Codable, Identifiable {
     var pitcherId: String?
     
     var createdByUid: String?
+
+    var strikeSwingingMarker: String? = nil
+    var strikeLookingMarker: String? = nil
+    var ballMarker: String? = nil
+    var foulMarker: String? = nil
 }
 
 extension PitchEvent: Hashable {

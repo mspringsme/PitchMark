@@ -14,8 +14,8 @@
             filePath = "PitchMark/PitchResultsSheetView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "420"
-            endingLineNumber = "420"
+            startingLineNumber = "613"
+            endingLineNumber = "613"
             landmarkName = "buildCurrentEvent()"
             landmarkType = "7">
          </BreakpointContent>
