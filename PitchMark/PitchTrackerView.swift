@@ -184,6 +184,11 @@ struct PitchTrackerView: View {
     @State private var pitchEvents: [PitchEvent] = []
     @State private var games: [Game] = []
     @State private var showPitchResults = false
+    @State private var showCardsFullScreenSheet = false
+    @State private var sharedDeletedEventIDs: Set<String> = []
+    @State private var sharedEditedEventOverrides: [String: PitchEvent] = [:]
+    @State private var sharedPitcherOverrides: [String: String] = [:]
+    @State private var sharedBatterJerseyOverrides: [String: String] = [:]
     @State private var showConfirmSheet = false
     @State private var calledPitchComposerDetent: PresentationDetent = .fraction(0.28)
     @State private var isStrikeSwinging = false
@@ -3311,9 +3316,19 @@ struct PitchTrackerView: View {
             .transition(.opacity)
 
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .top)
         .ignoresSafeArea(edges: [.horizontal])   // ✅ CHANGED (removed .bottom)
         .background(.regularMaterial)
+        .sheet(isPresented: $showCardsFullScreenSheet) {
+            pitchResultSheetBody(
+                controlButtonsOffsetY: 0,
+                controlButtonsVerticalPadding: 10,
+                onGearTapOverride: nil
+            )
+                .ignoresSafeArea()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private var overlayTabsHeader: some View {
@@ -3332,6 +3347,16 @@ struct PitchTrackerView: View {
                 isSelected: overlayTab == .cards
             ) {
                 overlayTab = .cards
+            }
+
+            if overlayTab == .cards && ((selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))) {
+                Button {
+                    showCardsFullScreenSheet = true
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .imageScale(.medium)
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal)
@@ -3376,21 +3401,59 @@ struct PitchTrackerView: View {
     private var cardsOverlayContent: some View {
         let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
         if showCards {
-            PitchResultSheet(
-                allEvents: filteredEvents,
-                games: games,
-                templates: templates,
-                pitchers: pitchers,
-                isParticipant: (isGame && !isOwnerForActiveGame),
-                selectedPlayerName: selectedPitcherName
+            pitchResultSheetBody(
+                controlButtonsOffsetY: -30,
+                controlButtonsVerticalPadding: 2,
+                onGearTapOverride: { showCardsFullScreenSheet = true }
             )
-            .environmentObject(authManager)
-            .environmentObject(sessionManager)
+            .padding(.top, -6)
             .frame(maxWidth: .infinity, minHeight: 170)
         } else {
             EmptyView()
                 .frame(maxWidth: .infinity, minHeight: 170)
         }
+    }
+
+    private func pitchResultSheetBody(
+        controlButtonsOffsetY: CGFloat,
+        controlButtonsVerticalPadding: CGFloat,
+        onGearTapOverride: (() -> Void)? = nil
+    ) -> some View {
+        PitchResultSheet(
+            allEvents: filteredEvents,
+            games: games,
+            templates: templates,
+            pitchers: pitchers,
+            isParticipant: (isGame && !isOwnerForActiveGame),
+            selectedPlayerName: selectedPitcherName,
+            gameOwnerUserId: effectiveGameOwnerUserId,
+            liveGameId: activeLiveId,
+            sharedDeletedEventIDs: sharedDeletedEventIDs,
+            onDeleteEventIDs: { ids in
+                sharedDeletedEventIDs.formUnion(ids)
+            },
+            sharedEditedEventOverrides: sharedEditedEventOverrides,
+            onApplyEditedEventOverride: { eventId, event in
+                sharedEditedEventOverrides[eventId] = event
+            },
+            sharedPitcherOverrides: sharedPitcherOverrides,
+            onApplyPitcherOverride: { eventIds, pitcherId in
+                for id in eventIds {
+                    sharedPitcherOverrides[id] = pitcherId
+                }
+            },
+            sharedBatterJerseyOverrides: sharedBatterJerseyOverrides,
+            onApplyBatterJerseyOverride: { eventIds, jersey in
+                for id in eventIds {
+                    sharedBatterJerseyOverrides[id] = jersey
+                }
+            },
+            onGearTapOverride: onGearTapOverride,
+            controlButtonsOffsetY: controlButtonsOffsetY,
+            controlButtonsVerticalPadding: controlButtonsVerticalPadding
+        )
+        .environmentObject(authManager)
+        .environmentObject(sessionManager)
     }
     private var calledPitchLayer: some View {
         Group {
@@ -8956,6 +9019,7 @@ private struct SessionConfirmationSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             Text(headerText)
                 .font(.headline)
+                .padding(.top, 13)
 
             Text(sessionLabel)
                 .font(.subheadline)
@@ -8991,15 +9055,6 @@ private struct SessionConfirmationSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Selected Pitcher: \(resolvedPitcherName)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text("Selected Grid Key: \(resolvedTemplateName)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
             HStack(spacing: 12) {
                 Button("Cancel", role: .cancel) {
                     onCancel()
@@ -9012,7 +9067,7 @@ private struct SessionConfirmationSheet: View {
             }
         }
         .padding()
-        .presentationDetents([.fraction(0.35)])
+        .presentationDetents([.fraction(0.45)])
         .presentationDragIndicator(.visible)
         .onAppear {
             normalizePitcherSelection()

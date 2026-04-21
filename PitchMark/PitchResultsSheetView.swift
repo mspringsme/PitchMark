@@ -97,14 +97,18 @@ private struct ToggleSection: View {
     @Binding var isPassedBall: Bool
     @Binding var isBall: Bool
     @Binding var isHitBatter: Bool
+    @Binding var isError: Bool
     @Binding var selectedOutcome: String?
+    @Binding var selectedDescriptor: String?
     let isSwingingDisabled: Bool
     let isLookingDisabled: Bool
     let isBallDisabled: Bool
     let isWildPitchDisabled: Bool
     let isPassedBallDisabled: Bool
     let isHitBatterDisabled: Bool
+    let isOutcomeDisabled: (String) -> Bool
     let onRequestSymbolPicker: (ResultSymbolPickerTarget) -> Void
+    let onFoulActivated: () -> Void
 
     private func toggleButton(
         _ title: String,
@@ -156,6 +160,28 @@ private struct ToggleSection: View {
                     }
                 }
 
+                Button {
+                    let next = (selectedOutcome == "Foul") ? nil : "Foul"
+                    selectedOutcome = next
+                    if next == "Foul" {
+                        onFoulActivated()
+                    }
+                } label: {
+                    Text("Foul")
+                        .font(.system(size: 14, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(selectedOutcome == "Foul" ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOutcomeDisabled("Foul"))
+                .opacity(isOutcomeDisabled("Foul") ? 0.4 : 1)
+
+            }
+
+            HStack(spacing: 8) {
                 toggleButton("Ball", isOn: isBall, disabled: isBallDisabled) {
                     let next = !isBall
                     isBall = next
@@ -163,37 +189,91 @@ private struct ToggleSection: View {
                         onRequestSymbolPicker(.ball)
                     }
                 }
-
+                OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
+                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
                 Spacer(minLength: 0)
             }
 
-            HStack(spacing: 8) {
-                toggleButton("Wild Pitch", isOn: isWildPitch, disabled: isWildPitchDisabled) {
-                    let next = !isWildPitch
-                    isWildPitch = next
-                    if next { isPassedBall = false }
-                }
-
-                toggleButton("Passed Ball", isOn: isPassedBall, disabled: isPassedBallDisabled) {
-                    let next = !isPassedBall
-                    isPassedBall = next
-                    if next { isWildPitch = false }
-                }
-
-                toggleButton("Hit Batter", isOn: isHitBatter, disabled: isHitBatterDisabled) {
-                    let next = !isHitBatter
-                    isHitBatter = next
-                    if next {
-                        selectedOutcome = "1B"
-                    } else if selectedOutcome == "1B" {
-                        selectedOutcome = nil
-                    }
-                }
-
-                Spacer(minLength: 0)
-            }
         }
         .padding(.horizontal)
+    }
+}
+
+private struct EventButtonsRow: View {
+    @Binding var isWildPitch: Bool
+    @Binding var isPassedBall: Bool
+    @Binding var isHitBatter: Bool
+    @Binding var isError: Bool
+    @Binding var selectedOutcome: String?
+    let isWildPitchDisabled: Bool
+    let isPassedBallDisabled: Bool
+    let isHitBatterDisabled: Bool
+    let isErrorDisabled: Bool
+
+    private func toggleButton(
+        _ title: String,
+        isOn: Bool,
+        disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(isOn ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                .cornerRadius(6)
+                .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.45 : 1)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                isError.toggle()
+            } label: {
+                Text("E")
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(isError ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                    .cornerRadius(6)
+                    .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+            }
+            .buttonStyle(.plain)
+            .disabled(isErrorDisabled)
+            .opacity(isErrorDisabled ? 0.4 : 1)
+
+            toggleButton("Wild Pitch", isOn: isWildPitch, disabled: isWildPitchDisabled) {
+                let next = !isWildPitch
+                isWildPitch = next
+                if next { isPassedBall = false }
+            }
+
+            toggleButton("Passed Ball", isOn: isPassedBall, disabled: isPassedBallDisabled) {
+                let next = !isPassedBall
+                isPassedBall = next
+                if next { isWildPitch = false }
+            }
+
+            toggleButton("Hit Batter", isOn: isHitBatter, disabled: isHitBatterDisabled) {
+                let next = !isHitBatter
+                isHitBatter = next
+                if next {
+                    selectedOutcome = "1B"
+                } else if selectedOutcome == "1B" {
+                    selectedOutcome = nil
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
     }
 }
 
@@ -541,6 +621,14 @@ struct PitchResultSheetView: View {
         symbolPickerTarget = nil
     }
 
+    private func symbolMenuTitle(_ symbol: String) -> String {
+        if symbol == "f.circle" { return "F" }
+        if let head = symbol.split(separator: ".").first, !head.isEmpty {
+            return String(head)
+        }
+        return symbol
+    }
+
     private var effectiveOpponentJersey: String? {
         overrideOpponentJersey ?? selectedOpponentJersey
     }
@@ -690,7 +778,19 @@ struct PitchResultSheetView: View {
                             .minimumScaleFactor(0.8)
                     }
                     Spacer(minLength: 0)
-                }
+                    if let calledPitch = pitchCall?.pitch, !calledPitch.isEmpty {
+                        let calledLocation = pitchCall?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let calledText = calledLocation.isEmpty
+                            ? "Called: \(calledPitch)"
+                            : "Called: \(calledPitch) • \(calledLocation)"
+                        Text(calledText)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                } 
+                .padding(.top, 8)
 
                 Divider()
 
@@ -701,15 +801,21 @@ struct PitchResultSheetView: View {
                     isPassedBall: $isPassedBall,
                     isBall: $isBall,
                     isHitBatter: $isHitBatter,
+                    isError: $isError,
                     selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
                     isSwingingDisabled: isTopToggleDisabled(.swinging),
                     isLookingDisabled: isTopToggleDisabled(.looking),
                     isBallDisabled: isTopToggleDisabled(.ball),
                     isWildPitchDisabled: isTopToggleDisabled(.wildPitch),
                     isPassedBallDisabled: isTopToggleDisabled(.passedBall),
                     isHitBatterDisabled: isTopToggleDisabled(.hitBatter),
+                    isOutcomeDisabled: isOutcomeDisabled,
                     onRequestSymbolPicker: { target in
                         symbolPickerTarget = target
+                    },
+                    onFoulActivated: {
+                        symbolPickerTarget = .foul
                     }
                 )
 
@@ -718,11 +824,20 @@ struct PitchResultSheetView: View {
                 OutcomeButtonsSection(
                     selectedOutcome: $selectedOutcome,
                     selectedDescriptor: $selectedDescriptor,
+                    isOutcomeDisabled: isOutcomeDisabled
+                )
+                .padding(.horizontal)
+
+                EventButtonsRow(
+                    isWildPitch: $isWildPitch,
+                    isPassedBall: $isPassedBall,
+                    isHitBatter: $isHitBatter,
                     isError: $isError,
-                    isOutcomeDisabled: isOutcomeDisabled,
-                    onFoulActivated: {
-                        symbolPickerTarget = .foul
-                    }
+                    selectedOutcome: $selectedOutcome,
+                    isWildPitchDisabled: isTopToggleDisabled(.wildPitch),
+                    isPassedBallDisabled: isTopToggleDisabled(.passedBall),
+                    isHitBatterDisabled: isTopToggleDisabled(.hitBatter),
+                    isErrorDisabled: isOutcomeDisabled("E")
                 )
                 .padding(.horizontal)
 
@@ -824,7 +939,7 @@ struct PitchResultSheetView: View {
                     Button {
                         applySelectedSymbol(symbol)
                     } label: {
-                        Label(symbol, systemImage: symbol)
+                        Text(symbolMenuTitle(symbol))
                     }
                 }
                 Button("Cancel", role: .cancel) {
@@ -922,35 +1037,10 @@ struct PitchResultSheetView: View {
 private struct OutcomeButtonsSection: View {
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
-    @Binding var isError: Bool
     var isOutcomeDisabled: (String) -> Bool
-    let onFoulActivated: () -> Void
     
     var body: some View {
         VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
-                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
-                Button {
-                    let next = (selectedOutcome == "Foul") ? nil : "Foul"
-                    selectedOutcome = next
-                    if next == "Foul" {
-                        onFoulActivated()
-                    }
-                } label: {
-                    Text("Foul")
-                        .font(.system(size: 14, weight: .semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(selectedOutcome == "Foul" ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
-                        .cornerRadius(6)
-                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-                }
-                .buttonStyle(.plain)
-                .disabled(isOutcomeDisabled("Foul"))
-                .opacity(isOutcomeDisabled("Foul") ? 0.4 : 1)
-                Spacer()
-            }
             HStack(spacing: 8) {
                 Text("Safe:")
                     .font(.subheadline.weight(.semibold))
@@ -959,30 +1049,14 @@ private struct OutcomeButtonsSection: View {
                 OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("1B"), usesDescriptorSelection: false)
                 OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("2B"), usesDescriptorSelection: false)
                 OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("3B"), usesDescriptorSelection: false)
+                OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
             }
             HStack(spacing: 8) {
                 OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)
                 OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Line"), usesDescriptorSelection: true)
                 OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Pop"), usesDescriptorSelection: true)
                 OutcomeButton(label: "Fly", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Fly"), usesDescriptorSelection: true)
-            }
-            HStack(spacing: 8) {
-                OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
                 OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Bunt"), usesDescriptorSelection: true)
-                Button {
-                    isError.toggle()
-                } label: {
-                    Text("E")
-                        .font(.system(size: 14, weight: .semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(isError ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
-                        .cornerRadius(6)
-                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-                }
-                .buttonStyle(.plain)
-                .disabled(isOutcomeDisabled("E"))
-                OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
             }
         }
     }

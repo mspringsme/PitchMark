@@ -515,7 +515,7 @@ private struct PrintableLocationSheetView: View {
     let locations: [PrintableLocation]
 
     private let pagePadding: CGFloat = 24
-    private let blockSpacing: CGFloat = 8
+    private let blockSpacing: CGFloat = 14
     private let imageTableGap: CGFloat = 4
     private let columnCount = 6
     private let columnSpacing: CGFloat = 12
@@ -602,8 +602,15 @@ private struct PrintableLocationSheetView: View {
                 HStack(spacing: 12) {
                     Text(template.name)
                         .font(.system(size: 16, weight: .semibold))
+
+                    Spacer(minLength: 0)
+
                     Text(title)
                         .font(.system(size: 14, weight: .medium))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 12) {
                     Image("Pitch Location code Key")
                         .resizable()
                         .scaledToFit()
@@ -629,7 +636,7 @@ private struct PrintableLocationSheetView: View {
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.bottom, 6)
 
                 HStack(alignment: .top, spacing: columnSpacing) {
@@ -681,13 +688,6 @@ private struct PrintableLocationSheetView: View {
                 .frame(width: imageSize, height: imageSize)
 
             VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    printableCell(text: "Pitch", width: pitchColumnWidth, height: rowHeight, bold: true)
-                    ForEach(0..<columnCount, id: \.self) { index in
-                        printableCell(text: "\(index + 1)", width: codeColumnWidth, height: rowHeight, bold: true)
-                    }
-                }
-
                 ForEach(pitchNames, id: \.self) { pitch in
                     let codes = codes(for: pitch, location: location)
                     HStack(spacing: 0) {
