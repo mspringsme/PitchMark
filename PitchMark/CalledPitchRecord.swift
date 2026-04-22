@@ -137,11 +137,13 @@ struct OutcomeSummaryBackground: View {
 struct OutcomeSummaryView: View {
     let lines: [String]
     let jerseyNumber: String?
+    let countText: String?
     let minHeight: CGFloat?
 
-    init(lines: [String], jerseyNumber: String?, minHeight: CGFloat? = 118) {
+    init(lines: [String], jerseyNumber: String?, countText: String? = nil, minHeight: CGFloat? = 118) {
         self.lines = lines
         self.jerseyNumber = jerseyNumber
+        self.countText = countText
         self.minHeight = minHeight
     }
 
@@ -174,6 +176,13 @@ struct OutcomeSummaryView: View {
                                 }
                             }
                         )
+                    if let countText, !countText.isEmpty {
+                        Text(countText)
+                            .font(.system(size: 12, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundColor(.black.opacity(0.75))
+                            .lineLimit(1)
+                    }
                 }
                 .padding(.bottom, 6)
             }
@@ -235,6 +244,7 @@ struct PitchCardView: View {
     let pitchNumber: Int?
     let outcomeSummary: [String]?
     let jerseyNumber: String?
+    let atBatCountText: String?
     let hideHeader: Bool
 
     let onLongPress: () -> Void
@@ -253,6 +263,7 @@ struct PitchCardView: View {
         pitchNumber: Int?,
         outcomeSummary: [String]?,
         jerseyNumber: String?,
+        atBatCountText: String? = nil,
         gameTitle: String? = nil,
         practiceTitle: String? = nil,
         hideHeader: Bool = false,
@@ -271,6 +282,7 @@ struct PitchCardView: View {
         self.pitchNumber = pitchNumber
         self.outcomeSummary = outcomeSummary
         self.jerseyNumber = jerseyNumber
+        self.atBatCountText = atBatCountText
         self.gameTitle = gameTitle
         self.practiceTitle = practiceTitle
         self.hideHeader = hideHeader
@@ -351,7 +363,7 @@ struct PitchCardView: View {
             
             let hasJerseyNumber = (jerseyNumber?.isEmpty == false)
             if (outcomeSummary != nil && !(outcomeSummary?.isEmpty ?? true)) || hasJerseyNumber {
-                OutcomeSummaryView(lines: outcomeSummary ?? [], jerseyNumber: jerseyNumber)
+                OutcomeSummaryView(lines: outcomeSummary ?? [], jerseyNumber: jerseyNumber, countText: atBatCountText)
                     .padding(.bottom, 10)
             }
             
@@ -629,6 +641,7 @@ struct PitchResultCard: View {
                 pitchNumber: pitchNumber(for: event, in: allEvents),
                 outcomeSummary: outcomeSummary,
                 jerseyNumber: jerseyNumber,
+                atBatCountText: event.atBatCount,
                 gameTitle: derivedGameTitle(from: event),
                 practiceTitle: practiceTitle(for: event),
                 hideHeader: isParticipant,
@@ -923,6 +936,7 @@ struct PitchEventDetailPopover: View {
                                 OutcomeSummaryView(
                                     lines: outcomeSummaryLines(for: evt),
                                     jerseyNumber: evt.opponentJersey,
+                                    countText: evt.atBatCount,
                                     minHeight: 0
                                 )
                                 .frame(width: 112)
@@ -1763,6 +1777,9 @@ struct PitchResultSheet: View {
                     selectedOpponentJersey: target.opponentJersey,
                     selectedOpponentBatterId: target.opponentBatterId,
                     selectedPracticeId: target.practiceId,
+                    allPitchEvents: allEvents,
+                    suggestedCountSeed: nil,
+                    currentCountSeed: nil,
                     lineupBatters: [],
                     selectedPitcherId: target.pitcherId,
                     saveAction: { edited in
@@ -2272,6 +2289,9 @@ struct PitchEvent: Codable, Identifiable {
     var strikeLookingMarker: String? = nil
     var ballMarker: String? = nil
     var foulMarker: String? = nil
+    var atBatBalls: Int? = nil
+    var atBatStrikes: Int? = nil
+    var atBatCount: String? = nil
 }
 
 extension PitchEvent: Hashable {

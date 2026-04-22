@@ -192,7 +192,6 @@ private struct ToggleSection: View {
                 OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
                 OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
                 OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
-                Spacer(minLength: 0)
             }
 
         }
@@ -271,8 +270,6 @@ private struct EventButtonsRow: View {
                     selectedOutcome = nil
                 }
             }
-
-            Spacer(minLength: 0)
         }
     }
 }
@@ -371,9 +368,14 @@ struct PitchResultSheetView: View {
     @State private var ballSymbol: String? = nil
     @State private var foulSymbol: String? = nil
     @State private var showMissingBatterPrompt: Bool = false
+    @State private var showCountConfirmationPrompt: Bool = false
     @State private var pendingSaveIntent: PendingSaveIntent? = nil
+    @State private var pendingCountEvent: PitchEvent? = nil
+    @State private var confirmedBallsCount: Int = 0
+    @State private var confirmedStrikesCount: Int = 0
     @State private var overrideOpponentJersey: String? = nil
     @State private var overrideOpponentBatterId: String? = nil
+    @State private var showMissingLocationPrompt: Bool = false
 
     @State private var colorMapImage: UIImage? = UIImage(named: "colorMap")
 
@@ -414,11 +416,20 @@ struct PitchResultSheetView: View {
     let selectedOpponentJersey: String?
     let selectedOpponentBatterId: String?
     let selectedPracticeId: String?
+    let allPitchEvents: [PitchEvent]
+    let suggestedCountSeed: (balls: Int, strikes: Int)?
+    let currentCountSeed: (balls: Int, strikes: Int)?
     let lineupBatters: [JerseyCell]
     let selectedPitcherId: String?
     let saveAction: (PitchEvent) -> Void
     let template: PitchTemplate?
     let pitcherName: String?
+    var onMissingLocation: (() -> Void)? = nil
+
+    private var hasSelectedLocation: Bool {
+        let trimmed = pendingResultLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !trimmed.isEmpty
+    }
 
     private func resetSelections() {
         isStrikeSwinging = false
@@ -580,13 +591,13 @@ struct PitchResultSheetView: View {
     private var symbolPickerTitle: String {
         switch symbolPickerTarget {
         case .swinging:
-            return "Swinging Count"
+            return "Strike Count"
         case .looking:
-            return "Looking Count"
+            return "Strike Count"
         case .ball:
             return "Ball Count"
         case .foul:
-            return "Foul Count"
+            return "Strike Count"
         case .none:
             return "Select"
         }
@@ -644,18 +655,147 @@ struct PitchResultSheetView: View {
     }
 
     private func performSave(_ intent: PendingSaveIntent) {
-        guard let event = buildCurrentEvent() else {
-            isPresented = false
+        guard hasSelectedLocation else {
+            showMissingLocationPrompt = true
+            onMissingLocation?()
             return
         }
+        guard let event = buildCurrentEvent() else { return }
+        pendingSaveIntent = intent
+        pendingCountEvent = event
+        let suggested = suggestedCount(for: event)
+        confirmedBallsCount = suggested.balls
+        confirmedStrikesCount = suggested.strikes
+        showCountConfirmationPrompt = true
+    }
+
+    private func finalizeSaveWithConfirmedCount() {
+        guard var event = pendingCountEvent else { return }
+        let balls = max(0, min(3, confirmedBallsCount))
+        let strikes = max(0, min(2, confirmedStrikesCount))
+        let prior = priorCount(for: event)
+
+        let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let isWalkOutcome = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame
+        let isKOutcome = normalizedOutcome == "K" || normalizedOutcome == "ꓘ"
+        let isStrikeTerminal = isKOutcome || ((event.strikeLooking || event.strikeSwinging) && prior.strikes >= 2)
+        let isBallTerminal = isWalkOutcome || ((event.isBall == true) && prior.balls >= 3)
+
+        if isStrikeTerminal {
+            event.atBatCount = "Strikeout"
+            event.atBatBalls = 0
+            event.atBatStrikes = 0
+        } else if isBallTerminal {
+            event.atBatCount = "Ball 4"
+            event.atBatBalls = 0
+            event.atBatStrikes = 0
+        } else {
+            event.atBatBalls = balls
+            event.atBatStrikes = strikes
+            event.atBatCount = "\(balls)-\(strikes)"
+        }
+
+        let intent = pendingSaveIntent ?? .pitchEvent
         if intent == .pitchOnly {
             event.debugLog(prefix: "📤 Saving Pitch-Only PitchEvent")
         } else {
             event.debugLog()
         }
         saveAction(event)
+        showCountConfirmationPrompt = false
+        pendingSaveIntent = nil
+        pendingCountEvent = nil
         isPresented = false
         resetSelections()
+    }
+
+    private func priorCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
+        let activeBatterId = effectiveOpponentBatterId
+        let activeJersey = effectiveOpponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseEvent = allPitchEvents
+            .filter { existing in
+                if let activeBatterId, !activeBatterId.isEmpty {
+                    return existing.opponentBatterId == activeBatterId
+                }
+                if let activeJersey, !activeJersey.isEmpty {
+                    return existing.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) == activeJersey
+                }
+                return false
+            }
+            .sorted(by: { $0.timestamp < $1.timestamp })
+            .last
+
+        let parsedFromText: (Int, Int)? = {
+            guard let text = baseEvent?.atBatCount else { return nil }
+            let parts = text.split(separator: "-", maxSplits: 1).map { Int($0.trimmingCharacters(in: .whitespaces)) }
+            guard parts.count == 2, let b = parts[0], let s = parts[1] else { return nil }
+            return (b, s)
+        }()
+
+        let balls = baseEvent?.atBatBalls ?? parsedFromText?.0 ?? suggestedCountSeed?.balls ?? currentCountSeed?.balls ?? 0
+        let strikes = baseEvent?.atBatStrikes ?? parsedFromText?.1 ?? suggestedCountSeed?.strikes ?? currentCountSeed?.strikes ?? 0
+        return (balls, strikes)
+    }
+
+    private func suggestedCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
+        let prior = priorCount(for: event)
+        var balls = prior.balls
+        var strikes = prior.strikes
+
+        let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let isHBP = normalizedOutcome.caseInsensitiveCompare("HBP") == .orderedSame
+        let isWalk = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame
+        let isK = normalizedOutcome == "K" || normalizedOutcome == "ꓘ"
+        let isFoul = normalizedOutcome.caseInsensitiveCompare("Foul") == .orderedSame
+
+        if isHBP {
+            return (balls, strikes)
+        }
+        if isWalk {
+            balls = 3
+            return (balls, strikes)
+        }
+        if isK {
+            strikes = 2
+            return (balls, strikes)
+        }
+
+        if event.isBall == true {
+            balls = min(3, balls + 1)
+            return (balls, strikes)
+        }
+        if event.strikeLooking || event.strikeSwinging {
+            strikes = min(2, strikes + 1)
+            return (balls, strikes)
+        }
+        if isFoul {
+            if strikes < 2 {
+                strikes += 1
+            }
+            return (balls, strikes)
+        }
+        if event.isStrike {
+            strikes = min(2, strikes + 1)
+        }
+
+        return (balls, strikes)
+    }
+
+    @ViewBuilder
+    private func countCircle(
+        isFilled: Bool,
+        fillColor: Color,
+        strokeColor: Color
+    ) -> some View {
+        ZStack {
+            Circle()
+                .fill(isFilled ? fillColor.opacity(0.9) : Color.clear)
+            Circle()
+                .stroke(strokeColor, lineWidth: 2)
+        }
+        .frame(width: 24, height: 24)
+        .frame(width: 42, height: 42)
+        .contentShape(Rectangle())
     }
 
     private func handleSave() {
@@ -770,13 +910,11 @@ struct PitchResultSheetView: View {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 10) {
                 HStack(spacing: 12) {
-                    if let label = pendingResultLabel {
-                        Text("Location: \(label)")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.blue)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
+                    Text(hasSelectedLocation ? "Location: \(pendingResultLabel ?? "")" : "Location")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(hasSelectedLocation ? .blue : .secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Spacer(minLength: 0)
                     if let calledPitch = pitchCall?.pitch, !calledPitch.isEmpty {
                         let calledLocation = pitchCall?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -963,6 +1101,87 @@ struct PitchResultSheetView: View {
                 } else {
                     foulSymbol = nil
                 }
+            }
+            .onChange(of: showCountConfirmationPrompt) { _, isShowing in
+                guard isShowing, let event = pendingCountEvent else { return }
+                let suggested = suggestedCount(for: event)
+                confirmedBallsCount = suggested.balls
+                confirmedStrikesCount = suggested.strikes
+            }
+            .alert("Result Location Required", isPresented: $showMissingLocationPrompt) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Select a result location on the strike zone before saving.")
+            }
+            .sheet(isPresented: $showCountConfirmationPrompt) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Confirm Count")
+                        .font(.headline)
+                    Text("Adjust balls/strikes for this batter before saving.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Balls")
+                            .font(.subheadline.weight(.semibold))
+                        HStack(spacing: 10) {
+                            ForEach(0..<3, id: \.self) { idx in
+                                let value = idx + 1
+                                Button {
+                                    confirmedBallsCount = value
+                                } label: {
+                                    countCircle(
+                                        isFilled: value <= confirmedBallsCount,
+                                        fillColor: .red,
+                                        strokeColor: .red
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Strikes")
+                            .font(.subheadline.weight(.semibold))
+                        HStack(spacing: 10) {
+                            ForEach(0..<2, id: \.self) { idx in
+                                let value = idx + 1
+                                Button {
+                                    confirmedStrikesCount = value
+                                } label: {
+                                    countCircle(
+                                        isFilled: value <= confirmedStrikesCount,
+                                        fillColor: .green,
+                                        strokeColor: .green
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    Text("Count: \(confirmedBallsCount)-\(confirmedStrikesCount)")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+
+                    HStack(spacing: 10) {
+                        Button("Cancel", role: .cancel) {
+                            showCountConfirmationPrompt = false
+                            pendingSaveIntent = nil
+                            pendingCountEvent = nil
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Confirm") {
+                            finalizeSaveWithConfirmedCount()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding()
+                .presentationDetents([.fraction(0.35), .medium])
+                .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showMissingBatterPrompt) {
                 VStack(alignment: .leading, spacing: 14) {

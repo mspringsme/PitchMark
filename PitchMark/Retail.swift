@@ -199,6 +199,8 @@ private struct TemplateDetailView: View {
 
     @State private var renderedPreview: UIImage? = nil
     @State private var animatePreviewWatermark: Bool = false
+    @State private var pdfURL: URL? = nil
+    @State private var showShareSheet = false
     @State private var customWidthInches: Double = 3.0
     @State private var customHeightInches: Double = 2.0
     private let customWidthRange = 3.0...7.0
@@ -276,6 +278,64 @@ private struct TemplateDetailView: View {
         }
     }
 
+    private func buildInsertPDFURL(for template: PitchTemplate, storeTemplate: StoreTemplate) -> URL? {
+        let sizeInches = selectedSizeInches(for: storeTemplate)
+        let pointsPerInch: CGFloat = 72
+        let targetSize = CGSize(width: sizeInches.width * pointsPerInch,
+                                height: sizeInches.height * pointsPerInch)
+
+        let baseContentSize = PrintableEncryptedGridsView.baseContentSize(for: template.pitchGridValues)
+        let outerPadding: CGFloat = 24
+        let contentSize = CGSize(
+            width: baseContentSize.width + (outerPadding * 2),
+            height: baseContentSize.height + (outerPadding * 2)
+        )
+        let scaleFactor = min(targetSize.width / max(contentSize.width, 1),
+                              targetSize.height / max(contentSize.height, 1))
+        let textScale: CGFloat = 1.5
+
+        let printableView = PrintableEncryptedGridsView(
+            grid: template.pitchGridValues,
+            strikeTopRow: template.strikeTopRow,
+            strikeRows: template.strikeRows,
+            ballsTopRow: template.ballsTopRow,
+            ballsRows: template.ballsRows,
+            pitchFirstColors: template.pitchFirstColors,
+            locationFirstColors: template.locationFirstColors,
+            outerPadding: outerPadding,
+            scale: scaleFactor,
+            textScale: textScale
+        )
+
+        guard let image = printableView.renderAsPNG(size: targetSize, scale: 3.0, alignment: .center) else {
+            return nil
+        }
+
+        let safeName = storeTemplate.name
+            .replacingOccurrences(of: " ", with: "_")
+            .replacingOccurrences(of: ".", with: "")
+            .replacingOccurrences(of: "/", with: "-")
+        let filename = "PitchMark_GridKey_\(safeName).pdf"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: targetSize))
+
+        do {
+            try renderer.writePDF(to: url, withActions: { context in
+                context.beginPage()
+                image.draw(in: CGRect(origin: .zero, size: targetSize))
+                let guideRect = CGRect(origin: .zero, size: targetSize).insetBy(dx: 8, dy: 8)
+                let guidePath = UIBezierPath(roundedRect: guideRect, cornerRadius: 6)
+                UIColor.black.withAlphaComponent(0.16).setStroke()
+                guidePath.setLineDash([5, 4], count: 2, phase: 0)
+                guidePath.lineWidth = 1
+                guidePath.stroke()
+            })
+            return url
+        } catch {
+            return nil
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -287,6 +347,15 @@ private struct TemplateDetailView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
                             .stroke(Color.black.opacity(0.18), lineWidth: 1)
+                    )
+                    .overlay(
+                        // Faint cut guide for the insert boundary.
+                        RoundedRectangle(cornerRadius: 8)
+                            .inset(by: 8)
+                            .stroke(
+                                Color.black.opacity(0.16),
+                                style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                            )
                     )
                     .overlay(
                         Group {
@@ -418,6 +487,19 @@ private struct TemplateDetailView: View {
                 }
 
                 Button {
+                    guard let current = selectedTemplate else { return }
+                    generatePreviewImage(for: current, storeTemplate: template)
+                    if let url = buildInsertPDFURL(for: current, storeTemplate: template) {
+                        pdfURL = url
+                        showShareSheet = true
+                    }
+                } label: {
+                    Label("Download PDF (Preview)", systemImage: "arrow.down.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
                     // Ensure a PitchTemplate is selected before purchase
                     guard selectedTemplate != nil else { return }
                     // TODO: Hook up to StoreKit purchase using selectedTemplate info
@@ -454,6 +536,11 @@ private struct TemplateDetailView: View {
         .background(Color(.systemGray6))
         .navigationTitle(template.name)
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showShareSheet) {
+            if let url = pdfURL {
+                ShareSheet(items: [url])
+            }
+        }
         .sheet(isPresented: $showTemplatePicker) {
             NavigationView {
                 List(availablePitchTemplates) { pt in

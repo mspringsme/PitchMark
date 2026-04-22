@@ -174,6 +174,7 @@ struct PitchTrackerView: View {
     @State private var deferredPendingPitch: Game.PendingPitch? = nil
     @State private var deferredDisplayCode: (colorName: String, code: String)? = nil
     @State private var actualLocationRecorded: String? = nil
+    @State private var atBatCountCacheByBatter: [String: (balls: Int, strikes: Int)] = [:]
     @State private var resultVisualState: String? = nil
     @State private var pendingResultLabel: String? = nil
     @State private var autoPitchOnlyEnabled: Bool = false
@@ -696,15 +697,9 @@ struct PitchTrackerView: View {
         guard let sel = data["resultSelection"] as? [String: Any] else { return }
         let label = (sel["label"] as? String) ?? ""
 
-        // If you already have a local "resultSelection" UI variable, set it here.
-        // If not, this is still useful because your existing UI reads pendingResultLabel etc.
-        if !label.isEmpty {
-            // Optionally: keep a local var if you have one
-            // self.lastResultSelectionLabel = label
-            if calledPitch != nil {
-                expandCalledPitchComposerToLarge()
-            }
-        }
+        // Keep listening to result selection, but do not auto-expand the composer.
+        // Expansion should happen only from explicit user result-location taps.
+        _ = label
     }
     /// Owner-side: keep CalledPitchView in sync with the shared live doc.
     /// When the participant saves, they delete `pending` from /liveGames/{liveId},
@@ -1504,7 +1499,6 @@ struct PitchTrackerView: View {
         showConfirmSheet = false
         showResultConfirmation = false
         isRecordingResult = false
-        selectedPitch = ""
         selectedLocation = ""
         resultVisualState = nil
         actualLocationRecorded = nil
@@ -2978,6 +2972,13 @@ struct PitchTrackerView: View {
         return pitcher.name
     }
 
+    private func atBatCountKey(batterId: String?, jersey: String?) -> String? {
+        if let batterId, !batterId.isEmpty { return "id:\(batterId)" }
+        let trimmed = jersey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmed.isEmpty { return "jersey:\(trimmed)" }
+        return nil
+    }
+
     private var canSelectPitcherInGame: Bool {
         guard isGame else { return true }
         let uid = authManager.user?.uid
@@ -3930,16 +3931,11 @@ struct PitchTrackerView: View {
     private var mainStrikeZoneSection: some View {
         let deviceWidth = effectiveScreenSize.width
         let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
+        let chipStripWidth: CGFloat = max(deviceWidth - 24, SZwidth)
 
         return VStack(spacing: 8) {
             if !activePitchChipOptions.isEmpty {
-                HStack(alignment: .center, spacing: 8) {
-                    if isGame {
-                        // Keep chips aligned with strike-zone card (to the right of At Bat sidebar).
-                        Color.clear.frame(width: 60)
-                    }
-                    pitchSelectionStrip(width: SZwidth)
-                }
+                pitchSelectionStrip(width: chipStripWidth)
             }
 
             HStack(alignment: .top, spacing: 8) {
@@ -3961,51 +3957,69 @@ struct PitchTrackerView: View {
 
     @ViewBuilder
     private func pitchSelectionStrip(width: CGFloat) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(activePitchChipOptions, id: \.self) { pitch in
-                    let isSelectedChip = selectedPitch == pitch
-                    let chipColor = colorForPitch(pitch)
+        let firstRowCount = Int(ceil(Double(activePitchChipOptions.count) / 2.0))
+        let row1 = Array(activePitchChipOptions.prefix(firstRowCount))
+        let row2 = Array(activePitchChipOptions.dropFirst(firstRowCount))
 
-                    Button {
-                        selectedPitch = pitch
-                    } label: {
-                        Text(pitch)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(isSelectedChip ? Color.white : Color.primary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 7)
-                            .background(
-                                Capsule()
-                                    .fill(isSelectedChip ? chipColor : Color(.systemGray6))
-                            )
-                            .overlay(
-                                Capsule()
-                                    .stroke(
-                                        isSelectedChip ? chipColor.opacity(0.9) : Color.black.opacity(0.12),
-                                        lineWidth: isSelectedChip ? 1.5 : 1
-                                    )
-                            )
-                            .shadow(
-                                color: isSelectedChip ? chipColor.opacity(0.35) : .clear,
-                                radius: isSelectedChip ? 5 : 0,
-                                x: 0,
-                                y: 2
-                            )
-                    }
-                    .buttonStyle(.plain)
+        VStack(spacing: row2.isEmpty ? 0 : 6) {
+            HStack(spacing: 8) {
+                ForEach(row1, id: \.self) { pitch in
+                    pitchChip(pitch)
                 }
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .center)
+            if !row2.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(row2, id: \.self) { pitch in
+                        pitchChip(pitch)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
-        .frame(width: width, height: 42, alignment: .leading)
-        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(width: width, alignment: .center)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            Capsule()
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+    }
+
+    @ViewBuilder
+    private func pitchChip(_ pitch: String) -> some View {
+        let isSelectedChip = selectedPitch == pitch
+        let chipColor = colorForPitch(pitch)
+
+        Button {
+            selectedPitch = pitch
+        } label: {
+            Text(pitch)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(isSelectedChip ? Color.white : Color.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule()
+                        .fill(isSelectedChip ? chipColor : Color(.systemGray6))
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(
+                            isSelectedChip ? chipColor.opacity(0.9) : Color.black.opacity(0.12),
+                            lineWidth: isSelectedChip ? 1.5 : 1
+                        )
+                )
+                .shadow(
+                    color: isSelectedChip ? chipColor.opacity(0.35) : .clear,
+                    radius: isSelectedChip ? 5 : 0,
+                    x: 0,
+                    y: 2
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private func syncSelectedPitchWithVisibleOptions() {
@@ -4783,9 +4797,11 @@ struct PitchTrackerView: View {
         actualLocationRecorded = nil
         pendingResultLabel = nil
         isStrikeSwinging = false
+        isStrikeLooking = false
         isWildPitch = false
         isPassedBall = false
         isBall = false
+        isError = false
         selectedOutcome = nil
         selectedDescriptor = nil
     }
@@ -4836,6 +4852,10 @@ struct PitchTrackerView: View {
         }
         if eventToPersist.opponentJersey == nil {
             eventToPersist.opponentJersey = fallbackJersey
+        }
+        if let balls = eventToPersist.atBatBalls, let strikes = eventToPersist.atBatStrikes,
+           let key = atBatCountKey(batterId: eventToPersist.opponentBatterId, jersey: eventToPersist.opponentJersey) {
+            atBatCountCacheByBatter[key] = (balls: balls, strikes: strikes)
         }
 
         var sharedEvent = eventToPersist
@@ -4929,9 +4949,11 @@ struct PitchTrackerView: View {
         actualLocationRecorded = nil
         pendingResultLabel = nil
         isStrikeSwinging = false
+        isStrikeLooking = false
         isWildPitch = false
         isPassedBall = false
         isBall = false
+        isError = false
         selectedOutcome = nil
         selectedDescriptor = nil
     }
@@ -5851,6 +5873,8 @@ struct PitchTrackerView: View {
     }
 
     @ViewBuilder private var pitchResultSheetView: some View {
+        let selectedJersey = jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber
+        let selectedBatterKey = atBatCountKey(batterId: selectedBatterId?.uuidString, jersey: selectedJersey)
         PitchResultSheetView(
             isPresented: $showConfirmSheet,
             isStrikeSwinging: $isStrikeSwinging,
@@ -5867,16 +5891,22 @@ struct PitchTrackerView: View {
             selectedTemplateId: selectedTemplate?.id.uuidString,
             currentMode: sessionManager.currentMode,
             selectedGameId: selectedGameId,
-            selectedOpponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
+            selectedOpponentJersey: selectedJersey,
             selectedOpponentBatterId: selectedBatterId?.uuidString,
             selectedPracticeId: selectedPracticeId,
+            allPitchEvents: isGame ? gamePitchEvents : pitchEvents,
+            suggestedCountSeed: selectedBatterKey.flatMap { atBatCountCacheByBatter[$0] },
+            currentCountSeed: (balls: balls, strikes: strikes),
             lineupBatters: jerseyCells,
             selectedPitcherId: effectivePitcherIdForSave,
             saveAction: { event in
                 persistPitchEvent(event)
             },
             template: selectedTemplate,
-            pitcherName: pitchers.first(where: { $0.id == selectedPitcherId })?.name
+            pitcherName: pitchers.first(where: { $0.id == selectedPitcherId })?.name,
+            onMissingLocation: {
+                calledPitchComposerDetent = .fraction(0.28)
+            }
         )
     }
 
