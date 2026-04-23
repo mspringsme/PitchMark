@@ -260,6 +260,7 @@ struct SettingsView: View {
     @Binding var shareCode: String
     @Binding var codeShareSheetID: UUID
     @Binding var showCodeShareModePicker: Bool
+    let hasActiveSessionSelection: Bool
     
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
@@ -311,6 +312,7 @@ struct SettingsView: View {
     @State private var showQRScanner = false
     @State private var showCameraUnavailableAlert = false
     @State private var showCameraPermissionAlert = false
+    @State private var showSelectSessionBeforeCloseAlert = false
 
     private static let quickLaunchDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -1836,6 +1838,10 @@ struct SettingsView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: {
+                        guard hasActiveSessionSelection else {
+                            showSelectSessionBeforeCloseAlert = true
+                            return
+                        }
                         // Notify listeners (e.g., PitchTrackerView) to reload with the latest selected template before dismissing
                         if let tmpl = selectedTemplate {
                             NotificationCenter.default.post(
@@ -1861,6 +1867,12 @@ struct SettingsView: View {
                     .animation(nil, value: storeGlowPulse)
                     .accessibilityLabel("Close Settings")
                 }
+            }
+            .interactiveDismissDisabled(!hasActiveSessionSelection)
+            .alert("Select Game Or Practice", isPresented: $showSelectSessionBeforeCloseAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Choose a game or practice session before closing Settings.")
             }
             //.navigationTitle("Settings")
             .sheet(item: $editorTemplate) { template in

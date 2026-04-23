@@ -368,11 +368,10 @@ struct PitchResultSheetView: View {
     @State private var ballSymbol: String? = nil
     @State private var foulSymbol: String? = nil
     @State private var showMissingBatterPrompt: Bool = false
-    @State private var showCountConfirmationPrompt: Bool = false
     @State private var pendingSaveIntent: PendingSaveIntent? = nil
-    @State private var pendingCountEvent: PitchEvent? = nil
     @State private var confirmedBallsCount: Int = 0
     @State private var confirmedStrikesCount: Int = 0
+    @State private var didInitializeManualCount: Bool = false
     @State private var overrideOpponentJersey: String? = nil
     @State private var overrideOpponentBatterId: String? = nil
     @State private var showMissingLocationPrompt: Bool = false
@@ -419,6 +418,7 @@ struct PitchResultSheetView: View {
     let allPitchEvents: [PitchEvent]
     let suggestedCountSeed: (balls: Int, strikes: Int)?
     let currentCountSeed: (balls: Int, strikes: Int)?
+    var onCountChanged: ((Int, Int) -> Void)? = nil
     let lineupBatters: [JerseyCell]
     let selectedPitcherId: String?
     let saveAction: (PitchEvent) -> Void
@@ -660,17 +660,8 @@ struct PitchResultSheetView: View {
             onMissingLocation?()
             return
         }
-        guard let event = buildCurrentEvent() else { return }
-        pendingSaveIntent = intent
-        pendingCountEvent = event
-        let suggested = suggestedCount(for: event)
-        confirmedBallsCount = suggested.balls
-        confirmedStrikesCount = suggested.strikes
-        showCountConfirmationPrompt = true
-    }
+        guard var event = buildCurrentEvent() else { return }
 
-    private func finalizeSaveWithConfirmedCount() {
-        guard var event = pendingCountEvent else { return }
         let balls = max(0, min(3, confirmedBallsCount))
         let strikes = max(0, min(2, confirmedStrikesCount))
         let prior = priorCount(for: event)
@@ -695,18 +686,33 @@ struct PitchResultSheetView: View {
             event.atBatCount = "\(balls)-\(strikes)"
         }
 
-        let intent = pendingSaveIntent ?? .pitchEvent
         if intent == .pitchOnly {
             event.debugLog(prefix: "📤 Saving Pitch-Only PitchEvent")
         } else {
             event.debugLog()
         }
+        onCountChanged?(event.atBatBalls ?? 0, event.atBatStrikes ?? 0)
         saveAction(event)
-        showCountConfirmationPrompt = false
         pendingSaveIntent = nil
-        pendingCountEvent = nil
         isPresented = false
         resetSelections()
+    }
+
+    private func initializeManualCountIfNeeded() {
+        guard !didInitializeManualCount else { return }
+        let source = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
+        confirmedBallsCount = max(0, min(3, source.balls))
+        confirmedStrikesCount = max(0, min(2, source.strikes))
+        didInitializeManualCount = true
+    }
+
+    private func syncManualCountFromCurrentSeed() {
+        guard let seed = currentCountSeed else { return }
+        let normalizedBalls = max(0, min(3, seed.balls))
+        let normalizedStrikes = max(0, min(2, seed.strikes))
+        guard normalizedBalls != confirmedBallsCount || normalizedStrikes != confirmedStrikesCount else { return }
+        confirmedBallsCount = normalizedBalls
+        confirmedStrikesCount = normalizedStrikes
     }
 
     private func priorCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
@@ -1014,6 +1020,64 @@ struct PitchResultSheetView: View {
                     )
                 }
 
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Count")
+                        .font(.subheadline.weight(.semibold))
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Balls")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                ForEach(0..<3, id: \.self) { idx in
+                                    let value = idx + 1
+                                    Button {
+                                        // Tap same filled value to step down by one, else set to that value.
+                                        confirmedBallsCount = (confirmedBallsCount == value) ? max(0, value - 1) : value
+                                        onCountChanged?(confirmedBallsCount, confirmedStrikesCount)
+                                    } label: {
+                                        countCircle(
+                                            isFilled: value <= confirmedBallsCount,
+                                            fillColor: .red,
+                                            strokeColor: .red
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Strikes")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                ForEach(0..<2, id: \.self) { idx in
+                                    let value = idx + 1
+                                    Button {
+                                        // Tap same filled value to step down by one, else set to that value.
+                                        confirmedStrikesCount = (confirmedStrikesCount == value) ? max(0, value - 1) : value
+                                        onCountChanged?(confirmedBallsCount, confirmedStrikesCount)
+                                    } label: {
+                                        countCircle(
+                                            isFilled: value <= confirmedStrikesCount,
+                                            fillColor: .green,
+                                            strokeColor: .green
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+
+                    Text("Count: \(confirmedBallsCount)-\(confirmedStrikesCount)")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                }
+                .padding(10)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
                 Divider()
                     .padding(.top, -6)
 
@@ -1102,86 +1166,22 @@ struct PitchResultSheetView: View {
                     foulSymbol = nil
                 }
             }
-            .onChange(of: showCountConfirmationPrompt) { _, isShowing in
-                guard isShowing, let event = pendingCountEvent else { return }
-                let suggested = suggestedCount(for: event)
-                confirmedBallsCount = suggested.balls
-                confirmedStrikesCount = suggested.strikes
+            .onChange(of: currentCountSeed?.balls) { _, _ in
+                syncManualCountFromCurrentSeed()
             }
+            .onChange(of: currentCountSeed?.strikes) { _, _ in
+                syncManualCountFromCurrentSeed()
+            }
+            .onChange(of: isPresented) { _, newValue in
+                guard newValue else { return }
+                didInitializeManualCount = false
+                initializeManualCountIfNeeded()
+            }
+            .onAppear { initializeManualCountIfNeeded() }
             .alert("Result Location Required", isPresented: $showMissingLocationPrompt) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("Select a result location on the strike zone before saving.")
-            }
-            .sheet(isPresented: $showCountConfirmationPrompt) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Confirm Count")
-                        .font(.headline)
-                    Text("Adjust balls/strikes for this batter before saving.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Balls")
-                            .font(.subheadline.weight(.semibold))
-                        HStack(spacing: 10) {
-                            ForEach(0..<3, id: \.self) { idx in
-                                let value = idx + 1
-                                Button {
-                                    confirmedBallsCount = value
-                                } label: {
-                                    countCircle(
-                                        isFilled: value <= confirmedBallsCount,
-                                        fillColor: .red,
-                                        strokeColor: .red
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Strikes")
-                            .font(.subheadline.weight(.semibold))
-                        HStack(spacing: 10) {
-                            ForEach(0..<2, id: \.self) { idx in
-                                let value = idx + 1
-                                Button {
-                                    confirmedStrikesCount = value
-                                } label: {
-                                    countCircle(
-                                        isFilled: value <= confirmedStrikesCount,
-                                        fillColor: .green,
-                                        strokeColor: .green
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-
-                    Text("Count: \(confirmedBallsCount)-\(confirmedStrikesCount)")
-                        .font(.subheadline.weight(.semibold))
-                        .monospacedDigit()
-
-                    HStack(spacing: 10) {
-                        Button("Cancel", role: .cancel) {
-                            showCountConfirmationPrompt = false
-                            pendingSaveIntent = nil
-                            pendingCountEvent = nil
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("Confirm") {
-                            finalizeSaveWithConfirmedCount()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-                .padding()
-                .presentationDetents([.fraction(0.35), .medium])
-                .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showMissingBatterPrompt) {
                 VStack(alignment: .leading, spacing: 14) {

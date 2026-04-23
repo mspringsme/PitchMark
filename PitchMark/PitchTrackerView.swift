@@ -2856,9 +2856,10 @@ struct PitchTrackerView: View {
         intBinding(
             get: { balls },
             set: { newValue in
+                // Always reflect immediately in local UI, even if persistence targets are unavailable.
+                balls = newValue
                 if let liveId = activeLiveId {
                     LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["balls": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    balls = newValue
                     mirrorLiveProgressToGame(field: "balls", value: newValue)
                     return
                 }
@@ -2880,9 +2881,10 @@ struct PitchTrackerView: View {
         intBinding(
             get: { strikes },
             set: { newValue in
+                // Always reflect immediately in local UI, even if persistence targets are unavailable.
+                strikes = newValue
                 if let liveId = activeLiveId {
                     LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["strikes": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    strikes = newValue
                     mirrorLiveProgressToGame(field: "strikes", value: newValue)
                     return
                 }
@@ -2977,6 +2979,137 @@ struct PitchTrackerView: View {
         let trimmed = jersey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty { return "jersey:\(trimmed)" }
         return nil
+    }
+
+    private func migrateEditedJerseyReferences(
+        batterId: String,
+        oldJersey: String,
+        newJersey: String
+    ) {
+        let oldNorm = normalizeJersey(oldJersey) ?? oldJersey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newNorm = normalizeJersey(newJersey) ?? newJersey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldNorm.isEmpty, !newNorm.isEmpty, oldNorm != newNorm else { return }
+
+        func shouldReplace(_ event: PitchEvent) -> Bool {
+            if event.opponentBatterId == batterId { return true }
+            return normalizeJersey(event.opponentJersey) == oldNorm
+        }
+
+        // Immediate local UI refresh for cards and lists.
+        gamePitchEvents = gamePitchEvents.map { ev in
+            var updated = ev
+            if shouldReplace(ev) { updated.opponentJersey = newNorm }
+            return updated
+        }
+        pitchEvents = pitchEvents.map { ev in
+            var updated = ev
+            if shouldReplace(ev) { updated.opponentJersey = newNorm }
+            return updated
+        }
+        if selectedBatterId?.uuidString == batterId {
+            selectedBatterJersey = newNorm
+        }
+
+        // Persist historical correction in Firestore.
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            let liveRef = Firestore.firestore()
+                .collection("liveGames")
+                .document(liveId)
+                .collection("pitchEvents")
+            updateOpponentJerseyInCollection(
+                collectionRef: liveRef,
+                batterId: batterId,
+                oldJersey: oldNorm,
+                newJersey: newNorm
+            )
+        }
+
+        if let gameId = selectedGameId,
+           let owner = effectiveGameOwnerUserId,
+           !owner.isEmpty {
+            let gameRef = Firestore.firestore()
+                .collection("users")
+                .document(owner)
+                .collection("games")
+                .document(gameId)
+                .collection("pitchEvents")
+            updateOpponentJerseyInCollection(
+                collectionRef: gameRef,
+                batterId: batterId,
+                oldJersey: oldNorm,
+                newJersey: newNorm
+            )
+            return
+        }
+
+        if sessionManager.currentMode == .practice,
+           let uid = authManager.user?.uid,
+           !uid.isEmpty {
+            let practiceRef = Firestore.firestore()
+                .collection("users")
+                .document(uid)
+                .collection("pitchEvents")
+            updateOpponentJerseyInCollection(
+                collectionRef: practiceRef,
+                batterId: batterId,
+                oldJersey: oldNorm,
+                newJersey: newNorm,
+                requiredPracticeId: selectedPracticeId
+            )
+        }
+    }
+
+    private func updateOpponentJerseyInCollection(
+        collectionRef: CollectionReference,
+        batterId: String,
+        oldJersey: String,
+        newJersey: String,
+        requiredPracticeId: String? = nil
+    ) {
+        let db = Firestore.firestore()
+        let group = DispatchGroup()
+        var merged: [String: QueryDocumentSnapshot] = [:]
+
+        group.enter()
+        collectionRef
+            .whereField("opponentBatterId", isEqualTo: batterId)
+            .getDocuments { snapshot, _ in
+                (snapshot?.documents ?? []).forEach { merged[$0.documentID] = $0 }
+                group.leave()
+            }
+
+        group.enter()
+        collectionRef
+            .whereField("opponentJersey", isEqualTo: oldJersey)
+            .getDocuments { snapshot, _ in
+                (snapshot?.documents ?? []).forEach { merged[$0.documentID] = $0 }
+                group.leave()
+            }
+
+        group.notify(queue: .main) {
+            var docs = Array(merged.values)
+            if let requiredPracticeId {
+                docs = docs.filter { ($0.data()["practiceId"] as? String) == requiredPracticeId }
+            }
+            guard !docs.isEmpty else { return }
+
+            let chunkSize = 400
+            var start = 0
+            while start < docs.count {
+                let end = min(start + chunkSize, docs.count)
+                let slice = docs[start..<end]
+                let batch = db.batch()
+                slice.forEach { doc in
+                    batch.updateData(["opponentJersey": newJersey], forDocument: doc.reference)
+                }
+                batch.commit { err in
+                    if let err {
+                        print("❌ migrate jersey batch failed:", err.localizedDescription)
+                    }
+                }
+                start = end
+            }
+        }
     }
 
     private var canSelectPitcherInGame: Bool {
@@ -3318,12 +3451,12 @@ struct PitchTrackerView: View {
 
         }
         .frame(maxWidth: .infinity, alignment: .top)
-        .ignoresSafeArea(edges: [.horizontal])   // ✅ CHANGED (removed .bottom)
         .background(.regularMaterial)
         .sheet(isPresented: $showCardsFullScreenSheet) {
             pitchResultSheetBody(
                 controlButtonsOffsetY: 0,
                 controlButtonsVerticalPadding: 10,
+                initialJerseyFilter: selectedJerseyNumberDisplay ?? selectedBatterJersey,
                 onGearTapOverride: nil
             )
                 .ignoresSafeArea()
@@ -3333,34 +3466,45 @@ struct PitchTrackerView: View {
     }
 
     private var overlayTabsHeader: some View {
-        HStack(spacing: 6) {
-            OverlayTabButton(
-                title: "Progress",
-                systemImage: "chart.bar.xaxis",
-                isSelected: overlayTab == .progress
-            ) {
-                overlayTab = .progress
-            }
-
-            OverlayTabButton(
-                title: "Cards",
-                systemImage: "square.grid.2x2",
-                isSelected: overlayTab == .cards
-            ) {
-                overlayTab = .cards
-            }
-
-            if overlayTab == .cards && ((selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))) {
-                Button {
-                    showCardsFullScreenSheet = true
-                } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .imageScale(.medium)
+        let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
+        return ZStack {
+            if sessionManager.currentMode == .game {
+                HStack {
+                    ballsInlineView
+                    Spacer(minLength: 0)
+                    strikesInlineView
                 }
-                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 6) {
+                OverlayTabButton(
+                    title: "Progress",
+                    systemImage: "chart.bar.xaxis",
+                    isSelected: overlayTab == .progress
+                ) {
+                    overlayTab = .progress
+                }
+
+                OverlayTabButton(
+                    title: "Cards",
+                    systemImage: "square.grid.2x2",
+                    isSelected: overlayTab == .cards
+                ) {
+                    overlayTab = .cards
+                }
+
+                if showCards {
+                    Button {
+                        showCardsFullScreenSheet = true
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.callout)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 8)
         .padding(.top, 12)
     }
     private struct OverlayTabButton: View {
@@ -3378,9 +3522,11 @@ struct PitchTrackerView: View {
 
                     Text(title)
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
                 }
                 .foregroundColor(isSelected ? .black : .black.opacity(0.4))
-                .padding(.horizontal, 6)
+                .padding(.horizontal, 4)
                 .padding(.vertical, 8)
                 .background(isSelected ? .ultraThickMaterial : .ultraThinMaterial)
                 .clipShape(Capsule())
@@ -3405,9 +3551,11 @@ struct PitchTrackerView: View {
             pitchResultSheetBody(
                 controlButtonsOffsetY: -30,
                 controlButtonsVerticalPadding: 2,
+                initialJerseyFilter: nil,
+                showTopControls: false,
                 onGearTapOverride: { showCardsFullScreenSheet = true }
             )
-            .padding(.top, -6)
+            .padding(.top, 19)
             .frame(maxWidth: .infinity, minHeight: 170)
         } else {
             EmptyView()
@@ -3418,6 +3566,8 @@ struct PitchTrackerView: View {
     private func pitchResultSheetBody(
         controlButtonsOffsetY: CGFloat,
         controlButtonsVerticalPadding: CGFloat,
+        initialJerseyFilter: String? = nil,
+        showTopControls: Bool = true,
         onGearTapOverride: (() -> Void)? = nil
     ) -> some View {
         PitchResultSheet(
@@ -3449,12 +3599,68 @@ struct PitchTrackerView: View {
                     sharedBatterJerseyOverrides[id] = jersey
                 }
             },
+            initialJerseyFilter: initialJerseyFilter,
+            showTopControls: showTopControls,
             onGearTapOverride: onGearTapOverride,
             controlButtonsOffsetY: controlButtonsOffsetY,
-            controlButtonsVerticalPadding: controlButtonsVerticalPadding
+            controlButtonsVerticalPadding: controlButtonsVerticalPadding,
+            currentCountSeed: (balls: balls, strikes: strikes),
+            onCountChanged: { newBalls, newStrikes in
+                syncCountFromComposer(balls: newBalls, strikes: newStrikes)
+            }
         )
         .environmentObject(authManager)
         .environmentObject(sessionManager)
+    }
+
+    private var ballsInlineView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Balls")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 8) {
+                ForEach(0..<3, id: \.self) { idx in
+                    let value = idx + 1
+                    Button {
+                        let next = (balls == value) ? max(0, value - 1) : value
+                        ballsBinding.wrappedValue = next
+                    } label: {
+                        Image(systemName: idx < max(0, min(3, balls)) ? "circle.fill" : "circle")
+                            .font(.caption)
+                            .foregroundStyle(idx < max(0, min(3, balls)) ? Color.red : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(minWidth: 44, alignment: .leading)
+    }
+
+    private var strikesInlineView: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            Text("Strikes")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 8) {
+                ForEach(0..<2, id: \.self) { idx in
+                    let value = idx + 1
+                    Button {
+                        let next = (strikes == value) ? max(0, value - 1) : value
+                        strikesBinding.wrappedValue = next
+                    } label: {
+                        Image(systemName: idx < max(0, min(2, strikes)) ? "circle.fill" : "circle")
+                            .font(.caption)
+                            .foregroundStyle(idx < max(0, min(2, strikes)) ? Color.green : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(minWidth: 44, alignment: .trailing)
     }
     private var calledPitchLayer: some View {
         Group {
@@ -4082,6 +4288,10 @@ struct PitchTrackerView: View {
                                     isReordering: $isReorderingMode,
                                     onViewDetails: { cell in
                                         Task { await openJerseyDetail(for: cell) }
+                                    },
+                                    onSelectedBatterChanged: { _ in
+                                        ballsBinding.wrappedValue = 0
+                                        strikesBinding.wrappedValue = 0
                                     }
                                 )
                                 .environmentObject(authManager)
@@ -4113,8 +4323,12 @@ struct PitchTrackerView: View {
                                             let normalized = normalizeJersey(trimmed) ?? trimmed
 
                                             // 1) Apply local change (edit vs add)
+                                            var editedBatterId: String? = nil
+                                            var oldEditedJersey: String? = nil
                                             if let editing = editingCell,
                                                let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
+                                                editedBatterId = editing.id.uuidString
+                                                oldEditedJersey = jerseyCells[idx].jerseyNumber
                                                 jerseyCells[idx].jerseyNumber = normalized
                                             } else {
                                                 // Add new cell (keep UUID stable across devices by storing batterIds)
@@ -4163,6 +4377,15 @@ struct PitchTrackerView: View {
                                             }
 
                                             persistLineup(jerseyCells: jerseyCells)
+
+                                            if let batterId = editedBatterId,
+                                               let oldJersey = oldEditedJersey {
+                                                migrateEditedJerseyReferences(
+                                                    batterId: batterId,
+                                                    oldJersey: oldJersey,
+                                                    newJersey: normalized
+                                                )
+                                            }
 
                                             // 3) Reset UI state
                                             showAddJerseyPopover = false
@@ -4853,9 +5076,10 @@ struct PitchTrackerView: View {
         if eventToPersist.opponentJersey == nil {
             eventToPersist.opponentJersey = fallbackJersey
         }
-        if let balls = eventToPersist.atBatBalls, let strikes = eventToPersist.atBatStrikes,
+        if let savedBalls = eventToPersist.atBatBalls, let savedStrikes = eventToPersist.atBatStrikes,
            let key = atBatCountKey(batterId: eventToPersist.opponentBatterId, jersey: eventToPersist.opponentJersey) {
-            atBatCountCacheByBatter[key] = (balls: balls, strikes: strikes)
+            atBatCountCacheByBatter[key] = (balls: savedBalls, strikes: savedStrikes)
+            syncCountFromComposer(balls: savedBalls, strikes: savedStrikes)
         }
 
         var sharedEvent = eventToPersist
@@ -4956,6 +5180,39 @@ struct PitchTrackerView: View {
         isError = false
         selectedOutcome = nil
         selectedDescriptor = nil
+    }
+
+    private func syncCountFromComposer(balls: Int, strikes: Int) {
+        let normalizedBalls = max(0, min(3, balls))
+        let normalizedStrikes = max(0, min(2, strikes))
+        // Always update local state immediately for responsive UI.
+        self.balls = normalizedBalls
+        self.strikes = normalizedStrikes
+
+        guard sessionManager.currentMode == .game else { return }
+
+        if let liveId = activeLiveId {
+            LiveGameService.shared.updateLiveFields(
+                liveId: liveId,
+                fields: [
+                    "balls": normalizedBalls,
+                    "strikes": normalizedStrikes,
+                    "progressUpdatedAt": FieldValue.serverTimestamp()
+                ]
+            )
+            mirrorLiveProgressToGame(field: "balls", value: normalizedBalls)
+            mirrorLiveProgressToGame(field: "strikes", value: normalizedStrikes)
+            return
+        }
+
+        guard let gid = selectedGameId, let owner = effectiveGameOwnerUserId else { return }
+        authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: normalizedBalls)
+        authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: normalizedStrikes)
+        if let idx = games.firstIndex(where: { $0.id == gid }) {
+            games[idx].balls = normalizedBalls
+            games[idx].strikes = normalizedStrikes
+        }
+        markLocalProgressChange()
     }
 
     private var bufferedSharedEventsURL: URL {
@@ -5897,6 +6154,9 @@ struct PitchTrackerView: View {
             allPitchEvents: isGame ? gamePitchEvents : pitchEvents,
             suggestedCountSeed: selectedBatterKey.flatMap { atBatCountCacheByBatter[$0] },
             currentCountSeed: (balls: balls, strikes: strikes),
+            onCountChanged: { newBalls, newStrikes in
+                syncCountFromComposer(balls: newBalls, strikes: newStrikes)
+            },
             lineupBatters: jerseyCells,
             selectedPitcherId: effectivePitcherIdForSave,
             saveAction: { event in
@@ -5932,7 +6192,8 @@ struct PitchTrackerView: View {
               showCodeShareSheet: $showCodeShareSheet,
               shareCode: $shareCode,
               codeShareSheetID: $codeShareSheetID,
-              showCodeShareModePicker: $showCodeShareModePicker
+              showCodeShareModePicker: $showCodeShareModePicker,
+              hasActiveSessionSelection: (activeLiveId != nil) || (selectedGameId != nil) || (selectedPracticeId != nil)
           )
         .environmentObject(authManager)
         .environmentObject(subscriptionManager)
@@ -6599,9 +6860,14 @@ struct PitchTrackerView: View {
                     },
                     onDeleteLineupBatter: { cell in
                         deleteBatterFromDetail(cell)
+                    },
+                    currentCountSeed: (balls: balls, strikes: strikes),
+                    onCountChanged: { newBalls, newStrikes in
+                        syncCountFromComposer(balls: newBalls, strikes: newStrikes)
                     }
                 )
                 .padding()
+                .ignoresSafeArea(.keyboard, edges: .bottom)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
             }
@@ -6898,37 +7164,8 @@ private struct ProgressGameView: View {
                 }
             }
             Divider()
-            
-            HStack(alignment: .center, spacing: 0) {
-                VStack(alignment: .leading){
-                    Text("  Balls")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 0){
-                        ForEach(ballToggles.indices, id: \.self) { idx in
-                            toggleChip(isOn: ballBinding(index: idx), activeColor: .red)
-                        }
-                    }
-                }
-                .padding(.horizontal, 0)
-                .padding(.leading, 10)
-                Spacer()
-                VStack(alignment: .trailing){
-                    Text("Strikes  ")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 0){
-                        ForEach(strikeToggles.indices, id: \.self) { idx in
-                            toggleChip(isOn: strikeBinding(index: idx), activeColor: .green)
-                        }
-                    }
-                }
-                .padding(.horizontal, 0)
-                .padding(.trailing, 10)
-            }
-            .padding(.vertical, -214)
         }
-        .padding(.vertical, -6)
+        .padding(.vertical, 2)
         .onAppear {
             let clampedBalls = max(0, min(3, balls))
             let clampedStrikes = max(0, min(2, strikes))
@@ -7638,6 +7875,7 @@ struct JerseyRow: View {
     let activeLiveId: String?
     @Binding var isReordering: Bool
     let onViewDetails: (JerseyCell) -> Void
+    let onSelectedBatterChanged: (JerseyCell) -> Void
 
     @State private var showActionsSheet: Bool = false
     @State private var showDeleteConfirm: Bool = false
@@ -7665,7 +7903,11 @@ struct JerseyRow: View {
                     y: 0)
             .onTapGesture {
                 guard !isReordering else { return }
+                let wasSelected = selectedBatterId == cell.id
                 syncSelection(cell.id)
+                if !wasSelected {
+                    onSelectedBatterChanged(cell)
+                }
             }
             .onAppear {
                 if isSelected {
@@ -7687,7 +7929,11 @@ struct JerseyRow: View {
             }
             .onLongPressGesture {
                 guard !isReordering else { return }
+                let wasSelected = selectedBatterId == cell.id
                 syncSelection(cell.id)
+                if !wasSelected {
+                    onSelectedBatterChanged(cell)
+                }
                 onViewDetails(cell)
             }
             .onDrop(of: [UTType.text], delegate: JerseyDropDelegate(current: cell, items: $jerseyCells, dragging: $draggingJersey))

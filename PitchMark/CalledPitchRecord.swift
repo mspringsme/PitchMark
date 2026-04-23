@@ -11,6 +11,72 @@ import FirebaseAuth
 import SwiftUI
 import UIKit
 
+private struct FocusableNotesTextView: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var isFocused: Bool
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: FocusableNotesTextView
+        weak var textView: UITextView?
+        init(parent: FocusableNotesTextView) { self.parent = parent }
+
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text
+        }
+
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            if !parent.isFocused { parent.isFocused = true }
+        }
+
+        func textViewDidEndEditing(_ textView: UITextView) {
+            if parent.isFocused { parent.isFocused = false }
+        }
+
+        @objc func doneTapped() {
+            parent.isFocused = false
+            textView?.resignFirstResponder()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.delegate = context.coordinator
+        context.coordinator.textView = textView
+        textView.font = UIFont.systemFont(ofSize: 16)
+        textView.backgroundColor = .clear
+        // Avoid nested scroll-view gesture competition inside the popover sheet.
+        textView.isScrollEnabled = false
+        textView.alwaysBounceVertical = false
+        textView.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
+        textView.keyboardDismissMode = .none
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.delaysContentTouches = false
+        textView.canCancelContentTouches = true
+
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+        let done = UIBarButtonItem(title: "Done", style: .done, target: context.coordinator, action: #selector(Coordinator.doneTapped))
+        toolbar.items = [flex, done]
+        textView.inputAccessoryView = toolbar
+        return textView
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        if uiView.text != text {
+            uiView.text = text
+        }
+        if isFocused, !uiView.isFirstResponder {
+            DispatchQueue.main.async { uiView.becomeFirstResponder() }
+        } else if !isFocused, uiView.isFirstResponder {
+            uiView.resignFirstResponder()
+        }
+    }
+}
+
 func outcomeSummaryLines(for event: PitchEvent) -> [String] {
     var lines: [String] = []
 
@@ -219,11 +285,11 @@ struct OutcomeSummaryView: View {
                 }
             }
         }
-        .frame(minWidth: 110, maxWidth: 150, minHeight: minHeight, alignment: .topLeading)
+        .frame(minWidth: 92, maxWidth: 132, minHeight: minHeight, alignment: .topLeading)
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
         .background(OutcomeSummaryBackground(isPositive: isPositiveOutcome))
-        .padding(.trailing, 10)
+        .padding(.trailing, 6)
     }
 }
 
@@ -356,7 +422,7 @@ struct PitchCardView: View {
                     .font(.caption)
                     .multilineTextAlignment(.leading)
             }
-            .frame(minWidth: 90)
+            .frame(minWidth: 70)
             .layoutPriority(1)
             
             Spacer()
@@ -648,7 +714,7 @@ struct PitchResultCard: View {
                 onLongPress: { }
             )
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 2)
     }
     
     private func derivedGameTitle(from event: PitchEvent) -> String? {
@@ -741,8 +807,10 @@ struct PitchEventDetailPopover: View {
     let onMoveLineupBatterUp: (JerseyCell) -> Void
     let onMoveLineupBatterDown: (JerseyCell) -> Void
     let onDeleteLineupBatter: (JerseyCell) -> Void
+    let currentCountSeed: (balls: Int, strikes: Int)?
+    let onCountChanged: ((Int, Int) -> Void)?
     @State private var batterNotes: String = ""
-    @FocusState private var isBatterNotesFocused: Bool
+    @State private var isBatterNotesFocused: Bool = false
 
     private var activeLineupCell: JerseyCell? {
         if let id = selectedLineupBatterId,
@@ -819,49 +887,65 @@ struct PitchEventDetailPopover: View {
         return nil
     }
 
+    private func normalizeCardPitchDescription(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let collapsed = trimmed
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .lowercased()
+
+        if collapsed == "strike out" {
+            return "Strike outer 1/2"
+        }
+        return trimmed
+    }
+
     var body: some View {
         let eventsWithCoords = batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil }
         let hasIdentity = (batterEvents.first?.opponentBatterId?.isEmpty == false) || (batterEvents.first?.opponentJersey?.isEmpty == false)
         let playerEvents = batterEvents
         
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Batter notes")
-                        .font(.subheadline.weight(.semibold))
-                    ZStack(alignment: .topLeading) {
-                        TextEditor(text: $batterNotes)
-                            .font(.system(size: 16))
-                            .padding(8)
-                            .scrollContentBackground(.hidden)
-                            .background(Color.clear)
-                            .focused($isBatterNotesFocused)
-
-                        if batterNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Text("Add notes for this batter...")
-                                .font(.system(size: 15))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 16)
-                                .allowsHitTesting(false)
-                        }
-                    }
-                    .frame(minHeight: 60)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+        VStack(alignment: .leading, spacing: 16) {
+            // Keep notes editor outside the main scroll view so its tap/focus is not
+            // competing with nested sheet scroll gestures.
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Batter notes")
+                    .font(.subheadline.weight(.semibold))
+                ZStack(alignment: .topLeading) {
+                    FocusableNotesTextView(
+                        text: $batterNotes,
+                        isFocused: $isBatterNotesFocused
                     )
-                    .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .onTapGesture {
-                        isBatterNotesFocused = true
+                    .frame(maxWidth: .infinity, minHeight: 60, maxHeight: 120)
+
+                    if batterNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Add notes for this batter...")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 16)
+                            .allowsHitTesting(false)
                     }
                 }
+                .frame(minHeight: 60)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .onTapGesture {
+                    isBatterNotesFocused = true
+                }
+            }
 
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Batter spray chart")
@@ -905,8 +989,16 @@ struct PitchEventDetailPopover: View {
                             let evt = item.element
                             let isSource = (evt.id != nil && evt.id == event.id) || (evt.id == nil && event.id == nil && evt.timestamp == event.timestamp)
                             HStack(alignment: .top, spacing: 10) {
-                                let calledLabel = evt.calledPitch.map { "\($0.type) \($0.location)" }
-                                let resultLabel = "\(evt.isStrike ? "Strike" : "Ball") \(evt.location)"
+                                let calledLabel = evt.calledPitch.map { normalizeCardPitchDescription("\($0.type) \($0.location)") }
+                                let resultLabel: String = {
+                                    let loc = evt.location.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    let lowered = loc.lowercased()
+                                    // Avoid duplicating "Strike"/"Ball" when location already includes it.
+                                    if lowered.hasPrefix("strike ") || lowered == "strike" || lowered.hasPrefix("ball ") || lowered == "ball" {
+                                        return normalizeCardPitchDescription(loc)
+                                    }
+                                    return normalizeCardPitchDescription("\(evt.isStrike ? "Strike" : "Ball") \(loc)")
+                                }()
                                 let pitcherName: String = {
                                     if let pid = evt.pitcherId,
                                        let name = pitcherNameById[pid],
@@ -920,18 +1012,25 @@ struct PitchEventDetailPopover: View {
                                         Text("(Coach): \(calledLabel)")
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
-                                            .lineLimit(1)
+                                            .lineLimit(2)
+                                            .multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
                                     }
                                     Text("(Result): \(resultLabel)")
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
-                                        .lineLimit(1)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                        .fixedSize(horizontal: false, vertical: true)
                                     Text("(Pitcher): \(pitcherName)")
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
-                                        .lineLimit(1)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
-                                .frame(maxWidth: 150, alignment: .leading)
+                                .frame(minWidth: 180, maxWidth: 220, alignment: .leading)
+                                .layoutPriority(1)
 
                                 OutcomeSummaryView(
                                     lines: outcomeSummaryLines(for: evt),
@@ -1021,16 +1120,10 @@ struct PitchEventDetailPopover: View {
                     }
                     .padding(.bottom, 18)
                 }
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .simultaneousGesture(
-            TapGesture().onEnded {
-                if isBatterNotesFocused {
-                    isBatterNotesFocused = false
                 }
+                .frame(maxWidth: .infinity)
             }
-        )
+        }
         .onAppear {
             guard let key = batterNotesKey else { return }
             batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
@@ -1039,6 +1132,15 @@ struct PitchEventDetailPopover: View {
             guard let key = batterNotesKey else { return }
             UserDefaults.standard.set(newValue, forKey: key)
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    isBatterNotesFocused = false
+                }
+            }
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 }
 
@@ -1227,6 +1329,8 @@ struct PitchResultSheet: View {
     var onApplyPitcherOverride: (([String], String) -> Void)? = nil
     var sharedBatterJerseyOverrides: [String: String] = [:]
     var onApplyBatterJerseyOverride: (([String], String) -> Void)? = nil
+    var initialJerseyFilter: String? = nil
+    var showTopControls: Bool = true
     var onGearTapOverride: (() -> Void)? = nil
     var controlButtonsOffsetY: CGFloat = -30
     var controlButtonsVerticalPadding: CGFloat = 2
@@ -1234,6 +1338,8 @@ struct PitchResultSheet: View {
     var isCardsTabSelected: Bool = true
     var onSelectProgressTab: (() -> Void)? = nil
     var onSelectCardsTab: (() -> Void)? = nil
+    var currentCountSeed: (balls: Int, strikes: Int)? = nil
+    var onCountChanged: ((Int, Int) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var sessionManager: PitchSessionManager
 
@@ -1263,6 +1369,7 @@ struct PitchResultSheet: View {
     @State private var pitcherFilter: String = ""
     @State private var jerseyFilter: String = ""
     @State private var pitchFilter: String = ""
+    @State private var didApplyInitialJerseyFilter = false
 
     private var pitcherNameById: [String: String] {
         var map: [String: String] = [:]
@@ -1439,7 +1546,8 @@ struct PitchResultSheet: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 
-                HStack {
+                if showTopControls {
+                    HStack {
                         if isSelecting {
                             LazyVGrid(columns: selectionActionColumns, spacing: 10) {
                                 selectionActionButton("Done", tint: .black) {
@@ -1658,17 +1766,18 @@ struct PitchResultSheet: View {
                                 .offset(y: controlButtonsOffsetY)
                             }
                         }
-                }
-                .padding(.horizontal, 20)
-                .background {
-                    if isSelecting {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(.ultraThinMaterial)
-                            .transition(.opacity)
                     }
+                    .padding(.horizontal, 20)
+                    .background {
+                        if isSelecting {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                                .transition(.opacity)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, controlButtonsVerticalPadding)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, controlButtonsVerticalPadding)
 
                 ScrollView(.vertical) {
                     VStack(spacing: 12) {
@@ -1779,7 +1888,10 @@ struct PitchResultSheet: View {
                     selectedPracticeId: target.practiceId,
                     allPitchEvents: allEvents,
                     suggestedCountSeed: nil,
-                    currentCountSeed: nil,
+                    currentCountSeed: currentCountSeed,
+                    onCountChanged: { balls, strikes in
+                        onCountChanged?(balls, strikes)
+                    },
                     lineupBatters: [],
                     selectedPitcherId: target.pitcherId,
                     saveAction: { edited in
@@ -1792,6 +1904,19 @@ struct PitchResultSheet: View {
                 .presentationDragIndicator(.visible)
             }
         }
+        .onAppear {
+            applyInitialJerseyFilterIfNeeded()
+        }
+    }
+
+    private func applyInitialJerseyFilterIfNeeded() {
+        guard !didApplyInitialJerseyFilter else { return }
+        let initial = (initialJerseyFilter ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !initial.isEmpty else { return }
+        if jerseyFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            jerseyFilter = initial
+        }
+        didApplyInitialJerseyFilter = true
     }
     
     private func reassignSelectedEvents(toPitcher pitcher: Pitcher) {
