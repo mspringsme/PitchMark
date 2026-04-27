@@ -233,6 +233,12 @@ struct PitchTrackerView: View {
     @State private var didAutoRetryJerseyDetail = false
     @State private var jerseyDetailPayload: JerseyDetailPayload? = nil
     @State private var atBatPulse = false
+    @State private var showAtBatHeatmapSheet = false
+    @State private var selectedAtBatHeatmapPitch: String = ""
+    @State private var atBatHeatmapResultFilter: BatterHeatmapResultFilter = .all
+    @State private var pendingHeatmapCall: (pitch: String, location: String, isStrike: Bool)? = nil
+    @State private var showHeatmapUnavailablePitchAlert = false
+    @State private var heatmapUnavailablePitchMessage = ""
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
@@ -2967,6 +2973,247 @@ struct PitchTrackerView: View {
         jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber
     }
 
+    private func heatmapResultIsInsideStrikeZone(_ rawLocation: String) -> Bool {
+        let trimmed = rawLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+
+        // Preferred modern format.
+        if lower.hasPrefix("strike ") { return true }
+        if lower.hasPrefix("ball ") { return false }
+
+        // Legacy fallback when prefix was not persisted.
+        let legacyStrikeLabels: Set<String> = [
+            "up & out", "up", "up & in",
+            "out", "middle", "in",
+            "↓ & out", "↓", "↓ & in",
+            "down & out", "down", "down & in",
+            "low & out", "low", "low & in",
+            "high"
+        ]
+        return legacyStrikeLabels.contains(lower)
+    }
+
+    private struct BatterHeatmapPitchStat: Identifiable {
+        let pitch: String
+        let events: [PitchEvent]
+        let successCount: Int
+        let totalCount: Int
+
+        var id: String { pitch }
+        var successRate: Double {
+            guard totalCount > 0 else { return 0 }
+            return Double(successCount) / Double(totalCount)
+        }
+        var successPercentText: String { "\(Int((successRate * 100).rounded()))%" }
+    }
+
+    private enum BatterHeatmapResultFilter: String, CaseIterable, Identifiable {
+        case all = "Strikes+Balls"
+        case hideStrikes = "Hide Strikes"
+        case hideBalls = "Hide Balls"
+
+        var id: String { rawValue }
+    }
+
+    private var selectedBatterHeatmapEvents: [PitchEvent] {
+        let sourceEvents = isGame ? gamePitchEvents : pitchEvents
+        let selectedBatterIdValue = selectedBatterId?.uuidString
+        let selectedJersey = normalizeJersey(selectedJerseyNumberDisplay ?? selectedBatterJersey)
+        guard selectedBatterIdValue != nil || selectedJersey != nil else { return [] }
+
+        return sourceEvents.filter { event in
+            if isGame, let gid = selectedGameId {
+                if let evGameId = event.gameId, !evGameId.isEmpty, evGameId != gid { return false }
+            }
+            if !isGame, let pid = selectedPracticeId, event.practiceId != pid { return false }
+
+            if let selectedBatterIdValue, event.opponentBatterId == selectedBatterIdValue {
+                return true
+            }
+            if let selectedJersey, let evJersey = normalizeJersey(event.opponentJersey), selectedJersey == evJersey {
+                return true
+            }
+            return false
+        }
+    }
+
+    private var batterHeatmapPitchStats: [BatterHeatmapPitchStat] {
+        let grouped = Dictionary(grouping: selectedBatterHeatmapEvents, by: { $0.pitch })
+        return grouped.map { pitch, events in
+            let successCount = events.filter { heatmapResultIsInsideStrikeZone($0.location) }.count
+            return BatterHeatmapPitchStat(
+                pitch: pitch,
+                events: events.sorted { $0.timestamp < $1.timestamp },
+                successCount: successCount,
+                totalCount: events.count
+            )
+        }
+        .sorted {
+            if $0.successRate != $1.successRate { return $0.successRate > $1.successRate }
+            if $0.totalCount != $1.totalCount { return $0.totalCount > $1.totalCount }
+            return $0.pitch.localizedCaseInsensitiveCompare($1.pitch) == .orderedAscending
+        }
+    }
+
+    private var selectedBatterHeatmapPitchResolved: BatterHeatmapPitchStat? {
+        if let selected = batterHeatmapPitchStats.first(where: { $0.pitch == selectedAtBatHeatmapPitch }) {
+            return selected
+        }
+        return batterHeatmapPitchStats.first
+    }
+
+    private var selectedBatterHeatmapFilteredEvents: [PitchEvent] {
+        let all = selectedBatterHeatmapPitchResolved?.events ?? []
+        switch atBatHeatmapResultFilter {
+        case .all:
+            return all
+        case .hideStrikes:
+            return all.filter { !heatmapResultIsInsideStrikeZone($0.location) }
+        case .hideBalls:
+            return all.filter { heatmapResultIsInsideStrikeZone($0.location) }
+        }
+    }
+
+    private var atBatBatterHeatmapSheetView: some View {
+        let batterLabel = selectedJerseyNumberDisplay ?? selectedBatterJersey ?? "-"
+        let hasUsableSelectedPitchChip: Bool = {
+            guard let pitch = selectedBatterHeatmapPitchResolved?.pitch else { return false }
+            return effectivePitchesForStrikeZone.contains(pitch)
+        }()
+        return NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(batterHeatmapPitchStats) { stat in
+                            let isSelected = selectedBatterHeatmapPitchResolved?.pitch == stat.pitch
+                            let isAvailableInCurrentTemplate = effectivePitchesForStrikeZone.contains(stat.pitch)
+                            Button {
+                                selectedAtBatHeatmapPitch = stat.pitch
+                            } label: {
+                                Text("\(stat.pitch) \(stat.successPercentText)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(isSelected ? .white : .primary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(
+                                        Capsule()
+                                            .fill(isSelected ? Color.accentColor : Color(.systemGray6))
+                                    )
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(isSelected ? Color.accentColor.opacity(0.95) : Color.black.opacity(0.2), lineWidth: isSelected ? 2 : 1)
+                                    )
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(
+                                                Color.black.opacity(isAvailableInCurrentTemplate ? 0 : 0.9),
+                                                style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
+                                            )
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+                
+                Text("(% landed in strike zone)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+
+                Picker("Display", selection: $atBatHeatmapResultFilter) {
+                    ForEach(BatterHeatmapResultFilter.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+
+                StrikeZoneHeatmapView(
+                    events: selectedBatterHeatmapFilteredEvents,
+                    interactionHint: hasUsableSelectedPitchChip ? "Tap a location to begin a pitch event" : nil,
+                    onLocationTap: { location, isStrike in
+                        guard let selectedPitchStat = selectedBatterHeatmapPitchResolved else { return }
+                        beginCallFromHeatmap(
+                            pitch: selectedPitchStat.pitch,
+                            location: location,
+                            isStrike: isStrike
+                        )
+                    }
+                )
+                    .padding(.top, 60)
+                    .padding(.horizontal, 6)
+
+                Spacer(minLength: 0)
+            }
+            .navigationTitle("Batter #\(batterLabel) Heat Map")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { showAtBatHeatmapSheet = false }
+                }
+            }
+            .onAppear {
+                if selectedAtBatHeatmapPitch.isEmpty {
+                    selectedAtBatHeatmapPitch = batterHeatmapPitchStats.first?.pitch ?? ""
+                }
+                atBatHeatmapResultFilter = .all
+            }
+        }
+    }
+
+    private func calledPitchCodes(pitch: String, location: String, isStrike: Bool) -> [String] {
+        if let template = selectedTemplate, useEncrypted(for: template) {
+            if let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(label: location, isStrike: isStrike) {
+                return EncryptedCodeGenerator.generateCalls(
+                    template: template,
+                    selectedPitch: pitch,
+                    gridKind: gridKind,
+                    columnIndex: columnIndex,
+                    rowIndex: rowIndex
+                )
+            }
+            return []
+        }
+
+        let fullLabel = "\(isStrike ? "Strike" : "Ball") \(location)"
+        return pitchCodeAssignments
+            .filter { $0.pitch == pitch && $0.location == fullLabel }
+            .map(\.code)
+    }
+
+    private func beginCallFromHeatmap(pitch: String, location: String, isStrike: Bool) {
+        guard canInitiateCall else { return }
+        // If this pitch is not currently available in the active template/grid-key, block and explain.
+        if !effectivePitchesForStrikeZone.contains(pitch) {
+            let templateName = selectedTemplate?.name ?? "current grid key"
+            heatmapUnavailablePitchMessage = "\(pitch) is not available in \(templateName). Change the grid key or select an available pitch."
+            showHeatmapUnavailablePitchAlert = true
+            return
+        }
+
+        pendingHeatmapCall = (pitch: pitch, location: location, isStrike: isStrike)
+        showAtBatHeatmapSheet = false
+    }
+
+    private func executePendingHeatmapCallIfNeeded() {
+        guard let pending = pendingHeatmapCall else { return }
+        pendingHeatmapCall = nil
+
+        selectedPitch = pending.pitch
+        let newCall = PitchCall(
+            pitch: pending.pitch,
+            location: pending.location,
+            isStrike: pending.isStrike,
+            codes: calledPitchCodes(pitch: pending.pitch, location: pending.location, isStrike: pending.isStrike)
+        )
+        // Let sheet dismissal finish before presenting composer.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            handleSetCalledPitch(newCall)
+        }
+    }
+
     private var selectedPitcherName: String {
         guard let pid = selectedPitcherId else { return "Select a pitcher" }
         guard let pitcher = pitchers.first(where: { $0.id == pid }) else { return "Select a pitcher" }
@@ -4525,6 +4772,21 @@ struct PitchTrackerView: View {
                                 .fill(Color.red.opacity(atBatPulse ? 1.0 : 0.01))
                         )
                         .padding(.top, 6)
+                } else {
+                    Button("Map") {
+                        selectedAtBatHeatmapPitch = batterHeatmapPitchStats.first?.pitch ?? ""
+                        showAtBatHeatmapSheet = true
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.blue.opacity(0.95))
+                    )
+                    .buttonStyle(.plain)
+                    .padding(.top, 6)
                 }
                 }
             .frame(width: 60, height: strikeZoneHeight)
@@ -6857,6 +7119,11 @@ struct PitchTrackerView: View {
             } message: {
                 Text(noJerseyEventsMessage)
             }
+            .alert("Pitch Unavailable", isPresented: $showHeatmapUnavailablePitchAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(heatmapUnavailablePitchMessage)
+            }
             .sheet(item: $jerseyDetailPayload) { payload in
                 let event = payload.event
                 let sourceEvents = isGame ? gamePitchEvents : pitchEvents
@@ -6906,6 +7173,13 @@ struct PitchTrackerView: View {
                 .ignoresSafeArea(.keyboard, edges: .bottom)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showAtBatHeatmapSheet, onDismiss: {
+                executePendingHeatmapCallIfNeeded()
+            }) {
+                atBatBatterHeatmapSheetView
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
             }
             .fullScreenCover(isPresented: displayCoverBinding) {
                 displayCoverView
@@ -7945,21 +8219,28 @@ struct JerseyRow: View {
                     onSelectedBatterChanged(cell)
                 }
             }
-            .onAppear {
-                if isSelected {
-                    withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                        selectedPulse = true
+            .task(id: isSelected) {
+                // Deterministic pulse loop tied to selection state.
+                // Task is canceled automatically when selection changes.
+                if !isSelected {
+                    withTransaction(Transaction(animation: nil)) {
+                        selectedPulse = false
                     }
-                } else {
+                    return
+                }
+
+                withTransaction(Transaction(animation: nil)) {
                     selectedPulse = false
                 }
-            }
-            .onChange(of: isSelected) { _, newValue in
-                if newValue {
-                    withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                        selectedPulse = true
+
+                while !Task.isCancelled {
+                    withAnimation(.easeInOut(duration: 0.9)) {
+                        selectedPulse.toggle()
                     }
-                } else {
+                    try? await Task.sleep(nanoseconds: 900_000_000)
+                }
+
+                withTransaction(Transaction(animation: nil)) {
                     selectedPulse = false
                 }
             }

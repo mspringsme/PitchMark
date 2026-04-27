@@ -2090,9 +2090,7 @@ struct PitcherStatsSheetView: View {
     @State private var hitSpotPitchFilter: String = "All"
     @State private var hitSpotSuccessFilter: HitSpotSuccessFilter = .all
     @State private var hitSpotOrder: HitSpotOrder = .chronological
-    @State private var heatmapPitchFilter: String = "All"
-    @State private var heatmapSource: HeatmapLocationSource = .result
-    @State private var heatmapCalledStrikeOnly: Bool = false
+    @State private var selectedHeatmapPitch: String = ""
 
     private var sortedGames: [Game] {
         games.sorted { $0.date > $1.date }
@@ -2416,18 +2414,32 @@ struct PitcherStatsSheetView: View {
             .sorted { $0.timestamp > $1.timestamp }
     }
 
-    private var heatmapPitchOptions: [String] {
-        let unique = Set(filteredEvents.map { $0.pitch }.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    private var heatmapPitchTypes: [String] {
+        let unique = Set(
+            filteredEvents
+                .map { $0.pitch.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
         return unique.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
-    private var heatmapSummary: HeatmapSummary {
-        buildHeatmapSummary(
-            events: filteredEvents,
-            pitchType: heatmapPitchFilter == "All" ? nil : heatmapPitchFilter,
-            calledStrikeOnly: heatmapCalledStrikeOnly,
-            source: heatmapSource
-        )
+    private var selectedHeatmapPitchResolved: String? {
+        if !selectedHeatmapPitch.isEmpty, heatmapPitchTypes.contains(selectedHeatmapPitch) {
+            return selectedHeatmapPitch
+        }
+        return heatmapPitchTypes.first
+    }
+
+    private var heatmapEventsForSelectedPitch: [PitchEvent] {
+        guard let pitch = selectedHeatmapPitchResolved else { return [] }
+        return filteredEvents
+            .filter { $0.pitch == pitch }
+            .sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private var heatmapCountByPitch: [String: Int] {
+        Dictionary(grouping: filteredEvents, by: { $0.pitch })
+            .mapValues(\.count)
     }
 
     private var pitchStats: [(name: String, count: Int, hitSpotPct: Int)] {
@@ -2826,7 +2838,6 @@ struct PitcherStatsSheetView: View {
                         }
 
                         summarySection
-                        heatMapSection
                         if shouldShowDatePickerSection {
                             statsPickerSection
                         }
@@ -2865,10 +2876,10 @@ struct PitcherStatsSheetView: View {
                         .padding(.horizontal)
 
                         summarySection
-                        heatMapSection
                     }
                     pitchBreakdownSection
                     outcomesSection
+                    heatMapSection
                 }
                 .padding(.vertical, 8)
             }
@@ -2971,47 +2982,44 @@ struct PitcherStatsSheetView: View {
                 .font(.headline)
                 .padding(.horizontal)
 
-            HStack(spacing: 10) {
-                Menu {
-                    Button("All") { heatmapPitchFilter = "All" }
-                    ForEach(heatmapPitchOptions, id: \.self) { pitch in
-                        Button(pitch) { heatmapPitchFilter = pitch }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(heatmapPitchFilter == "All" ? "Pitch Type" : heatmapPitchFilter)
-                            .font(.caption.weight(.semibold))
-                        Image(systemName: "chevron.down")
-                            .font(.caption2.weight(.semibold))
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color(.systemGray6)))
-                }
-
-                Picker("Source", selection: $heatmapSource) {
-                    ForEach(HeatmapLocationSource.allCases) { source in
-                        Text(source.rawValue).tag(source)
-                    }
-                }
-                .pickerStyle(.segmented)
-            }
-            .padding(.horizontal)
-
-            HStack {
-                Text("Any Called Strike")
+            if heatmapPitchTypes.isEmpty {
+                Text("No pitches recorded.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
-                Toggle("", isOn: $heatmapCalledStrikeOnly)
-                    .labelsHidden()
-            }
-            .padding(.horizontal)
+                    .padding(.horizontal)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(heatmapPitchTypes, id: \.self) { pitch in
+                            let isSelected = (selectedHeatmapPitchResolved == pitch)
+                            let pitchCount = heatmapCountByPitch[pitch] ?? 0
+                            Button {
+                                selectedHeatmapPitch = pitch
+                            } label: {
+                                Text("\(pitch) \(pitchCount)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundColor(isSelected ? .white : .primary)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 7)
+                                    .background(
+                                        Capsule().fill(isSelected ? Color.accentColor : Color(.systemGray6))
+                                    )
+                                    .overlay(
+                                        Capsule().stroke(isSelected ? Color.accentColor.opacity(0.9) : Color.black.opacity(0.2), lineWidth: isSelected ? 2 : 1)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
 
-            StrikeZoneHeatmapView(summary: heatmapSummary)
-                .padding(12)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(.horizontal)
+                StrikeZoneHeatmapView(events: heatmapEventsForSelectedPitch)
+                    .frame(maxWidth: .infinity)
+                    .padding(6)
+                    .padding(.top, 18)
+            }
         }
     }
 
