@@ -601,11 +601,22 @@ struct PitchResultCard: View {
     }
 
     var body: some View {
-        let leftImageName: String = PitchAssetMapper.imageName(
-            for: event.calledPitch?.location ?? "-",
-            isStrike: event.calledPitch?.isStrike ?? false,
-            batterSide: event.batterSide
-        )
+        let leftImageName: String = {
+            let calledIsStrike = event.calledPitch?.isStrike ?? false
+            let rawCalledLocation = (event.calledPitch?.location ?? "-")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedCalledLocation: String
+            if rawCalledLocation.hasPrefix("Strike ") || rawCalledLocation.hasPrefix("Ball ") {
+                normalizedCalledLocation = rawCalledLocation
+            } else {
+                normalizedCalledLocation = "\(calledIsStrike ? "Strike" : "Ball") \(rawCalledLocation)"
+            }
+            return PitchImageDictionary.imageName(
+                for: normalizedCalledLocation,
+                isStrike: calledIsStrike,
+                batterSide: event.batterSide
+            )
+        }()
         
         let rightImageName: String = PitchImageDictionary.imageName(
             for: event.location,
@@ -1126,6 +1137,13 @@ struct PitchEventDetailPopover: View {
         }
         .onAppear {
             guard let key = batterNotesKey else { return }
+            batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
+        }
+        .onChange(of: batterNotesKey) { _, newKey in
+            guard let key = newKey else {
+                batterNotes = ""
+                return
+            }
             batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
         }
         .onChange(of: batterNotes) { _, newValue in

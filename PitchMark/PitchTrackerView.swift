@@ -2807,9 +2807,10 @@ struct PitchTrackerView: View {
         intBinding(
             get: { hits },
             set: { newValue in
+                // Always reflect immediately in local UI, even if persistence targets are unavailable.
+                hits = newValue
                 if let liveId = activeLiveId {
                     LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["hits": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    hits = newValue
                     mirrorLiveProgressToGame(field: "hits", value: newValue)
                     return
                 }
@@ -2832,9 +2833,10 @@ struct PitchTrackerView: View {
         intBinding(
             get: { walks },
             set: { newValue in
+                // Always reflect immediately in local UI, even if persistence targets are unavailable.
+                walks = newValue
                 if let liveId = activeLiveId {
                     LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["walks": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    walks = newValue
                     mirrorLiveProgressToGame(field: "walks", value: newValue)
                     return
                 }
@@ -3617,7 +3619,7 @@ struct PitchTrackerView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Balls")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.black)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             HStack(spacing: 8) {
@@ -3628,7 +3630,7 @@ struct PitchTrackerView: View {
                         ballsBinding.wrappedValue = next
                     } label: {
                         Image(systemName: idx < max(0, min(3, balls)) ? "circle.fill" : "circle")
-                            .font(.caption)
+                            .font(.system(size: 17, weight: .regular))
                             .foregroundStyle(idx < max(0, min(3, balls)) ? Color.red : Color.primary)
                     }
                     .buttonStyle(.plain)
@@ -3642,7 +3644,7 @@ struct PitchTrackerView: View {
         VStack(alignment: .trailing, spacing: 6) {
             Text("Strikes")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.black)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             HStack(spacing: 8) {
@@ -3653,7 +3655,7 @@ struct PitchTrackerView: View {
                         strikesBinding.wrappedValue = next
                     } label: {
                         Image(systemName: idx < max(0, min(2, strikes)) ? "circle.fill" : "circle")
-                            .font(.caption)
+                            .font(.system(size: 17, weight: .regular))
                             .foregroundStyle(idx < max(0, min(2, strikes)) ? Color.green : Color.primary)
                     }
                     .buttonStyle(.plain)
@@ -4130,6 +4132,9 @@ struct PitchTrackerView: View {
             },
             onCancel: {
                 pendingGameConfirmation = nil
+                DispatchQueue.main.async {
+                    showSettings = true
+                }
             }
         )
     }
@@ -5148,6 +5153,7 @@ struct PitchTrackerView: View {
         writeResultSelection(label: eventToPersist.location)
 
         sessionManager.incrementCount()
+        applyProgressCounterAdjustments(for: eventToPersist)
 
         // ✅ LIVE: do NOT append to local pitchEvents (prevents “saved on participant” feeling).
         // Owner will show cards from live listener; practice/legacy continue using pitchEvents.
@@ -5180,6 +5186,34 @@ struct PitchTrackerView: View {
         isError = false
         selectedOutcome = nil
         selectedDescriptor = nil
+    }
+
+    private func applyProgressCounterAdjustments(for event: PitchEvent) {
+        if event.isBall == true {
+            let nextBalls = min(3, max(0, balls + 1))
+            ballsBinding.wrappedValue = nextBalls
+        }
+
+        let normalizedOutcome = (event.outcome ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if normalizedOutcome == "walk" {
+            let nextWalks = max(0, walks + 1)
+            walksBinding.wrappedValue = nextWalks
+        }
+
+        let hitOutcomes: Set<String> = ["1b", "2b", "3b", "hr", "hit"]
+        let descriptorTokens: Set<String> = Set(
+            (event.descriptor ?? "")
+                .lowercased()
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        )
+        let isHitEvent = hitOutcomes.contains(normalizedOutcome) || descriptorTokens.contains("hit")
+        if isHitEvent {
+            let nextHits = max(0, hits + 1)
+            hitsBinding.wrappedValue = nextHits
+        }
     }
 
     private func syncCountFromComposer(balls: Int, strikes: Int) {
@@ -6286,10 +6320,10 @@ struct PitchTrackerView: View {
         gameSummaryEvents.filter { $0.passedBall }.count
     }
     private var summaryWalkCount: Int {
-        gameSummaryEvents.filter { event in
-            guard let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else { return false }
-            return outcome.contains("walk")
-        }.count
+        max(0, walks)
+    }
+    private var summaryHitCount: Int {
+        max(0, hits)
     }
     private var summaryPitchBreakdown: [(pitch: String, count: Int)] {
         let grouped = Dictionary(grouping: gameSummaryEvents, by: { event in
@@ -6353,6 +6387,7 @@ struct PitchTrackerView: View {
         - Strike Looking: \(summaryStrikeLookingCount)
         - Strike Swinging: \(summaryStrikeSwingingCount)
         - Walks: \(summaryWalkCount)
+        - Hits: \(summaryHitCount)
         - Wild Pitches: \(summaryWildPitchCount)
         - Passed Balls: \(summaryPassedBallCount)
 
@@ -6422,6 +6457,7 @@ struct PitchTrackerView: View {
                         summaryMetricRow(title: "Strike Looking", value: "\(summaryStrikeLookingCount)")
                         summaryMetricRow(title: "Strike Swinging", value: "\(summaryStrikeSwingingCount)")
                         summaryMetricRow(title: "Walks", value: "\(summaryWalkCount)")
+                        summaryMetricRow(title: "Hits", value: "\(summaryHitCount)")
                         summaryMetricRow(title: "Wild Pitches", value: "\(summaryWildPitchCount)")
                         summaryMetricRow(title: "Passed Balls", value: "\(summaryPassedBallCount)")
                     }
@@ -9301,34 +9337,52 @@ private struct SessionConfirmationSheet: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Pitcher")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Pitcher")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.black)
 
-                Picker("Pitcher", selection: $selectedPitcherId) {
-                    Text("Not set").tag(String?.none)
-                    ForEach(pitchers) { pitcher in
-                        Text(pitcher.name).tag(pitcher.id)
+                    Picker("Pitcher", selection: $selectedPitcherId) {
+                        Text("Not set")
+                            .font(.body.weight(.semibold))
+                            .tag(String?.none)
+                        ForEach(pitchers) { pitcher in
+                            Text(pitcher.name)
+                                .font(.body.weight(.semibold))
+                                .tag(pitcher.id)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .font(.title3.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            }
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Grid Key")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Grid Key")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.black)
 
-                Picker("Grid Key", selection: $selectedTemplateId) {
-                    Text("Not set").tag(UUID?.none)
-                    ForEach(templates) { template in
-                        Text(template.name).tag(Optional(template.id))
+                    Picker("Grid Key", selection: $selectedTemplateId) {
+                        Text("Not set")
+                            .font(.body.weight(.semibold))
+                            .tag(UUID?.none)
+                        ForEach(templates) { template in
+                            Text(template.name)
+                                .font(.body.weight(.semibold))
+                                .tag(Optional(template.id))
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .font(.title3.weight(.semibold))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .pickerStyle(.menu)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
 
             HStack(spacing: 12) {

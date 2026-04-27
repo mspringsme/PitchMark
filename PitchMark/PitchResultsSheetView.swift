@@ -182,6 +182,9 @@ private struct ToggleSection: View {
             }
 
             HStack(spacing: 8) {
+                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
+                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
                 toggleButton("Ball", isOn: isBall, disabled: isBallDisabled) {
                     let next = !isBall
                     isBall = next
@@ -189,9 +192,6 @@ private struct ToggleSection: View {
                         onRequestSymbolPicker(.ball)
                     }
                 }
-                OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
-                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
-                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
             }
 
         }
@@ -355,6 +355,7 @@ struct PitchResultSheetView: View {
     @Binding var selectedDescriptor: String?
     @Binding var isError: Bool
     @State private var isHitBatter = false
+    @State private var isHitTagSelected = false
 
     @State private var battedBallRegionName: String? = nil
     @State private var battedBallSelection: OverlaySelection? = nil
@@ -440,6 +441,7 @@ struct PitchResultSheetView: View {
         isHitBatter = false
         selectedOutcome = nil
         selectedDescriptor = nil
+        isHitTagSelected = false
         isError = false
         battedBallRegionName = nil
         battedBallSelection = nil
@@ -845,7 +847,15 @@ struct PitchResultSheetView: View {
             passedBall: isPassedBall,
             strikeLooking: isStrikeLooking,
             outcome: isHitBatter ? "HBP" : selectedOutcome,
-            descriptor: selectedDescriptor,
+            descriptor: {
+                if isHitTagSelected {
+                    if let selectedDescriptor, !selectedDescriptor.isEmpty {
+                        return "\(selectedDescriptor), Hit"
+                    }
+                    return "Hit"
+                }
+                return selectedDescriptor
+            }(),
             errorOnPlay: isError,
             battedBallRegion: battedBallRegionName,
             battedBallType: {
@@ -968,6 +978,7 @@ struct PitchResultSheetView: View {
                 OutcomeButtonsSection(
                     selectedOutcome: $selectedOutcome,
                     selectedDescriptor: $selectedDescriptor,
+                    isHitTagSelected: $isHitTagSelected,
                     isOutcomeDisabled: isOutcomeDisabled
                 )
                 .padding(.horizontal)
@@ -990,6 +1001,7 @@ struct PitchResultSheetView: View {
                     (battedBallRegionName != nil) ||
                     (selectedOutcome != nil) ||
                     (selectedDescriptor != nil) ||
+                    isHitTagSelected ||
                     isError ||
                     isStrikeSwinging ||
                     isStrikeLooking ||
@@ -1256,6 +1268,7 @@ struct PitchResultSheetView: View {
 private struct OutcomeButtonsSection: View {
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
+    @Binding var isHitTagSelected: Bool
     var isOutcomeDisabled: (String) -> Bool
     
     var body: some View {
@@ -1269,6 +1282,20 @@ private struct OutcomeButtonsSection: View {
                 OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("2B"), usesDescriptorSelection: false)
                 OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("3B"), usesDescriptorSelection: false)
                 OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
+                Button {
+                    isHitTagSelected.toggle()
+                } label: {
+                    Text("Hit")
+                        .font(.system(size: 14, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(isHitTagSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOutcomeDisabled("Hit"))
+                .opacity(isOutcomeDisabled("Hit") ? 0.4 : 1.0)
             }
             HStack(spacing: 8) {
                 OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)

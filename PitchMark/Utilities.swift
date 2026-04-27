@@ -410,3 +410,165 @@ enum PitchImageDictionary {
         }
     }
 }
+
+enum HeatmapLocationSource: String, CaseIterable, Identifiable {
+    case result = "Result"
+    case called = "Called"
+
+    var id: String { rawValue }
+}
+
+struct HeatmapCell: Identifiable, Hashable {
+    let row: Int
+    let col: Int
+    let count: Int
+
+    var id: String { "\(row)-\(col)" }
+}
+
+struct HeatmapSummary {
+    let cells: [HeatmapCell]
+    let outerCounts: [Int]
+    let maxCount: Int
+    let outerMaxCount: Int
+    let totalCount: Int
+}
+
+private enum HeatmapPoint {
+    case inner(row: Int, col: Int)
+    case outer(index: Int) // 0...7 matches StrikeZoneView ballLocations order
+}
+
+private func heatmapPoint(for rawLocation: String) -> HeatmapPoint? {
+    let trimmed = rawLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+    let prefix: String? = {
+        if trimmed.hasPrefix("Strike ") { return "strike" }
+        if trimmed.hasPrefix("Ball ") { return "ball" }
+        return nil
+    }()
+
+    var zone = trimmed
+    if trimmed.hasPrefix("Strike ") {
+        zone = String(trimmed.dropFirst("Strike ".count))
+    } else if trimmed.hasPrefix("Ball ") {
+        zone = String(trimmed.dropFirst("Ball ".count))
+    }
+
+    let normalized = zone
+        .lowercased()
+        .replacingOccurrences(of: "—", with: " ")
+        .replacingOccurrences(of: "–", with: " ")
+        .replacingOccurrences(of: "-", with: " ")
+        .replacingOccurrences(of: "  ", with: " ")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    // Ball-prefixed locations map to the outside ring.
+    if prefix == "ball" {
+        if normalized.contains("up") && normalized.contains("out") { return .outer(index: 0) }
+        if normalized == "up" || normalized == "high" { return .outer(index: 1) }
+        if normalized.contains("up") && normalized.contains("in") { return .outer(index: 2) }
+        if normalized == "out" { return .outer(index: 3) }
+        if normalized == "in" { return .outer(index: 4) }
+        if (normalized.contains("↓") || normalized.contains("down") || normalized.contains("low")) && normalized.contains("out") { return .outer(index: 5) }
+        if normalized == "↓" || normalized == "down" || normalized == "low" { return .outer(index: 6) }
+        if (normalized.contains("↓") || normalized.contains("down") || normalized.contains("low")) && normalized.contains("in") { return .outer(index: 7) }
+    }
+
+    // Strike-prefixed locations map to inner grid.
+    if prefix == "strike" {
+        if normalized.contains("up") && normalized.contains("out") { return .inner(row: 0, col: 0) }
+        if normalized == "up" || normalized == "high" { return .inner(row: 0, col: 1) }
+        if normalized.contains("up") && normalized.contains("in") { return .inner(row: 0, col: 2) }
+        if normalized == "out" { return .inner(row: 1, col: 0) }
+        if normalized == "middle" { return .inner(row: 1, col: 1) }
+        if normalized == "in" { return .inner(row: 1, col: 2) }
+        if (normalized.contains("↓") || normalized.contains("down") || normalized.contains("low")) && normalized.contains("out") { return .inner(row: 2, col: 0) }
+        if normalized == "↓" || normalized == "down" || normalized == "low" { return .inner(row: 2, col: 1) }
+        if (normalized.contains("↓") || normalized.contains("down") || normalized.contains("low")) && normalized.contains("in") { return .inner(row: 2, col: 2) }
+    }
+
+    // Fallback for legacy labels without explicit Strike/Ball prefix:
+    let row: Int? = {
+        if normalized.contains("up") || normalized.contains("high") { return 0 }
+        if normalized.contains("↓") || normalized.contains("low") || normalized.contains("down") { return 2 }
+        if normalized.contains("middle") { return 1 }
+        if normalized.contains("in") || normalized.contains("out") { return 1 }
+        return nil
+    }()
+
+    let col: Int? = {
+        if normalized.contains("out") { return 0 }
+        if normalized.contains("middle") { return 1 }
+        if normalized.contains("in") { return 2 }
+        if normalized.contains("up") || normalized.contains("high") || normalized.contains("↓") || normalized.contains("low") || normalized.contains("down") {
+            return 1
+        }
+        return nil
+    }()
+
+    guard let row, let col else { return nil }
+    return .inner(row: row, col: col)
+}
+
+func buildHeatmapSummary(
+    events: [PitchEvent],
+    pitchType: String? = nil,
+    calledStrikeOnly: Bool = false,
+    source: HeatmapLocationSource
+) -> HeatmapSummary {
+    let filtered = events.filter { event in
+        if let pitchType, !pitchType.isEmpty {
+            return event.pitch == pitchType
+        }
+        return true
+    }
+    .filter { event in
+        if calledStrikeOnly {
+            return event.calledPitch?.isStrike == true
+        }
+        return true
+    }
+
+    var buckets: [String: Int] = [:]
+    var outerCounts = Array(repeating: 0, count: 8)
+    var total = 0
+    for event in filtered {
+        let rawLocation: String = {
+            switch source {
+            case .result:
+                return event.location
+            case .called:
+                return event.calledPitch?.location ?? ""
+            }
+        }()
+        guard let point = heatmapPoint(for: rawLocation) else { continue }
+        switch point {
+        case let .inner(row, col):
+            let key = "\(row)-\(col)"
+            buckets[key, default: 0] += 1
+        case let .outer(index):
+            guard outerCounts.indices.contains(index) else { break }
+            outerCounts[index] += 1
+        }
+        total += 1
+    }
+
+    var cells: [HeatmapCell] = []
+    var maxCount = 0
+    for row in 0..<3 {
+        for col in 0..<3 {
+            let count = buckets["\(row)-\(col)"] ?? 0
+            maxCount = max(maxCount, count)
+            cells.append(HeatmapCell(row: row, col: col, count: count))
+        }
+    }
+    let outerMaxCount = outerCounts.max() ?? 0
+
+    return HeatmapSummary(
+        cells: cells,
+        outerCounts: outerCounts,
+        maxCount: maxCount,
+        outerMaxCount: outerMaxCount,
+        totalCount: total
+    )
+}

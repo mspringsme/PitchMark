@@ -90,24 +90,22 @@ final class TopRowValidationCoordinator: ObservableObject {
         return formatWithInterpunct(raw)
     }
     
-    // For a specific column, gather all characters already used in that column across rows 1..3 in both grids
-    private func usedCharactersInColumn(_ col: Int, excludingRow excludedRow: Int) -> Set<Character> {
+    // For a specific column, gather all characters already used in that column across rows 1..3
+    // for the requested grid only (strike or balls).
+    private func usedCharactersInColumn(isStrike: Bool, _ col: Int, excludingRow excludedRow: Int) -> Set<Character> {
         var set: Set<Character> = []
-        // Strike
+        let rows = isStrike ? strikeRows : ballsRows
         for r in 1...3 where r != excludedRow {
-            for ch in alnumOnlyUppercased(strikeRows[r][col]) { set.insert(ch) }
-        }
-        // Balls
-        for r in 1...3 where r != excludedRow {
-            for ch in alnumOnlyUppercased(ballsRows[r][col]) { set.insert(ch) }
+            guard rows.indices.contains(r), rows[r].indices.contains(col) else { continue }
+            for ch in alnumOnlyUppercased(rows[r][col]) { set.insert(ch) }
         }
         return set
     }
     
     // Apply column-uniqueness filter to a proposed value for (row, col)
-    private func filteredForColumnUniqueness(row: Int, col: Int, proposed: String) -> String {
+    private func filteredForColumnUniqueness(isStrike: Bool, row: Int, col: Int, proposed: String) -> String {
         guard (1...3).contains(row) else { return proposed }
-        let used = usedCharactersInColumn(col, excludingRow: row)
+        let used = usedCharactersInColumn(isStrike: isStrike, col, excludingRow: row)
         var result: [Character] = []
         for ch in alnumOnlyUppercased(proposed) {
             if used.contains(ch) { continue }
@@ -117,23 +115,91 @@ final class TopRowValidationCoordinator: ObservableObject {
         return String(result.prefix(3))
     }
     
-    // Set a body row value (rows 1..3): mirror to all three columns in that row for BOTH grids, after enforcing column uniqueness.
-    func setBodyRowMirrored(row: Int, col: Int, rawValue: String) {
+    private func setBodyCell(isStrike: Bool, row: Int, col: Int, value: String) {
+        if isStrike {
+            guard strikeRows.indices.contains(row), strikeRows[row].indices.contains(col) else { return }
+            strikeRows[row][col] = value
+        } else {
+            guard ballsRows.indices.contains(row), ballsRows[row].indices.contains(col) else { return }
+            ballsRows[row][col] = value
+        }
+    }
+
+    private func bodyCell(isStrike: Bool, row: Int, col: Int) -> String {
+        if isStrike {
+            guard strikeRows.indices.contains(row), strikeRows[row].indices.contains(col) else { return "" }
+            return strikeRows[row][col]
+        } else {
+            guard ballsRows.indices.contains(row), ballsRows[row].indices.contains(col) else { return "" }
+            return ballsRows[row][col]
+        }
+    }
+
+    // Edit only the targeted body cell. If the user adds characters that already
+    // exist elsewhere in this same column, remove those added characters from the
+    // other rows in the same column (keep the edited cell as source of truth).
+    func setBodyCellEditingOnly(isStrike: Bool, row: Int, col: Int, rawValue: String) {
         guard (1...3).contains(row) else { return }
-        // Sanitize
-        let sanitized = sanitizeBodyInput(rawValue)
-        // Enforce column uniqueness for the originating column first
-        let filtered = filteredForColumnUniqueness(row: row, col: col, proposed: sanitized)
-        // Mirror across all 3 columns in this row for both grids, but for each column re-apply column-specific uniqueness
-        for c in 0..<3 {
-            let colFiltered = filteredForColumnUniqueness(row: row, col: c, proposed: filtered)
-            let formatted = formatWithInterpunct(colFiltered)
-            if strikeRows.indices.contains(row) && strikeRows[row].indices.contains(c) {
-                strikeRows[row][c] = formatted
+        let previousRaw = String(alnumOnlyUppercased(bodyCell(isStrike: isStrike, row: row, col: col)).prefix(3))
+        let newRaw = String(alnumOnlyUppercased(rawValue).prefix(3))
+
+        let previousSet = Set(previousRaw)
+        let newSet = Set(newRaw)
+        let addedChars = newSet.subtracting(previousSet)
+
+        if !addedChars.isEmpty {
+            for otherRow in 1...3 where otherRow != row {
+                let existingRaw = String(alnumOnlyUppercased(bodyCell(isStrike: isStrike, row: otherRow, col: col)).prefix(3))
+                let cleaned = String(existingRaw.filter { !addedChars.contains($0) }.prefix(3))
+                setBodyCell(isStrike: isStrike, row: otherRow, col: col, value: formatWithInterpunct(cleaned))
             }
-            if ballsRows.indices.contains(row) && ballsRows[row].indices.contains(c) {
-                ballsRows[row][c] = formatted
+        }
+
+        setBodyCell(isStrike: isStrike, row: row, col: col, value: formatWithInterpunct(newRaw))
+    }
+
+    // Set a body value and repeat it across all six body columns (3 strike + 3 balls),
+    // choosing a random row per column while keeping per-column uniqueness by character.
+    func setBodyValueRepeatingAcrossColumns(isStrikeSource: Bool, row: Int, col: Int, rawValue: String) {
+        guard (1...3).contains(row) else { return }
+        let baseRaw = String(alnumOnlyUppercased(rawValue).prefix(3))
+        if baseRaw.isEmpty {
+            setBodyCell(isStrike: isStrikeSource, row: row, col: col, value: "")
+            return
+        }
+        let columns: [(isStrike: Bool, col: Int)] = [
+            (true, 0), (true, 1), (true, 2),
+            (false, 0), (false, 1), (false, 2)
+        ]
+
+        for target in columns {
+            let targetRow: Int = {
+                if target.isStrike == isStrikeSource && target.col == col { return row }
+                let valid = (1...3).filter { candidateRow in
+                    filteredForColumnUniqueness(
+                        isStrike: target.isStrike,
+                        row: candidateRow,
+                        col: target.col,
+                        proposed: baseRaw
+                    ) == baseRaw
+                }
+                return valid.randomElement() ?? Int.random(in: 1...3)
+            }()
+
+            // Remove conflicting characters from other rows in this same column.
+            for r in 1...3 where r != targetRow {
+                let existingRaw = String(alnumOnlyUppercased(bodyCell(isStrike: target.isStrike, row: r, col: target.col)))
+                let cleaned = String(existingRaw.filter { !baseRaw.contains($0) }.prefix(3))
+                setBodyCell(isStrike: target.isStrike, row: r, col: target.col, value: formatWithInterpunct(cleaned))
             }
+
+            let filtered = filteredForColumnUniqueness(
+                isStrike: target.isStrike,
+                row: targetRow,
+                col: target.col,
+                proposed: baseRaw
+            )
+            setBodyCell(isStrike: target.isStrike, row: targetRow, col: target.col, value: formatWithInterpunct(filtered))
         }
     }
     
@@ -258,7 +324,9 @@ final class TopRowValidationCoordinator: ObservableObject {
         fill(isStrike: true, lettersUsed: &lettersUsed)
         fill(isStrike: false, lettersUsed: &lettersUsed)
     }
-    // Populate rows 1..3 in both grids with sequential two-digit codes, repeating across columns but unique per row and never repeating down
+    // Populate rows 1..3 in both grids using three base sequential pairs.
+    // The three pairs repeat in every column, but each column gets a random row order.
+    // This guarantees no character repeats within the same column across rows.
     func randomizeBodyRowsWithSequentialPairs() {
         // Build ascending sequential digit pairs with wrap from 9->0 (01,12,...,89,90)
         var pairs: [String] = []
@@ -266,70 +334,49 @@ final class TopRowValidationCoordinator: ObservableObject {
             let next = (i + 1) % 10
             pairs.append("\(i)\(next)")
         }
-        
-        // Helper to extract the two digits as Characters
+
         func digits(of s: String) -> (Character, Character)? {
             guard s.count == 2, let a = s.first, let b = s.last, a.isNumber, b.isNumber else { return nil }
             return (a, b)
         }
-        
-        // Find three pairs that do not share any digit among them (six distinct digits total)
-        var picked: [String] = []
-        var usedDigits: Set<Character> = []
+
+        // Pick 3 pairs with non-overlapping digits so each column can satisfy uniqueness constraints.
+        var baseValues: [String] = []
         let shuffled = pairs.shuffled()
-        
-        for first in shuffled {
-            guard let (f1, f2) = digits(of: first) else { continue }
-            let used1: Set<Character> = [f1, f2]
-            for second in shuffled where second != first {
-                guard let (s1, s2) = digits(of: second) else { continue }
-                if used1.contains(s1) || used1.contains(s2) { continue }
-                var used2 = used1
-                used2.insert(s1); used2.insert(s2)
-                for third in shuffled where third != first && third != second {
-                    guard let (t1, t2) = digits(of: third) else { continue }
-                    if used2.contains(t1) || used2.contains(t2) { continue }
-                    picked = [first, second, third]
-                    usedDigits = used2
-                    usedDigits.insert(t1); usedDigits.insert(t2)
-                    break
+        outerLoop: for a in shuffled {
+            guard let (a1, a2) = digits(of: a) else { continue }
+            let usedA: Set<Character> = [a1, a2]
+            for b in shuffled where b != a {
+                guard let (b1, b2) = digits(of: b) else { continue }
+                if usedA.contains(b1) || usedA.contains(b2) { continue }
+                var usedB = usedA
+                usedB.insert(b1); usedB.insert(b2)
+                for c in shuffled where c != a && c != b {
+                    guard let (c1, c2) = digits(of: c) else { continue }
+                    if usedB.contains(c1) || usedB.contains(c2) { continue }
+                    baseValues = [a, b, c]
+                    break outerLoop
                 }
-                if picked.count == 3 { break }
-            }
-            if picked.count == 3 { break }
-        }
-        
-        // Fallback: if not found (should be rare), greedily pick without digit overlap where possible
-        if picked.count < 3 {
-            picked.removeAll()
-            usedDigits.removeAll()
-            for p in shuffled {
-                guard let (d1, d2) = digits(of: p) else { continue }
-                if usedDigits.contains(d1) || usedDigits.contains(d2) { continue }
-                picked.append(p)
-                usedDigits.insert(d1); usedDigits.insert(d2)
-                if picked.count == 3 { break }
             }
         }
-        
-        // Absolute safety: if still < 3, fill with any remaining pairs (won't happen realistically)
-        var idx = 0
-        while picked.count < 3 && idx < pairs.count {
-            let cand = pairs[idx]
-            if !picked.contains(cand) { picked.append(cand) }
-            idx += 1
+
+        if baseValues.count < 3 {
+            // Safe fallback
+            baseValues = Array(shuffled.prefix(3))
         }
-        
-        // Assign to rows 1..3, mirror across all three columns, for both strike and balls grids
-        for r in 1...3 {
-            let value = picked[r - 1]
-            let formatted = formatWithInterpunct(value)
-            for c in 0..<3 {
+
+        // For each of the 6 columns (3 strike + 3 balls), randomize row order independently.
+        for c in 0..<3 {
+            let strikeColumn = baseValues.shuffled()
+            let ballsColumn = baseValues.shuffled()
+            for r in 1...3 {
+                let strikeFormatted = formatWithInterpunct(strikeColumn[r - 1])
+                let ballsFormatted = formatWithInterpunct(ballsColumn[r - 1])
                 if strikeRows.indices.contains(r) && strikeRows[r].indices.contains(c) {
-                    strikeRows[r][c] = formatted
+                    strikeRows[r][c] = strikeFormatted
                 }
                 if ballsRows.indices.contains(r) && ballsRows[r].indices.contains(c) {
-                    ballsRows[r][c] = formatted
+                    ballsRows[r][c] = ballsFormatted
                 }
             }
         }
@@ -2395,7 +2442,12 @@ struct StrikeLocationGridView: View {
                             binding.wrappedValue = sanitized
                             if coord.strikeTopRow.indices.contains(col) { coord.strikeTopRow[col] = sanitized }
                         } else if let coord = topRowCoordinator {
-                            coord.setBodyRowMirrored(row: row, col: col, rawValue: newValue)
+                            coord.setBodyCellEditingOnly(
+                                isStrike: true,
+                                row: row,
+                                col: col,
+                                rawValue: newValue
+                            )
                         } else {
                             let raw = String(alnumOnlyUppercased(newValue).prefix(3))
                             binding.wrappedValue = formatWithInterpunct(raw)
@@ -2498,7 +2550,12 @@ struct BallsLocationGridView: View {
                                 binding.wrappedValue = sanitized
                                 if coord.ballsTopRow.indices.contains(col) { coord.ballsTopRow[col] = sanitized }
                             } else if let coord = topRowCoordinator {
-                                coord.setBodyRowMirrored(row: row, col: col, rawValue: newValue)
+                                coord.setBodyCellEditingOnly(
+                                    isStrike: false,
+                                    row: row,
+                                    col: col,
+                                    rawValue: newValue
+                                )
                             } else {
                                 let raw = String(alnumOnlyUppercased(newValue).prefix(3))
                                 binding.wrappedValue = formatWithInterpunct(raw)

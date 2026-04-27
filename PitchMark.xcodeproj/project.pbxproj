@@ -11,6 +11,7 @@
 		2307AFC02F12BB3A00690E69 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 2307AFBF2F12BB3A00690E69 /* GoogleSignInSwift */; };
 		232EB1A72F69B81100BE086E /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 232EB1A62F69B81100BE086E /* FirebaseFunctions */; };
 		23652D3B2F57705F00461063 /* firestore.rules in Resources */ = {isa = PBXBuildFile; fileRef = 23652D3A2F57705F00461063 /* firestore.rules */; };
+		23A619482F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */; };
 		23B131CE2F75A50800A70589 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 23B131CD2F75A50800A70589 /* GoogleSignInSwift */; };
 		23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 23B131D12F75A91D00A70589 /* GoogleService-Info.plist */; };
 		23F1A88B2F12C6EF0094E7BC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88A2F12C6EF0094E7BC /* FirebaseAuth */; };
@@ -37,6 +38,7 @@
 /* Begin PBXFileReference section */
 		23652D3A2F57705F00461063 /* firestore.rules */ = {isa = PBXFileReference; lastKnownFileType = text; path = firestore.rules; sourceTree = "<group>"; };
 		239F0B7C2F12B238004E32DD /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrikeZoneHeatmapView.swift; sourceTree = "<group>"; };
 		23B131D12F75A91D00A70589 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyWindowView.swift; sourceTree = "<group>"; };
 		23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeDisplayOverlayView.swift; sourceTree = "<group>"; };
@@ -135,6 +137,7 @@
 				23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */,
 				23F7D2DA2F75979E0010D7BF /* PitchMarkDisplay */,
 				23F7D2F62F759DE90010D7BF /* StrikeZoneButtonLabel.swift */,
+				23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -292,6 +295,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				23F7D2BE2F7586290010D7BF /* DisplayOnlyWindowView.swift in Sources */,
+				23A619482F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift in Sources */,
 				23F7D2F72F759DE90010D7BF /* StrikeZoneButtonLabel.swift in Sources */,
 				23F7D2C02F758DE70010D7BF /* CodeDisplayOverlayView.swift in Sources */,
 			);
