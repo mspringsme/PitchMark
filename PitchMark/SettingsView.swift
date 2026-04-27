@@ -2091,6 +2091,15 @@ struct PitcherStatsSheetView: View {
     @State private var hitSpotSuccessFilter: HitSpotSuccessFilter = .all
     @State private var hitSpotOrder: HitSpotOrder = .chronological
     @State private var selectedHeatmapPitch: String = ""
+    @State private var heatmapZoneFilter: HeatmapZoneFilter = .all
+
+    private enum HeatmapZoneFilter: String, CaseIterable, Identifiable {
+        case all = "Strikes+Balls"
+        case onlyStrikes = "Only Strikes"
+        case onlyBalls = "Only Balls"
+
+        var id: String { rawValue }
+    }
 
     private var sortedGames: [Game] {
         games.sorted { $0.date > $1.date }
@@ -2435,6 +2444,35 @@ struct PitcherStatsSheetView: View {
         return filteredEvents
             .filter { $0.pitch == pitch }
             .sorted { $0.timestamp < $1.timestamp }
+    }
+
+    private func heatmapLocationIsStrikeZone(_ rawLocation: String) -> Bool {
+        let trimmed = rawLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("strike ") { return true }
+        if lower.hasPrefix("ball ") { return false }
+
+        let legacyStrikeLabels: Set<String> = [
+            "up & out", "up", "up & in",
+            "out", "middle", "in",
+            "↓ & out", "↓", "↓ & in",
+            "down & out", "down", "down & in",
+            "low & out", "low", "low & in",
+            "high"
+        ]
+        return legacyStrikeLabels.contains(lower)
+    }
+
+    private var heatmapEventsForSelectedPitchFiltered: [PitchEvent] {
+        let events = heatmapEventsForSelectedPitch
+        switch heatmapZoneFilter {
+        case .all:
+            return events
+        case .onlyStrikes:
+            return events.filter { heatmapLocationIsStrikeZone($0.location) }
+        case .onlyBalls:
+            return events.filter { !heatmapLocationIsStrikeZone($0.location) }
+        }
     }
 
     private var heatmapCountByPitch: [String: Int] {
@@ -3015,7 +3053,15 @@ struct PitcherStatsSheetView: View {
                     .padding(.horizontal)
                 }
 
-                StrikeZoneHeatmapView(events: heatmapEventsForSelectedPitch)
+                Picker("Zone Filter", selection: $heatmapZoneFilter) {
+                    ForEach(HeatmapZoneFilter.allCases) { option in
+                        Text(option.rawValue).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+
+                StrikeZoneHeatmapView(events: heatmapEventsForSelectedPitchFiltered)
                     .frame(maxWidth: .infinity)
                     .padding(6)
                     .padding(.top, 18)

@@ -247,7 +247,7 @@ struct StrikeZoneHeatmapView: View {
                 let zoneHeight = h * 0.74
                 let cellW = zoneWidth / 3.0
                 let cellH = zoneHeight / 3.0
-                let slotSize = min(cellW, cellH) * 1.04
+                let slotSize = min(cellW, cellH) * 1.01
                 let originX = (w - zoneWidth) / 2.0
                 let backgroundTop: CGFloat = 0
                 let backgroundHeight = h
@@ -433,20 +433,17 @@ struct StrikeZoneHeatmapView: View {
             .layoutPriority(1)
 
             VStack(alignment: .leading, spacing: 2) {
-                if let interactionHint, !interactionHint.isEmpty {
-                    Text(interactionHint)
-                        .font(.caption)
-                        .foregroundStyle(.black)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.bottom, 2)
-                        .padding(.top, -4)
-                }
+                Text(interactionHint ?? " ")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .opacity((interactionHint ?? "").isEmpty ? 0 : 1)
+                    .padding(.bottom, 2)
+                    .padding(.top, -4)
+                    .frame(height: 16)
 
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("----- = not available")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
                         HStack(alignment: .top, spacing: 18) {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("SS = Swinging Strike")
@@ -454,6 +451,7 @@ struct StrikeZoneHeatmapView: View {
                                 Text("F = Foul")
                                 Text("B? = Tapped strike zone, designated Ball")
                                 Text("S? = Tapped ball zone, designated Strike")
+                                Text("----- = not available")
                             }
 
                             VStack(alignment: .leading, spacing: 3) {
@@ -473,6 +471,13 @@ struct StrikeZoneHeatmapView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .scrollIndicators(.visible)
+                .overlay(alignment: .trailing) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.45))
+                        .frame(width: 3, height: 34)
+                        .padding(.trailing, 1)
+                        .allowsHitTesting(false)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 96)
