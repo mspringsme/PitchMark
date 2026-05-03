@@ -11,13 +11,6 @@ private enum OverlaySelection {
     case field, hr, foul
 }
 
-private enum ResultSymbolPickerTarget {
-    case swinging
-    case looking
-    case ball
-    case foul
-}
-
 private struct ColorKey: Hashable {
     let r: UInt8
     let g: UInt8
@@ -107,8 +100,6 @@ private struct ToggleSection: View {
     let isPassedBallDisabled: Bool
     let isHitBatterDisabled: Bool
     let isOutcomeDisabled: (String) -> Bool
-    let onRequestSymbolPicker: (ResultSymbolPickerTarget) -> Void
-    let onFoulActivated: () -> Void
 
     private func toggleButton(
         _ title: String,
@@ -147,7 +138,6 @@ private struct ToggleSection: View {
                     isStrikeSwinging = next
                     if next {
                         isStrikeLooking = false
-                        onRequestSymbolPicker(.swinging)
                     }
                 }
 
@@ -156,16 +146,12 @@ private struct ToggleSection: View {
                     isStrikeLooking = next
                     if next {
                         isStrikeSwinging = false
-                        onRequestSymbolPicker(.looking)
                     }
                 }
 
                 Button {
                     let next = (selectedOutcome == "Foul") ? nil : "Foul"
                     selectedOutcome = next
-                    if next == "Foul" {
-                        onFoulActivated()
-                    }
                 } label: {
                     Text("Foul")
                         .font(.system(size: 14, weight: .semibold))
@@ -186,11 +172,7 @@ private struct ToggleSection: View {
                 OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
                 OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
                 toggleButton("Ball", isOn: isBall, disabled: isBallDisabled) {
-                    let next = !isBall
-                    isBall = next
-                    if next {
-                        onRequestSymbolPicker(.ball)
-                    }
+                    isBall.toggle()
                 }
             }
 
@@ -363,11 +345,6 @@ struct PitchResultSheetView: View {
 
     @State private var showFieldOverlay: Bool = false
 
-    @State private var symbolPickerTarget: ResultSymbolPickerTarget? = nil
-    @State private var strikeSwingingSymbol: String? = nil
-    @State private var strikeLookingSymbol: String? = nil
-    @State private var ballSymbol: String? = nil
-    @State private var foulSymbol: String? = nil
     @State private var showMissingBatterPrompt: Bool = false
     @State private var pendingSaveIntent: PendingSaveIntent? = nil
     @State private var confirmedBallsCount: Int = 0
@@ -427,9 +404,41 @@ struct PitchResultSheetView: View {
     let pitcherName: String?
     var onMissingLocation: (() -> Void)? = nil
 
+    private var effectiveLocationLabel: String? {
+        let explicit = pendingResultLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !explicit.isEmpty {
+            return explicit
+        }
+
+        let calledPitchName = pitchCall?.pitch.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let calledLocation = pitchCall?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if calledPitchName == "Catcher", !calledLocation.isEmpty {
+            return calledLocation
+        }
+
+        return nil
+    }
+
     private var hasSelectedLocation: Bool {
-        let trimmed = pendingResultLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !trimmed.isEmpty
+        effectiveLocationLabel != nil
+    }
+
+    private func resultIsInsideStrikeZone(_ rawLocation: String) -> Bool {
+        let trimmed = rawLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+
+        if lower.hasPrefix("strike ") { return true }
+        if lower.hasPrefix("ball ") { return false }
+
+        let legacyStrikeLabels: Set<String> = [
+            "up & out", "up", "up & in",
+            "out", "middle", "in",
+            "↓ & out", "↓", "↓ & in",
+            "down & out", "down", "down & in",
+            "low & out", "low", "low & in",
+            "high"
+        ]
+        return legacyStrikeLabels.contains(lower)
     }
 
     private func resetSelections() {
@@ -446,11 +455,6 @@ struct PitchResultSheetView: View {
         battedBallRegionName = nil
         battedBallSelection = nil
         battedBallTapNormalized = nil
-        strikeSwingingSymbol = nil
-        strikeLookingSymbol = nil
-        ballSymbol = nil
-        foulSymbol = nil
-        symbolPickerTarget = nil
         showMissingBatterPrompt = false
         pendingSaveIntent = nil
         overrideOpponentJersey = nil
@@ -590,56 +594,25 @@ struct PitchResultSheetView: View {
         return false
     }
 
-    private var symbolPickerTitle: String {
-        switch symbolPickerTarget {
-        case .swinging:
-            return "Strike Count"
-        case .looking:
-            return "Strike Count"
-        case .ball:
-            return "Ball Count"
-        case .foul:
-            return "Strike Count"
-        case .none:
-            return "Select"
+    private func strikeMarkerSymbol(outcome: String) -> String {
+        if outcome == "K" || outcome == "ꓘ" {
+            return "3.circle"
         }
+        return "\(max(1, min(2, confirmedStrikesCount))).circle"
     }
 
-    private var symbolPickerOptions: [String] {
-        switch symbolPickerTarget {
-        case .swinging, .looking:
-            return ["1.circle", "2.circle", "3.circle"]
-        case .ball:
-            return ["1.circle", "2.circle", "3.circle", "4.circle"]
-        case .foul:
-            return ["1.circle", "2.circle", "f.circle"]
-        case .none:
-            return []
+    private func ballMarkerSymbol(outcome: String, prior: (balls: Int, strikes: Int)) -> String {
+        if outcome.caseInsensitiveCompare("Walk") == .orderedSame || prior.balls >= 3 {
+            return "4.circle"
         }
+        return "\(max(1, min(3, confirmedBallsCount))).circle"
     }
 
-    private func applySelectedSymbol(_ symbol: String?) {
-        switch symbolPickerTarget {
-        case .swinging:
-            strikeSwingingSymbol = symbol
-        case .looking:
-            strikeLookingSymbol = symbol
-        case .ball:
-            ballSymbol = symbol
-        case .foul:
-            foulSymbol = symbol
-        case .none:
-            break
+    private func foulMarkerSymbol(prior: (balls: Int, strikes: Int)) -> String {
+        if prior.strikes >= 2 || confirmedStrikesCount >= 2 {
+            return "f.circle"
         }
-        symbolPickerTarget = nil
-    }
-
-    private func symbolMenuTitle(_ symbol: String) -> String {
-        if symbol == "f.circle" { return "F" }
-        if let head = symbol.split(separator: ".").first, !head.isEmpty {
-            return String(head)
-        }
-        return symbol
+        return "\(max(1, min(2, confirmedStrikesCount))).circle"
     }
 
     private var effectiveOpponentJersey: String? {
@@ -825,19 +798,20 @@ struct PitchResultSheetView: View {
     }
 
     private func buildCurrentEvent() -> PitchEvent? {
-        guard let label = pendingResultLabel,
+        guard let label = effectiveLocationLabel,
               let pitchCall = pitchCall else {
             return nil
         }
-
-        return PitchEvent(
+        let resolvedIsStrike = resultIsInsideStrikeZone(label)
+        let normalizedOutcome = (isHitBatter ? "HBP" : selectedOutcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let prior = priorCount(for: PitchEvent(
             id: nil,
             timestamp: Date(),
             pitch: pitchCall.pitch,
             location: label,
             codes: pitchCall.codes,
-            isStrike: pitchCall.isStrike,
-            isBall: isBall,
+            isStrike: resolvedIsStrike,
+            isBall: !resolvedIsStrike,
             mode: currentMode,
             calledPitch: pitchCall,
             batterSide: batterSide,
@@ -846,7 +820,37 @@ struct PitchResultSheetView: View {
             wildPitch: isWildPitch,
             passedBall: isPassedBall,
             strikeLooking: isStrikeLooking,
-            outcome: isHitBatter ? "HBP" : selectedOutcome,
+            outcome: normalizedOutcome.isEmpty ? nil : normalizedOutcome,
+            descriptor: selectedDescriptor,
+            errorOnPlay: isError,
+            battedBallRegion: battedBallRegionName,
+            battedBallType: nil,
+            battedBallTapX: nil,
+            battedBallTapY: nil,
+            gameId: selectedGameId,
+            opponentJersey: effectiveOpponentJersey,
+            opponentBatterId: effectiveOpponentBatterId,
+            practiceId: selectedPracticeId,
+            pitcherId: selectedPitcherId
+        ))
+
+        return PitchEvent(
+            id: nil,
+            timestamp: Date(),
+            pitch: pitchCall.pitch,
+            location: label,
+            codes: pitchCall.codes,
+            isStrike: resolvedIsStrike,
+            isBall: !resolvedIsStrike,
+            mode: currentMode,
+            calledPitch: pitchCall,
+            batterSide: batterSide,
+            templateId: selectedTemplateId,
+            strikeSwinging: isStrikeSwinging,
+            wildPitch: isWildPitch,
+            passedBall: isPassedBall,
+            strikeLooking: isStrikeLooking,
+            outcome: normalizedOutcome.isEmpty ? nil : normalizedOutcome,
             descriptor: {
                 if isHitTagSelected {
                     if let selectedDescriptor, !selectedDescriptor.isEmpty {
@@ -873,10 +877,10 @@ struct PitchResultSheetView: View {
             opponentBatterId: effectiveOpponentBatterId,
             practiceId: selectedPracticeId,
             pitcherId: selectedPitcherId,
-            strikeSwingingMarker: isStrikeSwinging ? strikeSwingingSymbol : nil,
-            strikeLookingMarker: isStrikeLooking ? strikeLookingSymbol : nil,
-            ballMarker: isBall ? ballSymbol : nil,
-            foulMarker: selectedOutcome == "Foul" ? foulSymbol : nil
+            strikeSwingingMarker: isStrikeSwinging ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
+            strikeLookingMarker: isStrikeLooking ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
+            ballMarker: isBall ? ballMarkerSymbol(outcome: normalizedOutcome, prior: prior) : nil,
+            foulMarker: selectedOutcome == "Foul" ? foulMarkerSymbol(prior: prior) : nil
         )
     }
 
@@ -926,7 +930,7 @@ struct PitchResultSheetView: View {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(spacing: 10) {
                 HStack(spacing: 12) {
-                    Text(hasSelectedLocation ? "Location: \(pendingResultLabel ?? "")" : "Location")
+                    Text(hasSelectedLocation ? "Location: \(effectiveLocationLabel ?? "")" : "Location")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(hasSelectedLocation ? .blue : .secondary)
                         .lineLimit(1)
@@ -964,13 +968,7 @@ struct PitchResultSheetView: View {
                     isWildPitchDisabled: isTopToggleDisabled(.wildPitch),
                     isPassedBallDisabled: isTopToggleDisabled(.passedBall),
                     isHitBatterDisabled: isTopToggleDisabled(.hitBatter),
-                    isOutcomeDisabled: isOutcomeDisabled,
-                    onRequestSymbolPicker: { target in
-                        symbolPickerTarget = target
-                    },
-                    onFoulActivated: {
-                        symbolPickerTarget = .foul
-                    }
+                    isOutcomeDisabled: isOutcomeDisabled
                 )
 
                 Divider()
@@ -1143,41 +1141,6 @@ struct PitchResultSheetView: View {
                     deselectIfDisabled: { self.deselectIfDisabled() }
                 )
             )
-            .confirmationDialog(symbolPickerTitle, isPresented: Binding(
-                get: { symbolPickerTarget != nil },
-                set: { presented in
-                    if !presented { symbolPickerTarget = nil }
-                }
-            ), titleVisibility: .visible) {
-                ForEach(symbolPickerOptions, id: \.self) { symbol in
-                    Button {
-                        applySelectedSymbol(symbol)
-                    } label: {
-                        Text(symbolMenuTitle(symbol))
-                    }
-                }
-                Button("Cancel", role: .cancel) {
-                    symbolPickerTarget = nil
-                }
-            }
-            .onChange(of: isStrikeSwinging) { _, newValue in
-                if !newValue { strikeSwingingSymbol = nil }
-            }
-            .onChange(of: isStrikeLooking) { _, newValue in
-                if !newValue { strikeLookingSymbol = nil }
-            }
-            .onChange(of: isBall) { _, newValue in
-                if !newValue { ballSymbol = nil }
-            }
-            .onChange(of: selectedOutcome) { _, newValue in
-                if newValue == "Foul" {
-                    if foulSymbol == nil {
-                        symbolPickerTarget = .foul
-                    }
-                } else {
-                    foulSymbol = nil
-                }
-            }
             .onChange(of: currentCountSeed?.balls) { _, _ in
                 syncManualCountFromCurrentSeed()
             }

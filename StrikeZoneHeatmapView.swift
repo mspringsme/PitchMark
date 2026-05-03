@@ -2,6 +2,7 @@ import SwiftUI
 
 struct StrikeZoneHeatmapView: View {
     let events: [PitchEvent]
+    var showLegend: Bool = true
     var interactionHint: String? = nil
     var onLocationTap: ((String, Bool) -> Void)? = nil
 
@@ -27,6 +28,19 @@ struct StrikeZoneHeatmapView: View {
         let point: CGPoint
         let label: String?
         let matched: Bool
+    }
+
+    private struct ResultBucketKey: Hashable {
+        let slot: Slot
+        let label: String
+        let matched: Bool
+    }
+
+    private struct ResultBucket {
+        let slot: Slot
+        let label: String
+        let matched: Bool
+        var count: Int
     }
 
     private func parseSlot(for rawLocation: String, preferStrike: Bool? = nil) -> Slot? {
@@ -130,9 +144,11 @@ struct StrikeZoneHeatmapView: View {
     private func layoutForAllEvents(originX: CGFloat, originY: CGFloat, zoneWidth: CGFloat, zoneHeight: CGFloat, slotSize: CGFloat) -> (markers: [Marker], lines: [MissLine]) {
         var markers: [Marker] = []
         var lines: [MissLine] = []
+        var resultBuckets: [ResultBucketKey: ResultBucket] = [:]
 
         // Per-slot placement index so markers don't overlap.
-        var nextOffsetIndex: [Slot: Int] = [:]
+        var nextCalledOffsetIndex: [Slot: Int] = [:]
+        var nextLineResultOffsetIndex: [Slot: Int] = [:]
         let innerRadius = slotSize * 0.36
         let outerRadius = slotSize * 0.60
         let offsets: [CGSize] = [.zero] + (0..<8).map { i in
@@ -143,12 +159,22 @@ struct StrikeZoneHeatmapView: View {
             return CGSize(width: cos(a) * outerRadius, height: sin(a) * outerRadius)
         }
 
-        func placedPoint(for slot: Slot) -> CGPoint {
+        func placedPoint(for slot: Slot, nextOffsetIndex: inout [Slot: Int]) -> CGPoint {
             let base = basePoint(for: slot, originX: originX, originY: originY, zoneWidth: zoneWidth, zoneHeight: zoneHeight, slotSize: slotSize)
             let idx = nextOffsetIndex[slot, default: 0]
             nextOffsetIndex[slot] = idx + 1
             let offset = offsets[idx % offsets.count]
             return CGPoint(x: base.x + offset.width, y: base.y + offset.height)
+        }
+
+        func addResultBucket(slot: Slot, label: String, matched: Bool) {
+            let key = ResultBucketKey(slot: slot, label: label, matched: matched)
+            if var existing = resultBuckets[key] {
+                existing.count += 1
+                resultBuckets[key] = existing
+            } else {
+                resultBuckets[key] = ResultBucket(slot: slot, label: label, matched: matched, count: 1)
+            }
         }
 
         for event in events {
@@ -161,27 +187,72 @@ struct StrikeZoneHeatmapView: View {
             let label = designation(for: event, resultSlot: resultSlot)
 
             if calledSlot == resultSlot {
-                markers.append(
-                    Marker(
-                        id: "\(eventId)-result",
-                        kind: .resultLabel,
-                        point: placedPoint(for: resultSlot),
-                        label: label,
-                        matched: true
-                    )
-                )
+                addResultBucket(slot: resultSlot, label: label, matched: true)
             } else {
-                let calledPoint = placedPoint(for: calledSlot)
-                let resultPoint = placedPoint(for: resultSlot)
+                let calledPoint = placedPoint(for: calledSlot, nextOffsetIndex: &nextCalledOffsetIndex)
+                let resultPoint = placedPoint(for: resultSlot, nextOffsetIndex: &nextLineResultOffsetIndex)
                 lines.append(MissLine(id: "\(eventId)-line", from: calledPoint, to: resultPoint))
                 markers.append(Marker(id: "\(eventId)-called", kind: .redCalled, point: calledPoint, label: nil, matched: false))
+                addResultBucket(slot: resultSlot, label: label, matched: false)
+            }
+        }
+
+        let bucketsBySlot = Dictionary(grouping: resultBuckets.values, by: \.slot)
+        for (slot, buckets) in bucketsBySlot {
+            let sortedBuckets = buckets.sorted {
+                if $0.count == $1.count { return $0.label < $1.label }
+                return $0.count > $1.count
+            }
+            let base = basePoint(for: slot, originX: originX, originY: originY, zoneWidth: zoneWidth, zoneHeight: zoneHeight, slotSize: slotSize)
+            let primaryRadius = slotSize * 0.22
+            let secondaryRadius = slotSize * 0.38
+            let primaryAngles: [CGFloat] = [
+                -.pi / 2,
+                -.pi / 6,
+                .pi / 6,
+                .pi / 2,
+                5 * .pi / 6,
+                -5 * .pi / 6
+            ]
+            let secondaryAngles: [CGFloat] = [
+                -.pi / 2,
+                -.pi / 4,
+                0,
+                .pi / 4,
+                .pi / 2,
+                3 * .pi / 4,
+                .pi,
+                -3 * .pi / 4
+            ]
+
+            for (index, bucket) in sortedBuckets.enumerated() {
+                let offset: CGSize
+                let displayLabel = bucket.count > 1 ? "\(bucket.label)×\(bucket.count)" : bucket.label
+                let prefersOuterRing = displayLabel.count >= 3
+
+                if sortedBuckets.count == 1 && !prefersOuterRing {
+                    offset = .zero
+                } else if !prefersOuterRing && index < primaryAngles.count {
+                    let angle = primaryAngles[index]
+                    offset = CGSize(
+                        width: cos(angle) * primaryRadius,
+                        height: sin(angle) * primaryRadius
+                    )
+                } else {
+                    let outerIndex = prefersOuterRing ? index : max(0, index - primaryAngles.count)
+                    let angle = secondaryAngles[outerIndex % secondaryAngles.count]
+                    offset = CGSize(
+                        width: cos(angle) * secondaryRadius,
+                        height: sin(angle) * secondaryRadius
+                    )
+                }
                 markers.append(
                     Marker(
-                        id: "\(eventId)-result",
+                        id: "\(bucket.label)-\(bucket.matched)-\(String(describing: slot))",
                         kind: .resultLabel,
-                        point: resultPoint,
-                        label: label,
-                        matched: false
+                        point: CGPoint(x: base.x + offset.width, y: base.y + offset.height),
+                        label: displayLabel,
+                        matched: bucket.matched
                     )
                 )
             }
@@ -365,10 +436,12 @@ struct StrikeZoneHeatmapView: View {
                                 .allowsHitTesting(false)
                         case .resultLabel:
                             Text(marker.label ?? "")
-                                .font(.caption2.weight(.bold))
+                                .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
                                 .background(
                                     Capsule()
                                         .fill(
@@ -432,57 +505,59 @@ struct StrikeZoneHeatmapView: View {
             .aspectRatio(0.96, contentMode: .fit)
             .layoutPriority(1)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(interactionHint ?? " ")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.black)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .opacity((interactionHint ?? "").isEmpty ? 0 : 1)
-                    .padding(.bottom, 2)
-                    .padding(.top, -4)
-                    .frame(height: 16)
+            if showLegend {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(interactionHint ?? " ")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .opacity((interactionHint ?? "").isEmpty ? 0 : 1)
+                        .padding(.bottom, 2)
+                        .padding(.top, -4)
+                        .frame(height: 16)
 
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(alignment: .top, spacing: 18) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("SS = Swinging Strike")
-                                Text("SL = Looking Strike")
-                                Text("F = Foul")
-                                Text("B? = Tapped strike zone, designated Ball")
-                                Text("S? = Tapped ball zone, designated Strike")
-                                Text("----- = not available")
-                            }
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .top, spacing: 18) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("SS = Swinging Strike")
+                                    Text("SL = Looking Strike")
+                                    Text("F = Foul")
+                                    Text("B? = Tapped strike zone, designated Ball")
+                                    Text("S? = Tapped ball zone, designated Strike")
+                                    Text("----- = not available")
+                                }
 
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("WP = Wild Pitch")
-                                Text("PB = Passed Ball")
-                                Text("HB = Hit Batter")
-                                Text("H1B = Hit Single")
-                                Text("H2B = Hit Double")
-                                Text("H3B = Hit Triple")
-                                Text("HHR = Hit Home Run")
-                                Text("H = Hit")
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("WP = Wild Pitch")
+                                    Text("PB = Passed Ball")
+                                    Text("HB = Hit Batter")
+                                    Text("H1B = Hit Single")
+                                    Text("H2B = Hit Double")
+                                    Text("H3B = Hit Triple")
+                                    Text("HHR = Hit Home Run")
+                                    Text("H = Hit")
+                                }
                             }
                         }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .scrollIndicators(.visible)
+                    .overlay(alignment: .trailing) {
+                        Capsule()
+                            .fill(Color.secondary.opacity(0.45))
+                            .frame(width: 3, height: 34)
+                            .padding(.trailing, 1)
+                            .allowsHitTesting(false)
+                    }
                 }
-                .scrollIndicators(.visible)
-                .overlay(alignment: .trailing) {
-                    Capsule()
-                        .fill(Color.secondary.opacity(0.45))
-                        .frame(width: 3, height: 34)
-                        .padding(.trailing, 1)
-                        .allowsHitTesting(false)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: 96)
+                .padding(.top, 72)
+                .padding(.horizontal, 6)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 96)
-            .padding(.top, 72)
-            .padding(.horizontal, 6)
         }
         .transaction { t in t.animation = nil }
     }

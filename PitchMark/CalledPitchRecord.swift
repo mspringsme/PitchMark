@@ -301,7 +301,7 @@ struct PitchCardView: View {
     let middleText: String
     let bottomText: String
     let verticalTopImage: Image
-    let rightImage: Image
+    let rightImage: Image?
     let rightImageShouldHighlight: Bool
     let footerTextName: String
     let footerTextDate: String
@@ -311,6 +311,7 @@ struct PitchCardView: View {
     let outcomeSummary: [String]?
     let jerseyNumber: String?
     let atBatCountText: String?
+    let trackingMode: TrackingMode
     let hideHeader: Bool
 
     let onLongPress: () -> Void
@@ -322,7 +323,7 @@ struct PitchCardView: View {
         middleText: String,
         bottomText: String,
         verticalTopImage: Image,
-        rightImage: Image,
+        rightImage: Image?,
         rightImageShouldHighlight: Bool,
         footerTextName: String,
         footerTextDate: String,
@@ -330,6 +331,7 @@ struct PitchCardView: View {
         outcomeSummary: [String]?,
         jerseyNumber: String?,
         atBatCountText: String? = nil,
+        trackingMode: TrackingMode = .coach,
         gameTitle: String? = nil,
         practiceTitle: String? = nil,
         hideHeader: Bool = false,
@@ -349,6 +351,7 @@ struct PitchCardView: View {
         self.outcomeSummary = outcomeSummary
         self.jerseyNumber = jerseyNumber
         self.atBatCountText = atBatCountText
+        self.trackingMode = trackingMode
         self.gameTitle = gameTitle
         self.practiceTitle = practiceTitle
         self.hideHeader = hideHeader
@@ -393,65 +396,151 @@ struct PitchCardView: View {
         }
         .background(cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 3)
+        .shadow(color: .black.opacity(trackingMode == .scout ? 0.16 : 0.3), radius: trackingMode == .scout ? 4 : 6, x: 0, y: trackingMode == .scout ? 2 : 3)
         .onLongPressGesture(minimumDuration: 0.45) { onLongPress() }
     }
     
+    @ViewBuilder
     private var content: some View {
-        HStack(alignment: .center, spacing: 2) {
-            leadingImages
-                .padding(.leading, 10)
-            
-            VStack(alignment: .leading, spacing: 6) {
-                HStack{
-                    Text(topText)
-                        .font(.subheadline)
-                        .bold()
-                        .multilineTextAlignment(.leading)
-                    
-                    verticalTopImage
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 20, height: 20)
-                }
-                Text(middleText)
-                    .font(.caption)
-                    .multilineTextAlignment(.leading)
+        if trackingMode == .scout {
+            scoutCompactContent
+        } else {
+            HStack(alignment: .center, spacing: 2) {
+                leadingImages
+                    .padding(.leading, 10)
                 
-                Text(bottomText)
-                    .font(.caption)
-                    .multilineTextAlignment(.leading)
-            }
-            .frame(minWidth: 70)
-            .layoutPriority(1)
-            
-            Spacer()
-            
-            let hasJerseyNumber = (jerseyNumber?.isEmpty == false)
-            if (outcomeSummary != nil && !(outcomeSummary?.isEmpty ?? true)) || hasJerseyNumber {
-                OutcomeSummaryView(lines: outcomeSummary ?? [], jerseyNumber: jerseyNumber, countText: atBatCountText)
-                    .padding(.bottom, 10)
-            }
-            
-            rightImage
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 60, height: 90)
-                .shadow(
-                    color: rightImageShouldHighlight ? .green.opacity(0.7) : .red.opacity(0.5),
-                    radius: 6, x: 0, y: 0
-                )
+                VStack(alignment: .leading, spacing: isCatcherCard ? 2 : 6) {
+                    HStack{
+                        Text(topText)
+                            .font(.system(size: topText == "Catcher" ? 13 : 15, weight: .semibold))
+                            .bold()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .multilineTextAlignment(.leading)
+                    }
+                    if !isCatcherCard {
+                        Text(middleText)
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                        
+                        Text(bottomText)
+                            .font(.caption)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                .frame(minWidth: 70)
+                .layoutPriority(1)
+                
+                Spacer()
+                
+                let hasJerseyNumber = (jerseyNumber?.isEmpty == false)
+                if (outcomeSummary != nil && !(outcomeSummary?.isEmpty ?? true)) || hasJerseyNumber {
+                    OutcomeSummaryView(
+                        lines: outcomeSummary ?? [],
+                        jerseyNumber: jerseyNumber,
+                        countText: atBatCountText,
+                        minHeight: isCatcherCard ? 0 : 118
+                    )
+                    .padding(.bottom, isCatcherCard ? 0 : 10)
+                }
+                
+                Group {
+                    if let rightImage {
+                        rightImage
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 60, height: isCatcherCard ? 72 : 90)
+                            .shadow(
+                                color: rightImageShouldHighlight ? .green.opacity(0.7) : .red.opacity(0.5),
+                                radius: 6, x: 0, y: 0
+                            )
+                    } else {
+                        Color.clear
+                            .frame(width: 60, height: isCatcherCard ? 72 : 90)
+                    }
+                }
                 .padding(.trailing, 10)
+            }
         }
+    }
+
+    private var isCatcherCard: Bool {
+        topText == "Catcher"
+    }
+
+    private var scoutCompactContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                if let primaryLine = scoutPrimaryLine {
+                    scoutSummaryLine(primaryLine, font: .system(size: 20, weight: .medium))
+                } else {
+                    Text("Scout")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(.black)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(alignment: .top, spacing: 10) {
+                if let num = jerseyNumber, !num.isEmpty {
+                    HStack(spacing: 6) {
+                        Text(num)
+                            .font(.system(size: 12, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .padding(.horizontal, num.count > 1 ? 6 : 0)
+                            .frame(width: num.count > 1 ? nil : 18, height: 18)
+                            .background(
+                                Group {
+                                    if num.count > 1 {
+                                        Capsule().fill(Color.blue)
+                                    } else {
+                                        Circle().fill(Color.blue)
+                                    }
+                                }
+                            )
+                        if let count = atBatCountText, !count.isEmpty {
+                            Text(count)
+                                .font(.system(size: 12, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundColor(.black.opacity(0.75))
+                        }
+                    }
+                } else if let count = atBatCountText, !count.isEmpty {
+                    Text(count)
+                        .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundColor(.black.opacity(0.75))
+                }
+
+                if !scoutSecondaryLines.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(scoutSecondaryLines, id: \.self) { line in
+                            scoutSummaryLine(line, font: .system(size: 12, weight: .regular))
+                        }
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
     
     @ViewBuilder
     private var leadingImages: some View {
         if batterSide == .right {
             leftImageView
-            batImageView
+            if topText != "Catcher" {
+                batImageView
+            }
         } else {
-            batImageView
+            if topText != "Catcher" {
+                batImageView
+            }
             leftImageView
         }
     }
@@ -460,7 +549,7 @@ struct PitchCardView: View {
         leftImage
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(width: 60, height: 90)
+            .frame(width: 60, height: isCatcherCard ? 72 : 90)
     }
     
     private var batImageView: some View {
@@ -474,7 +563,51 @@ struct PitchCardView: View {
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 16, style: .continuous)
             .fill(Color(.systemBackground))
-            .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 3)
+            .shadow(color: .black.opacity(trackingMode == .scout ? 0.08 : 0.15), radius: trackingMode == .scout ? 4 : 6, x: 0, y: trackingMode == .scout ? 2 : 3)
+    }
+
+    private var scoutPrimaryLine: String? {
+        let lines = outcomeSummary ?? []
+        return lines.first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+    }
+
+    private var scoutSecondaryLines: [String] {
+        let lines = outcomeSummary ?? []
+        guard !lines.isEmpty else { return [] }
+        return Array(lines.dropFirst()).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    @ViewBuilder
+    private func scoutSummaryLine(_ line: String, font: Font) -> some View {
+        let tokens = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        let firstToken = tokens.first.map(String.init) ?? ""
+        let hasSymbolPrefix = firstToken.hasSuffix(".circle") || firstToken == "f.circle"
+        let displayText: String = {
+            guard hasSymbolPrefix else { return line }
+            if tokens.count > 1 { return String(tokens[1]) }
+            return line
+        }()
+        let showRunner: Bool = ["1B", "2B", "3B", "HR"].contains { prefix in
+            displayText.uppercased().hasPrefix(prefix)
+        }
+
+        HStack(spacing: 4) {
+            if hasSymbolPrefix {
+                Image(systemName: firstToken)
+                    .font(font)
+                    .foregroundColor(.black)
+            }
+            if showRunner {
+                Image(systemName: "figure.run")
+                    .font(font)
+                    .foregroundColor(.black)
+            }
+            Text(displayText)
+                .font(font)
+                .foregroundColor(.black)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+        }
     }
 }
 
@@ -600,8 +733,12 @@ struct PitchResultCard: View {
         return isLocationMatch(event)
     }
 
-    var body: some View {
+        var body: some View {
         let leftImageName: String = {
+            let calledPitchName = event.calledPitch?.pitch.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if calledPitchName == "Catcher" {
+                return "Catcher"
+            }
             let calledIsStrike = event.calledPitch?.isStrike ?? false
             let rawCalledLocation = (event.calledPitch?.location ?? "-")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -618,13 +755,20 @@ struct PitchResultCard: View {
             )
         }()
         
-        let rightImageName: String = PitchImageDictionary.imageName(
-            for: event.location,
-            isStrike: event.isStrike,
-            batterSide: event.batterSide
-        )
+        let rightImageName: String? = {
+            let calledPitchName = event.calledPitch?.pitch.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if calledPitchName == "Catcher" && event.location.trimmingCharacters(in: .whitespacesAndNewlines) == "Catcher" {
+                return nil
+            }
+            return PitchImageDictionary.imageName(
+                for: event.location,
+                isStrike: event.isStrike,
+                batterSide: event.batterSide
+            )
+        }()
         
         let didHitLocation: Bool = isLocationMatch(event)
+        let actualResultIsStrikeZone: Bool = event.isStrike
         
         // TEMP DEBUG: print normalized comparison inputs and result (no extra scope to satisfy some View body)
         let _ = {
@@ -711,14 +855,15 @@ struct PitchResultCard: View {
                 middleText: "\(overallSuccessRate)% overall",
                 bottomText: "\(locationSuccessRate)% @ location",
                 verticalTopImage: Image(verticalTopImageName),
-                rightImage: Image(rightImageName),
-                rightImageShouldHighlight: didHitLocation,
+                rightImage: rightImageName.map { Image($0) },
+                rightImageShouldHighlight: actualResultIsStrikeZone,
                 footerTextName: selectedPlayerName,
                 footerTextDate: "\(timestampText)",
                 pitchNumber: pitchNumber(for: event, in: allEvents),
                 outcomeSummary: outcomeSummary,
                 jerseyNumber: jerseyNumber,
                 atBatCountText: event.atBatCount,
+                trackingMode: event.trackingMode ?? .coach,
                 gameTitle: derivedGameTitle(from: event),
                 practiceTitle: practiceTitle(for: event),
                 hideHeader: isParticipant,
@@ -1728,7 +1873,7 @@ struct PitchResultSheet: View {
                                         } label: {
                                             HStack {
                                                 let pct = pitchTypeSuccessPercent[type]
-                                                Text(pct != nil ? "\(type) (\(pct!)%)" : type)
+                                                Text(type == "Catcher" ? type : (pct != nil ? "\(type) (\(pct!)%)" : type))
                                                 if pitchFilter == type {
                                                     Image(systemName: "checkmark")
                                                 }
@@ -1765,7 +1910,7 @@ struct PitchResultSheet: View {
                                         } label: {
                                             HStack {
                                                 let pct = pitchTypeSuccessPercent[type]
-                                                Text(pct != nil ? "\(type) (\(pct!)%)" : type)
+                                                Text(type == "Catcher" ? type : (pct != nil ? "\(type) (\(pct!)%)" : type))
                                                 if pitchFilter == type {
                                                     Image(systemName: "checkmark")
                                                 }
@@ -2435,6 +2580,7 @@ struct PitchEvent: Codable, Identifiable {
     var atBatBalls: Int? = nil
     var atBatStrikes: Int? = nil
     var atBatCount: String? = nil
+    var trackingMode: TrackingMode? = .coach
 }
 
 extension PitchEvent: Hashable {
@@ -2610,6 +2756,12 @@ extension PitchEvent {
         self.practiceId = data["practiceId"] as? String
         self.pitcherId = data["pitcherId"] as? String
         self.createdByUid = data["createdByUid"] as? String
+        if let rawTrackingMode = data["trackingMode"] as? String,
+           let parsedTrackingMode = TrackingMode(rawValue: rawTrackingMode) {
+            self.trackingMode = parsedTrackingMode
+        } else {
+            self.trackingMode = .coach
+        }
     }
 
     func debugLog(prefix: String = "📤 Saving PitchEvent") {
@@ -2641,6 +2793,7 @@ extension PitchEvent {
             let opponentBatterId: String?
             let practiceId: String?
             let pitcherId: String?
+            let trackingMode: TrackingMode?
         }
         let debug = DebugEvent(
             id: self.id,
@@ -2669,7 +2822,8 @@ extension PitchEvent {
             opponentJersey: self.opponentJersey,
             opponentBatterId: self.opponentBatterId,
             practiceId: self.practiceId,
-            pitcherId: self.pitcherId
+            pitcherId: self.pitcherId,
+            trackingMode: self.trackingMode
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -2691,5 +2845,9 @@ extension PitchEvent {
     var isHomeRunInferred: Bool {
         let text = [outcome, descriptor].compactMap { $0?.lowercased() }.joined(separator: " ")
         return text.contains("hr") || text.contains("home run") || text.contains("homerun")
+    }
+
+    var supportsLocationAnalytics: Bool {
+        (trackingMode ?? .coach) == .coach && calledPitch != nil && !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

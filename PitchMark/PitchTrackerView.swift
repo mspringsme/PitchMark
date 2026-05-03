@@ -131,6 +131,8 @@ private extension View {
 }
 
 struct PitchTrackerView: View {
+    private static let allPitchersSummarySelection = "__ALL_PITCHERS__"
+
     @State private var mirroredLivePitchEventIds: Set<String> = []
     @State private var didAutoDismissCodeSheetForLiveId: String? = nil
     @State private var uiConnected: Bool = false
@@ -207,6 +209,8 @@ struct PitchTrackerView: View {
     @State private var showGameStatsSheet = false
     @State private var showGameSummarySheet = false
     @State private var showGameSummaryShareSheet = false
+    @State private var selectedGameSummaryPitcherSelection: String = allPitchersSummarySelection
+    @State private var currentTrackingMode: TrackingMode = .coach
     @State private var opponentName: String? = nil
     @State private var selectedGameId: String? = nil
     // Participant overlay state
@@ -230,6 +234,8 @@ struct PitchTrackerView: View {
     @State private var showJerseyDetailSheet = false
     @State private var showNoJerseyEventsAlert = false
     @State private var noJerseyEventsMessage = ""
+    @State private var showNextBatterAdjustmentAlert = false
+    @State private var nextBatterAdjustmentMessage = "Adjust to next batter if needed"
     @State private var didAutoRetryJerseyDetail = false
     @State private var jerseyDetailPayload: JerseyDetailPayload? = nil
     @State private var atBatPulse = false
@@ -239,6 +245,13 @@ struct PitchTrackerView: View {
     @State private var pendingHeatmapCall: (pitch: String, location: String, isStrike: Bool)? = nil
     @State private var showHeatmapUnavailablePitchAlert = false
     @State private var heatmapUnavailablePitchMessage = ""
+    @State private var scoutObservedResult: ScoutObservedResult? = nil
+    @State private var scoutInPlayOutcome: String? = nil
+    @State private var scoutMiscOutcome: String? = nil
+    @State private var scoutResultLocation: String? = nil
+    @State private var showScoutFieldMap = false
+    @State private var scoutBattedBallRegionName: String? = nil
+    @State private var scoutBattedBallTapNormalized: CGPoint? = nil
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
@@ -258,6 +271,7 @@ struct PitchTrackerView: View {
     @State private var pendingGameConfirmation: PendingSessionConfirmation? = nil
     @State private var pendingConfirmationPitcherId: String? = nil
     @State private var pendingConfirmationTemplateId: UUID? = nil
+    @State private var pendingConfirmationTrackingMode: TrackingMode = .coach
 
     // Added per instructions:
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
@@ -268,6 +282,31 @@ struct PitchTrackerView: View {
 
     fileprivate enum OverlayTab { case cards, progress }
     @State private var overlayTab: OverlayTab = .progress
+
+    private enum ScoutObservedResult: String, CaseIterable, Identifiable {
+        case ball
+        case calledStrike
+        case swingingStrike
+        case foul
+        case inPlay
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .ball:
+                return "Ball"
+            case .calledStrike:
+                return "Called Strike"
+            case .swingingStrike:
+                return "Swinging Strike"
+            case .foul:
+                return "Foul"
+            case .inPlay:
+                return "In Play"
+            }
+        }
+    }
 
     enum DefaultsKeys {
         static let lastTemplateId = "lastTemplateId"
@@ -1510,7 +1549,18 @@ struct PitchTrackerView: View {
         actualLocationRecorded = nil
         lastCallInitiatedAt = nil
         lastObservedPendingCallId = nil
+        resetScoutComposer()
         clearDisplayCodeIfNeeded()
+    }
+
+    private func resetScoutComposer() {
+        scoutObservedResult = nil
+        scoutInPlayOutcome = nil
+        scoutMiscOutcome = nil
+        scoutResultLocation = nil
+        scoutBattedBallRegionName = nil
+        scoutBattedBallTapNormalized = nil
+        showScoutFieldMap = false
     }
 
     private func clearDisplayCodeIfNeeded() {
@@ -2452,6 +2502,7 @@ struct PitchTrackerView: View {
         // ✅ Runtime state
         activeGameOwnerUserId = ownerUid
         selectedGameId = gameId
+        currentTrackingMode = games.first(where: { $0.id == gameId })?.trackingMode ?? .coach
         print("🧭[PROG] chooseGame gid=\(gameId) owner=\(ownerUid)")
 
         isGame = true
@@ -2527,12 +2578,14 @@ struct PitchTrackerView: View {
         if practiceId == "__GENERAL__" {
             selectedPracticeId = nil
             self.practiceName = nil
+            currentTrackingMode = .coach
             persistActivePracticeId(nil)
             return
         }
 
         selectedPracticeId = practiceId
         self.practiceName = practiceName
+        currentTrackingMode = loadPracticeSessions().first(where: { $0.id == practiceId })?.trackingMode ?? .coach
         persistActivePracticeId(practiceId)
     }
 
@@ -2552,7 +2605,9 @@ struct PitchTrackerView: View {
     }
 
     private func requestGameConfirmation(gameId: String, ownerUid: String) {
-        let opponent = games.first(where: { $0.id == gameId })?.opponent ?? opponentName
+        let game = games.first(where: { $0.id == gameId })
+        let opponent = game?.opponent ?? opponentName
+        pendingConfirmationTrackingMode = .coach
         let defaults = UserDefaults.standard
         if let map = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String],
            let pitcherId = map[gameId] {
@@ -2590,6 +2645,8 @@ struct PitchTrackerView: View {
     }
 
     private func requestPracticeConfirmation(practiceId: String, practiceName: String?) {
+        let sessions = loadPracticeSessions()
+        pendingConfirmationTrackingMode = sessions.first(where: { $0.id == practiceId })?.trackingMode ?? .coach
         pendingConfirmationPitcherId = selectedPitcherId
         pendingConfirmationTemplateId = selectedTemplate?.id
         if let selected = pendingConfirmationTemplateId,
@@ -2617,8 +2674,10 @@ struct PitchTrackerView: View {
     private func confirmSessionSelection(
         _ item: PendingSessionConfirmation,
         selectedPitcherId: String?,
-        selectedTemplateId: UUID?
+        selectedTemplateId: UUID?,
+        selectedTrackingMode: TrackingMode
     ) {
+        let effectiveTrackingMode: TrackingMode = item.kind == .game ? .coach : selectedTrackingMode
         let defaults = UserDefaults.standard
 
         if case .game = item.kind, let gameId = item.gameId {
@@ -2641,6 +2700,8 @@ struct PitchTrackerView: View {
             if let index = games.firstIndex(where: { $0.id == gameId }) {
                 games[index].lastTemplateId = selectedTemplateId?.uuidString
                 games[index].lastPitcherId = selectedPitcherId
+                games[index].trackingMode = effectiveTrackingMode
+                authManager.saveGame(games[index])
             }
         }
 
@@ -2659,6 +2720,13 @@ struct PitchTrackerView: View {
             }
         case .practice:
             let pid = item.practiceId ?? "__GENERAL__"
+            if pid != "__GENERAL__" {
+                var sessions = loadPracticeSessions()
+                if let index = sessions.firstIndex(where: { $0.id == pid }) {
+                    sessions[index].trackingMode = effectiveTrackingMode
+                    savePracticeSessions(sessions)
+                }
+            }
             choosePractice(practiceId: pid, practiceName: item.practiceName)
             if let templateId = selectedTemplateId,
                let template = templates.first(where: { $0.id == templateId }) {
@@ -2672,6 +2740,8 @@ struct PitchTrackerView: View {
 
         persistSelectedTemplate(selectedTemplate)
         persistSelectedPitcherId(self.selectedPitcherId)
+        currentTrackingMode = effectiveTrackingMode
+        resetScoutComposer()
         pendingGameConfirmation = nil
 
         // Re-assert confirmed selections after game listeners settle to avoid stale post-confirm overwrites.
@@ -3022,6 +3092,7 @@ struct PitchTrackerView: View {
         guard selectedBatterIdValue != nil || selectedJersey != nil else { return [] }
 
         return sourceEvents.filter { event in
+            if !event.supportsLocationAnalytics { return false }
             if isGame, let gid = selectedGameId {
                 if let evGameId = event.gameId, !evGameId.isEmpty, evGameId != gid { return false }
             }
@@ -3034,6 +3105,20 @@ struct PitchTrackerView: View {
                 return true
             }
             return false
+        }
+    }
+
+    private var currentSessionSupportsLocationAnalytics: Bool {
+        let sourceEvents = isGame ? gamePitchEvents : pitchEvents
+        return sourceEvents.contains { event in
+            guard event.supportsLocationAnalytics else { return false }
+            if isGame, let gid = selectedGameId {
+                return event.gameId == gid
+            }
+            if !isGame, let pid = selectedPracticeId {
+                return event.practiceId == pid
+            }
+            return !isGame
         }
     }
 
@@ -3090,7 +3175,7 @@ struct PitchTrackerView: View {
                             Button {
                                 selectedAtBatHeatmapPitch = stat.pitch
                             } label: {
-                                Text("\(stat.pitch) \(stat.successPercentText)")
+                                Text(stat.pitch == "Catcher" ? stat.pitch : "\(stat.pitch) \(stat.successPercentText)")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(isSelected ? .white : .primary)
                                     .padding(.horizontal, 10)
@@ -3212,6 +3297,27 @@ struct PitchTrackerView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             handleSetCalledPitch(newCall)
         }
+    }
+
+    private func beginCatcherCoachCall() {
+        guard currentTrackingMode == .coach else { return }
+        guard canInitiateCall else { return }
+
+        selectedPitch = ""
+        pendingResultLabel = nil
+        actualLocationRecorded = nil
+        resultVisualState = nil
+        lastTappedPosition = nil
+
+        let placeholderLocation = "Catcher"
+        let newCall = PitchCall(
+            pitch: "Catcher",
+            location: placeholderLocation,
+            isStrike: false,
+            codes: calledPitchCodes(pitch: "Catcher", location: placeholderLocation, isStrike: false)
+        )
+
+        handleSetCalledPitch(newCall)
     }
 
     private var selectedPitcherName: String {
@@ -4002,10 +4108,11 @@ struct PitchTrackerView: View {
             width: screen.width * 0.94,   // 94% of screen width
             height: headerHeight
         )
-        .background(
-            .thickMaterial,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.thickMaterial)
+                .shadow(color: .black.opacity(0.7), radius: 6, x: 0, y: 6)
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
@@ -4026,6 +4133,10 @@ struct PitchTrackerView: View {
     private var strikeZoneHeight: CGFloat {
         isCompactHeight ? 320 : 390
     }
+
+    private var sidebarColumnWidth: CGFloat { 60 }
+
+    private var topControlRowHeight: CGFloat { 76 }
     
     private var participantHeaderOverlay: some View {
         Group {
@@ -4077,9 +4188,12 @@ struct PitchTrackerView: View {
 
 
     private var contentSection: some View {
-        Group {
+        VStack(spacing: 0) {
             mainStrikeZoneSection
-            Spacer(minLength: 16)
+                .padding(.bottom, 16)
+
+            Spacer(minLength: 0)
+
             cardsAndOverlay
         }
     }
@@ -4110,7 +4224,7 @@ struct PitchTrackerView: View {
 
     private var calledPitchComposerBinding: Binding<Bool> {
         Binding<Bool>(
-            get: { calledPitch != nil },
+            get: { currentTrackingMode != .scout && calledPitch != nil },
             set: { newValue in
                 if !newValue {
                     resetCallAndResultUIState()
@@ -4242,7 +4356,7 @@ struct PitchTrackerView: View {
                     }
 
                     VStack(alignment: .center, spacing: 4) {
-                        Text("Grid Key")
+                        Text(currentTrackingMode == .scout ? "Pitch Key" : "Grid Key")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Menu {
@@ -4289,7 +4403,7 @@ struct PitchTrackerView: View {
                                         .lineLimit(1)
                                         .minimumScaleFactor(0.7)
                                         .allowsTightening(true)
-                                    if !currentTemplateVersionLabel.isEmpty {
+                                    if currentTrackingMode != .scout && !currentTemplateVersionLabel.isEmpty {
                                         Text(currentTemplateVersionLabel)
                                             .font(.caption2.weight(.semibold))
                                             .padding(.horizontal, 6)
@@ -4322,7 +4436,7 @@ struct PitchTrackerView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            codeLinkButton
+            settingsButton
         }
         .padding(.horizontal)
         .padding(.top, 6)
@@ -4366,6 +4480,7 @@ struct PitchTrackerView: View {
             templates: visibleTemplates,
             selectedPitcherId: $pendingConfirmationPitcherId,
             selectedTemplateId: $pendingConfirmationTemplateId,
+            selectedTrackingMode: $pendingConfirmationTrackingMode,
             resolvedPitcherName: resolvedPitcherName(for: pendingConfirmationPitcherId),
             resolvedTemplateName: resolvedTemplateName(for: pendingConfirmationTemplateId),
             resolvedGameName: resolvedGameName(for: pending),
@@ -4374,7 +4489,8 @@ struct PitchTrackerView: View {
                 confirmSessionSelection(
                     pending,
                     selectedPitcherId: pendingConfirmationPitcherId,
-                    selectedTemplateId: pendingConfirmationTemplateId
+                    selectedTemplateId: pendingConfirmationTemplateId,
+                    selectedTrackingMode: pendingConfirmationTrackingMode
                 )
             },
             onCancel: {
@@ -4389,19 +4505,334 @@ struct PitchTrackerView: View {
     private var mainStrikeZoneSection: some View {
         let deviceWidth = effectiveScreenSize.width
         let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
-        let chipStripWidth: CGFloat = max(deviceWidth - 24, SZwidth)
+        let chipStripWidth: CGFloat = SZwidth
 
         return VStack(spacing: 8) {
-            if !activePitchChipOptions.isEmpty {
-                pitchSelectionStrip(width: chipStripWidth)
+            HStack(alignment: .top, spacing: 8) {
+                sidebarControlPanel
+
+                if !activePitchChipOptions.isEmpty {
+                    pitchSelectionStrip(width: chipStripWidth)
+                } else {
+                    Color.clear
+                        .frame(width: chipStripWidth, height: topControlRowHeight)
+                }
             }
 
             HStack(alignment: .top, spacing: 8) {
                 atBatSidebar
-                strikeZoneArea(width: SZwidth)
+
+                if currentTrackingMode == .scout {
+                    scoutTrackingArea(width: SZwidth)
+                } else {
+                    strikeZoneArea(width: SZwidth)
+                }
             }
         }
         .padding(.horizontal, 12)
+    }
+
+    private var settingsButton: some View {
+        Button {
+            showSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(
+                    width: 40,
+                    height: max(0, headerHeight - 22)
+                )
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Settings")
+    }
+
+    private var scoutInPlayOptions: [String] { ["Out", "1B", "2B", "3B", "HR"] }
+
+    private var scoutCanSave: Bool {
+        guard scoutObservedResult != nil else { return false }
+        if scoutObservedResult == .inPlay {
+            return scoutInPlayOutcome != nil
+        }
+        return true
+    }
+
+    private var scoutResultLocationRows: [[String]] {
+        [
+            ["Up & Out", "Up", "Up & In"],
+            ["Out", "Middle", "In"],
+            ["↓ & Out", "↓", "↓ & In"]
+        ]
+    }
+
+    @ViewBuilder
+    private func scoutTrackingArea(width: CGFloat) -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Strike")
+                        .font(.subheadline.weight(.semibold))
+
+                    HStack(spacing: 8) {
+                        scoutResultButton(.swingingStrike, title: "Swinging")
+                        scoutResultButton(.calledStrike, title: "Looking")
+                        scoutResultButton(.foul, title: "Foul")
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    scoutResultButton(.ball, title: "Ball")
+                    scoutResultButton(.inPlay, title: "In Play")
+                    scoutMiscTagButton("HBP")
+                    scoutMiscTagButton("WP")
+                    scoutMiscTagButton("PB")
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text("Result Location")
+                            .font(.subheadline.weight(.semibold))
+                        if let scoutResultLocation, !scoutResultLocation.isEmpty {
+                            Text(scoutResultLocation)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    VStack(spacing: 8) {
+                        ForEach(Array(scoutResultLocationRows.enumerated()), id: \.offset) { _, row in
+                            HStack(spacing: 8) {
+                                ForEach(row, id: \.self) { location in
+                                    scoutLocationButton(location)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if scoutObservedResult == .inPlay {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("In-Play Outcome")
+                            .font(.subheadline.weight(.semibold))
+                        scoutOptionWrap(options: scoutInPlayOptions, selection: $scoutInPlayOutcome)
+
+                        HStack(spacing: 10) {
+                            Button {
+                                showScoutFieldMap = true
+                            } label: {
+                                Label(
+                                    scoutBattedBallRegionName == nil ? "Field Map" : "Edit Field Map",
+                                    systemImage: "map"
+                                )
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            if let scoutBattedBallRegionName, !scoutBattedBallRegionName.isEmpty {
+                                Text(scoutBattedBallRegionName)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 76)
+        }
+        .frame(width: width, height: strikeZoneHeight, alignment: .topLeading)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.thickMaterial)
+                .shadow(color: .black.opacity(0.7), radius: 6, x: 0, y: 6)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .overlay(alignment: .topTrailing) {
+            Text("Count \(balls)-\(strikes)")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 16)
+                .padding(.trailing, 16)
+        }
+        .overlay(alignment: .bottomLeading) {
+            ResetPitchButton {
+                resetScoutComposer()
+            }
+            .padding(16)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Button("Save Event") {
+                saveScoutEvent()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!scoutCanSave)
+            .padding(16)
+        }
+        .sheet(isPresented: $showScoutFieldMap) {
+            ScoutFieldMapSheet(
+                selectedOutcome: $scoutInPlayOutcome,
+                battedBallRegionName: $scoutBattedBallRegionName,
+                battedBallTapNormalized: $scoutBattedBallTapNormalized
+            )
+        }
+    }
+
+    private var sidebarControlPanel: some View {
+        VStack(spacing: 4) {
+            sidebarControlButton(title: "Coach", isSelected: currentTrackingMode == .coach) {
+                currentTrackingMode = .coach
+            }
+            sidebarControlButton(title: "Scout", isSelected: currentTrackingMode == .scout) {
+                currentTrackingMode = .scout
+            }
+            sidebarControlButton(title: "Asst.", isSelected: false) {
+                triggerAssistantCodeLink()
+            }
+        }
+        .padding(6)
+        .frame(width: sidebarColumnWidth, height: topControlRowHeight, alignment: .top)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+    }
+
+    private func sidebarControlButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(isSelected ? Color.black : Color(.systemGray6))
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func triggerAssistantCodeLink() {
+        if !subscriptionManager.isPro {
+            proGateMessage = "Coach + Assistant mode is available in PitchMark Pro."
+            showProGateAlert = true
+            return
+        }
+        showCodeShareModePicker = true
+    }
+
+    private func scoutSelectObservedResult(_ result: ScoutObservedResult) {
+        scoutObservedResult = result
+        if result != .inPlay {
+            scoutInPlayOutcome = nil
+            scoutBattedBallRegionName = nil
+            scoutBattedBallTapNormalized = nil
+        }
+        if result != .ball {
+            scoutMiscOutcome = nil
+        }
+    }
+
+    @ViewBuilder
+    private func scoutLocationButton(_ location: String) -> some View {
+        let isSelected = scoutResultLocation == location
+        Button {
+            scoutResultLocation = isSelected ? nil : location
+        } label: {
+            Text(location)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(isSelected ? Color.black : Color(.systemGray6))
+                        .shadow(color: .black.opacity(0.12), radius: 1.5, x: 0, y: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func scoutResultButton(_ result: ScoutObservedResult, title: String? = nil) -> some View {
+        Button {
+            scoutSelectObservedResult(result)
+        } label: {
+            Text(title ?? result.title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(scoutObservedResult == result ? Color.white : Color.primary)
+                .shadow(color: .clear, radius: 0)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(scoutObservedResult == result ? Color.black : Color(.systemGray6))
+                        .shadow(color: .black.opacity(0.12), radius: 1.5, x: 0, y: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func scoutMiscTagButton(_ option: String) -> some View {
+        let isSelected = scoutObservedResult == .ball && scoutMiscOutcome == option
+        Button {
+            if isSelected {
+                scoutMiscOutcome = nil
+            } else {
+                scoutSelectObservedResult(.ball)
+                scoutMiscOutcome = option
+            }
+        } label: {
+            Text(option)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .shadow(color: .clear, radius: 0)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(isSelected ? Color.black : Color(.systemGray6))
+                        .shadow(color: .black.opacity(0.12), radius: 1.5, x: 0, y: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func scoutOptionWrap(options: [String], selection: Binding<String?>) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 8)], spacing: 8) {
+            ForEach(options, id: \.self) { option in
+                let isSelected = selection.wrappedValue == option
+                Button {
+                    selection.wrappedValue = isSelected ? nil : option
+                } label: {
+                    Text(option)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(isSelected ? Color.white : Color.primary)
+                        .shadow(color: .clear, radius: 0)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 9)
+                        .background(
+                            Capsule()
+                                .fill(isSelected ? Color.black : Color(.systemGray6))
+                                .shadow(color: .black.opacity(0.12), radius: 1.5, x: 0, y: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     private var activePitchChipOptions: [String] {
@@ -4413,11 +4844,16 @@ struct PitchTrackerView: View {
         return filtered.isEmpty ? ordered : filtered
     }
 
+    private var displayedPitchChipOptions: [String] {
+        [""] + activePitchChipOptions
+    }
+
     @ViewBuilder
     private func pitchSelectionStrip(width: CGFloat) -> some View {
-        let firstRowCount = Int(ceil(Double(activePitchChipOptions.count) / 2.0))
-        let row1 = Array(activePitchChipOptions.prefix(firstRowCount))
-        let row2 = Array(activePitchChipOptions.dropFirst(firstRowCount))
+        let chipOptions = displayedPitchChipOptions
+        let firstRowCount = Int(ceil(Double(chipOptions.count) / 2.0))
+        let row1 = Array(chipOptions.prefix(firstRowCount))
+        let row2 = Array(chipOptions.dropFirst(firstRowCount))
 
         VStack(spacing: row2.isEmpty ? 0 : 6) {
             HStack(spacing: 8) {
@@ -4437,7 +4873,7 @@ struct PitchTrackerView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .frame(width: width, alignment: .center)
+        .frame(width: width, height: topControlRowHeight, alignment: .center)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -4448,13 +4884,24 @@ struct PitchTrackerView: View {
 
     @ViewBuilder
     private func pitchChip(_ pitch: String) -> some View {
-        let isSelectedChip = selectedPitch == pitch
-        let chipColor = colorForPitch(pitch)
+        let isNoneChip = pitch.isEmpty
+        let isSelectedChip = isNoneChip ? selectedPitch.isEmpty : selectedPitch == pitch
+        let chipColor = isNoneChip ? Color.black : colorForPitch(pitch)
 
         Button {
-            selectedPitch = pitch
+            if isNoneChip {
+                if currentTrackingMode == .coach {
+                    beginCatcherCoachCall()
+                } else {
+                    selectedPitch = ""
+                }
+            } else if currentTrackingMode == .scout && isSelectedChip {
+                selectedPitch = ""
+            } else {
+                selectedPitch = pitch
+            }
         } label: {
-            Text(pitch)
+            Text(isNoneChip ? "Catcher" : pitch)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(isSelectedChip ? Color.white : Color.primary)
                 .padding(.horizontal, 14)
@@ -4484,6 +4931,15 @@ struct PitchTrackerView: View {
         let options = activePitchChipOptions
         guard !options.isEmpty else {
             selectedPitch = ""
+            return
+        }
+        if selectedPitch.isEmpty {
+            return
+        }
+        if currentTrackingMode == .scout {
+            if !options.contains(selectedPitch) {
+                selectedPitch = ""
+            }
             return
         }
         if !options.contains(selectedPitch) {
@@ -4772,7 +5228,7 @@ struct PitchTrackerView: View {
                                 .fill(Color.red.opacity(atBatPulse ? 1.0 : 0.01))
                         )
                         .padding(.top, 6)
-                } else {
+                } else if currentTrackingMode != .scout && !selectedBatterHeatmapEvents.isEmpty {
                     Button("Map") {
                         selectedAtBatHeatmapPitch = batterHeatmapPitchStats.first?.pitch ?? ""
                         showAtBatHeatmapSheet = true
@@ -4787,9 +5243,20 @@ struct PitchTrackerView: View {
                     )
                     .buttonStyle(.plain)
                     .padding(.top, 6)
+                } else if currentTrackingMode == .scout {
+                    Text("Scout")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.black.opacity(0.7))
+                        )
+                        .padding(.top, 6)
                 }
                 }
-            .frame(width: 60, height: strikeZoneHeight)
+            .frame(width: sidebarColumnWidth, height: strikeZoneHeight)
             .background(.ultraThinMaterial)
             .cornerRadius(10)
             .overlay(
@@ -5033,8 +5500,15 @@ struct PitchTrackerView: View {
     private var codeLinkButton: some View {
         Menu {
             Button {
+                showSettings = true
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+            
+            
+            Button {
                 if !subscriptionManager.isPro {
-                    proGateMessage = "Code links require PitchMark Pro."
+                    proGateMessage = "Coach + Assistant mode is available in PitchMark Pro."
                     showProGateAlert = true
                     return
                 }
@@ -5043,11 +5517,6 @@ struct PitchTrackerView: View {
                 Label("Code Link", systemImage: "key.sensor.tag.radiowaves.left.and.right.fill")
             }
 
-            Button {
-                showSettings = true
-            } label: {
-                Label("Settings", systemImage: "gearshape")
-            }
         } label: {
             VStack(spacing: 4) {
                 Image(systemName: "key.sensor.tag.radiowaves.left.and.right.fill")
@@ -5297,10 +5766,14 @@ struct PitchTrackerView: View {
     }
 
     private func buildPitchOnlyEvent() -> PitchEvent? {
-        guard let label = pendingResultLabel,
-              let pitchCall = calledPitch else {
+        guard let pitchCall = calledPitch else {
             return nil
         }
+        let label = pendingResultLabel ?? pitchCall.location
+        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let resolvedIsStrike = heatmapResultIsInsideStrikeZone(label)
 
         return PitchEvent(
             id: nil,
@@ -5308,8 +5781,8 @@ struct PitchTrackerView: View {
             pitch: pitchCall.pitch,
             location: label,
             codes: pitchCall.codes,
-            isStrike: pitchCall.isStrike,
-            isBall: isBall,
+            isStrike: resolvedIsStrike,
+            isBall: !resolvedIsStrike,
             mode: sessionManager.currentMode,
             calledPitch: pitchCall,
             batterSide: batterSide,
@@ -5331,6 +5804,165 @@ struct PitchTrackerView: View {
             practiceId: selectedPracticeId,
             pitcherId: effectivePitcherIdForSave
         )
+    }
+
+    private func saveScoutEvent() {
+        guard let event = buildScoutEvent() else { return }
+        persistPitchEvent(event)
+        resetScoutComposer()
+    }
+
+    private func buildScoutEvent() -> PitchEvent? {
+        guard let observed = scoutObservedResult else { return nil }
+
+        let prior = priorScoutCount()
+        let inferredPitch = selectedPitch.isEmpty ? "Catcher" : selectedPitch
+        let inferredCodes = pitchCodeAssignments
+            .filter { $0.pitch == inferredPitch }
+            .map { $0.code }
+
+        let strikeLooking = observed == .calledStrike
+        let strikeSwinging = observed == .swingingStrike
+        let isFoul = observed == .foul
+        let isBallResult = observed == .ball
+
+        var event = PitchEvent(
+            id: nil,
+            timestamp: Date(),
+            pitch: inferredPitch,
+            location: scoutResultLocation ?? "Scout",
+            codes: inferredCodes,
+            isStrike: strikeLooking || strikeSwinging || isFoul,
+            isBall: isBallResult,
+            mode: sessionManager.currentMode,
+            calledPitch: nil,
+            batterSide: batterSide,
+            templateId: selectedTemplate?.id.uuidString,
+            strikeSwinging: strikeSwinging,
+            wildPitch: scoutMiscOutcome == "WP",
+            passedBall: scoutMiscOutcome == "PB",
+            strikeLooking: strikeLooking,
+            outcome: scoutOutcome(for: observed, prior: prior),
+            descriptor: nil,
+            errorOnPlay: false,
+            battedBallRegion: observed == .inPlay ? scoutBattedBallRegionName : nil,
+            battedBallType: nil,
+            battedBallTapX: observed == .inPlay ? scoutBattedBallTapNormalized.map { Double($0.x) } : nil,
+            battedBallTapY: observed == .inPlay ? scoutBattedBallTapNormalized.map { Double($0.y) } : nil,
+            gameId: selectedGameId,
+            opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
+            opponentBatterId: selectedBatterId?.uuidString,
+            practiceId: selectedPracticeId,
+            pitcherId: effectivePitcherIdForSave,
+            trackingMode: .scout
+        )
+
+        if scoutMiscOutcome == "HBP" {
+            event.outcome = "HBP"
+        }
+
+        let next = nextScoutCount(for: event, prior: prior)
+        if let terminal = terminalAtBatText(for: event, prior: prior) {
+            event.atBatCount = terminal
+            event.atBatBalls = 0
+            event.atBatStrikes = 0
+        } else {
+            event.atBatBalls = next.balls
+            event.atBatStrikes = next.strikes
+            event.atBatCount = "\(next.balls)-\(next.strikes)"
+        }
+
+        return event
+    }
+
+    private func priorScoutCount() -> (balls: Int, strikes: Int) {
+        let sourceEvents = isGame ? gamePitchEvents : pitchEvents
+        let fallbackBatterId = selectedBatterId?.uuidString
+        let fallbackJersey = jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber ?? selectedBatterJersey
+
+        let latestEvent = sourceEvents
+            .filter { event in
+                if isGame, let gid = selectedGameId, event.gameId != gid { return false }
+                if !isGame, let pid = selectedPracticeId, event.practiceId != pid { return false }
+                if let batterId = fallbackBatterId, !batterId.isEmpty {
+                    return event.opponentBatterId == batterId
+                }
+                if let jersey = fallbackJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
+                    return event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) == jersey
+                }
+                return false
+            }
+            .sorted(by: { $0.timestamp < $1.timestamp })
+            .last
+
+        let parsedFromText: (Int, Int)? = {
+            guard let text = latestEvent?.atBatCount else { return nil }
+            let parts = text.split(separator: "-", maxSplits: 1).map { Int($0.trimmingCharacters(in: .whitespaces)) }
+            guard parts.count == 2, let balls = parts[0], let strikes = parts[1] else { return nil }
+            return (balls, strikes)
+        }()
+
+        return (
+            latestEvent?.atBatBalls ?? parsedFromText?.0 ?? balls,
+            latestEvent?.atBatStrikes ?? parsedFromText?.1 ?? strikes
+        )
+    }
+
+    private func scoutOutcome(for observed: ScoutObservedResult, prior: (balls: Int, strikes: Int)) -> String? {
+        switch observed {
+        case .ball:
+            return prior.balls >= 3 ? "Walk" : nil
+        case .calledStrike:
+            return prior.strikes >= 2 ? "ꓘ" : nil
+        case .swingingStrike:
+            return prior.strikes >= 2 ? "K" : nil
+        case .foul:
+            return "Foul"
+        case .inPlay:
+            return scoutInPlayOutcome
+        }
+    }
+
+    private func nextScoutCount(for event: PitchEvent, prior: (balls: Int, strikes: Int)) -> (balls: Int, strikes: Int) {
+        let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedOutcome == "walk" || normalizedOutcome == "k" || normalizedOutcome == "ꓘ".lowercased() || normalizedOutcome == "hbp" {
+            return (0, 0)
+        }
+
+        var nextBalls = prior.balls
+        var nextStrikes = prior.strikes
+
+        if event.isBall == true {
+            nextBalls = min(3, nextBalls + 1)
+        } else if event.strikeLooking || event.strikeSwinging {
+            nextStrikes = min(2, nextStrikes + 1)
+        } else if normalizedOutcome == "foul" {
+            if nextStrikes < 2 {
+                nextStrikes += 1
+            }
+        }
+
+        return (nextBalls, nextStrikes)
+    }
+
+    private func terminalAtBatText(for event: PitchEvent, prior: (balls: Int, strikes: Int)) -> String? {
+        let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalizedOutcome == "walk" {
+            return "Ball 4"
+        }
+        if normalizedOutcome == "k" || normalizedOutcome == "ꓘ".lowercased() {
+            return "Strikeout"
+        }
+        if normalizedOutcome == "hbp" {
+            return "HBP"
+        }
+        if event.isBall == true, prior.balls >= 3 {
+            return "Ball 4"
+        }
+        if (event.strikeLooking || event.strikeSwinging) && prior.strikes >= 2 {
+            return "Strikeout"
+        }
+        return nil
     }
 
     private func persistPitchEvent(_ event: PitchEvent) {
@@ -5431,6 +6063,8 @@ struct PitchTrackerView: View {
             }
         }
 
+        autoAdvanceSelectedBatterIfNeeded(after: eventToPersist)
+
         resultVisualState = event.location
         activeCalledPitchId = nil
         isRecordingResult = false
@@ -5448,6 +6082,48 @@ struct PitchTrackerView: View {
         isError = false
         selectedOutcome = nil
         selectedDescriptor = nil
+    }
+
+    private func autoAdvanceSelectedBatterIfNeeded(after event: PitchEvent) {
+        guard shouldAdvanceBatterSelection(after: event) else { return }
+        syncCountFromComposer(balls: 0, strikes: 0)
+        let savedJersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !savedJersey.isEmpty else { return }
+        guard !jerseyCells.isEmpty else { return }
+
+        let currentIndex: Int? = {
+            if let batterId = event.opponentBatterId,
+               let match = jerseyCells.firstIndex(where: { $0.id.uuidString == batterId }) {
+                return match
+            }
+            return jerseyCells.firstIndex {
+                $0.jerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines) == savedJersey
+            }
+        }()
+
+        guard let currentIndex else { return }
+
+        if currentIndex + 1 < jerseyCells.count {
+            syncSelectedBatterFromDetail(jerseyCells[currentIndex + 1])
+        } else {
+            presentNextBatterAdjustmentAlert(currentIndex: currentIndex, totalCount: jerseyCells.count)
+        }
+    }
+
+    private func shouldAdvanceBatterSelection(after event: PitchEvent) -> Bool {
+        let outcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if ["Walk", "1B", "2B", "3B", "HR", "HBP", "K", "ꓘ"].contains(outcome) {
+            return true
+        }
+        return event.atBatCount == "Strikeout"
+    }
+
+    private func presentNextBatterAdjustmentAlert(currentIndex: Int, totalCount: Int) {
+        nextBatterAdjustmentMessage = "Adjust to next batter if needed [\(currentIndex + 1) of \(totalCount)]"
+        showNextBatterAdjustmentAlert = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            showNextBatterAdjustmentAlert = false
+        }
     }
 
     private func applyProgressCounterAdjustments(for event: PitchEvent) {
@@ -6275,13 +6951,14 @@ struct PitchTrackerView: View {
 
     @ViewBuilder private var gameSheetView: some View {
         GameSelectionSheet(
-            onCreate: { name, date in
+            onCreate: { name, date, trackingMode in
                 let newGame = Game(
                     id: nil,
                     opponent: name,
                     date: date,
                     jerseyNumbers: jerseyCells.map { $0.jerseyNumber },
-                    batterIds: jerseyCells.map { $0.id.uuidString }
+                    batterIds: jerseyCells.map { $0.id.uuidString },
+                    trackingMode: trackingMode
                 )
                 authManager.saveGame(newGame)
             },
@@ -6372,14 +7049,15 @@ struct PitchTrackerView: View {
 
     @ViewBuilder private var practiceSheetView: some View {
         PracticeSelectionSheet(
-            onCreate: { name, date, templateId, templateName in
+            onCreate: { name, date, templateId, templateName, trackingMode in
                 var sessions = loadPracticeSessions()
                 let new = PracticeSession(
                     id: UUID().uuidString,
                     name: name,
                     date: date,
                     templateId: templateId,
-                    templateName: templateName
+                    templateName: templateName,
+                    trackingMode: trackingMode
                 )
                 sessions.append(new)
                 savePracticeSessions(sessions)
@@ -6529,27 +7207,57 @@ struct PitchTrackerView: View {
         }
     }
 
-    private var gameSummaryPitcherId: String? {
-        selectedPitcherForStats?.id ?? selectedPitcherId
-    }
-
-    private var gameSummaryEvents: [PitchEvent] {
+    private var gameSummarySourceEvents: [PitchEvent] {
         guard let gameId = selectedGameId else { return [] }
-        let source = gamePitchEvents.filter { event in
+        return gamePitchEvents.filter { event in
             guard let eventGameId = event.gameId else { return false }
             return eventGameId == gameId
         }
+        .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private var gameSummaryPitcherOptions: [(id: String, name: String)] {
+        let pitcherIds = Set(
+            gameSummarySourceEvents.compactMap { event -> String? in
+                guard let pitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !pitcherId.isEmpty else { return nil }
+                return pitcherId
+            }
+        )
+
+        return pitcherIds.compactMap { pitcherId in
+            guard let pitcher = pitchers.first(where: { $0.id == pitcherId }) else { return nil }
+            return (id: pitcherId, name: pitcher.name)
+        }
+        .sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private var gameSummaryPitcherId: String? {
+        guard selectedGameSummaryPitcherSelection != Self.allPitchersSummarySelection else { return nil }
+        return selectedGameSummaryPitcherSelection
+    }
+
+    private var gameSummaryPitcherName: String {
+        guard let pitcherId = gameSummaryPitcherId else { return "All Pitchers" }
+        return gameSummaryPitcherOptions.first(where: { $0.id == pitcherId })?.name
+            ?? selectedPitcherForStats?.name
+            ?? "Pitcher"
+    }
+
+    private var gameSummaryEvents: [PitchEvent] {
+        let source = gameSummarySourceEvents
 
         guard let pitcherId = gameSummaryPitcherId, !pitcherId.isEmpty else {
-            return source.sorted { $0.timestamp > $1.timestamp }
+            return source
         }
 
         return source
             .filter { event in
-                guard let eventPitcherId = event.pitcherId, !eventPitcherId.isEmpty else { return true }
+                guard let eventPitcherId = event.pitcherId, !eventPitcherId.isEmpty else { return false }
                 return eventPitcherId == pitcherId
             }
-            .sorted { $0.timestamp > $1.timestamp }
     }
 
     private var summaryTotalPitches: Int { gameSummaryEvents.count }
@@ -6566,8 +7274,11 @@ struct PitchTrackerView: View {
     }
     private var summaryHitSpotPitches: Int {
         gameSummaryEvents.filter { event in
-            isLocationMatch(event)
+            event.supportsLocationAnalytics && isLocationMatch(event)
         }.count
+    }
+    private var gameSummaryHasLocationAnalytics: Bool {
+        gameSummaryEvents.contains(where: \.supportsLocationAnalytics)
     }
     private var summaryStrikeLookingCount: Int {
         gameSummaryEvents.filter { $0.strikeLooking }.count
@@ -6582,10 +7293,34 @@ struct PitchTrackerView: View {
         gameSummaryEvents.filter { $0.passedBall }.count
     }
     private var summaryWalkCount: Int {
-        max(0, walks)
+        if gameSummaryPitcherId == nil {
+            return max(0, walks)
+        }
+        return gameSummaryEvents.filter {
+            guard let outcome = $0.outcome, !outcome.isEmpty else { return false }
+            return outcome == "BB" || outcome == "Walk"
+        }.count
     }
     private var summaryHitCount: Int {
-        max(0, hits)
+        if gameSummaryPitcherId == nil {
+            return max(0, hits)
+        }
+        return gameSummaryEvents.filter { event in
+            let normalizedOutcome = (event.outcome ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            let hitOutcomes: Set<String> = ["1b", "2b", "3b", "hr", "hit"]
+            if hitOutcomes.contains(normalizedOutcome) {
+                return true
+            }
+            let descriptorTokens: Set<String> = Set(
+                (event.descriptor ?? "")
+                    .lowercased()
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            )
+            return descriptorTokens.contains("hit")
+        }.count
     }
     private var summaryPitchBreakdown: [(pitch: String, count: Int)] {
         let grouped = Dictionary(grouping: gameSummaryEvents, by: { event in
@@ -6612,14 +7347,35 @@ struct PitchTrackerView: View {
             }
     }
 
+    private var summaryHeatmapsByPitch: [(pitch: String, events: [PitchEvent])] {
+        Dictionary(grouping: gameSummaryEvents.filter(\.supportsLocationAnalytics), by: { $0.pitch.isEmpty ? "-" : $0.pitch })
+            .map { key, value in
+                (pitch: key, events: value.sorted { $0.timestamp < $1.timestamp })
+            }
+            .sorted { lhs, rhs in
+                if lhs.events.count == rhs.events.count { return lhs.pitch < rhs.pitch }
+                return lhs.events.count > rhs.events.count
+            }
+    }
+
     private func summaryPercent(_ part: Int, total: Int) -> String {
         guard total > 0 else { return "0%" }
         let value = (Double(part) / Double(total)) * 100.0
         return String(format: "%.0f%%", value.rounded())
     }
 
+    private func initializeGameSummaryPitcherSelection() {
+        let preferredPitcherId = selectedPitcherForStats?.id ?? selectedPitcherId
+        if let preferredPitcherId,
+           gameSummaryPitcherOptions.contains(where: { $0.id == preferredPitcherId }) {
+            selectedGameSummaryPitcherSelection = preferredPitcherId
+        } else {
+            selectedGameSummaryPitcherSelection = Self.allPitchersSummarySelection
+        }
+    }
+
     private var summaryShareText: String {
-        let pitcher = selectedPitcherForStats?.name ?? "Unknown"
+        let pitcher = gameSummaryPitcherName
         let opponent = currentGame?.opponent ?? "Unknown Opponent"
         let gameDate = currentGame?.date.formatted(date: .abbreviated, time: .omitted) ?? "-"
 
@@ -6632,6 +7388,12 @@ struct PitchTrackerView: View {
             if summaryOutcomeBreakdown.isEmpty { return "None" }
             return summaryOutcomeBreakdown.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
         }()
+        let hitSpotLine = gameSummaryHasLocationAnalytics
+            ? "- Hit Spot: \(summaryHitSpotPitches) of \(summaryTotalPitches) (\(summaryPercent(summaryHitSpotPitches, total: summaryTotalPitches)))"
+            : "- Hit Spot: Hidden for Scout Mode events"
+        let hitSpotDefinition = gameSummaryHasLocationAnalytics
+            ? "- Hit Spot % = Location matches / Total Pitches"
+            : "- Location-based metrics hidden for Scout Mode events."
 
         return """
         PitchMark Game Summary
@@ -6643,7 +7405,7 @@ struct PitchTrackerView: View {
         - Pitches: \(summaryTotalPitches)
         - Strikes: \(summaryStrikePitches) of \(summaryTotalPitches) (\(summaryPercent(summaryStrikePitches, total: summaryTotalPitches)))
         - Balls: \(summaryBallPitches) of \(summaryTotalPitches) (\(summaryPercent(summaryBallPitches, total: summaryTotalPitches)))
-        - Hit Spot: \(summaryHitSpotPitches) of \(summaryTotalPitches) (\(summaryPercent(summaryHitSpotPitches, total: summaryTotalPitches)))
+        \(hitSpotLine)
 
         Events
         - Strike Looking: \(summaryStrikeLookingCount)
@@ -6656,7 +7418,7 @@ struct PitchTrackerView: View {
         Metric Definitions
         - Strike % = Strikes / Total Pitches
         - Ball % = Balls / Total Pitches
-        - Hit Spot % = Location matches / Total Pitches
+        \(hitSpotDefinition)
 
         Pitch Breakdown
         \(pitchBreakdownText)
@@ -6666,103 +7428,370 @@ struct PitchTrackerView: View {
         """
     }
 
+    @ViewBuilder
+    private var gameSummaryContentWithoutHeatmaps: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(gameSummaryPitcherName)
+                    .font(.title3.weight(.semibold))
+                Text(currentGame?.opponent ?? "Opponent")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let date = currentGame?.date {
+                    Text(date.formatted(date: .abbreviated, time: .omitted))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Picker("Pitcher", selection: $selectedGameSummaryPitcherSelection) {
+                    Text("All Pitchers").tag(Self.allPitchersSummarySelection)
+                    ForEach(gameSummaryPitcherOptions, id: \.id) { option in
+                        Text(option.name).tag(option.id)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            VStack(spacing: 10) {
+                summaryMetricRow(title: "Total Pitches", value: "\(summaryTotalPitches)")
+                summaryMetricRow(
+                    title: "Strike %",
+                    value: "\(summaryPercent(summaryStrikePitches, total: summaryTotalPitches)) (\(summaryStrikePitches)/\(summaryTotalPitches))"
+                )
+                summaryMetricRow(
+                    title: "Ball %",
+                    value: "\(summaryPercent(summaryBallPitches, total: summaryTotalPitches)) (\(summaryBallPitches)/\(summaryTotalPitches))"
+                )
+                if gameSummaryHasLocationAnalytics {
+                    summaryMetricRow(
+                        title: "Hit Spot %",
+                        value: "\(summaryPercent(summaryHitSpotPitches, total: summaryTotalPitches)) (\(summaryHitSpotPitches)/\(summaryTotalPitches))"
+                    )
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Metric Definitions")
+                    .font(.subheadline.weight(.semibold))
+                Text("Strike % = Strikes / Total Pitches")
+                Text("Ball % = Balls / Total Pitches")
+                if gameSummaryHasLocationAnalytics {
+                    Text("Hit Spot % = Location matches / Total Pitches")
+                } else {
+                    Text("Location-based metrics hidden for Scout Mode events.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Events")
+                    .font(.headline)
+                summaryMetricRow(title: "Strike Looking", value: "\(summaryStrikeLookingCount)")
+                summaryMetricRow(title: "Strike Swinging", value: "\(summaryStrikeSwingingCount)")
+                summaryMetricRow(title: "Walks", value: "\(summaryWalkCount)")
+                summaryMetricRow(title: "Hits", value: "\(summaryHitCount)")
+                summaryMetricRow(title: "Wild Pitches", value: "\(summaryWildPitchCount)")
+                summaryMetricRow(title: "Passed Balls", value: "\(summaryPassedBallCount)")
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pitch Breakdown")
+                    .font(.headline)
+                if summaryPitchBreakdown.isEmpty {
+                    Text("No pitches recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(summaryPitchBreakdown.enumerated()), id: \.offset) { _, item in
+                        summaryMetricRow(title: item.pitch, value: "\(item.count)")
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Outcome Breakdown")
+                    .font(.headline)
+                if summaryOutcomeBreakdown.isEmpty {
+                    Text("No outcomes recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(summaryOutcomeBreakdown.enumerated()), id: \.offset) { _, item in
+                        summaryMetricRow(title: item.name, value: "\(item.count)")
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private func printableGameSummaryHeatmapPage(for item: (pitch: String, events: [PitchEvent]), pageHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("\(item.pitch) (\(item.events.count))")
+                .font(.title3.weight(.semibold))
+            HStack {
+                Spacer()
+                StrikeZoneHeatmapView(
+                    events: item.events,
+                    showLegend: false
+                )
+                .frame(width: 380, height: 312)
+                Spacer()
+            }
+            Spacer(minLength: 12)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Notes:")
+                    .font(.headline)
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.45))
+                    .frame(height: 1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: pageHeight, alignment: .top)
+    }
+
+    @MainActor
+    private func renderedGameSummaryPrintableImage<Content: View>(for content: Content, width: CGFloat) -> UIImage? {
+        let printableContent = content
+            .padding()
+            .frame(width: width)
+            .background(Color.white)
+        let imageRenderer = ImageRenderer(content: printableContent)
+        imageRenderer.scale = 2
+        return imageRenderer.uiImage
+    }
+
+    @ViewBuilder
+    private var gameSummaryContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(gameSummaryPitcherName)
+                    .font(.title3.weight(.semibold))
+                Text(currentGame?.opponent ?? "Opponent")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let date = currentGame?.date {
+                    Text(date.formatted(date: .abbreviated, time: .omitted))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Picker("Pitcher", selection: $selectedGameSummaryPitcherSelection) {
+                    Text("All Pitchers").tag(Self.allPitchersSummarySelection)
+                    ForEach(gameSummaryPitcherOptions, id: \.id) { option in
+                        Text(option.name).tag(option.id)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+
+            VStack(spacing: 10) {
+                summaryMetricRow(title: "Total Pitches", value: "\(summaryTotalPitches)")
+                summaryMetricRow(
+                    title: "Strike %",
+                    value: "\(summaryPercent(summaryStrikePitches, total: summaryTotalPitches)) (\(summaryStrikePitches)/\(summaryTotalPitches))"
+                )
+                summaryMetricRow(
+                    title: "Ball %",
+                    value: "\(summaryPercent(summaryBallPitches, total: summaryTotalPitches)) (\(summaryBallPitches)/\(summaryTotalPitches))"
+                )
+                if gameSummaryHasLocationAnalytics {
+                    summaryMetricRow(
+                        title: "Hit Spot %",
+                        value: "\(summaryPercent(summaryHitSpotPitches, total: summaryTotalPitches)) (\(summaryHitSpotPitches)/\(summaryTotalPitches))"
+                    )
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Metric Definitions")
+                    .font(.subheadline.weight(.semibold))
+                Text("Strike % = Strikes / Total Pitches")
+                Text("Ball % = Balls / Total Pitches")
+                if gameSummaryHasLocationAnalytics {
+                    Text("Hit Spot % = Location matches / Total Pitches")
+                } else {
+                    Text("Location-based metrics hidden for Scout Mode events.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Events")
+                    .font(.headline)
+                summaryMetricRow(title: "Strike Looking", value: "\(summaryStrikeLookingCount)")
+                summaryMetricRow(title: "Strike Swinging", value: "\(summaryStrikeSwingingCount)")
+                summaryMetricRow(title: "Walks", value: "\(summaryWalkCount)")
+                summaryMetricRow(title: "Hits", value: "\(summaryHitCount)")
+                summaryMetricRow(title: "Wild Pitches", value: "\(summaryWildPitchCount)")
+                summaryMetricRow(title: "Passed Balls", value: "\(summaryPassedBallCount)")
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pitch Breakdown")
+                    .font(.headline)
+                if summaryPitchBreakdown.isEmpty {
+                    Text("No pitches recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(summaryPitchBreakdown.enumerated()), id: \.offset) { _, item in
+                        summaryMetricRow(title: item.pitch, value: "\(item.count)")
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Outcome Breakdown")
+                    .font(.headline)
+                if summaryOutcomeBreakdown.isEmpty {
+                    Text("No outcomes recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(summaryOutcomeBreakdown.enumerated()), id: \.offset) { _, item in
+                        summaryMetricRow(title: item.name, value: "\(item.count)")
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Heat Maps By Pitch")
+                    .font(.headline)
+                if summaryHeatmapsByPitch.isEmpty {
+                    Text("No pitches recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(summaryHeatmapsByPitch, id: \.pitch) { item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 10) {
+                                Text("\(item.pitch) (\(item.events.count))")
+                                    .font(.subheadline.weight(.semibold))
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.35))
+                                    .frame(height: 1)
+                            }
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 16)
+
+                            StrikeZoneHeatmapView(
+                                events: item.events,
+                                showLegend: false
+                            )
+                            .padding(.bottom, 28)
+                        }
+                        .padding(.bottom, 20)
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    @MainActor
+    private func printGameSummary() {
+        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let contentRect = pageRect.insetBy(dx: 24, dy: 36)
+        var printableImages: [UIImage] = []
+        if let summaryImage = renderedGameSummaryPrintableImage(for: gameSummaryContentWithoutHeatmaps, width: contentRect.width) {
+            printableImages.append(summaryImage)
+        }
+        for item in summaryHeatmapsByPitch {
+            if let heatmapImage = renderedGameSummaryPrintableImage(for: printableGameSummaryHeatmapPage(for: item, pageHeight: contentRect.height), width: contentRect.width) {
+                printableImages.append(heatmapImage)
+            }
+        }
+        let pdfRenderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        let pdfData = pdfRenderer.pdfData { context in
+            func drawPaginatedImage(_ image: UIImage) {
+                guard let cgImage = image.cgImage else { return }
+                let scale = image.scale
+                let totalHeightPoints = image.size.height
+                var offsetYPoints: CGFloat = 0
+
+                while offsetYPoints < totalHeightPoints {
+                    context.beginPage()
+                    let remainingHeight = totalHeightPoints - offsetYPoints
+                    let sliceHeightPoints = min(contentRect.height, remainingHeight)
+                    let cropRect = CGRect(
+                        x: 0,
+                        y: offsetYPoints * scale,
+                        width: CGFloat(cgImage.width),
+                        height: sliceHeightPoints * scale
+                    ).integral
+
+                    if let cropped = cgImage.cropping(to: cropRect) {
+                        let sliceImage = UIImage(cgImage: cropped, scale: scale, orientation: .up)
+                        sliceImage.draw(
+                            in: CGRect(
+                                x: contentRect.minX,
+                                y: contentRect.minY,
+                                width: contentRect.width,
+                                height: sliceHeightPoints
+                            )
+                        )
+                    }
+
+                    offsetYPoints += sliceHeightPoints
+                }
+            }
+
+            for image in printableImages {
+                drawPaginatedImage(image)
+            }
+        }
+
+        let controller = UIPrintInteractionController.shared
+        let info = UIPrintInfo.printInfo()
+        info.jobName = "PitchMark Game Summary"
+        info.outputType = .general
+        controller.printInfo = info
+        controller.printingItem = pdfData
+        controller.present(animated: true, completionHandler: nil)
+    }
+
     @ViewBuilder private var gameSummarySheetView: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(selectedPitcherForStats?.name ?? "Pitcher")
-                            .font(.title3.weight(.semibold))
-                        Text(currentGame?.opponent ?? "Opponent")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        if let date = currentGame?.date {
-                            Text(date.formatted(date: .abbreviated, time: .omitted))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    VStack(spacing: 10) {
-                        summaryMetricRow(title: "Total Pitches", value: "\(summaryTotalPitches)")
-                        summaryMetricRow(
-                            title: "Strike %",
-                            value: "\(summaryPercent(summaryStrikePitches, total: summaryTotalPitches)) (\(summaryStrikePitches)/\(summaryTotalPitches))"
-                        )
-                        summaryMetricRow(
-                            title: "Ball %",
-                            value: "\(summaryPercent(summaryBallPitches, total: summaryTotalPitches)) (\(summaryBallPitches)/\(summaryTotalPitches))"
-                        )
-                        summaryMetricRow(
-                            title: "Hit Spot %",
-                            value: "\(summaryPercent(summaryHitSpotPitches, total: summaryTotalPitches)) (\(summaryHitSpotPitches)/\(summaryTotalPitches))"
-                        )
-                    }
+                gameSummaryContent
                     .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Metric Definitions")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Strike % = Strikes / Total Pitches")
-                        Text("Ball % = Balls / Total Pitches")
-                        Text("Hit Spot % = Location matches / Total Pitches")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Events")
-                            .font(.headline)
-                        summaryMetricRow(title: "Strike Looking", value: "\(summaryStrikeLookingCount)")
-                        summaryMetricRow(title: "Strike Swinging", value: "\(summaryStrikeSwingingCount)")
-                        summaryMetricRow(title: "Walks", value: "\(summaryWalkCount)")
-                        summaryMetricRow(title: "Hits", value: "\(summaryHitCount)")
-                        summaryMetricRow(title: "Wild Pitches", value: "\(summaryWildPitchCount)")
-                        summaryMetricRow(title: "Passed Balls", value: "\(summaryPassedBallCount)")
-                    }
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Pitch Breakdown")
-                            .font(.headline)
-                        if summaryPitchBreakdown.isEmpty {
-                            Text("No pitches recorded.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(Array(summaryPitchBreakdown.enumerated()), id: \.offset) { _, item in
-                                summaryMetricRow(title: item.pitch, value: "\(item.count)")
-                            }
-                        }
-                    }
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Outcome Breakdown")
-                            .font(.headline)
-                        if summaryOutcomeBreakdown.isEmpty {
-                            Text("No outcomes recorded.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(Array(summaryOutcomeBreakdown.enumerated()), id: \.offset) { _, item in
-                                summaryMetricRow(title: item.name, value: "\(item.count)")
-                            }
-                        }
-                    }
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .padding()
             }
             .navigationTitle("Game Summary")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        printGameSummary()
+                    } label: {
+                        Label("Print", systemImage: "printer")
+                    }
+                    .disabled(summaryTotalPitches == 0)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showGameSummaryShareSheet = true
@@ -6774,6 +7803,9 @@ struct PitchTrackerView: View {
             }
             .sheet(isPresented: $showGameSummaryShareSheet) {
                 ShareSheet(items: [summaryShareText])
+            }
+            .onAppear {
+                initializeGameSummaryPitcherSelection()
             }
         }
     }
@@ -6949,6 +7981,13 @@ struct PitchTrackerView: View {
                     loadPracticePitchEventsIfNeeded(force: false)
                 }
             }
+            .onChange(of: currentTrackingMode) { _, newValue in
+                if newValue == .scout {
+                    resetCallAndResultUIState()
+                } else {
+                    resetScoutComposer()
+                }
+            }
             .onChange(of: encryptedSelectionByGameId) { _, _ in
                 persistEncryptedSelections()
                 if let t = selectedTemplate {
@@ -7118,6 +8157,10 @@ struct PitchTrackerView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(noJerseyEventsMessage)
+            }
+            .alert("Adjust to next batter if needed", isPresented: $showNextBatterAdjustmentAlert) {
+            } message: {
+                Text(nextBatterAdjustmentMessage)
             }
             .alert("Pitch Unavailable", isPresented: $showHeatmapUnavailablePitchAlert) {
                 Button("OK", role: .cancel) { }
@@ -7942,6 +8985,10 @@ private struct ProgressSummaryView: View {
             return true
         }
     }
+
+    private var hasLocationAnalytics: Bool {
+        practiceEvents.contains(where: \.supportsLocationAnalytics)
+    }
     
     private var totalCount: Int { practiceEvents.count }
     private var strikeCount: Int { practiceEvents.filter { $0.isStrike == true }.count }
@@ -8051,13 +9098,15 @@ private struct ProgressSummaryView: View {
                         .font(Font.caption.italic())
                         .padding(.bottom, -4)
                     metricCard(title: "# Pitches", value: "\(totalCount)")
-                    metricCard(title: "% Hit Spot", value: percent(hitSpotCount, of: max(totalCount, 1)))
+                    if hasLocationAnalytics {
+                        metricCard(title: "% Hit Spot", value: percent(hitSpotCount, of: max(totalCount, 1)))
+                    }
                 }
                 .frame(maxWidth: 80)
                 
                 // Center: Header + Table (constrained and centered)
                 VStack(spacing: 8) {
-                    Text("Hit Spot Performance")
+                    Text(hasLocationAnalytics ? "Hit Spot Performance" : "Scout Mode Summary")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -8065,16 +9114,24 @@ private struct ProgressSummaryView: View {
 
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
-                            if pitchStats.isEmpty {
+                            if !hasLocationAnalytics {
+                                Text("Location-based metrics hidden for Scout Mode events.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .center)
+                            } else if pitchStats.isEmpty {
                                 Text("No data yet.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .center)
                             } else {
                                 ForEach(Array(pitchStats.enumerated()), id: \.offset) { idx, item in
-                                    let percentString = percent(item.hits, of: max(item.attempts, 1))
                                     HStack(alignment: .firstTextBaseline) {
-                                        Text("\(idx + 1). \(item.pitch) — \(item.hits)/\(item.attempts) (\(percentString))")
+                                        Text(
+                                            item.pitch == "Catcher"
+                                            ? "\(idx + 1). \(item.pitch) — \(item.attempts)"
+                                            : "\(idx + 1). \(item.pitch) — \(item.hits)/\(item.attempts) (\(percent(item.hits, of: max(item.attempts, 1))))"
+                                        )
                                             .font(.subheadline)
                                         Spacer()
                                     }
@@ -8100,11 +9157,13 @@ private struct ProgressSummaryView: View {
                 
                 // Right metrics (vertical)
                 VStack(spacing: 10) {
-                    Text("Hit Spot")
-                        .font(Font.caption.italic())
-                        .padding(.bottom, -4)
-                    metricCard(title: "Strike %", value: percent(strikeHitSpotCount, of: max(strikeCount, 1)))
-                    metricCard(title: "Ball %", value: percent(ballHitSpotCount, of: max(ballCount, 1)))
+                    if hasLocationAnalytics {
+                        Text("Hit Spot")
+                            .font(Font.caption.italic())
+                            .padding(.bottom, -4)
+                        metricCard(title: "Strike %", value: percent(strikeHitSpotCount, of: max(strikeCount, 1)))
+                        metricCard(title: "Ball %", value: percent(ballHitSpotCount, of: max(ballCount, 1)))
+                    }
                 }
                 .frame(maxWidth: 80)
             }
@@ -8600,6 +9659,197 @@ struct ShowPitchLog: View {
             }
         }
         .accessibilityLabel("Show pitches.")
+    }
+}
+
+private struct ScoutColorKey: Hashable {
+    let r: UInt8
+    let g: UInt8
+    let b: UInt8
+    let a: UInt8
+}
+
+private func scoutColorKey(from color: UIColor) -> ScoutColorKey {
+    var r: CGFloat = 0
+    var g: CGFloat = 0
+    var b: CGFloat = 0
+    var a: CGFloat = 0
+    color.getRed(&r, green: &g, blue: &b, alpha: &a)
+    return ScoutColorKey(
+        r: UInt8((r * 255.0).rounded()),
+        g: UInt8((g * 255.0).rounded()),
+        b: UInt8((b * 255.0).rounded()),
+        a: UInt8((a * 255.0).rounded())
+    )
+}
+
+private extension UIImage {
+    func scoutPixelColor(at point: CGPoint) -> UIColor? {
+        guard let cgImage = self.cgImage else { return nil }
+        guard Int(point.x) >= 0, Int(point.y) >= 0, Int(point.x) < cgImage.width, Int(point.y) < cgImage.height else { return nil }
+        guard let dataProvider = cgImage.dataProvider, let data = dataProvider.data else { return nil }
+        let ptr = CFDataGetBytePtr(data)
+        let bytesPerPixel = 4
+        let bytesPerRow = cgImage.bytesPerRow
+        let offset = Int(point.y) * bytesPerRow + Int(point.x) * bytesPerPixel
+        let r = ptr![offset]
+        let g = ptr![offset + 1]
+        let b = ptr![offset + 2]
+        let a = ptr![offset + 3]
+        return UIColor(
+            red: CGFloat(r) / 255.0,
+            green: CGFloat(g) / 255.0,
+            blue: CGFloat(b) / 255.0,
+            alpha: CGFloat(a) / 255.0
+        )
+    }
+}
+
+private struct ScoutFieldMapSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selectedOutcome: String?
+    @Binding var battedBallRegionName: String?
+    @Binding var battedBallTapNormalized: CGPoint?
+
+    private let colorMapImage: UIImage? = UIImage(named: "colorMap")
+    private let colorMapping: [ScoutColorKey: (label: String, outcome: String?)] = [
+        ScoutColorKey(r: 0xE6, g: 0x19, b: 0x4B, a: 0xFF): ("Left Field HR", "HR"),
+        ScoutColorKey(r: 0x91, g: 0x1E, b: 0xB4, a: 0xFF): ("Foul Left", nil),
+        ScoutColorKey(r: 0xDC, g: 0xBE, b: 0xFF, a: 0xFF): ("Deep Center", nil),
+        ScoutColorKey(r: 0xBF, g: 0xEF, b: 0x45, a: 0xFF): ("Deep Left", nil),
+        ScoutColorKey(r: 0x4E, g: 0x51, b: 0x2E, a: 0xFF): ("Deep Right", nil),
+        ScoutColorKey(r: 0x42, g: 0xD4, b: 0xF4, a: 0xFF): ("Shallow Left", nil),
+        ScoutColorKey(r: 0xF7, g: 0x81, b: 0xBF, a: 0xFF): ("Shallow Center", nil),
+        ScoutColorKey(r: 0x00, g: 0x00, b: 0x75, a: 0xFF): ("Shallow Right", nil),
+        ScoutColorKey(r: 0x80, g: 0x80, b: 0x00, a: 0xFF): ("3B area", nil),
+        ScoutColorKey(r: 0xFF, g: 0xD8, b: 0xB1, a: 0xFF): ("SS area", nil),
+        ScoutColorKey(r: 0xFF, g: 0xE1, b: 0x19, a: 0xFF): ("2B area", nil),
+        ScoutColorKey(r: 0xAA, g: 0x6E, b: 0x28, a: 0xFF): ("1B area", nil),
+        ScoutColorKey(r: 0xFA, g: 0xBE, b: 0x28, a: 0xFF): ("Front of 3B", nil),
+        ScoutColorKey(r: 0x00, g: 0x80, b: 0x80, a: 0xFF): ("Front of catcher", nil),
+        ScoutColorKey(r: 0xE6, g: 0xBE, b: 0xFF, a: 0xFF): ("Front of 1B", nil),
+        ScoutColorKey(r: 0x80, g: 0x00, b: 0x00, a: 0xFF): ("Pitcher", nil),
+        ScoutColorKey(r: 0xF0, g: 0x32, b: 0xE6, a: 0xFF): ("Foul Right", nil),
+        ScoutColorKey(r: 0xF5, g: 0x82, b: 0x31, a: 0xFF): ("Foul Left field", nil),
+        ScoutColorKey(r: 0xD2, g: 0xF5, b: 0x3C, a: 0xFF): ("Foul Right field", nil),
+        ScoutColorKey(r: 0x46, g: 0xF0, b: 0xF0, a: 0xFF): ("Foul behind", nil),
+        ScoutColorKey(r: 0x3C, g: 0xB4, b: 0x4B, a: 0xFF): ("Center Field HR", "HR"),
+        ScoutColorKey(r: 0x00, g: 0x82, b: 0xC8, a: 0xFF): ("Right Field HR", "HR")
+    ]
+
+    private func handleTap(at location: CGPoint, in imageRect: CGRect) {
+        guard imageRect.contains(location) else { return }
+
+        let nx = (location.x - imageRect.minX) / imageRect.width
+        let ny = (location.y - imageRect.minY) / imageRect.height
+
+        if let img = colorMapImage, let cg = img.cgImage {
+            let px = max(0, min(CGFloat(cg.width - 1), nx * CGFloat(cg.width)))
+            let py = max(0, min(CGFloat(cg.height - 1), ny * CGFloat(cg.height)))
+            if let uiColor = img.scoutPixelColor(at: CGPoint(x: floor(px), y: floor(py))) {
+                let key = scoutColorKey(from: uiColor)
+                if let mapped = colorMapping[key] {
+                    battedBallRegionName = mapped.label
+                    battedBallTapNormalized = CGPoint(x: max(0, min(1, nx)), y: max(0, min(1, ny)))
+                    if let outcome = mapped.outcome {
+                        selectedOutcome = outcome
+                    }
+                    return
+                }
+            }
+        }
+
+        battedBallRegionName = colorMapImage == nil ? "No color map" : "Unmapped"
+        battedBallTapNormalized = CGPoint(x: max(0, min(1, nx)), y: max(0, min(1, ny)))
+    }
+
+    var body: some View {
+        NavigationStack {
+            GeometryReader { proxy in
+                let availableWidth = proxy.size.width
+                let availableHeight = proxy.size.height
+                let aspect: CGFloat = {
+                    if let img = colorMapImage ?? UIImage(named: "FieldImage") {
+                        return img.size.width / max(img.size.height, 1)
+                    }
+                    return 1
+                }()
+                let widthFitW = availableWidth * 1.18
+                let widthFitH = widthFitW / max(aspect, 0.001)
+                let heightFitH = availableHeight * 1.18
+                let heightFitW = heightFitH * aspect
+                let finalSize: CGSize = widthFitH >= availableHeight
+                    ? CGSize(width: widthFitW, height: widthFitH)
+                    : CGSize(width: heightFitW, height: heightFitH)
+                let imageRect = CGRect(
+                    x: (availableWidth - finalSize.width) / 2,
+                    y: -120 + (availableHeight * 0.03),
+                    width: finalSize.width,
+                    height: finalSize.height
+                )
+
+                ZStack {
+                    Image("FieldImage")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: imageRect.width, height: imageRect.height)
+                        .position(x: imageRect.midX, y: imageRect.midY)
+                        .shadow(radius: 10)
+                        .allowsHitTesting(false)
+
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: imageRect.width, height: imageRect.height)
+                        .position(x: imageRect.midX, y: imageRect.midY)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            SpatialTapGesture()
+                                .onEnded { value in
+                                    handleTap(at: value.location, in: imageRect)
+                                }
+                        )
+
+                    if let normalized = battedBallTapNormalized {
+                        let point = CGPoint(
+                            x: imageRect.minX + (normalized.x * imageRect.width),
+                            y: imageRect.minY + (normalized.y * imageRect.height)
+                        )
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 14, height: 14)
+                            .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                            .position(x: point.x, y: point.y)
+
+                        if let battedBallRegionName, !battedBallRegionName.isEmpty {
+                            Text(battedBallRegionName)
+                                .font(.headline)
+                                .padding(8)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .position(
+                                    x: min(max(point.x, 70), proxy.size.width - 70),
+                                    y: min(point.y + 28, proxy.size.height - 24)
+                                )
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .navigationTitle("Ball in Play Location")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Clear") {
+                        battedBallRegionName = nil
+                        battedBallTapNormalized = nil
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -9278,7 +10528,7 @@ struct BlendedStrokeCircle: View {
 }
 
 struct GameSelectionSheet: View {
-    var onCreate: (String, Date) -> Void
+    var onCreate: (String, Date, TrackingMode) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
     @Binding var codeShareInitialTab: Int
@@ -9290,6 +10540,7 @@ struct GameSelectionSheet: View {
     @State private var showAddGamePopover: Bool = false
     @State private var newOpponentName: String = ""
     @State private var newGameDate: Date = Date()
+    @State private var newGameTrackingMode: TrackingMode = .coach
     
     @State private var pendingDeleteGameId: String? = nil
     @State private var showDeleteGameConfirm: Bool = false
@@ -9433,13 +10684,14 @@ struct GameSelectionSheet: View {
                         AddGameCard(
                             opponentName: $newOpponentName,
                             gameDate: $newGameDate,
+                            trackingMode: $newGameTrackingMode,
                             onCancel: { showAddGamePopover = false },
                             onSave: {
                                 let name = newOpponentName.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !name.isEmpty else { return }
-                                let item = Game(opponent: name, date: newGameDate, jerseyNumbers: [])
+                                let item = Game(opponent: name, date: newGameDate, jerseyNumbers: [], trackingMode: newGameTrackingMode)
                                 games.append(item)
-                                onCreate(name, newGameDate)
+                                onCreate(name, newGameDate, newGameTrackingMode)
                                 showAddGamePopover = false
                                 // Keep the game selection sheet open; do not dismiss here.
                             }
@@ -9473,6 +10725,7 @@ struct GameItem: Identifiable {
 struct AddGameCard: View {
     @Binding var opponentName: String
     @Binding var gameDate: Date
+    @Binding var trackingMode: TrackingMode
     var onCancel: () -> Void
     var onSave: () -> Void
 
@@ -9495,6 +10748,13 @@ struct AddGameCard: View {
 
             DatePicker("Date & Time", selection: $gameDate, displayedComponents: [.date, .hourAndMinute])
 
+            Picker("Tracking", selection: $trackingMode) {
+                ForEach(TrackingMode.allCases, id: \.rawValue) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
@@ -9513,6 +10773,7 @@ struct AddGameCard: View {
 struct AddPracticeCard: View {
     @Binding var practiceName: String
     @Binding var practiceDate: Date
+    @Binding var trackingMode: TrackingMode
     var templateName: String?
     var onCancel: () -> Void
     var onSave: () -> Void
@@ -9554,6 +10815,13 @@ struct AddPracticeCard: View {
 
             DatePicker("Date & Time", selection: $practiceDate, displayedComponents: [.date, .hourAndMinute])
 
+            Picker("Tracking", selection: $trackingMode) {
+                ForEach(TrackingMode.allCases, id: \.rawValue) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel)
@@ -9575,6 +10843,7 @@ private struct SessionConfirmationSheet: View {
     let templates: [PitchTemplate]
     @Binding var selectedPitcherId: String?
     @Binding var selectedTemplateId: UUID?
+    @Binding var selectedTrackingMode: TrackingMode
     let resolvedPitcherName: String
     let resolvedTemplateName: String
     let resolvedGameName: String
@@ -9894,10 +11163,11 @@ struct PracticeSession: Identifiable, Codable {
     var date: Date
     var templateId: String?
     var templateName: String?
+    var trackingMode: TrackingMode? = .coach
 }
 
 struct PracticeSelectionSheet: View {
-    var onCreate: (String, Date, String?, String?) -> Void
+    var onCreate: (String, Date, String?, String?, TrackingMode) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
     
@@ -9910,6 +11180,7 @@ struct PracticeSelectionSheet: View {
     @State private var showAddPopover: Bool = false
     @State private var newName: String = ""
     @State private var newDate: Date = Date()
+    @State private var newTrackingMode: TrackingMode = .coach
     
     @State private var pendingDeleteSessionId: String? = nil
     @State private var showDeleteSessionConfirm: Bool = false
@@ -10083,12 +11354,13 @@ struct PracticeSelectionSheet: View {
                         AddPracticeCard(
                             practiceName: $newName,
                             practiceDate: $newDate,
+                            trackingMode: $newTrackingMode,
                             templateName: currentTemplateName,
                             onCancel: { showAddPopover = false },
                             onSave: {
                                 let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !name.isEmpty else { return }
-                                onCreate(name, newDate, currentTemplateId, currentTemplateName)
+                                onCreate(name, newDate, currentTemplateId, currentTemplateName, newTrackingMode)
                                 // Reload sessions from UserDefaults so IDs match the persisted source
                                 if let data = UserDefaults.standard.data(forKey: PitchTrackerView.DefaultsKeys.storedPracticeSessions),
                                    let decoded = try? JSONDecoder().decode([PracticeSession].self, from: data) {

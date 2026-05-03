@@ -67,6 +67,21 @@ private struct SettingsGameSummarySheetView: View {
         }
     }
 
+    private var heatmapsByPitch: [(pitch: String, events: [PitchEvent])] {
+        Dictionary(grouping: events.filter(\.supportsLocationAnalytics), by: { $0.pitch.isEmpty ? "-" : $0.pitch })
+            .map { key, value in
+                (pitch: key, events: value.sorted { $0.timestamp < $1.timestamp })
+            }
+            .sorted { lhs, rhs in
+                if lhs.events.count == rhs.events.count { return lhs.pitch < rhs.pitch }
+                return lhs.events.count > rhs.events.count
+            }
+    }
+
+    private var hasLocationAnalytics: Bool {
+        events.contains(where: \.supportsLocationAnalytics)
+    }
+
     private func percent(_ part: Int, _ total: Int) -> String {
         guard total > 0 else { return "0%" }
         let value = (Double(part) / Double(total)) * 100.0
@@ -76,6 +91,12 @@ private struct SettingsGameSummarySheetView: View {
     private var shareText: String {
         let pitchLines = pitchBreakdown.isEmpty ? "None" : pitchBreakdown.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
         let outcomeLines = outcomeBreakdown.isEmpty ? "None" : outcomeBreakdown.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
+        let hitSpotLine = hasLocationAnalytics
+            ? "Hit Spot: \(hitSpots) of \(totalPitches) (\(percent(hitSpots, totalPitches)))"
+            : "Hit Spot: Hidden for Scout Mode events"
+        let hitSpotDefinition = hasLocationAnalytics
+            ? "Hit Spot % = Location matches / Total Pitches"
+            : "Location-based metrics hidden for Scout Mode events."
         return """
         PitchMark Game Summary
         Pitcher: \(pitcherName)
@@ -85,7 +106,7 @@ private struct SettingsGameSummarySheetView: View {
         Pitches: \(totalPitches)
         Strikes: \(strikes) of \(totalPitches) (\(percent(strikes, totalPitches)))
         Balls: \(balls) of \(totalPitches) (\(percent(balls, totalPitches)))
-        Hit Spot: \(hitSpots) of \(totalPitches) (\(percent(hitSpots, totalPitches)))
+        \(hitSpotLine)
 
         Strike Looking: \(strikeLooking)
         Strike Swinging: \(strikeSwinging)
@@ -97,99 +118,341 @@ private struct SettingsGameSummarySheetView: View {
         Metric Definitions:
         Strike % = Strikes / Total Pitches
         Ball % = Balls / Total Pitches
-        Hit Spot % = Location matches / Total Pitches
+        \(hitSpotDefinition)
 
         Pitch Breakdown: \(pitchLines)
         Outcome Breakdown: \(outcomeLines)
         """
     }
 
+    @ViewBuilder
+    private var summaryContentWithoutHeatmaps: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(pitcherName)
+                    .font(.title3.weight(.semibold))
+                Text("vs \(game.opponent)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(game.date.formatted(date: .abbreviated, time: .omitted))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Group {
+                summaryRow("Total Pitches", "\(totalPitches)")
+                summaryRow("Strike %", "\(percent(strikes, totalPitches)) (\(strikes)/\(totalPitches))")
+                summaryRow("Ball %", "\(percent(balls, totalPitches)) (\(balls)/\(totalPitches))")
+                if hasLocationAnalytics {
+                    summaryRow("Hit Spot %", "\(percent(hitSpots, totalPitches)) (\(hitSpots)/\(totalPitches))")
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Metric Definitions")
+                    .font(.subheadline.weight(.semibold))
+                Text("Strike % = Strikes / Total Pitches")
+                Text("Ball % = Balls / Total Pitches")
+                if hasLocationAnalytics {
+                    Text("Hit Spot % = Location matches / Total Pitches")
+                } else {
+                    Text("Location-based metrics hidden for Scout Mode events.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Group {
+                summaryRow("Strike Looking", "\(strikeLooking)")
+                summaryRow("Strike Swinging", "\(strikeSwinging)")
+                summaryRow("Walks", "\(walks)")
+                summaryRow("Hits", "\(hits)")
+                summaryRow("Wild Pitches", "\(wildPitches)")
+                summaryRow("Passed Balls", "\(passedBalls)")
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pitch Breakdown")
+                    .font(.headline)
+                if pitchBreakdown.isEmpty {
+                    Text("No pitches recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(pitchBreakdown.enumerated()), id: \.offset) { _, item in
+                        summaryRow(item.name, "\(item.count)")
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Outcome Breakdown")
+                    .font(.headline)
+                if outcomeBreakdown.isEmpty {
+                    Text("No outcomes recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(outcomeBreakdown.enumerated()), id: \.offset) { _, item in
+                        summaryRow(item.name, "\(item.count)")
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private func printableHeatmapPage(for item: (pitch: String, events: [PitchEvent]), pageHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("\(item.pitch) (\(item.events.count))")
+                .font(.title3.weight(.semibold))
+            HStack {
+                Spacer()
+                StrikeZoneHeatmapView(
+                    events: item.events,
+                    showLegend: false
+                )
+                .frame(width: 380, height: 312)
+                Spacer()
+            }
+            Spacer(minLength: 12)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Notes:")
+                    .font(.headline)
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.45))
+                    .frame(height: 1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: pageHeight, alignment: .top)
+    }
+
+    @MainActor
+    private func renderedPrintableImage<Content: View>(for content: Content, width: CGFloat) -> UIImage? {
+        let printableContent = content
+            .padding()
+            .frame(width: width)
+            .background(Color.white)
+        let imageRenderer = ImageRenderer(content: printableContent)
+        imageRenderer.scale = 2
+        return imageRenderer.uiImage
+    }
+
+    @ViewBuilder
+    private var summaryContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(pitcherName)
+                    .font(.title3.weight(.semibold))
+                Text("vs \(game.opponent)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text(game.date.formatted(date: .abbreviated, time: .omitted))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Group {
+                summaryRow("Total Pitches", "\(totalPitches)")
+                summaryRow("Strike %", "\(percent(strikes, totalPitches)) (\(strikes)/\(totalPitches))")
+                summaryRow("Ball %", "\(percent(balls, totalPitches)) (\(balls)/\(totalPitches))")
+                if hasLocationAnalytics {
+                    summaryRow("Hit Spot %", "\(percent(hitSpots, totalPitches)) (\(hitSpots)/\(totalPitches))")
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Metric Definitions")
+                    .font(.subheadline.weight(.semibold))
+                Text("Strike % = Strikes / Total Pitches")
+                Text("Ball % = Balls / Total Pitches")
+                if hasLocationAnalytics {
+                    Text("Hit Spot % = Location matches / Total Pitches")
+                } else {
+                    Text("Location-based metrics hidden for Scout Mode events.")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Group {
+                summaryRow("Strike Looking", "\(strikeLooking)")
+                summaryRow("Strike Swinging", "\(strikeSwinging)")
+                summaryRow("Walks", "\(walks)")
+                summaryRow("Hits", "\(hits)")
+                summaryRow("Wild Pitches", "\(wildPitches)")
+                summaryRow("Passed Balls", "\(passedBalls)")
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Pitch Breakdown")
+                    .font(.headline)
+                if pitchBreakdown.isEmpty {
+                    Text("No pitches recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(pitchBreakdown.enumerated()), id: \.offset) { _, item in
+                        summaryRow(item.name, "\(item.count)")
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Outcome Breakdown")
+                    .font(.headline)
+                if outcomeBreakdown.isEmpty {
+                    Text("No outcomes recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(outcomeBreakdown.enumerated()), id: \.offset) { _, item in
+                        summaryRow(item.name, "\(item.count)")
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Heat Maps By Pitch")
+                    .font(.headline)
+                if !hasLocationAnalytics {
+                    Text("Heat maps hidden for Scout Mode events.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if heatmapsByPitch.isEmpty {
+                    Text("No pitches recorded.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(heatmapsByPitch, id: \.pitch) { item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 10) {
+                                Text("\(item.pitch) (\(item.events.count))")
+                                    .font(.subheadline.weight(.semibold))
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.35))
+                                    .frame(height: 1)
+                            }
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 16)
+
+                            StrikeZoneHeatmapView(
+                                events: item.events,
+                                showLegend: false
+                            )
+                            .padding(.bottom, 28)
+                        }
+                        .padding(.bottom, 20)
+                    }
+                }
+            }
+            .padding()
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
+    @MainActor
+    private func printSummary() {
+        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let contentRect = pageRect.insetBy(dx: 24, dy: 36)
+        var printableImages: [UIImage] = []
+        if let summaryImage = renderedPrintableImage(for: summaryContentWithoutHeatmaps, width: contentRect.width) {
+            printableImages.append(summaryImage)
+        }
+        for item in heatmapsByPitch {
+            if let heatmapImage = renderedPrintableImage(for: printableHeatmapPage(for: item, pageHeight: contentRect.height), width: contentRect.width) {
+                printableImages.append(heatmapImage)
+            }
+        }
+        let pdfRenderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        let pdfData = pdfRenderer.pdfData { context in
+            func drawPaginatedImage(_ image: UIImage) {
+                guard let cgImage = image.cgImage else { return }
+                let scale = image.scale
+                let totalHeightPoints = image.size.height
+                var offsetYPoints: CGFloat = 0
+
+                while offsetYPoints < totalHeightPoints {
+                    context.beginPage()
+                    let remainingHeight = totalHeightPoints - offsetYPoints
+                    let sliceHeightPoints = min(contentRect.height, remainingHeight)
+                    let cropRect = CGRect(
+                        x: 0,
+                        y: offsetYPoints * scale,
+                        width: CGFloat(cgImage.width),
+                        height: sliceHeightPoints * scale
+                    ).integral
+
+                    if let cropped = cgImage.cropping(to: cropRect) {
+                        let sliceImage = UIImage(cgImage: cropped, scale: scale, orientation: .up)
+                        sliceImage.draw(
+                            in: CGRect(
+                                x: contentRect.minX,
+                                y: contentRect.minY,
+                                width: contentRect.width,
+                                height: sliceHeightPoints
+                            )
+                        )
+                    }
+
+                    offsetYPoints += sliceHeightPoints
+                }
+            }
+
+            for image in printableImages {
+                drawPaginatedImage(image)
+            }
+        }
+
+        let controller = UIPrintInteractionController.shared
+        let info = UIPrintInfo.printInfo()
+        info.jobName = "PitchMark Game Summary"
+        info.outputType = .general
+        controller.printInfo = info
+        controller.printingItem = pdfData
+        controller.present(animated: true, completionHandler: nil)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(pitcherName)
-                            .font(.title3.weight(.semibold))
-                        Text("vs \(game.opponent)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Text(game.date.formatted(date: .abbreviated, time: .omitted))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Group {
-                        summaryRow("Total Pitches", "\(totalPitches)")
-                        summaryRow("Strike %", "\(percent(strikes, totalPitches)) (\(strikes)/\(totalPitches))")
-                        summaryRow("Ball %", "\(percent(balls, totalPitches)) (\(balls)/\(totalPitches))")
-                        summaryRow("Hit Spot %", "\(percent(hitSpots, totalPitches)) (\(hitSpots)/\(totalPitches))")
-                    }
+                summaryContent
                     .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Metric Definitions")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Strike % = Strikes / Total Pitches")
-                        Text("Ball % = Balls / Total Pitches")
-                        Text("Hit Spot % = Location matches / Total Pitches")
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    Group {
-                        summaryRow("Strike Looking", "\(strikeLooking)")
-                        summaryRow("Strike Swinging", "\(strikeSwinging)")
-                        summaryRow("Walks", "\(walks)")
-                        summaryRow("Hits", "\(hits)")
-                        summaryRow("Wild Pitches", "\(wildPitches)")
-                        summaryRow("Passed Balls", "\(passedBalls)")
-                    }
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Pitch Breakdown")
-                            .font(.headline)
-                        if pitchBreakdown.isEmpty {
-                            Text("No pitches recorded.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(Array(pitchBreakdown.enumerated()), id: \.offset) { _, item in
-                                summaryRow(item.name, "\(item.count)")
-                            }
-                        }
-                    }
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Outcome Breakdown")
-                            .font(.headline)
-                        if outcomeBreakdown.isEmpty {
-                            Text("No outcomes recorded.")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(Array(outcomeBreakdown.enumerated()), id: \.offset) { _, item in
-                                summaryRow(item.name, "\(item.count)")
-                            }
-                        }
-                    }
-                    .padding()
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .padding()
             }
             .navigationTitle("Game Summary")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        printSummary()
+                    } label: {
+                        Label("Print", systemImage: "printer")
+                    }
+                    .disabled(totalPitches == 0)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -602,6 +865,103 @@ struct SettingsView: View {
         let session: PracticeSession?
     }
 
+    @ViewBuilder
+    private func quickLaunchGameChip(_ item: QuickLaunchGame) -> some View {
+        let opponentName = item.game.opponent
+        let gameDateText = quickLaunchDateCaption(for: item.game)
+
+        Button {
+            launchGame(item.game)
+        } label: {
+            VStack(spacing: 4) {
+                Text(opponentName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(gameDateText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(minWidth: 120)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func quickLaunchPracticeChip(_ item: QuickLaunchPractice) -> some View {
+        let sessionName = item.session?.name ?? "Practice"
+        let sessionDateText: String = {
+            guard let session = item.session else { return "" }
+            return Self.quickLaunchDateFormatter.string(from: session.date)
+        }()
+
+        Button {
+            launchPractice(item.session)
+        } label: {
+            VStack(spacing: 4) {
+                Text(sessionName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(sessionDateText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(minWidth: 120)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var joinGameButtonLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "person.2")
+                .font(.subheadline.weight(.semibold))
+            Text("Join a Game")
+                .font(.subheadline.weight(.semibold))
+        }
+        .foregroundColor(.black)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Capsule().fill(Color.black.opacity(0.06))
+        )
+        .overlay(
+            Capsule().stroke(Color.black, lineWidth: 1)
+        )
+    }
+
+    private var accountFooterButtonLabel: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "person.crop.circle")
+                .font(.footnote.weight(.semibold))
+            Text("Signed in as: \(authManager.userEmail)")
+                .font(.footnote.weight(.semibold))
+            Image(systemName: "chevron.up")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .foregroundColor(.black)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .background(
+            Capsule().fill(Color.black.opacity(0.06))
+        )
+        .overlay(
+            Capsule().stroke(Color.black.opacity(0.12), lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(.clear)
+    }
+
     private func practiceQuickLaunchItems() -> [QuickLaunchPractice] {
         let sessions = loadPracticeSessions().sorted { $0.date > $1.date }
         return sessions.map { QuickLaunchPractice(id: $0.id ?? UUID().uuidString, session: $0) }
@@ -638,6 +998,130 @@ struct SettingsView: View {
             )
         }
         dismiss()
+    }
+
+    private func deletePendingTemplate() {
+        guard let template = templatePendingDeletion else { return }
+        let templateId = template.id
+        authManager.deleteTemplate(template)
+        templates.removeAll { $0.id == templateId }
+        templatePendingDeletion = nil
+    }
+
+    private func handleCreatedPitcher(_ created: Pitcher?) {
+        if let created {
+            pitchers.append(created)
+        }
+        showAddPitcher = false
+    }
+
+    private func handleSavedTemplate(_ updatedTemplate: PitchTemplate) {
+        if let index = templates.firstIndex(where: { $0.id == updatedTemplate.id }) {
+            templates[index] = updatedTemplate
+        } else {
+            templates.append(updatedTemplate)
+        }
+        authManager.saveTemplate(updatedTemplate)
+    }
+
+    private var pitcherShareSheetItems: [Any] {
+        if let qr = sharePitcherQR {
+            return [sharePitcherLink, qr]
+        }
+        return [sharePitcherLink]
+    }
+
+    private var pitcherShareSheetView: some View {
+        VStack(spacing: 16) {
+            Text("Share Pitcher")
+                .font(.headline)
+
+            if !sharePitcherLink.isEmpty {
+                Text(sharePitcherLink)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.horizontal)
+            }
+
+            if let qr = sharePitcherQR {
+                Image(uiImage: qr)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 200, height: 200)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            HStack {
+                Button("Close") {
+                    showPitcherShareSheet = false
+                }
+                Spacer()
+                Button("Share") {
+                    showPitcherShareActivity = true
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(sharePitcherLink.isEmpty)
+            }
+        }
+        .padding()
+        .presentationDetents([.medium])
+    }
+
+    private var addPitcherSheetTitle: String {
+        editingPitcher == nil ? "New Pitcher" : "Edit Pitcher"
+    }
+
+    private func dismissPitcherEditor() {
+        showAddPitcher = false
+        editingPitcher = nil
+    }
+
+    private func savePitcherFromSheet() {
+        let name = newPitcherName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+
+        if let editing = editingPitcher, let pid = editing.id {
+            authManager.updatePitcher(id: pid, name: name, templateId: editing.templateId) { updated in
+                if let updated,
+                   let idx = pitchers.firstIndex(where: { $0.id == pid }) {
+                    pitchers[idx] = updated
+                }
+                dismissPitcherEditor()
+            }
+        } else {
+            let templateId = selectedTemplate?.id.uuidString
+            authManager.createPitcher(name: name, templateId: templateId) { created in
+                handleCreatedPitcher(created)
+            }
+        }
+    }
+
+    private var addPitcherSheetView: some View {
+        VStack(spacing: 16) {
+            Text(addPitcherSheetTitle)
+                .font(.headline)
+
+            TextField("Name", text: $newPitcherName)
+                .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Button("Cancel") {
+                    dismissPitcherEditor()
+                }
+                Spacer()
+                Button("Save") {
+                    savePitcherFromSheet()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .presentationDetents([.fraction(0.35)])
+        .presentationDragIndicator(.visible)
     }
 
     private func qrImage(for text: String) -> UIImage? {
@@ -1473,31 +1957,7 @@ struct SettingsView: View {
                                             let sorted = games.sorted(by: { $0.date > $1.date })
                                             let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
                                             ForEach(quickGames) { item in
-                                                Button {
-                                                    launchGame(item.game)
-                                                } label: {
-                                                    VStack(spacing: 4) {
-                                                        Text(item.game.opponent)
-                                                            .font(.subheadline.weight(.semibold))
-                                                            .foregroundStyle(.primary)
-                                                            .lineLimit(1)
-                                                        Text(quickLaunchDateCaption(for: item.game))
-                                                            .font(.caption2)
-                                                            .foregroundStyle(.secondary)
-                                                    }
-                                                    .padding(.horizontal, 12)
-                                                    .padding(.vertical, 10)
-                                                    .frame(minWidth: 120)
-                                                    .background(
-                                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                            .fill(Color.black.opacity(0.06))
-                                                    )
-                                                    .overlay(
-                                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                            .stroke(Color.black.opacity(0.12), lineWidth: 1)
-                                                    )
-                                                }
-                                                .buttonStyle(.plain)
+                                                quickLaunchGameChip(item)
                                             }
                                         }
                                         .padding(.horizontal)
@@ -1527,31 +1987,7 @@ struct SettingsView: View {
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: 12) {
                                             ForEach(quickPractice) { item in
-                                                Button {
-                                                    launchPractice(item.session)
-                                                } label: {
-                                                    VStack(spacing: 4) {
-                                                        Text(item.session?.name ?? "Practice")
-                                                            .font(.subheadline.weight(.semibold))
-                                                            .foregroundStyle(.primary)
-                                                            .lineLimit(1)
-                                                        Text(item.session.map { Self.quickLaunchDateFormatter.string(from: $0.date) } ?? "")
-                                                            .font(.caption2)
-                                                            .foregroundStyle(.secondary)
-                                                    }
-                                                    .padding(.horizontal, 12)
-                                                    .padding(.vertical, 10)
-                                                    .frame(minWidth: 120)
-                                                    .background(
-                                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                            .fill(Color.black.opacity(0.06))
-                                                    )
-                                                    .overlay(
-                                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                            .stroke(Color.black.opacity(0.12), lineWidth: 1)
-                                                    )
-                                                }
-                                                .buttonStyle(.plain)
+                                                quickLaunchPracticeChip(item)
                                             }
                                         }
                                         .padding(.horizontal)
@@ -1578,25 +2014,7 @@ struct SettingsView: View {
                     Button {
                         showAccountActionsSheet = true
                     } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "person.crop.circle")
-                                .font(.footnote.weight(.semibold))
-                            Text("Signed in as: \(authManager.userEmail)")
-                                .font(.footnote.weight(.semibold))
-                            Image(systemName: "chevron.up")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .padding(.horizontal, 16)
-                        .background(
-                            Capsule().fill(Color.black.opacity(0.06))
-                        )
-                        .overlay(
-                            Capsule().stroke(Color.black, lineWidth: 1)
-                        )
+                        accountFooterButtonLabel
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 8)
@@ -1723,61 +2141,15 @@ struct SettingsView: View {
                 .presentationDetents([.medium])
             }
             .sheet(isPresented: $showPitcherShareSheet) {
-                VStack(spacing: 16) {
-                    Text("Share Pitcher")
-                        .font(.headline)
-
-                    if !sharePitcherLink.isEmpty {
-                        Text(sharePitcherLink)
-                            .font(.caption)
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .padding(.horizontal)
-                    }
-
-                    if let qr = sharePitcherQR {
-                        Image(uiImage: qr)
-                            .interpolation(.none)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 200, height: 200)
-                            .background(Color.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-
-                    HStack {
-                        Button("Close") {
-                            showPitcherShareSheet = false
-                        }
-                        Spacer()
-                        Button("Share") {
-                            showPitcherShareActivity = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(sharePitcherLink.isEmpty)
-                    }
-                }
-                .padding()
-                .presentationDetents([.medium])
+                pitcherShareSheetView
             }
             .sheet(isPresented: $showPitcherShareActivity) {
-                let items: [Any] = {
-                    if let qr = sharePitcherQR {
-                        return [sharePitcherLink, qr]
-                    }
-                    return [sharePitcherLink]
-                }()
-                ShareSheet(items: items)
+                ShareSheet(items: pitcherShareSheetItems)
             }
             .alert("Are you sure you want to delete this template?", isPresented: $showDeleteAlert) {
                 Button("Cancel", role: .cancel) {}
                 Button("Delete", role: .destructive) {
-                    if let template = templatePendingDeletion {
-                        authManager.deleteTemplate(template)
-                        templates.removeAll { $0.id == template.id }
-                        templatePendingDeletion = nil
-                    }
+                    deletePendingTemplate()
                 }
             }
             .alert("Pitcher Share", isPresented: $showPitcherShareError) {
@@ -1814,21 +2186,7 @@ struct SettingsView: View {
                         inviteJoinText = ""
                         showQRScanner = true
                     } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "person.2")
-                                .font(.subheadline.weight(.semibold))
-                            Text("Join a Game")
-                                .font(.subheadline.weight(.semibold))
-                        }
-                        .foregroundColor(.black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule().fill(Color.black.opacity(0.06))
-                        )
-                        .overlay(
-                            Capsule().stroke(Color.black, lineWidth: 1)
-                        )
+                        joinGameButtonLabel
                     }
                     .transaction { transaction in
                         transaction.animation = nil
@@ -1880,60 +2238,12 @@ struct SettingsView: View {
                     template: template,
                     allPitches: allPitches,
                     onSave: { updatedTemplate in
-                        if let index = templates.firstIndex(where: { $0.id == updatedTemplate.id }) {
-                            templates[index] = updatedTemplate
-                        } else {
-                            templates.append(updatedTemplate)
-                        }
-                        
-                        authManager.saveTemplate(updatedTemplate) // ✅ persist to Firestore
+                        handleSavedTemplate(updatedTemplate)
                     }
                 )
             }
             .sheet(isPresented: $showAddPitcher) {
-                VStack(spacing: 16) {
-                    Text(editingPitcher == nil ? "New Pitcher" : "Edit Pitcher")
-                        .font(.headline)
-
-                    TextField("Name", text: $newPitcherName)
-                        .textFieldStyle(.roundedBorder)
-
-
-                    HStack {
-                        Button("Cancel") {
-                            showAddPitcher = false
-                            editingPitcher = nil
-                        }
-                        Spacer()
-                        Button("Save") {
-                            let name = newPitcherName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !name.isEmpty else { return }
-
-                            if let editing = editingPitcher, let pid = editing.id {
-                                authManager.updatePitcher(id: pid, name: name, templateId: editing.templateId) { updated in
-                                    if let updated,
-                                       let idx = pitchers.firstIndex(where: { $0.id == pid }) {
-                                        pitchers[idx] = updated
-                                    }
-                                    showAddPitcher = false
-                                    editingPitcher = nil
-                                }
-                            } else {
-                                let templateId = selectedTemplate?.id.uuidString
-                                authManager.createPitcher(name: name, templateId: templateId) { created in
-                                    if let created {
-                                        pitchers.append(created)
-                                    }
-                                    showAddPitcher = false
-                                }
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-                .padding()
-                .presentationDetents([.fraction(0.35)])
-                .presentationDragIndicator(.visible)
+                addPitcherSheetView
             }
             .sheet(item: $statsPitcher) { pitcher in
                 PitcherStatsSheetView(
@@ -1944,8 +2254,8 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showGameChooser) {
                 GameSelectionSheet(
-                    onCreate: { name, date in
-                        let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: [])
+                    onCreate: { name, date, trackingMode in
+                        let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: [], trackingMode: trackingMode)
                         authManager.saveGame(newGame)
                     },
                     onChoose: { gameId in
@@ -1974,14 +2284,15 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showPracticeChooser) {
                 PracticeSelectionSheet(
-                    onCreate: { name, date, templateId, templateName in
+                    onCreate: { name, date, templateId, templateName, trackingMode in
                         var sessions = loadPracticeSessions()
                         let new = PracticeSession(
                             id: UUID().uuidString,
                             name: name,
                             date: date,
                             templateId: templateId,
-                            templateName: templateName
+                            templateName: templateName,
+                            trackingMode: trackingMode
                         )
                         sessions.append(new)
                         savePracticeSessions(sessions)
@@ -2362,15 +2673,19 @@ struct PitcherStatsSheetView: View {
     }
 
     private var hitSpotCount: Int {
-        activeStats?.hitSpotCount ?? filteredEvents.filter { strictIsLocationMatch($0) }.count
+        activeStats?.hitSpotCount ?? filteredEvents.filter { $0.supportsLocationAnalytics && strictIsLocationMatch($0) }.count
     }
 
     private var hitSpotEvents: [PitchEvent] {
-        filteredEvents.filter { strictIsLocationMatch($0) }
+        filteredEvents.filter { $0.supportsLocationAnalytics && strictIsLocationMatch($0) }
     }
 
     private var hitSpotPercent: Int {
         totalCount == 0 ? 0 : Int(Double(hitSpotCount) / Double(totalCount) * 100)
+    }
+
+    private var hasLocationAnalytics: Bool {
+        filteredEvents.contains(where: \.supportsLocationAnalytics)
     }
 
     private var outcomesSummary: [(label: String, count: Int, jerseys: String)] {
@@ -2426,6 +2741,7 @@ struct PitcherStatsSheetView: View {
     private var heatmapPitchTypes: [String] {
         let unique = Set(
             filteredEvents
+                .filter(\.supportsLocationAnalytics)
                 .map { $0.pitch.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
         )
@@ -2442,7 +2758,7 @@ struct PitcherStatsSheetView: View {
     private var heatmapEventsForSelectedPitch: [PitchEvent] {
         guard let pitch = selectedHeatmapPitchResolved else { return [] }
         return filteredEvents
-            .filter { $0.pitch == pitch }
+            .filter { $0.supportsLocationAnalytics && $0.pitch == pitch }
             .sorted { $0.timestamp < $1.timestamp }
     }
 
@@ -2476,7 +2792,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var heatmapCountByPitch: [String: Int] {
-        Dictionary(grouping: filteredEvents, by: { $0.pitch })
+        Dictionary(grouping: filteredEvents.filter(\.supportsLocationAnalytics), by: { $0.pitch })
             .mapValues(\.count)
     }
 
@@ -2487,7 +2803,9 @@ struct PitcherStatsSheetView: View {
                 let hitSpotPct = total == 0 ? 0 : Int(Double(value.hitSpotCount) / Double(total) * 100)
                 return (key, total, hitSpotPct)
             }
-            return rows.sorted {
+            return rows
+                .filter { $0.0 != "Catcher" }
+                .sorted {
                 if $0.1 != $1.1 { return $0.1 > $1.1 }
                 return $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending
             }
@@ -2501,7 +2819,9 @@ struct PitcherStatsSheetView: View {
             let hitSpotPct = total == 0 ? 0 : Int(Double(hitSpots) / Double(total) * 100)
             rows.append((pitch, total, hitSpotPct))
         }
-        return rows.sorted {
+        return rows
+            .filter { $0.0 != "Catcher" }
+            .sorted {
             if $0.1 != $1.1 { return $0.1 > $1.1 }
             return $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending
         }
@@ -2681,6 +3001,17 @@ struct PitcherStatsSheetView: View {
                     }
                     return lhs.count < rhs.count
                 }
+                // When success sorting is active, repeated exact matches for the same
+                // pitch/called/result combination don't add value because the Success
+                // column already represents the aggregate.
+                var seenMatchedKeys: Set<String> = []
+                filtered = filtered.filter { row in
+                    guard row.isMatch else { return true }
+                    let key = "\(row.pitch)|\(row.intended ?? "")|\(row.location)"
+                    guard !seenMatchedKeys.contains(key) else { return false }
+                    seenMatchedKeys.insert(key)
+                    return true
+                }
             } else if hitSpotOrder == .reverseChronological {
                 filtered.reverse()
             }
@@ -2744,15 +3075,27 @@ struct PitcherStatsSheetView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 2) {
                             if includeIntended {
-                                Text("Success")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 100, alignment: .leading)
-                            }
-                            Text("Pitch")
+                                HStack(spacing: 4) {
+                                    Text("Success")
+                                    if hitSpotSuccessFilter != .all {
+                                        Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                                            .font(.caption2)
+                                    }
+                                }
                                 .font(.caption.weight(.semibold))
                                 .foregroundColor(.secondary)
-                                .frame(width: 70, alignment: .leading)
+                                .frame(width: 100, alignment: .leading)
+                            }
+                            HStack(spacing: 4) {
+                                Text("Pitch")
+                                if includeIntended && hitSpotPitchFilter != "All" {
+                                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                                        .font(.caption2)
+                                }
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                            .frame(width: 70, alignment: .leading)
                             Text(includeIntended ? "Called" : "Location")
                                 .font(.caption.weight(.semibold))
                                 .foregroundColor(.secondary)
@@ -3020,7 +3363,12 @@ struct PitcherStatsSheetView: View {
                 .font(.headline)
                 .padding(.horizontal)
 
-            if heatmapPitchTypes.isEmpty {
+            if !hasLocationAnalytics {
+                Text("Heat maps hidden for Scout Mode events.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+            } else if heatmapPitchTypes.isEmpty {
                 Text("No pitches recorded.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -3351,18 +3699,20 @@ struct PitcherStatsSheetView: View {
                 }
                 .buttonStyle(.plain)
 
-                Button {
-                    summaryDetail = .hitSpot
-                } label: {
-                    statCard(title: "Hit-Spot %", value: "\(hitSpotPercent)%")
-                        .overlay(alignment: .bottomTrailing) {
-                            Image(systemName: "chevron.down")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.secondary)
-                                .padding(10)
-                        }
+                if hasLocationAnalytics {
+                    Button {
+                        summaryDetail = .hitSpot
+                    } label: {
+                        statCard(title: "Hit-Spot %", value: "\(hitSpotPercent)%")
+                            .overlay(alignment: .bottomTrailing) {
+                                Image(systemName: "chevron.down")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                                    .padding(10)
+                            }
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
             .padding(.horizontal)
 
@@ -3385,7 +3735,11 @@ struct PitcherStatsSheetView: View {
                     .font(.subheadline.weight(.semibold))
                 Text("Strike % = Strikes (\(strikeCount)) / Total Pitches (\(totalCount))")
                 Text("Ball % = Balls (\(ballCount)) / Total Pitches (\(totalCount))")
-                Text("Hit-Spot % = Location matches (\(hitSpotCount)) / Total Pitches (\(totalCount))")
+                if hasLocationAnalytics {
+                    Text("Hit-Spot % = Location matches (\(hitSpotCount)) / Total Pitches (\(totalCount))")
+                } else {
+                    Text("Location-based metrics hidden for Scout Mode events.")
+                }
             }
             .font(.caption)
             .foregroundColor(.secondary)

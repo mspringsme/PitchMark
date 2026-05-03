@@ -38,6 +38,20 @@ struct JerseyCellView: View {
 let sampleJerseyCells: [JerseyCell] = [
 ]
 
+enum TrackingMode: String, Codable, CaseIterable {
+    case coach
+    case scout
+
+    var displayName: String {
+        switch self {
+        case .coach:
+            return "Coach Mode"
+        case .scout:
+            return "Scout Mode"
+        }
+    }
+}
+
 struct Game: Identifiable, Codable {
     // Firestore doc id
     @DocumentID var id: String?
@@ -69,6 +83,7 @@ struct Game: Identifiable, Codable {
     var templateName: String? = nil
     var lastTemplateId: String? = nil
     var lastPitcherId: String? = nil
+    var trackingMode: TrackingMode? = .coach
 
     // MARK: - Nested types
 
@@ -96,12 +111,14 @@ struct Game: Identifiable, Codable {
         opponent: String,
         date: Date,
         jerseyNumbers: [String],
-        batterIds: [String]? = nil
+        batterIds: [String]? = nil,
+        trackingMode: TrackingMode? = .coach
     ) {
         self.id = id
         self.opponent = opponent
         self.date = date
         self.jerseyNumbers = jerseyNumbers
         self.batterIds = batterIds
+        self.trackingMode = trackingMode
     }
 }
