@@ -306,7 +306,6 @@ struct PitchCardView: View {
     let footerTextName: String
     let footerTextDate: String
     let gameTitle: String?
-    let practiceTitle: String?
     let pitchNumber: Int?
     let outcomeSummary: [String]?
     let jerseyNumber: String?
@@ -333,7 +332,6 @@ struct PitchCardView: View {
         atBatCountText: String? = nil,
         trackingMode: TrackingMode = .coach,
         gameTitle: String? = nil,
-        practiceTitle: String? = nil,
         hideHeader: Bool = false,
         onLongPress: @escaping (() -> Void) = {}
     ) {
@@ -353,7 +351,6 @@ struct PitchCardView: View {
         self.atBatCountText = atBatCountText
         self.trackingMode = trackingMode
         self.gameTitle = gameTitle
-        self.practiceTitle = practiceTitle
         self.hideHeader = hideHeader
         self.onLongPress = onLongPress
     }
@@ -366,8 +363,6 @@ struct PitchCardView: View {
                     Text({
                         if let game = gameTitle, !game.isEmpty {
                             return "\(footerTextName) vs. \(game)"
-                        } else if let practice = practiceTitle, !practice.isEmpty {
-                            return "\(footerTextName) — \(practice)"
                         } else {
                             return footerTextName
                         }
@@ -865,7 +860,6 @@ struct PitchResultCard: View {
                 atBatCountText: event.atBatCount,
                 trackingMode: event.trackingMode ?? .coach,
                 gameTitle: derivedGameTitle(from: event),
-                practiceTitle: practiceTitle(for: event),
                 hideHeader: isParticipant,
                 onLongPress: { }
             )
@@ -879,15 +873,6 @@ struct PitchResultCard: View {
             return game.opponent
         }
         return nil
-    }
-    
-    private func practiceTitle(for event: PitchEvent) -> String? {
-        struct StoredPracticeSession: Codable { var id: String?; var name: String; var date: Date }
-        guard let pid = event.practiceId, !pid.isEmpty else { return nil }
-        let key = "storedPracticeSessions"
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let sessions = try? JSONDecoder().decode([StoredPracticeSession].self, from: data) else { return nil }
-        return sessions.first(where: { $0.id == pid })?.name
     }
     
     private func formattedTimestamp(_ date: Date) -> String {
@@ -1073,18 +1058,18 @@ struct PitchEventDetailPopover: View {
                         text: $batterNotes,
                         isFocused: $isBatterNotesFocused
                     )
-                    .frame(maxWidth: .infinity, minHeight: 60, maxHeight: 120)
+                    .frame(maxWidth: .infinity, minHeight: 45, maxHeight: 90)
 
                     if batterNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text("Add notes for this batter...")
                             .font(.system(size: 15))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 14)
-                            .padding(.vertical, 16)
+                            .padding(.vertical, 12)
                             .allowsHitTesting(false)
                     }
                 }
-                .frame(minHeight: 60)
+                .frame(minHeight: 45)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(Color(.secondarySystemBackground))
@@ -1215,39 +1200,6 @@ struct PitchEventDetailPopover: View {
 
                 if !lineupBatters.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 8) {
-                            if let activeCell = activeLineupCell {
-                                Button {
-                                    onEditLineupBatter(activeCell)
-                                } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button {
-                                    onMoveLineupBatterUp(activeCell)
-                                } label: {
-                                    Label("Up", systemImage: "arrow.up")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button {
-                                    onMoveLineupBatterDown(activeCell)
-                                } label: {
-                                    Label("Down", systemImage: "arrow.down")
-                                }
-                                .buttonStyle(.bordered)
-
-                                Button(role: .destructive) {
-                                    onDeleteLineupBatter(activeCell)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                            Spacer()
-                        }
-
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(lineupBatters) { cell in
@@ -1273,13 +1225,55 @@ struct PitchEventDetailPopover: View {
                             }
                             .padding(.vertical, 4)
                         }
+
+                        HStack(spacing: 8) {
+                            if let activeCell = activeLineupCell {
+                                Button {
+                                    onEditLineupBatter(activeCell)
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+
+                                Button {
+                                    onMoveLineupBatterUp(activeCell)
+                                } label: {
+                                    Label("Up", systemImage: "arrow.up")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+
+                                Button {
+                                    onMoveLineupBatterDown(activeCell)
+                                } label: {
+                                    Label("Down", systemImage: "arrow.down")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+
+                                Button(role: .destructive) {
+                                    onDeleteLineupBatter(activeCell)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                        .font(.caption)
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            Spacer()
+                        }
                     }
-                    .padding(.bottom, 18)
+                    .padding(.bottom, 0)
                 }
                 }
                 .frame(maxWidth: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             guard let key = batterNotesKey else { return }
             batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
@@ -1294,14 +1288,6 @@ struct PitchEventDetailPopover: View {
         .onChange(of: batterNotes) { _, newValue in
             guard let key = batterNotesKey else { return }
             UserDefaults.standard.set(newValue, forKey: key)
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") {
-                    isBatterNotesFocused = false
-                }
-            }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
     }
@@ -1657,20 +1643,11 @@ struct PitchResultSheet: View {
             return evt.mode == sessionManager.currentMode
         }
 
-        // If in practice mode and we have an active practice session, scope further to that session
-        let practiceScoped: [PitchEvent] = {
-            if sessionManager.currentMode == .practice, let pid = sessionManager.activePracticeId, !pid.isEmpty {
-                return modeScoped.filter { $0.practiceId == pid }
-            } else {
-                return modeScoped
-            }
-        }()
-
         // Apply pitcher filter in game mode if provided
         let trimmedPitcher = pitcherFilter.trimmingCharacters(in: .whitespacesAndNewlines)
         let pitcherScoped: [PitchEvent] = {
-            if sessionManager.currentMode != .game || trimmedPitcher.isEmpty { return practiceScoped }
-            return practiceScoped.filter { event in
+            if sessionManager.currentMode != .game || trimmedPitcher.isEmpty { return modeScoped }
+            return modeScoped.filter { event in
                 guard let id = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else { return false }
                 return id == trimmedPitcher
             }
@@ -2048,7 +2025,6 @@ struct PitchResultSheet: View {
                     selectedGameId: target.gameId,
                     selectedOpponentJersey: target.opponentJersey,
                     selectedOpponentBatterId: target.opponentBatterId,
-                    selectedPracticeId: target.practiceId,
                     allPitchEvents: allEvents,
                     suggestedCountSeed: nil,
                     currentCountSeed: currentCountSeed,

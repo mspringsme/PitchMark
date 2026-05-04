@@ -545,7 +545,6 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     
     @State private var showGameChooser = false
-    @State private var showPracticeChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
     @State private var showAddPitcher = false
     @State private var newPitcherName: String = ""
@@ -602,7 +601,6 @@ struct SettingsView: View {
     @State private var showCopyPitcherConfirm = false
 
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
-    @State private var encryptedSelectionByPracticeId: [String: Bool] = [:]
 
     @State private var showPitcherShareSheet = false
     @State private var showPitcherShareActivity = false
@@ -688,27 +686,6 @@ struct SettingsView: View {
 
     private var hiddenPitchers: [Pitcher] {
         sortedPitchers.filter { hiddenPitcherIds.contains($0.id ?? "") }
-    }
-    
-    private func savePracticeSessions(_ sessions: [PracticeSession]) {
-        let encoder = JSONEncoder()
-        if let data = try? encoder.encode(sessions) {
-            UserDefaults.standard.set(data, forKey: "storedPracticeSessions")
-        }
-    }
-    private func loadPracticeSessions() -> [PracticeSession] {
-        guard let data = UserDefaults.standard.data(forKey: "storedPracticeSessions") else {
-            return []
-        }
-        let decoder = JSONDecoder()
-        do {
-            let sessions = try decoder.decode([PracticeSession].self, from: data)
-            return sessions
-        } catch {
-            // Optionally log the error in debug builds
-            // print("Failed to decode PracticeSession array: \(error)")
-            return []
-        }
     }
     
     private func joinByCodeFromSettings() {
@@ -860,11 +837,6 @@ struct SettingsView: View {
         let game: Game
     }
 
-    private struct QuickLaunchPractice: Identifiable {
-        let id: String
-        let session: PracticeSession?
-    }
-
     @ViewBuilder
     private func quickLaunchGameChip(_ item: QuickLaunchGame) -> some View {
         let opponentName = item.game.opponent
@@ -879,34 +851,6 @@ struct SettingsView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Text(gameDateText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(minWidth: 120)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func quickLaunchPracticeChip(_ item: QuickLaunchPractice) -> some View {
-        let sessionName = item.session?.name ?? "Practice"
-        let sessionDateText: String = {
-            guard let session = item.session else { return "" }
-            return Self.quickLaunchDateFormatter.string(from: session.date)
-        }()
-
-        Button {
-            launchPractice(item.session)
-        } label: {
-            VStack(spacing: 4) {
-                Text(sessionName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(sessionDateText)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -960,44 +904,6 @@ struct SettingsView: View {
         .padding(.top, 8)
         .padding(.bottom, 10)
         .background(.clear)
-    }
-
-    private func practiceQuickLaunchItems() -> [QuickLaunchPractice] {
-        let sessions = loadPracticeSessions().sorted { $0.date > $1.date }
-        return sessions.map { QuickLaunchPractice(id: $0.id ?? UUID().uuidString, session: $0) }
-    }
-
-    private func launchPractice(_ session: PracticeSession?) {
-        let defaults = UserDefaults.standard
-        defaults.set(true, forKey: PitchTrackerView.DefaultsKeys.activeIsPractice)
-        defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activeGameId)
-        defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activeGameOwnerUserId)
-        defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
-
-        if let session, let pid = session.id {
-            defaults.set(pid, forKey: PitchTrackerView.DefaultsKeys.activePracticeId)
-            NotificationCenter.default.post(
-                name: .gameOrSessionChosen,
-                object: nil,
-                userInfo: [
-                    "type": "practice",
-                    "practiceId": pid,
-                    "practiceName": session.name
-                ]
-            )
-        } else {
-            defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activePracticeId)
-            NotificationCenter.default.post(
-                name: .gameOrSessionChosen,
-                object: nil,
-                userInfo: [
-                    "type": "practice",
-                    "practiceId": "__GENERAL__",
-                    "practiceName": "General"
-                ]
-            )
-        }
-        dismiss()
     }
 
     private func deletePendingTemplate() {
@@ -1938,7 +1844,7 @@ struct SettingsView: View {
                         sectionCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 HStack {
-                                    Text("Quick Launch – Games")
+                                    Text("Games")
                                         .font(.headline)
                                     Spacer()
                                     Button {
@@ -1958,36 +1864,6 @@ struct SettingsView: View {
                                             let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
                                             ForEach(quickGames) { item in
                                                 quickLaunchGameChip(item)
-                                            }
-                                        }
-                                        .padding(.horizontal)
-                                    }
-                                }
-                            }
-                        }
-
-                        sectionCard {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Text("Quick Launch – Practice")
-                                        .font(.headline)
-                                    Spacer()
-                                    Button {
-                                        showPracticeChooser = true
-                                    } label: {
-                                        Image(systemName: "plus.circle.fill")
-                                            .font(.subheadline)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                .padding(.horizontal)
-
-                                let quickPractice = practiceQuickLaunchItems()
-                                if !quickPractice.isEmpty {
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 12) {
-                                            ForEach(quickPractice) { item in
-                                                quickLaunchPracticeChip(item)
                                             }
                                         }
                                         .padding(.horizontal)
@@ -2282,39 +2158,6 @@ struct SettingsView: View {
                     games: $games,
                 )
             }
-            .sheet(isPresented: $showPracticeChooser) {
-                PracticeSelectionSheet(
-                    onCreate: { name, date, templateId, templateName, trackingMode in
-                        var sessions = loadPracticeSessions()
-                        let new = PracticeSession(
-                            id: UUID().uuidString,
-                            name: name,
-                            date: date,
-                            templateId: templateId,
-                            templateName: templateName,
-                            trackingMode: trackingMode
-                        )
-                        sessions.append(new)
-                        savePracticeSessions(sessions)
-                    },
-                    onChoose: { practiceId in
-                        if practiceId == "__GENERAL__" {
-                            launchPractice(nil)
-                            return
-                        }
-                        let sessions = loadPracticeSessions()
-                        if let session = sessions.first(where: { $0.id == practiceId }) {
-                            launchPractice(session)
-                        }
-                    },
-                    onCancel: {
-                        showPracticeChooser = false
-                    },
-                    currentTemplateId: selectedTemplate?.id.uuidString,
-                    currentTemplateName: selectedTemplate?.name,
-                    encryptedSelectionByPracticeId: $encryptedSelectionByPracticeId
-                )
-            }
         }
     }
 }
@@ -2332,7 +2175,6 @@ struct PitcherStatsSheetView: View {
 
     enum StatScope: String, CaseIterable, Identifiable {
         case games = "Games"
-        case practice = "Practice"
 
         var id: String { rawValue }
     }
@@ -2361,6 +2203,7 @@ struct PitcherStatsSheetView: View {
     }
 
     let pitcher: Pitcher
+    let availablePitchers: [Pitcher]
     let games: [Game]
     let lockToGameId: String?
     let liveId: String?
@@ -2368,11 +2211,19 @@ struct PitcherStatsSheetView: View {
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
 
-    init(pitcher: Pitcher, games: [Game], lockToGameId: String? = nil, liveId: String? = nil) {
+    init(
+        pitcher: Pitcher,
+        availablePitchers: [Pitcher]? = nil,
+        games: [Game],
+        lockToGameId: String? = nil,
+        liveId: String? = nil
+    ) {
         self.pitcher = pitcher
+        self.availablePitchers = availablePitchers ?? [pitcher]
         self.games = games
         self.lockToGameId = lockToGameId
         self.liveId = liveId
+        _selectedPitcherId = State(initialValue: pitcher.id)
     }
 
     @State private var dateFilter: DateRangeFilter = .all
@@ -2382,14 +2233,11 @@ struct PitcherStatsSheetView: View {
     @State private var endDate: Date = Date()
 
     @State private var selectedGameIds: Set<String> = []
-    @State private var selectedPracticeIds: Set<String> = []
     @State private var cachedGameIdsWithEvents: Set<String> = []
 
-    @State private var practiceEvents: [PitchEvent] = []
     @State private var gameEvents: [PitchEvent] = []
     @State private var liveEvents: [PitchEvent] = []
     @State private var sharedGameEvents: [PitchEvent] = []
-    @State private var sharedPracticeEvents: [PitchEvent] = []
     @State private var liveEventsListener: ListenerRegistration? = nil
     @State private var sharedPitcherEventsListener: ListenerRegistration? = nil
     @State private var cachedStats: PitcherStatsDoc? = nil
@@ -2403,6 +2251,7 @@ struct PitcherStatsSheetView: View {
     @State private var hitSpotOrder: HitSpotOrder = .chronological
     @State private var selectedHeatmapPitch: String = ""
     @State private var heatmapZoneFilter: HeatmapZoneFilter = .all
+    @State private var selectedPitcherId: String?
 
     private enum HeatmapZoneFilter: String, CaseIterable, Identifiable {
         case all = "Strikes+Balls"
@@ -2416,19 +2265,28 @@ struct PitcherStatsSheetView: View {
         games.sorted { $0.date > $1.date }
     }
 
-    private var practiceSessions: [PracticeSession] {
-        guard let data = UserDefaults.standard.data(forKey: "storedPracticeSessions"),
-              let sessions = try? JSONDecoder().decode([PracticeSession].self, from: data) else {
-            return []
-        }
-        return sessions.sorted { $0.date > $1.date }
-    }
-
     private static let shortDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MM/dd/yy"
         return formatter
     }()
+
+    private var selectablePitchers: [Pitcher] {
+        let base = availablePitchers.isEmpty ? [pitcher] : availablePitchers
+        return base.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var activePitcher: Pitcher {
+        if let selectedPitcherId,
+           let match = selectablePitchers.first(where: { $0.id == selectedPitcherId }) {
+            return match
+        }
+        return selectablePitchers.first ?? pitcher
+    }
+
+    private var activePitcherId: String? {
+        activePitcher.id
+    }
 
     private var gamesWithPitcherEvents: [Game] {
         let gameIdsWithEvents: Set<String> = {
@@ -2447,16 +2305,8 @@ struct PitcherStatsSheetView: View {
         Set(gamesWithPitcherEvents.compactMap { $0.id })
     }
 
-    private var allPracticeIds: Set<String> {
-        Set(practiceSessions.compactMap { $0.id } + ["__GENERAL__"])
-    }
-
     private var validGameIds: Set<String> {
         Set(sortedGames.compactMap { $0.id })
-    }
-
-    private var validPracticeIds: Set<String> {
-        Set(practiceSessions.compactMap { $0.id })
     }
 
     private func formattedDate(_ date: Date) -> String {
@@ -2464,31 +2314,15 @@ struct PitcherStatsSheetView: View {
     }
 
     private var scopeSelectionLabel: String {
-        switch scope {
-        case .games:
-            if selectedGameIds.count == 1,
-               let id = selectedGameIds.first,
-               let game = sortedGames.first(where: { $0.id == id }) {
-                return "vs \(game.opponent) • \(formattedDate(game.date))"
-            }
-            if selectedGameIds.isEmpty || selectedGameIds == allGameIds {
-                return "All Games"
-            }
-            return "Multiple Games"
-        case .practice:
-            if selectedPracticeIds == ["__GENERAL__"] {
-                return "General"
-            }
-            if selectedPracticeIds.count == 1,
-               let id = selectedPracticeIds.first,
-               let session = practiceSessions.first(where: { $0.id == id }) {
-                return "\(session.name) • \(formattedDate(session.date))"
-            }
-            if selectedPracticeIds.isEmpty || selectedPracticeIds == allPracticeIds {
-                return "All Practices"
-            }
-            return "Multiple Practices"
+        if selectedGameIds.count == 1,
+           let id = selectedGameIds.first,
+           let game = sortedGames.first(where: { $0.id == id }) {
+            return "vs \(game.opponent) • \(formattedDate(game.date))"
         }
+        if selectedGameIds.isEmpty || selectedGameIds == allGameIds {
+            return "All Games"
+        }
+        return "Multiple Games"
     }
 
     private var dateRange: ClosedRange<Date>? {
@@ -2516,31 +2350,12 @@ struct PitcherStatsSheetView: View {
             return lockedEvents.filter { range.contains($0.timestamp) }
         }
 
-        let allForPitcher: [PitchEvent] = {
-            switch scope {
-            case .practice:
-                return combinedPracticeEvents
-            case .games:
-                return combinedGameEvents
-            }
-        }()
-
+        let effectiveGameIds = selectedGameIds.isEmpty ? allGameIds : selectedGameIds
         let byScopeSelection: [PitchEvent] = {
-            switch scope {
-            case .practice:
-                if selectedPracticeIds.isEmpty { return allForPitcher }
-                return allForPitcher.filter { event in
-                    let pid = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let normalized = (pid == nil || pid == "") ? "__GENERAL__" : pid!
-                    return selectedPracticeIds.contains(normalized)
-                }
-            case .games:
-                let effectiveGameIds = selectedGameIds.isEmpty ? allGameIds : selectedGameIds
-                if effectiveGameIds.isEmpty { return [] }
-                return allForPitcher.filter { event in
-                    if let gid = event.gameId { return effectiveGameIds.contains(gid) }
-                    return false
-                }
+            if effectiveGameIds.isEmpty { return [] }
+            return combinedGameEvents.filter { event in
+                if let gid = event.gameId { return effectiveGameIds.contains(gid) }
+                return false
             }
         }()
 
@@ -3176,7 +2991,7 @@ struct PitcherStatsSheetView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if lockToGameId == nil {
                         HStack(alignment: .center, spacing: 12) {
-                            Text(pitcher.name)
+                            Text(activePitcher.name)
                                 .font(.title2.weight(.semibold))
 
                             Spacer(minLength: 8)
@@ -3227,8 +3042,18 @@ struct PitcherStatsSheetView: View {
                             Spacer(minLength: 12)
 
                             HStack(alignment: .center, spacing: 12) {
-                                Text(pitcher.name)
+                                if lockToGameId != nil, selectablePitchers.count > 1 {
+                                    Picker("Pitcher", selection: $selectedPitcherId) {
+                                        ForEach(selectablePitchers, id: \.id) { pitcher in
+                                            Text(pitcher.name).tag(pitcher.id as String?)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
                                     .font(.title2.weight(.semibold))
+                                } else {
+                                    Text(activePitcher.name)
+                                        .font(.title2.weight(.semibold))
+                                }
                                 Spacer(minLength: 8)
                                 VStack(alignment: .trailing, spacing: 4) {
                                     Text("Game")
@@ -3277,7 +3102,7 @@ struct PitcherStatsSheetView: View {
             .sheet(isPresented: $showGameSummarySheet) {
                 if let game = selectedSingleGameForSummary {
                     SettingsGameSummarySheetView(
-                        pitcherName: pitcher.name,
+                        pitcherName: activePitcher.name,
                         game: game,
                         events: selectedGameSummaryEvents
                     )
@@ -3315,10 +3140,6 @@ struct PitcherStatsSheetView: View {
                 loadEvents()
                 loadCachedStats()
             }
-            .onChange(of: selectedPracticeIds) { _, _ in
-                loadEvents()
-                loadCachedStats()
-            }
             .onChange(of: scope) { _, _ in
                 if lockToGameId != nil {
                     scope = .games
@@ -3329,10 +3150,12 @@ struct PitcherStatsSheetView: View {
             .onChange(of: liveId) { _, _ in
                 startLiveListener()
             }
-            .onChange(of: pitcher.id) { _, _ in
+            .onChange(of: selectedPitcherId) { _, _ in
                 cachedGameIdsWithEvents = []
+                loadEvents()
                 startSharedPitcherListener()
                 loadCachedStats()
+                startLiveListener()
             }
         }
     }
@@ -3364,10 +3187,21 @@ struct PitcherStatsSheetView: View {
                 .padding(.horizontal)
 
             if !hasLocationAnalytics {
-                Text("Heat maps hidden for Scout Mode events.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Heat maps hidden for Scout Mode events.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color(.systemGray6))
+                        .frame(height: 220)
+                        .overlay {
+                            Text("Coach data needed")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .opacity(0.65)
+                }
+                .padding(.horizontal)
             } else if heatmapPitchTypes.isEmpty {
                 Text("No pitches recorded.")
                     .font(.caption)
@@ -3441,21 +3275,6 @@ struct PitcherStatsSheetView: View {
                         }
                     }
                 }
-            case .practice:
-                Button("All Practices") {
-                    selectedPracticeIds = allPracticeIds
-                }
-                Button("General") {
-                    selectedPracticeIds = ["__GENERAL__"]
-                }
-                ForEach(practiceSessions, id: \.id) { session in
-                    let title = "\(session.name) • \(formattedDate(session.date))"
-                    Button(title) {
-                        if let id = session.id {
-                            selectedPracticeIds = [id]
-                        }
-                    }
-                }
             }
         } label: {
             HStack(spacing: 8) {
@@ -3483,19 +3302,7 @@ struct PitcherStatsSheetView: View {
                 .font(.headline)
                 .padding(.horizontal)
 
-            Picker("Scope", selection: $scope) {
-                ForEach(StatScope.allCases) { scope in
-                    Text(scope.rawValue).tag(scope)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-
-            if scope == .games {
-                gameFilterList
-            } else if scope == .practice {
-                practiceFilterList
-            }
+            gameFilterList
         }
     }
 
@@ -3591,74 +3398,6 @@ struct PitcherStatsSheetView: View {
         }
     }
 
-    private var practiceFilterList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Practice")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Button("All") {
-                    let ids = practiceSessions.compactMap { $0.id } + ["__GENERAL__"]
-                    selectedPracticeIds = Set(ids)
-                }
-                .font(.caption)
-                Button("Clear") {
-                    selectedPracticeIds.removeAll()
-                }
-                .font(.caption)
-            }
-            .padding(.horizontal)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    Button("General") {
-                        if selectedPracticeIds.contains("__GENERAL__") {
-                            selectedPracticeIds.remove("__GENERAL__")
-                        } else {
-                            selectedPracticeIds.insert("__GENERAL__")
-                        }
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.black)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(
-                        Capsule().fill(selectedPracticeIds.contains("__GENERAL__") ? Color.black.opacity(0.14) : Color.clear)
-                    )
-                    .overlay(
-                        Capsule().stroke(Color.black, lineWidth: 1)
-                    )
-
-                    ForEach(practiceSessions, id: \.id) { session in
-                        Group {
-                            if let pid = session.id {
-                                let isSelected = selectedPracticeIds.contains(pid)
-                                Button(session.name) {
-                                    if isSelected {
-                                        selectedPracticeIds.remove(pid)
-                                    } else {
-                                        selectedPracticeIds.insert(pid)
-                                    }
-                                }
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(.black)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    Capsule().fill(isSelected ? Color.black.opacity(0.14) : Color.clear)
-                                )
-                                .overlay(
-                                    Capsule().stroke(Color.black, lineWidth: 1)
-                                )
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal)
-            }
-        }
-    }
-
     private var summarySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Summary")
@@ -3699,19 +3438,24 @@ struct PitcherStatsSheetView: View {
                 }
                 .buttonStyle(.plain)
 
-                if hasLocationAnalytics {
-                    Button {
-                        summaryDetail = .hitSpot
-                    } label: {
-                        statCard(title: "Hit-Spot %", value: "\(hitSpotPercent)%")
-                            .overlay(alignment: .bottomTrailing) {
-                                Image(systemName: "chevron.down")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundColor(.secondary)
-                                    .padding(10)
-                            }
+                Group {
+                    if hasLocationAnalytics {
+                        Button {
+                            summaryDetail = .hitSpot
+                        } label: {
+                            statCard(title: "Hit-Spot %", value: "\(hitSpotPercent)%")
+                                .overlay(alignment: .bottomTrailing) {
+                                    Image(systemName: "chevron.down")
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(.secondary)
+                                        .padding(10)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        statCard(title: "Hit-Spot %", value: "Coach data")
+                            .opacity(0.45)
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal)
@@ -3773,6 +3517,7 @@ struct PitcherStatsSheetView: View {
                         Text("Hit %")
                             .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
+                            .opacity(hasLocationAnalytics ? 1 : 0.45)
                             .frame(width: 50, alignment: .trailing)
                     }
 
@@ -3787,9 +3532,10 @@ struct PitcherStatsSheetView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                                 .frame(width: 40, alignment: .trailing)
-                            Text("\(row.hitSpotPct)%")
+                            Text(hasLocationAnalytics ? "\(row.hitSpotPct)%" : "—")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .opacity(hasLocationAnalytics ? 1 : 0.45)
                                 .frame(width: 50, alignment: .trailing)
                         }
                     }
@@ -3869,10 +3615,16 @@ struct PitcherStatsSheetView: View {
     }
 
     private func initializeSelections() {
+        if let selectedPitcherId,
+           selectablePitchers.contains(where: { $0.id == selectedPitcherId }) {
+            // keep current selection
+        } else {
+            selectedPitcherId = selectablePitchers.first?.id
+        }
+
         if let lockedGameId = lockToGameId {
             scope = .games
             selectedGameIds = [lockedGameId]
-            selectedPracticeIds = []
             return
         }
 
@@ -3880,45 +3632,35 @@ struct PitcherStatsSheetView: View {
 
         let ids = sortedGames.compactMap { $0.id }
         selectedGameIds = Set(ids)
-
-        // Treat empty selection as "All Practices" so historical practice events
-        // are not excluded when session IDs are missing/stale in local metadata.
-        selectedPracticeIds = []
     }
 
     private func loadEvents() {
-        guard let pitcherId = pitcher.id else { return }
+        guard let pitcherId = activePitcherId else { return }
         let requestToken = UUID()
         loadEventsToken = requestToken
 
         isLoading = true
         hasLoadedEvents = false
-        practiceEvents = []
         gameEvents = []
         liveEvents = []
         sharedGameEvents = []
-        sharedPracticeEvents = []
 
         authManager.loadPitcherEvents(pitcherId: pitcherId) { events in
             guard loadEventsToken == requestToken else { return }
 
             var sharedGameBucket: [PitchEvent] = []
-            var sharedPracticeBucket: [PitchEvent] = []
             var seenIdentities = Set<String>()
 
             if !events.isEmpty {
                 for event in events {
                     if event.mode == .game || (event.gameId?.isEmpty == false) {
                         sharedGameBucket.append(event)
-                    } else {
-                        sharedPracticeBucket.append(event)
                     }
                 }
-                seenIdentities = Set((sharedGameBucket + sharedPracticeBucket).map { $0.identity })
+                seenIdentities = Set(sharedGameBucket.map { $0.identity })
 
                 DispatchQueue.main.async {
                     self.gameEvents = sharedGameBucket
-                    self.practiceEvents = sharedPracticeBucket
                 }
             }
 
@@ -3935,23 +3677,20 @@ struct PitcherStatsSheetView: View {
             group.enter()
             authManager.loadPitchEvents { events in
                 guard loadEventsToken == requestToken else { group.leave(); return }
-                let filtered = events.filter { $0.pitcherId == pitcherId }
+                let filtered = events.filter {
+                    $0.pitcherId == pitcherId && ($0.mode == .game || ($0.gameId?.isEmpty == false))
+                }
                 DispatchQueue.main.async {
                     let unique = filtered.filter { !seenIdentities.contains($0.identity) }
                     seenIdentities.formUnion(unique.map { $0.identity })
-                    self.practiceEvents.append(contentsOf: unique)
+                    self.gameEvents.append(contentsOf: unique)
                     group.leave()
                 }
             }
 
             let gameIdsToLoad: [String] = {
                 if let lockedGameId = lockToGameId { return [lockedGameId] }
-                switch scope {
-                case .practice:
-                    return []
-                case .games:
-                    return selectedGameIds.isEmpty ? sortedGames.compactMap { $0.id } : Array(selectedGameIds)
-                }
+                return selectedGameIds.isEmpty ? sortedGames.compactMap { $0.id } : Array(selectedGameIds)
             }()
 
             for gameId in gameIdsToLoad {
@@ -3989,31 +3728,13 @@ struct PitcherStatsSheetView: View {
         }
     }
 
-    private var combinedPracticeEvents: [PitchEvent] {
-        mergeUnique([practiceEvents, sharedPracticeEvents]).filter { event in
-            let pid = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if pid == nil || pid == "" {
-                return true
-            }
-            return validPracticeIds.contains(pid!)
-        }
-    }
-
     private func statsScopeKey() -> (scope: String, scopeId: String)? {
         if let lockedGameId = lockToGameId {
             return ("game", lockedGameId)
         }
 
-        switch scope {
-        case .games:
-            if selectedGameIds.count == 1, let gid = selectedGameIds.first {
-                return ("game", gid)
-            }
-        case .practice:
-            if selectedPracticeIds.count == 1, let pid = selectedPracticeIds.first {
-                let normalized = pid.trimmingCharacters(in: .whitespacesAndNewlines)
-                return ("practice", normalized.isEmpty ? "__GENERAL__" : normalized)
-            }
+        if selectedGameIds.count == 1, let gid = selectedGameIds.first {
+            return ("game", gid)
         }
 
         return nil
@@ -4021,7 +3742,7 @@ struct PitcherStatsSheetView: View {
 
     private func loadCachedStats() {
         cachedStats = nil
-        guard let pitcherId = pitcher.id else { return }
+        guard let pitcherId = activePitcherId else { return }
         guard let key = statsScopeKey() else { return }
 
         let docId: String = {
@@ -4061,7 +3782,7 @@ struct PitcherStatsSheetView: View {
     private func startLiveListener() {
         stopLiveListener()
         liveEvents = []
-        guard let liveId, !liveId.isEmpty, let pitcherId = pitcher.id else { return }
+        guard let liveId, !liveId.isEmpty, let pitcherId = activePitcherId else { return }
 
         let ref = Firestore.firestore()
             .collection("liveGames").document(liveId)
@@ -4093,9 +3814,8 @@ struct PitcherStatsSheetView: View {
     private func startSharedPitcherListener() {
         stopSharedPitcherListener()
         sharedGameEvents = []
-        sharedPracticeEvents = []
 
-        guard let pitcherId = pitcher.id else { return }
+        guard let pitcherId = activePitcherId else { return }
 
         let ref = Firestore.firestore()
             .collection("pitchers").document(pitcherId)
@@ -4116,7 +3836,6 @@ struct PitcherStatsSheetView: View {
             }
 
             let sharedGame = events.filter { $0.mode == .game || ($0.gameId?.isEmpty == false) }
-            let sharedPractice = events.filter { !($0.mode == .game || ($0.gameId?.isEmpty == false)) }
 
             if let sample = events.last {
                 print("🧾 shared pitcherEvents sample gameId=\(sample.gameId ?? "<nil>") mode=\(sample.mode.rawValue) pitcherId=\(sample.pitcherId ?? "<nil>") location=\(sample.location)")
@@ -4124,7 +3843,6 @@ struct PitcherStatsSheetView: View {
 
             DispatchQueue.main.async {
                 self.sharedGameEvents = sharedGame
-                self.sharedPracticeEvents = sharedPractice
             }
         }
     }

@@ -392,7 +392,6 @@ struct PitchResultSheetView: View {
     let selectedGameId: String?
     let selectedOpponentJersey: String?
     let selectedOpponentBatterId: String?
-    let selectedPracticeId: String?
     let allPitchEvents: [PitchEvent]
     let suggestedCountSeed: (balls: Int, strikes: Int)?
     let currentCountSeed: (balls: Int, strikes: Int)?
@@ -830,7 +829,7 @@ struct PitchResultSheetView: View {
             gameId: selectedGameId,
             opponentJersey: effectiveOpponentJersey,
             opponentBatterId: effectiveOpponentBatterId,
-            practiceId: selectedPracticeId,
+            practiceId: nil,
             pitcherId: selectedPitcherId
         ))
 
@@ -875,7 +874,7 @@ struct PitchResultSheetView: View {
             gameId: selectedGameId,
             opponentJersey: effectiveOpponentJersey,
             opponentBatterId: effectiveOpponentBatterId,
-            practiceId: selectedPracticeId,
+            practiceId: nil,
             pitcherId: selectedPitcherId,
             strikeSwingingMarker: isStrikeSwinging ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
             strikeLookingMarker: isStrikeLooking ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
