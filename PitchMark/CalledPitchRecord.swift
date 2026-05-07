@@ -205,12 +205,14 @@ struct OutcomeSummaryView: View {
     let jerseyNumber: String?
     let countText: String?
     let minHeight: CGFloat?
+    let maxHeight: CGFloat?
 
-    init(lines: [String], jerseyNumber: String?, countText: String? = nil, minHeight: CGFloat? = 118) {
+    init(lines: [String], jerseyNumber: String?, countText: String? = nil, minHeight: CGFloat? = 118, maxHeight: CGFloat? = nil) {
         self.lines = lines
         self.jerseyNumber = jerseyNumber
         self.countText = countText
         self.minHeight = minHeight
+        self.maxHeight = maxHeight
     }
 
     private var isPositiveOutcome: Bool {
@@ -277,17 +279,18 @@ struct OutcomeSummaryView: View {
                             .foregroundColor(.black)
                     }
                     Text(displayText)
-                        .font(.system(size: 18, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundColor(.black)
                         .lineLimit(2)
+                        .minimumScaleFactor(0.65)
                         .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .allowsTightening(true)
                 }
             }
         }
-        .frame(minWidth: 92, maxWidth: 132, minHeight: minHeight, alignment: .topLeading)
+        .frame(minWidth: 92, maxWidth: 132, minHeight: minHeight, maxHeight: maxHeight, alignment: .topLeading)
         .padding(.horizontal, 8)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .background(OutcomeSummaryBackground(isPositive: isPositiveOutcome))
         .padding(.trailing, 6)
     }
@@ -403,6 +406,7 @@ struct PitchCardView: View {
             HStack(alignment: .center, spacing: 2) {
                 leadingImages
                     .padding(.leading, 10)
+                    .padding(.vertical, 6)
                 
                 VStack(alignment: .leading, spacing: isCatcherCard ? 2 : 6) {
                     HStack{
@@ -434,9 +438,10 @@ struct PitchCardView: View {
                         lines: outcomeSummary ?? [],
                         jerseyNumber: jerseyNumber,
                         countText: atBatCountText,
-                        minHeight: isCatcherCard ? 0 : 118
+                        minHeight: isCatcherCard ? 0 : 90,
+                        maxHeight: isCatcherCard ? 72 : 90
                     )
-                    .padding(.bottom, isCatcherCard ? 0 : 10)
+                    .padding(.vertical, 6)
                 }
                 
                 Group {
@@ -454,6 +459,7 @@ struct PitchCardView: View {
                             .frame(width: 60, height: isCatcherCard ? 72 : 90)
                     }
                 }
+                .padding(.vertical, 6)
                 .padding(.trailing, 10)
             }
         }
@@ -464,7 +470,7 @@ struct PitchCardView: View {
     }
 
     private var scoutCompactContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .center, spacing: 10) {
                 if let primaryLine = scoutPrimaryLine {
                     scoutSummaryLine(primaryLine, font: .system(size: 20, weight: .medium))
@@ -476,7 +482,7 @@ struct PitchCardView: View {
                 Spacer(minLength: 0)
             }
 
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
                 if let num = jerseyNumber, !num.isEmpty {
                     HStack(spacing: 6) {
                         Text(num)
@@ -519,10 +525,28 @@ struct PitchCardView: View {
                 }
 
                 Spacer(minLength: 0)
+
+                Group {
+                    if let rightImage {
+                        rightImage
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 60, height: 90)
+                            .shadow(
+                                color: rightImageShouldHighlight ? .green.opacity(0.7) : .red.opacity(0.5),
+                                radius: 6, x: 0, y: 0
+                            )
+                    } else {
+                        Color.clear
+                            .frame(width: 60, height: 90)
+                    }
+                }
+                .padding(.vertical, 6)
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 0)
     }
     
     @ViewBuilder
@@ -828,6 +852,12 @@ struct PitchResultCard: View {
         let timestampText: String = formattedTimestamp(event.timestamp)
         let outcomeSummary: [String] = outcomeSummaryLines(for: event)
         let jerseyNumber: String? = event.opponentJersey
+        let resolvedAllEvents: [PitchEvent] = allEvents.map { candidate in
+            if candidate.identity == event.identity {
+                return event
+            }
+            return candidate
+        }
 
         HStack(alignment: .center, spacing: 8) {
             if isSelecting {
@@ -854,7 +884,7 @@ struct PitchResultCard: View {
                 rightImageShouldHighlight: actualResultIsStrikeZone,
                 footerTextName: selectedPlayerName,
                 footerTextDate: "\(timestampText)",
-                pitchNumber: pitchNumber(for: event, in: allEvents),
+                pitchNumber: pitchNumber(for: event, in: resolvedAllEvents),
                 outcomeSummary: outcomeSummary,
                 jerseyNumber: jerseyNumber,
                 atBatCountText: event.atBatCount,
@@ -890,35 +920,71 @@ struct PitchResultCard: View {
 }
 
 func pitchNumber(for event: PitchEvent, in allEvents: [PitchEvent]) -> Int {
-    let sameDayEvents = allEvents.filter { evt in
-        guard Calendar.current.isDate(evt.timestamp, inSameDayAs: event.timestamp) else { return false }
+    let eventGameId = event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let eventPracticeId = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let eventPitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+    let scopedEvents = allEvents.filter { evt in
         guard evt.mode == event.mode else { return false }
+
+        let evtGameId = evt.gameId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let evtPracticeId = evt.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let evtPitcherId = evt.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         switch event.mode {
         case .game:
-            if let gid = event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines), !gid.isEmpty {
-                guard evt.gameId == gid else { return false }
+            // In game mode, require a strict gameId match whenever either side has one.
+            if !eventGameId.isEmpty || !evtGameId.isEmpty {
+                guard eventGameId == evtGameId else { return false }
             }
         case .practice:
-            let eventPid = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let evtPid = evt.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !eventPid.isEmpty || !evtPid.isEmpty {
-                guard eventPid == evtPid else { return false }
+            if !eventPracticeId.isEmpty || !evtPracticeId.isEmpty {
+                guard eventPracticeId == evtPracticeId else { return false }
             }
         }
 
-        if let eventPitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !eventPitcherId.isEmpty {
-            let evtPitcherId = evt.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return evtPitcherId == eventPitcherId
+        // Keep numbering scoped per pitcher whenever either event declares a pitcher.
+        if !eventPitcherId.isEmpty || !evtPitcherId.isEmpty {
+            guard eventPitcherId == evtPitcherId else { return false }
         }
 
         return true
     }
 
-    let sorted = sameDayEvents.sorted { $0.timestamp < $1.timestamp }
-    let index = sorted.firstIndex { $0.identity == event.identity } ?? -1
-    return index + 1
+    // Make ordering deterministic when timestamps tie.
+    let sorted = scopedEvents.sorted { lhs, rhs in
+        if lhs.timestamp != rhs.timestamp {
+            return lhs.timestamp < rhs.timestamp
+        }
+        return lhs.identity < rhs.identity
+    }
+
+    if let index = sorted.firstIndex(where: { $0.identity == event.identity }) {
+        return index + 1
+    }
+
+    // Fallback: if identity changed due to local overrides, match by stable Firestore id.
+    if let eventId = event.id, !eventId.isEmpty,
+       let index = sorted.firstIndex(where: { $0.id == eventId }) {
+        return index + 1
+    }
+
+    return nilCoalescedPitchNumber(from: sorted, for: event)
 }
+
+private func nilCoalescedPitchNumber(from sorted: [PitchEvent], for event: PitchEvent) -> Int {
+    // Last-resort deterministic insertion position rather than returning 0.
+    for (index, candidate) in sorted.enumerated() {
+        if event.timestamp < candidate.timestamp {
+            return max(1, index + 1)
+        }
+        if event.timestamp == candidate.timestamp && event.identity < candidate.identity {
+            return max(1, index + 1)
+        }
+    }
+    return max(1, sorted.count + 1)
+}
+
 
 struct CalledPitchRecord: Identifiable, Codable {
     let id: UUID

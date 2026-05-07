@@ -27,22 +27,24 @@ private struct SettingsGameSummarySheetView: View {
 
     private var totalPitches: Int { events.count }
     private var strikes: Int {
-        events.filter { $0.isStrike || $0.strikeLooking || $0.strikeSwinging }.count
+        events.filter { inferredPitchResultType(for: $0) == .strike }.count
     }
     private var balls: Int {
-        events.filter { event in
-            if let isBall = event.isBall { return isBall }
-            return !(event.isStrike || event.strikeLooking || event.strikeSwinging)
-        }.count
+        events.filter { inferredPitchResultType(for: $0) == .ball }.count
     }
     private var hitSpots: Int {
-        events.filter { isLocationMatch($0) }.count
+        events.filter { $0.supportsLocationAnalytics && isLocationMatch($0) }.count
     }
     private var strikeLooking: Int { events.filter { $0.strikeLooking }.count }
     private var strikeSwinging: Int { events.filter { $0.strikeSwinging }.count }
-    private var walks: Int { max(0, game.walks) }
+    private var walks: Int {
+        events.filter {
+            guard let outcome = $0.outcome, !outcome.isEmpty else { return false }
+            return outcome == "BB" || outcome == "Walk"
+        }.count
+    }
     private var hits: Int {
-        max(0, game.hits)
+        events.filter(pitchEventCountsAsHit).count
     }
     private var wildPitches: Int { events.filter { $0.wildPitch }.count }
     private var passedBalls: Int { events.filter { $0.passedBall }.count }
@@ -82,6 +84,14 @@ private struct SettingsGameSummarySheetView: View {
         events.contains(where: \.supportsLocationAnalytics)
     }
 
+    private var locationAnalyticsEligibleCount: Int {
+        events.filter(\.supportsLocationAnalytics).count
+    }
+
+    private var firstPitchStrike: (made: Int, total: Int) {
+        sharedFirstPitchStrikeMetrics(for: events)
+    }
+
     private func percent(_ part: Int, _ total: Int) -> String {
         guard total > 0 else { return "0%" }
         let value = (Double(part) / Double(total)) * 100.0
@@ -92,10 +102,11 @@ private struct SettingsGameSummarySheetView: View {
         let pitchLines = pitchBreakdown.isEmpty ? "None" : pitchBreakdown.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
         let outcomeLines = outcomeBreakdown.isEmpty ? "None" : outcomeBreakdown.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
         let hitSpotLine = hasLocationAnalytics
-            ? "Hit Spot: \(hitSpots) of \(totalPitches) (\(percent(hitSpots, totalPitches)))"
+            ? "Hit Spot: \(hitSpots) of \(locationAnalyticsEligibleCount) (\(percent(hitSpots, locationAnalyticsEligibleCount)))"
             : "Hit Spot: Hidden for Scout Mode events"
+        let firstPitchStrikeLine = "1st Pitch Strike: \(firstPitchStrike.total == 0 ? "0%" : percent(firstPitchStrike.made, firstPitchStrike.total)) (\(firstPitchStrike.made)/\(firstPitchStrike.total))"
         let hitSpotDefinition = hasLocationAnalytics
-            ? "Hit Spot % = Location matches / Total Pitches"
+            ? "Hit Spot % = Location matches / Coach-mode pitches"
             : "Location-based metrics hidden for Scout Mode events."
         return """
         PitchMark Game Summary
@@ -106,6 +117,7 @@ private struct SettingsGameSummarySheetView: View {
         Pitches: \(totalPitches)
         Strikes: \(strikes) of \(totalPitches) (\(percent(strikes, totalPitches)))
         Balls: \(balls) of \(totalPitches) (\(percent(balls, totalPitches)))
+        \(firstPitchStrikeLine)
         \(hitSpotLine)
 
         Strike Looking: \(strikeLooking)
@@ -143,6 +155,7 @@ private struct SettingsGameSummarySheetView: View {
                 summaryRow("Total Pitches", "\(totalPitches)")
                 summaryRow("Strike %", "\(percent(strikes, totalPitches)) (\(strikes)/\(totalPitches))")
                 summaryRow("Ball %", "\(percent(balls, totalPitches)) (\(balls)/\(totalPitches))")
+                summaryRow("1st Pitch Strike", "\(firstPitchStrike.total == 0 ? "0%" : percent(firstPitchStrike.made, firstPitchStrike.total)) (\(firstPitchStrike.made)/\(firstPitchStrike.total))")
                 if hasLocationAnalytics {
                     summaryRow("Hit Spot %", "\(percent(hitSpots, totalPitches)) (\(hitSpots)/\(totalPitches))")
                 }
@@ -155,8 +168,9 @@ private struct SettingsGameSummarySheetView: View {
                     .font(.subheadline.weight(.semibold))
                 Text("Strike % = Strikes / Total Pitches")
                 Text("Ball % = Balls / Total Pitches")
+                Text("1st Pitch Strike % = Qualified first-pitch strikes / New batter appearances")
                 if hasLocationAnalytics {
-                    Text("Hit Spot % = Location matches / Total Pitches")
+                    Text("Hit Spot % = Location matches / Coach-mode pitches")
                 } else {
                     Text("Location-based metrics hidden for Scout Mode events.")
                 }
@@ -267,6 +281,7 @@ private struct SettingsGameSummarySheetView: View {
                 summaryRow("Total Pitches", "\(totalPitches)")
                 summaryRow("Strike %", "\(percent(strikes, totalPitches)) (\(strikes)/\(totalPitches))")
                 summaryRow("Ball %", "\(percent(balls, totalPitches)) (\(balls)/\(totalPitches))")
+                summaryRow("1st Pitch Strike", "\(firstPitchStrike.total == 0 ? "0%" : percent(firstPitchStrike.made, firstPitchStrike.total)) (\(firstPitchStrike.made)/\(firstPitchStrike.total))")
                 if hasLocationAnalytics {
                     summaryRow("Hit Spot %", "\(percent(hitSpots, totalPitches)) (\(hitSpots)/\(totalPitches))")
                 }
@@ -279,8 +294,9 @@ private struct SettingsGameSummarySheetView: View {
                     .font(.subheadline.weight(.semibold))
                 Text("Strike % = Strikes / Total Pitches")
                 Text("Ball % = Balls / Total Pitches")
+                Text("1st Pitch Strike % = Qualified first-pitch strikes / New batter appearances")
                 if hasLocationAnalytics {
-                    Text("Hit Spot % = Location matches / Total Pitches")
+                    Text("Hit Spot % = Location matches / Coach-mode pitches")
                 } else {
                     Text("Location-based metrics hidden for Scout Mode events.")
                 }
@@ -2346,8 +2362,9 @@ struct PitcherStatsSheetView: View {
                 if let gid = event.gameId, !gid.isEmpty { return gid == lockedGameId }
                 return liveId != nil
             }
-            guard let range = dateRange else { return lockedEvents }
-            return lockedEvents.filter { range.contains($0.timestamp) }
+            let pitcherFiltered = filterEventsForActivePitcher(lockedEvents)
+            guard let range = dateRange else { return pitcherFiltered }
+            return pitcherFiltered.filter { range.contains($0.timestamp) }
         }
 
         let effectiveGameIds = selectedGameIds.isEmpty ? allGameIds : selectedGameIds
@@ -2364,7 +2381,19 @@ struct PitcherStatsSheetView: View {
             return byScopeSelection.filter { range.contains($0.timestamp) }
         }()
 
-        return byDate
+        return filterEventsForActivePitcher(byDate)
+    }
+
+    private func filterEventsForActivePitcher(_ events: [PitchEvent]) -> [PitchEvent] {
+        guard let pitcherId = activePitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !pitcherId.isEmpty else {
+            return events
+        }
+        return events.filter { event in
+            guard let eventPitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !eventPitcherId.isEmpty else {
+                return false
+            }
+            return eventPitcherId == pitcherId
+        }
     }
 
     private enum ResultType {
@@ -2372,10 +2401,14 @@ struct PitcherStatsSheetView: View {
     }
 
     private func resultType(for event: PitchEvent) -> ResultType? {
-        let raw = event.location.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if raw.hasPrefix("strike ") { return .strike }
-        if raw.hasPrefix("ball ") { return .ball }
-        return nil
+        switch inferredPitchResultType(for: event) {
+        case .strike:
+            return .strike
+        case .ball:
+            return .ball
+        case nil:
+            return nil
+        }
     }
 
     private var activeStats: PitcherStatsDoc? {
@@ -2405,6 +2438,10 @@ struct PitcherStatsSheetView: View {
         totalCount == 0 ? 0 : Int(Double(ballCount) / Double(totalCount) * 100)
     }
 
+    private var locationAnalyticsEligibleCount: Int {
+        filteredEvents.filter(\.supportsLocationAnalytics).count
+    }
+
     private var swingingStrikeCount: Int {
         activeStats?.swingingStrikeCount ?? filteredEvents.filter { $0.strikeSwinging && $0.outcome == "K" }.count
     }
@@ -2430,17 +2467,6 @@ struct PitcherStatsSheetView: View {
     }
 
     private var walkCount: Int {
-        if scope == .games {
-            let ids = selectedGameIdsForCounters
-            if !ids.isEmpty {
-                return games
-                    .filter { game in
-                        guard let id = game.id else { return false }
-                        return ids.contains(id)
-                    }
-                    .reduce(0) { $0 + max(0, $1.walks) }
-            }
-        }
         return activeStats?.walkCount ?? filteredEvents.filter {
             guard let outcome = $0.outcome, !outcome.isEmpty else { return false }
             return outcome == "BB" || outcome == "Walk"
@@ -2448,43 +2474,11 @@ struct PitcherStatsSheetView: View {
     }
 
     private var hitCount: Int {
-        if scope == .games {
-            let ids = selectedGameIdsForCounters
-            if !ids.isEmpty {
-                return games
-                    .filter { game in
-                        guard let id = game.id else { return false }
-                        return ids.contains(id)
-                    }
-                    .reduce(0) { $0 + max(0, $1.hits) }
-            }
-        }
-        return filteredEvents.filter { event in
-            let normalizedOutcome = (event.outcome ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-            let hitOutcomes: Set<String> = ["1b", "2b", "3b", "hr", "hit"]
-            if hitOutcomes.contains(normalizedOutcome) {
-                return true
-            }
-            let descriptorTokens: Set<String> = Set(
-                (event.descriptor ?? "")
-                    .lowercased()
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            )
-            return descriptorTokens.contains("hit")
-        }.count
+        return filteredEvents.filter(eventCountsAsHit).count
     }
 
-    private var selectedGameIdsForCounters: Set<String> {
-        if let locked = lockToGameId, !locked.isEmpty {
-            return [locked]
-        }
-        if !selectedGameIds.isEmpty {
-            return selectedGameIds
-        }
-        return Set(games.compactMap { $0.id })
+    private func eventCountsAsHit(_ event: PitchEvent) -> Bool {
+        pitchEventCountsAsHit(event)
     }
 
     private var hitSpotCount: Int {
@@ -2496,7 +2490,15 @@ struct PitcherStatsSheetView: View {
     }
 
     private var hitSpotPercent: Int {
-        totalCount == 0 ? 0 : Int(Double(hitSpotCount) / Double(totalCount) * 100)
+        locationAnalyticsEligibleCount == 0 ? 0 : Int(Double(hitSpotCount) / Double(locationAnalyticsEligibleCount) * 100)
+    }
+
+    private var firstPitchStrike: (made: Int, total: Int) {
+        sharedFirstPitchStrikeMetrics(for: filteredEvents)
+    }
+
+    private var firstPitchStrikePercent: Int {
+        firstPitchStrike.total == 0 ? 0 : Int(Double(firstPitchStrike.made) / Double(firstPitchStrike.total) * 100)
     }
 
     private var hasLocationAnalytics: Bool {
@@ -2548,7 +2550,7 @@ struct PitcherStatsSheetView: View {
 
     private var selectedGameSummaryEvents: [PitchEvent] {
         guard let gameId = selectedSingleGameIdForSummary else { return [] }
-        return combinedGameEvents
+        return filterEventsForActivePitcher(combinedGameEvents)
             .filter { ($0.gameId ?? "") == gameId }
             .sorted { $0.timestamp > $1.timestamp }
     }
@@ -2630,8 +2632,9 @@ struct PitcherStatsSheetView: View {
         var rows: [(String, Int, Int)] = []
         for (pitch, events) in grouped {
             let total = events.count
-            let hitSpots = events.filter { strictIsLocationMatch($0) }.count
-            let hitSpotPct = total == 0 ? 0 : Int(Double(hitSpots) / Double(total) * 100)
+            let eligible = events.filter(\.supportsLocationAnalytics).count
+            let hitSpots = events.filter { $0.supportsLocationAnalytics && strictIsLocationMatch($0) }.count
+            let hitSpotPct = eligible == 0 ? 0 : Int(Double(hitSpots) / Double(eligible) * 100)
             rows.append((pitch, total, hitSpotPct))
         }
         return rows
@@ -3471,6 +3474,7 @@ struct PitcherStatsSheetView: View {
             HStack(spacing: 12) {
                 statCard(title: "Strikes", value: "\(strikeCount)")
                 statCard(title: "Balls", value: "\(ballCount)")
+                statCard(title: "1st Pitch Strike", value: "\(firstPitchStrikePercent)%")
             }
             .padding(.horizontal)
 
@@ -3479,8 +3483,9 @@ struct PitcherStatsSheetView: View {
                     .font(.subheadline.weight(.semibold))
                 Text("Strike % = Strikes (\(strikeCount)) / Total Pitches (\(totalCount))")
                 Text("Ball % = Balls (\(ballCount)) / Total Pitches (\(totalCount))")
+                Text("1st Pitch Strike % = Qualified first-pitch strikes (\(firstPitchStrike.made)) / New batter appearances (\(firstPitchStrike.total))")
                 if hasLocationAnalytics {
-                    Text("Hit-Spot % = Location matches (\(hitSpotCount)) / Total Pitches (\(totalCount))")
+                    Text("Hit-Spot % = Location matches (\(hitSpotCount)) / Coach-mode pitches (\(locationAnalyticsEligibleCount))")
                 } else {
                     Text("Location-based metrics hidden for Scout Mode events.")
                 }
