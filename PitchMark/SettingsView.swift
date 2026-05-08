@@ -1866,7 +1866,7 @@ struct SettingsView: View {
                                     Button {
                                         showGameChooser = true
                                     } label: {
-                                        Image(systemName: "plus.circle.fill")
+                                        Image(systemName: "arrowshape.right.circle.fill")
                                             .font(.subheadline)
                                     }
                                     .buttonStyle(.plain)

@@ -358,6 +358,8 @@ struct PitchTrackerView: View {
     @State private var showCodeShareSheet = false
     @State private var showCodeShareModePicker = false
     @State private var codeShareInitialTab: Int = 0 // 0 = Generate, 1 = Enter
+    @State private var inviteSheetDismissArmed: Bool = false
+    @State private var inviteSheetOpenedAt: Date? = nil
     @State private var showSelectGameFirstAlert = false
     @State private var showCodeShareErrorAlert = false
     @State private var codeShareErrorMessage: String = ""
@@ -527,6 +529,9 @@ struct PitchTrackerView: View {
 
     private var effectiveGameOwnerUserId: String? {
         if let host = activeGameOwnerUserId, !host.isEmpty { return host }
+        // In game mode, unknown owner must not fall back to self; that can
+        // incorrectly flip participant UI/permissions into owner behavior.
+        if isGame { return nil }
         return authManager.user?.uid
     }
 
@@ -680,7 +685,6 @@ struct PitchTrackerView: View {
     }
     private func applyPendingFromLiveData(_ data: [String: Any]) {
         guard isGame else { return }
-        guard !isOwnerForActiveGame else { return } // owner already has full call with codes
 
         guard let pending = data["pending"] as? [String: Any],
               (pending["isActive"] as? Bool) == true,
@@ -751,7 +755,7 @@ struct PitchTrackerView: View {
     /// When the participant saves, they delete `pending` from /liveGames/{liveId},
     /// so the owner should dismiss their CalledPitchView automatically.
     private func syncOwnerCallStateFromLiveData(_ data: [String: Any]) {
-        guard isGame, isOwnerForActiveGame else { return }
+        guard isGame else { return }
 
         let pending = data["pending"] as? [String: Any]
         let isActive = (pending?["isActive"] as? Bool) == true
@@ -878,7 +882,29 @@ struct PitchTrackerView: View {
     }
 
     private func ensureLivePresence(liveId: String) {
-        LiveGameService.shared.heartbeatPresence(liveId: liveId)
+        guard let uid = authManager.user?.uid, !uid.isEmpty else { return }
+        let db = Firestore.firestore()
+        db.collection("liveGames").document(liveId)
+            .collection("participants").document(uid)
+            .setData([
+                "uid": uid,
+                "joinedAt": FieldValue.serverTimestamp(),
+                "lastSeenAt": FieldValue.serverTimestamp()
+            ], merge: true)
+
+        // Only participant devices should claim the live `connection` state.
+        // If owner writes this field too, invite UI can auto-dismiss from a fake connect event.
+        guard !isOwnerForActiveGame else { return }
+        LiveGameService.shared.updateLiveFields(
+            liveId: liveId,
+            fields: [
+                "connection": [
+                    "participantUid": uid,
+                    "connected": true,
+                    "connectedAt": FieldValue.serverTimestamp()
+                ]
+            ]
+        )
     }
 
     private func seedLivePitchEventsOnce(liveId: String) {
@@ -1293,7 +1319,9 @@ struct PitchTrackerView: View {
                 DispatchQueue.main.async {
                     if self.activeLiveId == liveId {
                         self.uiConnected = false
-                        self.endLiveSessionLocally(keepCurrentGame: false)
+                        if self.isOwnerForActiveGame {
+                            self.endLiveSessionLocally(keepCurrentGame: false)
+                        }
                     }
                 }
                 return
@@ -1303,7 +1331,9 @@ struct PitchTrackerView: View {
                 DispatchQueue.main.async {
                     if self.activeLiveId == liveId {
                         self.uiConnected = false
-                        self.endLiveSessionLocally(keepCurrentGame: false)
+                        if self.isOwnerForActiveGame {
+                            self.endLiveSessionLocally(keepCurrentGame: false)
+                        }
                     }
                 }
                 return
@@ -1344,6 +1374,7 @@ struct PitchTrackerView: View {
                     self.livePitcherId = nil
                 }
 
+                let wasConnected = self.uiConnected
                 if let connection = data["connection"] as? [String: Any],
                    let connected = connection["connected"] as? Bool {
                     self.uiConnected = connected
@@ -1351,19 +1382,33 @@ struct PitchTrackerView: View {
                     self.uiConnected = false
                 }
 
-                if !self.uiConnected, !self.isOwnerForActiveGame, self.activeLiveId == liveId {
-                    self.endLiveSessionLocally(keepCurrentGame: false)
-                    return
-                }
+                // Do not forcibly end the participant's live session only because
+                // `connection.connected` is false; heartbeat-based participants listener
+                // is the source of truth for reconnect visibility.
 
-                if self.uiConnected && self.isOwnerForActiveGame {
+                if self.uiConnected && !wasConnected && self.isOwnerForActiveGame {
                     if self.didAutoDismissCodeSheetForLiveId != liveId {
                         self.didAutoDismissCodeSheetForLiveId = liveId
                         if self.activeLiveId == liveId {
                             self.startListeningToLivePitchEvents(liveId: liveId)
                         }
+                    }
+                }
+                if self.inviteSheetDismissArmed,
+                   self.isOwnerForActiveGame,
+                   self.showCodeShareSheet,
+                   self.codeShareInitialTab == 0,
+                   let connection = data["connection"] as? [String: Any],
+                   let participantUid = connection["participantUid"] as? String,
+                   !participantUid.isEmpty,
+                   let connected = connection["connected"] as? Bool,
+                   connected {
+                    let connectedAt = (connection["connectedAt"] as? Timestamp)?.dateValue()
+                    let openedAt = self.inviteSheetOpenedAt ?? .distantPast
+                    if let connectedAt, connectedAt >= openedAt {
                         self.showCodeShareSheet = false
                         self.showCodeShareModePicker = false
+                        self.inviteSheetDismissArmed = false
                     }
                 }
 
@@ -1479,7 +1524,9 @@ struct PitchTrackerView: View {
                 let liveIsActive = (activeLiveId != nil) && (liveStatus == "active") && notExpired
 
                 if liveIsActive {
-                    if self.isOwnerForActiveGame {
+                    let snapshotOwnerUid = (data["ownerUid"] as? String) ?? self.activeGameOwnerUserId
+                    let amOwnerForSnapshot = snapshotOwnerUid == self.authManager.user?.uid
+                    if amOwnerForSnapshot {
                         self.syncOwnerCallStateFromLiveData(data)
                     } else {
                         self.applyPendingFromLiveData(data)
@@ -1534,7 +1581,7 @@ struct PitchTrackerView: View {
 
             DispatchQueue.main.async {
                 let connectedNow = (self.activeLiveId != nil) && self.isGame && otherRecent
-                _ = connectedNow
+                self.uiConnected = connectedNow
             }
         }
     }
@@ -2039,6 +2086,17 @@ struct PitchTrackerView: View {
            hiddenTemplateIdSet.contains(selected.id.uuidString) {
             selectedTemplate = visibleTemplates.first ?? templates.first
         }
+    }
+
+    private func restorePersistedTemplateIfPossible(from loadedTemplates: [PitchTemplate]) -> Bool {
+        let defaults = UserDefaults.standard
+        guard let idString = defaults.string(forKey: DefaultsKeys.lastTemplateId),
+              !hiddenTemplateIdSet.contains(idString),
+              let template = loadedTemplates.first(where: { $0.id.uuidString == idString }) else {
+            return false
+        }
+        applyTemplate(template, source: .live)
+        return true
     }
 
     private func persistBatterSide(_ side: BatterSide) {
@@ -2944,6 +3002,7 @@ struct PitchTrackerView: View {
         }
         var successPercentText: String { "\(Int((successRate * 100).rounded()))%" }
     }
+    private let allHeatmapPitchesKey = "__ALL_PITCHES__"
 
     private enum BatterHeatmapResultFilter: String, CaseIterable, Identifiable {
         case all = "Strikes+Balls"
@@ -3009,14 +3068,31 @@ struct PitchTrackerView: View {
     }
 
     private var selectedBatterHeatmapPitchResolved: BatterHeatmapPitchStat? {
+        if selectedAtBatHeatmapPitch == allHeatmapPitchesKey { return nil }
         if let selected = batterHeatmapPitchStats.first(where: { $0.pitch == selectedAtBatHeatmapPitch }) {
             return selected
         }
         return batterHeatmapPitchStats.first
     }
 
+    private var allBatterHeatmapPitchStat: BatterHeatmapPitchStat {
+        let events = selectedBatterHeatmapEvents.sorted { $0.timestamp < $1.timestamp }
+        let successCount = events.filter { heatmapResultIsInsideStrikeZone($0.location) }.count
+        return BatterHeatmapPitchStat(
+            pitch: allHeatmapPitchesKey,
+            events: events,
+            successCount: successCount,
+            totalCount: events.count
+        )
+    }
+
     private var selectedBatterHeatmapFilteredEvents: [PitchEvent] {
-        let all = selectedBatterHeatmapPitchResolved?.events ?? []
+        let all: [PitchEvent] = {
+            if selectedAtBatHeatmapPitch == allHeatmapPitchesKey {
+                return allBatterHeatmapPitchStat.events
+            }
+            return selectedBatterHeatmapPitchResolved?.events ?? []
+        }()
         switch atBatHeatmapResultFilter {
         case .all:
             return all
@@ -3029,17 +3105,44 @@ struct PitchTrackerView: View {
 
     private var atBatBatterHeatmapSheetView: some View {
         let batterLabel = selectedJerseyNumberDisplay ?? selectedBatterJersey ?? "-"
+        let allStat = allBatterHeatmapPitchStat
         let hasUsableSelectedPitchChip: Bool = {
             guard let pitch = selectedBatterHeatmapPitchResolved?.pitch else { return false }
             return effectivePitchesForStrikeZone.contains(pitch)
+        }()
+        let isAllPitchesSelected = selectedAtBatHeatmapPitch == allHeatmapPitchesKey
+        let selectedHeatmapChipColor: Color = {
+            guard let selectedPitch = selectedBatterHeatmapPitchResolved?.pitch else { return Color.secondary }
+            return colorForPitch(selectedPitch)
         }()
         return NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
+                        let isAllSelected = selectedAtBatHeatmapPitch == allHeatmapPitchesKey
+                        Button {
+                            selectedAtBatHeatmapPitch = allHeatmapPitchesKey
+                        } label: {
+                            Text("All \(allStat.successPercentText)")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(isAllSelected ? .white : .primary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(
+                                    Capsule()
+                                        .fill(isAllSelected ? Color.secondary : Color(.systemGray6))
+                                )
+                                .overlay(
+                                    Capsule()
+                                        .stroke(isAllSelected ? Color.secondary.opacity(0.95) : Color.black.opacity(0.2), lineWidth: isAllSelected ? 2 : 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+
                         ForEach(batterHeatmapPitchStats) { stat in
-                            let isSelected = selectedBatterHeatmapPitchResolved?.pitch == stat.pitch
+                            let isSelected = selectedAtBatHeatmapPitch == stat.pitch
                             let isAvailableInCurrentTemplate = effectivePitchesForStrikeZone.contains(stat.pitch)
+                            let chipColor = colorForPitch(stat.pitch)
                             Button {
                                 selectedAtBatHeatmapPitch = stat.pitch
                             } label: {
@@ -3050,11 +3153,11 @@ struct PitchTrackerView: View {
                                     .padding(.vertical, 7)
                                     .background(
                                         Capsule()
-                                            .fill(isSelected ? Color.accentColor : Color(.systemGray6))
+                                            .fill(isSelected ? chipColor : chipColor.opacity(0.2))
                                     )
                                     .overlay(
                                         Capsule()
-                                            .stroke(isSelected ? Color.accentColor.opacity(0.95) : Color.black.opacity(0.2), lineWidth: isSelected ? 2 : 1)
+                                            .stroke(isSelected ? chipColor.opacity(0.95) : chipColor.opacity(0.5), lineWidth: isSelected ? 2 : 1)
                                     )
                                     .overlay(
                                         Capsule()
@@ -3086,6 +3189,10 @@ struct PitchTrackerView: View {
                 StrikeZoneHeatmapView(
                     events: selectedBatterHeatmapFilteredEvents,
                     interactionHint: hasUsableSelectedPitchChip ? "Tap a location to begin a pitch event" : nil,
+                    resultChipColor: isAllPitchesSelected ? nil : selectedHeatmapChipColor,
+                    resultChipColorResolver: isAllPitchesSelected ? { pitch in
+                        colorForPitch(pitch)
+                    } : nil,
                     onLocationTap: { location, isStrike in
                         guard let selectedPitchStat = selectedBatterHeatmapPitchResolved else { return }
                         beginCallFromHeatmap(
@@ -3109,7 +3216,7 @@ struct PitchTrackerView: View {
             }
             .onAppear {
                 if selectedAtBatHeatmapPitch.isEmpty {
-                    selectedAtBatHeatmapPitch = batterHeatmapPitchStats.first?.pitch ?? ""
+                    selectedAtBatHeatmapPitch = allHeatmapPitchesKey
                 }
                 atBatHeatmapResultFilter = .all
             }
@@ -4162,26 +4269,22 @@ struct PitchTrackerView: View {
                 Text("Game")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button(action: {}) {
-                    HStack(spacing: 6) {
-                        Text(opponentName ?? "Game")
-                            .font(.subheadline)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
+                Text(opponentName ?? "Game")
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .foregroundStyle(.white)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
+                    .background(
+                        Capsule()
+                            .fill(Color.black.opacity(0.8))
+                    )
                     .overlay(
                         Capsule()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                }
-                .buttonStyle(.plain)
-                .disabled(true)
-                .opacity(0.7)
+                    .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 2)
                 }
                 if isGame && !isOwnerForActiveGame && activeLiveId != nil {
                     Text("Pitch Events: Assistant")
@@ -4343,6 +4446,8 @@ struct PitchTrackerView: View {
                 ) {
                     Button("Create Invite Link") {
                         codeShareInitialTab = 0
+                        inviteSheetOpenedAt = Date()
+                        inviteSheetDismissArmed = true
                         showCodeShareSheet = true
                     }
 
@@ -4716,6 +4821,10 @@ struct PitchTrackerView: View {
                 Capsule()
                     .fill(Color(.systemGray6))
             )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.25), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
     }
@@ -4738,6 +4847,14 @@ struct PitchTrackerView: View {
                 }
             }
             .frame(width: 56, height: 24)
+            .background(
+                Capsule()
+                    .fill(Color(.systemGray6))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.25), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
     }
@@ -5496,10 +5613,17 @@ struct PitchTrackerView: View {
         @Binding var showResultConfirmation: Bool
         var showConfirmSheet: Binding<Bool>
         let onResultLocationPicked: (String) -> Void
+        let onCatcherLocationTap: () -> Void
         let isEncryptedMode: Bool
         let colorRefreshToken: UUID
         let template: PitchTemplate?
         let canInitiateCall: Bool
+        @State private var resultGlowAngle: Double = 0
+        @State private var resultGlowPulse: Bool = false
+
+        private var highlightForResultLocationPick: Bool {
+            isRecordingResult && calledPitch != nil && (pendingResultLabel == nil || !canInitiateCall)
+        }
 
         var body: some View {
             VStack {
@@ -5527,6 +5651,7 @@ struct PitchTrackerView: View {
                     showResultConfirmation: $showResultConfirmation,
                     showConfirmSheet: showConfirmSheet,
                     onResultLocationPicked: onResultLocationPicked,
+                    onCatcherLocationTap: onCatcherLocationTap,
                     isEncryptedMode: isEncryptedMode,
                     template: template,
                     canInitiateCall: canInitiateCall
@@ -5542,7 +5667,39 @@ struct PitchTrackerView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(
+                        AngularGradient(
+                            gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
+                            center: .center,
+                            angle: .degrees(resultGlowAngle)
+                        ),
+                        lineWidth: 2
+                    )
+                    .blur(radius: 2)
+                    .opacity(highlightForResultLocationPick ? 0.9 : 0)
+            )
+            .shadow(
+                color: Color.cyan.opacity(highlightForResultLocationPick ? (resultGlowPulse ? 0.6 : 0.3) : 0),
+                radius: highlightForResultLocationPick ? (resultGlowPulse ? 10 : 4) : 6,
+                x: 0,
+                y: 6
+            )
             .shadow(color: .black.opacity(0.7), radius: 6, x: 0, y: 6)
+            .onChange(of: highlightForResultLocationPick) { _, isOn in
+                guard isOn else {
+                    resultGlowPulse = false
+                    resultGlowAngle = 0
+                    return
+                }
+                withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+                    resultGlowAngle = 360
+                }
+                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                    resultGlowPulse = true
+                }
+            }
         }
     }
     
@@ -5577,6 +5734,9 @@ struct PitchTrackerView: View {
                     if sessionManager.currentMode == .game, !isOwnerForActiveGame {
                         writeResultSelection(label: pickedLabel)
                     }
+                },
+                onCatcherLocationTap: {
+                    beginCatcherCoachCall()
                 },
                 isEncryptedMode: {
                     if let t = selectedTemplate {
@@ -6808,7 +6968,12 @@ struct PitchTrackerView: View {
             if templates.isEmpty {
                 authManager.loadTemplates { loaded in
                     self.templates = loaded
-                    if self.selectedTemplate == nil { self.selectedTemplate = loaded.first }
+                    if self.selectedTemplate == nil {
+                        let restored = self.restorePersistedTemplateIfPossible(from: loaded)
+                        if !restored {
+                            self.selectedTemplate = self.visibleTemplates.first ?? loaded.first
+                        }
+                    }
                 }
             }
             if games.isEmpty {
@@ -6896,7 +7061,10 @@ struct PitchTrackerView: View {
             print("✅ Loaded templates:", loadedTemplates.count)
             self.templates = loadedTemplates
             if self.selectedTemplate == nil {
-                self.selectedTemplate = self.visibleTemplates.first ?? loadedTemplates.first
+                let restored = self.restorePersistedTemplateIfPossible(from: loadedTemplates)
+                if !restored {
+                    self.selectedTemplate = self.visibleTemplates.first ?? loadedTemplates.first
+                }
             } else if let current = self.selectedTemplate,
                       self.hiddenTemplateIdSet.contains(current.id.uuidString) {
                 self.selectedTemplate = self.visibleTemplates.first ?? loadedTemplates.first
@@ -7825,13 +7993,85 @@ struct PitchTrackerView: View {
     }
 
     private func resumeLiveSessionIfNeeded() {
+        // Participant: always verify liveId against owner's active session code on resume.
+        // This fixes stale liveId cases that can delay event propagation after wake.
+        if isGame && !isOwnerForActiveGame {
+            recoverLiveSessionFromOwnerGameIfNeeded()
+        }
+        if activeLiveId == nil || activeLiveId?.isEmpty == true {
+            if let persistedLiveId = UserDefaults.standard.string(forKey: "activeLiveId"), !persistedLiveId.isEmpty {
+                activeLiveId = persistedLiveId
+            } else {
+                recoverLiveSessionFromOwnerGameIfNeeded()
+                return
+            }
+        }
         guard let liveId = activeLiveId, !liveId.isEmpty else { return }
         print("🔌 Scene active → resuming live presence")
         startListeningToActiveGame()
+        startListeningToLiveGame(liveId: liveId)
         startListeningToLivePitchEvents(liveId: liveId)
         startListeningToLiveParticipants(liveId: liveId)
         startLivePresenceHeartbeat(liveId: liveId)
         ensureLivePresence(liveId: liveId)
+    }
+
+    private func recoverLiveSessionFromOwnerGameIfNeeded() {
+        guard isGame else { return }
+        guard !isOwnerForActiveGame else { return }
+
+        let defaults = UserDefaults.standard
+        let ownerUid = activeGameOwnerUserId ?? defaults.string(forKey: DefaultsKeys.activeGameOwnerUserId)
+        let gameId = selectedGameId ?? defaults.string(forKey: DefaultsKeys.activeGameId)
+        guard let ownerUid, !ownerUid.isEmpty, let gameId, !gameId.isEmpty else { return }
+
+        Firestore.firestore()
+            .collection("users").document(ownerUid)
+            .collection("games").document(gameId)
+            .getDocument { snap, err in
+                if let err {
+                    print("❌ recover live: owner game lookup failed:", err.localizedDescription)
+                    return
+                }
+                guard let data = snap?.data(),
+                      let code = data["activeSessionCode"] as? String,
+                      !code.isEmpty else {
+                    return
+                }
+
+                Firestore.firestore().collection("joinCodes").document(code).getDocument { codeSnap, codeErr in
+                    if let codeErr {
+                        print("❌ recover live: joinCode lookup failed:", codeErr.localizedDescription)
+                        return
+                    }
+                    guard let codeData = codeSnap?.data(),
+                          let liveId = codeData["liveId"] as? String,
+                          !liveId.isEmpty else {
+                        return
+                    }
+
+                    DispatchQueue.main.async {
+                        self.activeGameOwnerUserId = ownerUid
+                        self.selectedGameId = gameId
+
+                        let needsSwitch = self.activeLiveId != liveId
+                        if needsSwitch {
+                            print("🔁 recover live: switching to owner liveId=\(liveId)")
+                            self.activeLiveId = liveId
+                            defaults.set(liveId, forKey: "activeLiveId")
+                            self.updateActiveSessionLiveId(liveId)
+                            self.startListeningToLiveGame(liveId: liveId)
+                        } else {
+                            print("🔁 recover live: liveId already current, refreshing listeners")
+                        }
+
+                        self.startListeningToLivePitchEvents(liveId: liveId)
+                        self.startListeningToLiveParticipants(liveId: liveId)
+                        self.startLivePresenceHeartbeat(liveId: liveId)
+                        self.ensureLivePresence(liveId: liveId)
+                    }
+                }
+            }
     }
 
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
@@ -10524,6 +10764,7 @@ struct GameSelectionSheet: View {
     @State private var newGameTrackingMode: TrackingMode = .coach
     
     @State private var pendingDeleteGameId: String? = nil
+    @State private var pendingDeleteGameName: String = ""
     @State private var showDeleteGameConfirm: Bool = false
     @State private var showFinalDeleteGameConfirm: Bool = false
 
@@ -10570,16 +10811,24 @@ struct GameSelectionSheet: View {
                                     }
                                 }
                                 .buttonStyle(.plain)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    if let id = game.id {
+                                
+                                Spacer(minLength: 12)
+                                
+                                Menu {
+                                    Button(role: .destructive) {
+                                        guard let id = game.id, !id.isEmpty else { return }
                                         pendingDeleteGameId = id
+                                        pendingDeleteGameName = game.opponent
                                         showDeleteGameConfirm = true
+                                    } label: {
+                                        Label("Delete Game…", systemImage: "trash")
                                     }
                                 } label: {
-                                    Label("Delete", systemImage: "trash")
+                                    Image(systemName: "ellipsis.circle")
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -10625,9 +10874,14 @@ struct GameSelectionSheet: View {
             }
             Button("Cancel", role: .cancel) {
                 pendingDeleteGameId = nil
+                pendingDeleteGameName = ""
             }
         } message: {
-            Text("This will remove the game and its lineup.")
+            if pendingDeleteGameName.isEmpty {
+                Text("This will remove the game and its lineup.")
+            } else {
+                Text("This will remove “\(pendingDeleteGameName)” and its lineup.")
+            }
         }
         .confirmationDialog(
             "Delete Game and Stats?",
@@ -10647,12 +10901,18 @@ struct GameSelectionSheet: View {
                     NotificationCenter.default.post(name: .gameOrSessionDeleted, object: nil, userInfo: ["type": "game", "gameId": id])
                 }
                 pendingDeleteGameId = nil
+                pendingDeleteGameName = ""
             }
             Button("Cancel", role: .cancel) {
                 pendingDeleteGameId = nil
+                pendingDeleteGameName = ""
             }
         } message: {
-            Text("This will permanently delete the game, all pitch events for that game, and pitcher stats linked to it. This cannot be undone.")
+            if pendingDeleteGameName.isEmpty {
+                Text("This will permanently delete the game, all pitch events for that game, and pitcher stats linked to it. This cannot be undone.")
+            } else {
+                Text("This will permanently delete “\(pendingDeleteGameName)”, all pitch events for that game, and pitcher stats linked to it. This cannot be undone.")
+            }
         }
         .overlay(
             Group {

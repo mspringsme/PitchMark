@@ -32,6 +32,7 @@ private struct PitchButtonView: View {
     let showResultConfirmation: Binding<Bool>
     let showConfirmSheet: Binding<Bool>
     let onResultLocationPicked: (String) -> Void
+    let onCatcherLocationTap: () -> Void
     let isEncryptedMode: Bool
     let template: PitchTemplate?
     let canInitiateCall: Bool
@@ -109,7 +110,10 @@ private struct PitchButtonView: View {
                 Group {
                     if canInitiateCall {
                         Button(action: {
-                            guard !selectedPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                            guard !selectedPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                                onCatcherLocationTap()
+                                return
+                            }
 
                             let selected = selectedPitch
                             let assignedCodes = pitchCodeAssignments
@@ -240,6 +244,7 @@ func pitchButton(
     showResultConfirmation: Binding<Bool>,
     showConfirmSheet: Binding<Bool>,
     onResultLocationPicked: @escaping (String) -> Void,
+    onCatcherLocationTap: @escaping () -> Void,
     isEncryptedMode: Bool,
     template: PitchTemplate?,
     canInitiateCall: Bool
@@ -270,6 +275,7 @@ func pitchButton(
         showResultConfirmation: showResultConfirmation,
         showConfirmSheet: showConfirmSheet,
         onResultLocationPicked: onResultLocationPicked,
+        onCatcherLocationTap: onCatcherLocationTap,
         isEncryptedMode: isEncryptedMode,
         template: template,
         canInitiateCall: canInitiateCall

@@ -4,6 +4,8 @@ struct StrikeZoneHeatmapView: View {
     let events: [PitchEvent]
     var showLegend: Bool = true
     var interactionHint: String? = nil
+    var resultChipColor: Color? = nil
+    var resultChipColorResolver: ((String) -> Color)? = nil
     var onLocationTap: ((String, Bool) -> Void)? = nil
 
     private enum Slot: Hashable {
@@ -28,19 +30,111 @@ struct StrikeZoneHeatmapView: View {
         let point: CGPoint
         let label: String?
         let matched: Bool
+        let tintColor: Color?
     }
 
     private struct ResultBucketKey: Hashable {
         let slot: Slot
         let label: String
         let matched: Bool
+        let pitch: String
     }
 
     private struct ResultBucket {
         let slot: Slot
         let label: String
         let matched: Bool
+        let pitch: String
         var count: Int
+    }
+
+    private func markerCollisionRadius(for marker: Marker) -> CGFloat {
+        switch marker.kind {
+        case .redCalled:
+            // Red called marker image footprint is larger than a plain dot.
+            return 13
+        case .resultLabel:
+            // Approximate capsule footprint for small labels like "SS", "B?", "Fx2".
+            let labelLength = CGFloat((marker.label ?? "").count)
+            return max(11, min(18, 7 + labelLength * 1.3))
+        }
+    }
+
+    private func spreadOverlappingMarkers(_ markers: [Marker]) -> [Marker] {
+        guard markers.count > 1 else { return markers }
+
+        var adjusted = markers
+        let iterations = 12
+        let minSeparationPadding: CGFloat = 2.5
+
+        for _ in 0..<iterations {
+            var moved = false
+
+            for i in 0..<adjusted.count {
+                for j in (i + 1)..<adjusted.count {
+                    let a = adjusted[i]
+                    let b = adjusted[j]
+                    let dx = b.point.x - a.point.x
+                    let dy = b.point.y - a.point.y
+                    let rawDistance = sqrt(dx * dx + dy * dy)
+                    let distance = max(rawDistance, 0.001)
+                    let minDistance = markerCollisionRadius(for: a) + markerCollisionRadius(for: b) + minSeparationPadding
+
+                    guard distance < minDistance else { continue }
+
+                    let overlap = (minDistance - distance) / 2.0
+                    let ux: CGFloat
+                    let uy: CGFloat
+                    if rawDistance < 0.001 {
+                        // Deterministic fallback direction for coincident markers.
+                        let seed = abs((a.id + b.id).hashValue % 360)
+                        let angle = CGFloat(seed) * .pi / 180.0
+                        ux = cos(angle)
+                        uy = sin(angle)
+                    } else {
+                        ux = dx / distance
+                        uy = dy / distance
+                    }
+
+                    let newAPoint: CGPoint
+                    let newBPoint: CGPoint
+
+                    // Prefer to preserve called-marker anchor and move labels away from it.
+                    if a.kind == .redCalled && b.kind == .resultLabel {
+                        newAPoint = a.point
+                        newBPoint = CGPoint(x: b.point.x + ux * (overlap * 2.0), y: b.point.y + uy * (overlap * 2.0))
+                    } else if a.kind == .resultLabel && b.kind == .redCalled {
+                        newAPoint = CGPoint(x: a.point.x - ux * (overlap * 2.0), y: a.point.y - uy * (overlap * 2.0))
+                        newBPoint = b.point
+                    } else {
+                        newAPoint = CGPoint(x: a.point.x - ux * overlap, y: a.point.y - uy * overlap)
+                        newBPoint = CGPoint(x: b.point.x + ux * overlap, y: b.point.y + uy * overlap)
+                    }
+
+                    adjusted[i] = Marker(
+                        id: a.id,
+                        kind: a.kind,
+                        point: newAPoint,
+                        label: a.label,
+                        matched: a.matched,
+                        tintColor: a.tintColor
+                    )
+                    adjusted[j] = Marker(
+                        id: b.id,
+                        kind: b.kind,
+                        point: newBPoint,
+                        label: b.label,
+                        matched: b.matched,
+                        tintColor: b.tintColor
+                    )
+                    moved = true
+                }
+            }
+
+            if !moved { break }
+        }
+
+        return adjusted
     }
 
     private func parseSlot(for rawLocation: String, preferStrike: Bool? = nil) -> Slot? {
@@ -167,18 +261,19 @@ struct StrikeZoneHeatmapView: View {
             return CGPoint(x: base.x + offset.width, y: base.y + offset.height)
         }
 
-        func addResultBucket(slot: Slot, label: String, matched: Bool) {
-            let key = ResultBucketKey(slot: slot, label: label, matched: matched)
+        func addResultBucket(slot: Slot, label: String, matched: Bool, pitch: String) {
+            let key = ResultBucketKey(slot: slot, label: label, matched: matched, pitch: pitch)
             if var existing = resultBuckets[key] {
                 existing.count += 1
                 resultBuckets[key] = existing
             } else {
-                resultBuckets[key] = ResultBucket(slot: slot, label: label, matched: matched, count: 1)
+                resultBuckets[key] = ResultBucket(slot: slot, label: label, matched: matched, pitch: pitch, count: 1)
             }
         }
 
         for event in events {
             let eventId = event.identity
+            let eventPitch = event.pitch.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let calledSlot = parseSlot(
                 for: event.calledPitch?.location ?? "",
                 preferStrike: event.calledPitch?.isStrike
@@ -187,13 +282,13 @@ struct StrikeZoneHeatmapView: View {
             let label = designation(for: event, resultSlot: resultSlot)
 
             if calledSlot == resultSlot {
-                addResultBucket(slot: resultSlot, label: label, matched: true)
+                addResultBucket(slot: resultSlot, label: label, matched: true, pitch: eventPitch)
             } else {
                 let calledPoint = placedPoint(for: calledSlot, nextOffsetIndex: &nextCalledOffsetIndex)
                 let resultPoint = placedPoint(for: resultSlot, nextOffsetIndex: &nextLineResultOffsetIndex)
                 lines.append(MissLine(id: "\(eventId)-line", from: calledPoint, to: resultPoint))
-                markers.append(Marker(id: "\(eventId)-called", kind: .redCalled, point: calledPoint, label: nil, matched: false))
-                addResultBucket(slot: resultSlot, label: label, matched: false)
+                markers.append(Marker(id: "\(eventId)-called", kind: .redCalled, point: calledPoint, label: nil, matched: false, tintColor: nil))
+                addResultBucket(slot: resultSlot, label: label, matched: false, pitch: eventPitch)
             }
         }
 
@@ -248,17 +343,19 @@ struct StrikeZoneHeatmapView: View {
                 }
                 markers.append(
                     Marker(
-                        id: "\(bucket.label)-\(bucket.matched)-\(String(describing: slot))",
+                        id: "\(bucket.pitch)-\(bucket.label)-\(bucket.matched)-\(String(describing: slot))",
                         kind: .resultLabel,
                         point: CGPoint(x: base.x + offset.width, y: base.y + offset.height),
                         label: displayLabel,
-                        matched: bucket.matched
+                        matched: bucket.matched,
+                        tintColor: resultChipColorResolver?(bucket.pitch)
                     )
                 )
             }
         }
 
-        return (markers, lines)
+        let spreadMarkers = spreadOverlappingMarkers(markers)
+        return (spreadMarkers, lines)
     }
 
     private func designation(for event: PitchEvent, resultSlot: Slot) -> String {
@@ -435,6 +532,21 @@ struct StrikeZoneHeatmapView: View {
                                 .position(marker.point)
                                 .allowsHitTesting(false)
                         case .resultLabel:
+                            let baseTint = marker.tintColor ?? resultChipColor
+                            let fillColor: Color = {
+                                if let tint = baseTint {
+                                    return marker.matched ? tint.opacity(0.22) : tint.opacity(0.10)
+                                }
+                                return marker.matched
+                                    ? Color(red: 0.88, green: 0.96, blue: 0.89)
+                                    : Color(.systemBackground)
+                            }()
+                            let strokeColor: Color = {
+                                if let tint = baseTint {
+                                    return tint.opacity(marker.matched ? 0.8 : 0.5)
+                                }
+                                return marker.matched ? Color.green.opacity(0.55) : Color.red.opacity(0.5)
+                            }()
                             Text(marker.label ?? "")
                                 .font(.system(size: 10, weight: .bold))
                                 .foregroundStyle(.primary)
@@ -444,15 +556,11 @@ struct StrikeZoneHeatmapView: View {
                                 .minimumScaleFactor(0.65)
                                 .background(
                                     Capsule()
-                                        .fill(
-                                            marker.matched
-                                            ? Color(red: 0.88, green: 0.96, blue: 0.89)
-                                            : Color(.systemBackground)
-                                        )
+                                        .fill(fillColor)
                                 )
                                 .overlay(
                                     Capsule()
-                                        .stroke(marker.matched ? Color.green.opacity(0.55) : Color.red.opacity(0.5), lineWidth: 1)
+                                        .stroke(strokeColor, lineWidth: 1)
                                 )
                                 .position(marker.point)
                                 .zIndex(20)
