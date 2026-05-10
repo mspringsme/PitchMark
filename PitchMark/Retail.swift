@@ -7,6 +7,8 @@
 import SwiftUI
 import UIKit
 import StoreKit
+import Combine
+import FirebaseFunctions
 
 struct StorefrontView: View {
     @EnvironmentObject var subscriptionManager: SubscriptionManager
@@ -174,16 +176,17 @@ private struct StoreTemplate: Identifiable, Hashable {
     let icon: String
     let price: Decimal
     let kind: StoreItemKind
+    let retailProductId: String
 }
 
 private let gridKeyTemplates: [StoreTemplate] = [
-    .init(name: "5 x 3 in.", subtitle: "4 inserts; 2 thicknesses (8 cards), Waterproof", icon: "squareshape.split.3x3", price: 12, kind: .gridKey),
-    .init(name: "3.5 x 2.75 in.", subtitle: "4 inserts; 2 thicknesses (8 cards)", icon: "squareshape.split.3x3", price: 12, kind: .gridKey),
-    .init(name: "Custom", subtitle: "4 inserts; 2 thicknesses (8 cards)", icon: "squareshape.split.3x3", price: 14, kind: .gridKey)
+    .init(name: "5 x 3 in.", subtitle: "4 inserts; 2 thicknesses (8 cards), Waterproof", icon: "squareshape.split.3x3", price: 12, kind: .gridKey, retailProductId: "grid_5x3"),
+    .init(name: "3.5 x 2.75 in.", subtitle: "4 inserts; 2 thicknesses (8 cards)", icon: "squareshape.split.3x3", price: 12, kind: .gridKey, retailProductId: "grid_3_5x2_75"),
+    .init(name: "Custom", subtitle: "4 inserts; 2 thicknesses (8 cards)", icon: "squareshape.split.3x3", price: 14, kind: .gridKey, retailProductId: "grid_custom")
 ]
 
 private let printableSheetTemplates: [StoreTemplate] = [
-    .init(name: "Printable Sheet (8.5 x 11)", subtitle: "Strikes on one side, Balls on the other (2 copies)", icon: "doc.plaintext", price: 12, kind: .printableSheet)
+    .init(name: "Printable Sheet (8.5 x 11)", subtitle: "Strikes on one side, Balls on the other (2 copies)", icon: "doc.plaintext", price: 12, kind: .printableSheet, retailProductId: "sheet_8_5x11")
 ]
 
 // MARK: - Detail View
@@ -193,6 +196,8 @@ private struct TemplateDetailView: View {
     
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
+    @Environment(\.openURL) private var openURL
+    @StateObject private var stripeCheckoutManager = StripeCheckoutManager()
     @State private var availablePitchTemplates: [PitchTemplate] = []
     @State private var selectedTemplate: PitchTemplate? = nil
     @State private var showTemplatePicker: Bool = false
@@ -500,15 +505,36 @@ private struct TemplateDetailView: View {
                 .buttonStyle(.bordered)
 
                 Button {
-                    // Ensure a PitchTemplate is selected before purchase
-                    guard selectedTemplate != nil else { return }
-                    // TODO: Hook up to StoreKit purchase using selectedTemplate info
-                    // e.g., await purchase(templateId: selectedTemplate.id.uuidString)
+                    guard let current = selectedTemplate else { return }
+                    Task {
+                        await stripeCheckoutManager.beginCheckout(
+                            retailProductId: template.retailProductId,
+                            kind: template.kind,
+                            selectedTemplate: current,
+                            storeTemplate: template
+                        )
+                        if let checkoutURL = stripeCheckoutManager.checkoutURL {
+                            openURL(checkoutURL)
+                        }
+                    }
                 } label: {
                     Label("Buy for \(template.price, format: .currency(code: "USD"))", systemImage: "cart")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(selectedTemplate == nil || stripeCheckoutManager.isLoading)
+
+                if stripeCheckoutManager.isLoading {
+                    ProgressView("Preparing checkout…")
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                if let checkoutError = stripeCheckoutManager.lastErrorMessage {
+                    Text(checkoutError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             }
             .padding()
             .padding(.top, 16)
@@ -810,6 +836,8 @@ private struct PrintableSheetDetailView: View {
     let template: StoreTemplate
 
     @EnvironmentObject var authManager: AuthManager
+    @Environment(\.openURL) private var openURL
+    @StateObject private var stripeCheckoutManager = StripeCheckoutManager()
     @State private var availablePitchTemplates: [PitchTemplate] = []
     @State private var selectedTemplate: PitchTemplate? = nil
     @State private var showTemplatePicker = false
@@ -945,13 +973,36 @@ private struct PrintableSheetDetailView: View {
                 .buttonStyle(.bordered)
 
                 Button {
-                    guard selectedTemplate != nil else { return }
-                    // TODO: Hook up to StoreKit purchase for printable sheet
+                    guard let current = selectedTemplate else { return }
+                    Task {
+                        await stripeCheckoutManager.beginCheckout(
+                            retailProductId: template.retailProductId,
+                            kind: template.kind,
+                            selectedTemplate: current,
+                            storeTemplate: template
+                        )
+                        if let checkoutURL = stripeCheckoutManager.checkoutURL {
+                            openURL(checkoutURL)
+                        }
+                    }
                 } label: {
                     Label("Buy for \(template.price, format: .currency(code: "USD"))", systemImage: "cart")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(selectedTemplate == nil || stripeCheckoutManager.isLoading)
+
+                if stripeCheckoutManager.isLoading {
+                    ProgressView("Preparing checkout…")
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                if let checkoutError = stripeCheckoutManager.lastErrorMessage {
+                    Text(checkoutError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             }
             .padding()
             .padding(.top, 16)
@@ -995,6 +1046,54 @@ private struct PrintableSheetDetailView: View {
             }
             .presentationDetents([.medium])
         }
+    }
+}
+
+@MainActor
+private final class StripeCheckoutManager: ObservableObject {
+    @Published private(set) var isLoading = false
+    @Published private(set) var lastErrorMessage: String? = nil
+    @Published private(set) var checkoutURL: URL? = nil
+
+    func beginCheckout(
+        retailProductId: String,
+        kind: StoreItemKind,
+        selectedTemplate: PitchTemplate,
+        storeTemplate: StoreTemplate
+    ) async {
+        guard !isLoading else { return }
+        isLoading = true
+        lastErrorMessage = nil
+        checkoutURL = nil
+
+        let payload: [String: Any] = [
+            "retailProductId": retailProductId,
+            "itemKind": kind == .gridKey ? "gridKey" : "printableSheet",
+            "templateId": selectedTemplate.id.uuidString,
+            "templateName": selectedTemplate.name,
+            "storeTemplateName": storeTemplate.name
+        ]
+
+        do {
+            let callable = Functions.functions().httpsCallable("createRetailCheckoutSession")
+            let result = try await callable.call(payload)
+
+            guard
+                let data = result.data as? [String: Any],
+                let urlString = data["checkoutUrl"] as? String,
+                let url = URL(string: urlString)
+            else {
+                lastErrorMessage = "Checkout link was not returned."
+                isLoading = false
+                return
+            }
+
+            checkoutURL = url
+        } catch {
+            lastErrorMessage = "Unable to start checkout. \(error.localizedDescription)"
+        }
+
+        isLoading = false
     }
 }
 

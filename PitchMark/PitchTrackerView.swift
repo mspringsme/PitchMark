@@ -242,6 +242,8 @@ struct PitchTrackerView: View {
     @State private var selectedAtBatHeatmapPitch: String = ""
     @State private var atBatHeatmapResultFilter: BatterHeatmapResultFilter = .all
     @State private var pendingHeatmapCall: (pitch: String, location: String, isStrike: Bool)? = nil
+    @State private var pendingAllPitchesHeatmapTap: (location: String, isStrike: Bool)? = nil
+    @State private var showAllPitchesHeatmapPitchPicker = false
     @State private var showHeatmapUnavailablePitchAlert = false
     @State private var heatmapUnavailablePitchMessage = ""
     @State private var scoutObservedResult: ScoutObservedResult? = nil
@@ -3194,6 +3196,11 @@ struct PitchTrackerView: View {
                         colorForPitch(pitch)
                     } : nil,
                     onLocationTap: { location, isStrike in
+                        if selectedAtBatHeatmapPitch == allHeatmapPitchesKey {
+                            pendingAllPitchesHeatmapTap = (location: location, isStrike: isStrike)
+                            showAllPitchesHeatmapPitchPicker = true
+                            return
+                        }
                         guard let selectedPitchStat = selectedBatterHeatmapPitchResolved else { return }
                         beginCallFromHeatmap(
                             pitch: selectedPitchStat.pitch,
@@ -3219,6 +3226,24 @@ struct PitchTrackerView: View {
                     selectedAtBatHeatmapPitch = allHeatmapPitchesKey
                 }
                 atBatHeatmapResultFilter = .all
+            }
+            .confirmationDialog("Choose Pitch Type", isPresented: $showAllPitchesHeatmapPitchPicker, titleVisibility: .visible) {
+                ForEach(batterHeatmapPitchStats) { stat in
+                    Button(stat.pitch) {
+                        guard let pendingTap = pendingAllPitchesHeatmapTap else { return }
+                        beginCallFromHeatmap(
+                            pitch: stat.pitch,
+                            location: pendingTap.location,
+                            isStrike: pendingTap.isStrike
+                        )
+                        pendingAllPitchesHeatmapTap = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingAllPitchesHeatmapTap = nil
+                }
+            } message: {
+                Text("Select the pitch type for this location.")
             }
         }
     }
