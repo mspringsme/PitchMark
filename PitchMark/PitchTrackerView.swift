@@ -6495,6 +6495,7 @@ struct PitchTrackerView: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .onAppear {
+            AppDelegate.setOrientationLock(.portrait)
             if isPad && !isDisplayOnlyMode {
                 forceOrientation(.portrait)
             }
@@ -6543,6 +6544,7 @@ struct PitchTrackerView: View {
         }
         )
         .onAppear {
+            AppDelegate.setOrientationLock(.landscapeRight)
             forceOrientation(.landscapeRight)
             startDisplaySessionListener()
             startListeningToDisplayState()
@@ -6550,6 +6552,7 @@ struct PitchTrackerView: View {
         }
         .onDisappear {
             stopDisplayOnlyListeners()
+            AppDelegate.setOrientationLock(.portrait)
             forceOrientation(.portrait)
         }
     }
@@ -8256,6 +8259,7 @@ struct PitchTrackerView: View {
                 }
             }
             .onChange(of: isDisplayOnlyMode) { _, newValue in
+                AppDelegate.setOrientationLock(newValue ? .landscapeRight : .portrait)
                 forceOrientation(newValue ? .landscapeRight : .portrait)
                 if isPad && newValue {
                     NotificationCenter.default.post(name: .displayOnlyPresentRequested, object: nil)

@@ -59,6 +59,9 @@ struct RootView: View {
             handleInviteLink(url)
         }
         .onChange(of: authManager.isSignedIn) { _, isSignedIn in
+            Task {
+                await subscriptionManager.refreshForAuthStateChange(isSignedIn: isSignedIn)
+            }
             if isSignedIn {
                 LiveGameService.shared.cleanupExpiredJoinArtifacts()
                 if let token = UserDefaults.standard.string(forKey: "pendingInviteToken"), !token.isEmpty {
@@ -162,9 +165,16 @@ struct SplashView: View {
         ZStack {
             Color(.systemBackground).ignoresSafeArea()
             VStack(spacing: 16) {
-                Text("PitchMark")
-                    .font(.largeTitle).bold()
-                    .foregroundColor(.blue)
+//                Text("PitchMark")
+//                    .font(.largeTitle).bold()
+//                    .foregroundColor(.blue)
+
+                Image("SoftballBaseballWtitle4")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 200, height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                
                 ProgressView()
                     .progressViewStyle(.circular)
             }
@@ -173,6 +183,8 @@ struct SplashView: View {
 }
 
 class AppDelegate: NSObject, UIApplicationDelegate {
+    static var orientationLock: UIInterfaceOrientationMask = .portrait
+
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
 
@@ -200,6 +212,23 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         #endif
 
         return true
+    }
+
+    func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        Self.orientationLock
+    }
+
+    static func setOrientationLock(_ lock: UIInterfaceOrientationMask) {
+        orientationLock = lock
+        DispatchQueue.main.async {
+            UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .forEach { scene in
+                    scene.windows.first(where: { $0.isKeyWindow })?
+                        .rootViewController?
+                        .setNeedsUpdateOfSupportedInterfaceOrientations()
+                }
+        }
     }
 }
 

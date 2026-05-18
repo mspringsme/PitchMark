@@ -529,6 +529,9 @@ struct PitcherStatsDoc: Codable {
 }
 
 struct SettingsView: View {
+    private let privacyPolicyURL = URL(string: "https://pitchmark.app/privacy")
+    private let termsOfUseURL = URL(string: "https://pitchmark.app/terms")
+
     @Binding var templates: [PitchTemplate]
     @Binding var games: [Game]
     @Binding var pitchers: [Pitcher]
@@ -1606,9 +1609,61 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            if subscriptionManager.isSandboxTestingOverrideAvailable {
+                Divider()
+                    .padding(.horizontal)
+
+                Toggle(isOn: Binding(
+                    get: { subscriptionManager.forcePaywallForSandboxTesting },
+                    set: { subscriptionManager.setForcePaywallForSandboxTesting($0) }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Subscription Test Mode")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Show the paywall even when this sandbox receipt is already Pro.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Debug Subscription State")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Override Pro state for UI testing without changing sandbox account history.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker(
+                        "Debug Subscription State",
+                        selection: Binding(
+                            get: { subscriptionManager.debugSubscriptionOverride },
+                            set: { subscriptionManager.setDebugSubscriptionOverride($0) }
+                        )
+                    ) {
+                        ForEach(SubscriptionManager.DebugSubscriptionOverride.allCases) { option in
+                            Text(option.label).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                .padding(.horizontal)
+
+                Button {
+                    Task {
+                        await subscriptionManager.refresh(reason: "settings-sandbox-test-refresh")
+                    }
+                } label: {
+                    Label("Refresh Subscription Status", systemImage: "arrow.clockwise")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .padding(.horizontal)
+            }
         }
     }
-    
+
     @ViewBuilder
     private var accountActionsSheetView: some View {
         VStack(spacing: 16) {
@@ -1619,6 +1674,16 @@ struct SettingsView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+
+            if let privacyPolicyURL {
+                Link("Privacy Policy", destination: privacyPolicyURL)
+                    .font(.subheadline)
+            }
+
+            if let termsOfUseURL {
+                Link("Terms of Use", destination: termsOfUseURL)
+                    .font(.subheadline)
+            }
 
             Button {
                 let current = authManager.userEmail
@@ -1899,6 +1964,14 @@ struct SettingsView: View {
                         sectionCard {
                             storeSection
                         }
+
+                        Spacer()
+                        Image("SoftballBaseballWtitle4")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 120)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.top, 4)
                     }
                     .padding(.top, 4)
                 }

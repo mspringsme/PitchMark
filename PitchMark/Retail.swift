@@ -114,12 +114,12 @@ struct StorefrontView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
-
-                            Button("Restore Purchases") {
-                                Task { await subscriptionManager.restorePurchases() }
-                            }
-                            .buttonStyle(.bordered)
                         }
+
+                        Button("Restore Purchases") {
+                            Task { await subscriptionManager.restorePurchases() }
+                        }
+                        .buttonStyle(.bordered)
                     }
                     .padding(.vertical, 6)
                 }

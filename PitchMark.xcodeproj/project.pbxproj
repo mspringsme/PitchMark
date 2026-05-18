@@ -12,6 +12,7 @@
 		232EB1A72F69B81100BE086E /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 232EB1A62F69B81100BE086E /* FirebaseFunctions */; };
 		23652D3B2F57705F00461063 /* firestore.rules in Resources */ = {isa = PBXBuildFile; fileRef = 23652D3A2F57705F00461063 /* firestore.rules */; };
 		23A619482F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */; };
+		23AF006C2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md in Resources */ = {isa = PBXBuildFile; fileRef = 23AF006B2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md */; };
 		23B131CE2F75A50800A70589 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 23B131CD2F75A50800A70589 /* GoogleSignInSwift */; };
 		23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 23B131D12F75A91D00A70589 /* GoogleService-Info.plist */; };
 		23F1A88B2F12C6EF0094E7BC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88A2F12C6EF0094E7BC /* FirebaseAuth */; };
@@ -40,6 +41,7 @@
 		239F0B7C2F12B238004E32DD /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrikeZoneHeatmapView.swift; sourceTree = "<group>"; };
 		23AF006A2FAFD1C70046D670 /* index.ts */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.typescript; path = index.ts; sourceTree = "<group>"; };
+		23AF006B2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SUBMISSION_READINESS_CHECKLIST.md; sourceTree = "<group>"; };
 		23B131D12F75A91D00A70589 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyWindowView.swift; sourceTree = "<group>"; };
 		23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeDisplayOverlayView.swift; sourceTree = "<group>"; };
@@ -140,6 +142,7 @@
 				23F7D2F62F759DE90010D7BF /* StrikeZoneButtonLabel.swift */,
 				23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */,
 				23AF006A2FAFD1C70046D670 /* index.ts */,
+				23AF006B2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -278,6 +281,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				23652D3B2F57705F00461063 /* firestore.rules in Resources */,
+				23AF006C2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -451,11 +455,13 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = PitchMark/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Use the camera to capture the owner's QR code for joining a live game.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -492,11 +498,13 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = PitchMark/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Use the camera to capture the owner's QR code for joining a live game.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				LD_RUNPATH_SEARCH_PATHS = (
