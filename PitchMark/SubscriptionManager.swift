@@ -166,7 +166,7 @@ final class SubscriptionManager: ObservableObject {
                 log("purchase unknown result")
             }
         } catch {
-            lastErrorMessage = error.localizedDescription
+            lastErrorMessage = userFacingPurchaseErrorMessage(from: error)
             log("purchase failed error=\(error.localizedDescription)")
         }
     }
@@ -179,9 +179,44 @@ final class SubscriptionManager: ObservableObject {
             log("restore sync complete")
             await refreshEntitlements(reason: "restore")
         } catch {
-            lastErrorMessage = error.localizedDescription
+            lastErrorMessage = userFacingPurchaseErrorMessage(from: error)
             log("restore failed error=\(error.localizedDescription)")
         }
+    }
+
+    private func userFacingPurchaseErrorMessage(from error: Error) -> String {
+        func mapNetworkError(_ nsError: NSError) -> String? {
+            if nsError.domain == NSURLErrorDomain {
+                switch nsError.code {
+                case NSURLErrorCannotConnectToHost, NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost:
+                    return "Unable to reach the App Store right now. Check your connection and try again."
+                case NSURLErrorTimedOut:
+                    return "The App Store request timed out. Please try again."
+                default:
+                    break
+                }
+            }
+            return nil
+        }
+
+        let topLevel = error as NSError
+        if let mapped = mapNetworkError(topLevel) {
+            return mapped
+        }
+
+        if let underlying = topLevel.userInfo[NSUnderlyingErrorKey] as? NSError,
+           let mapped = mapNetworkError(underlying) {
+            return mapped
+        }
+
+        let localized = error.localizedDescription
+        if localized.contains("NSURLErrorDomain error -1004")
+            || localized.contains("NSURLErrorDomain error -1009")
+            || localized.contains("NSURLErrorDomain error -1001") {
+            return "Unable to reach the App Store right now. Check your connection and try again."
+        }
+
+        return localized
     }
 
     private func observeTransactions() async {
@@ -276,7 +311,7 @@ final class SubscriptionManager: ObservableObject {
     }
 
     private func log(_ message: String) {
-        print("💳 [SubscriptionManager] \(message)")
+        debugLog("💳 [SubscriptionManager] \(message)")
     }
 
     private static var sandboxTestingOverrideAvailable: Bool {
@@ -297,6 +332,7 @@ struct ProPaywallView: View {
     var allowsClose: Bool = true
 
     @State private var isPurchasing = false
+    @State private var isRestoring = false
 
     private var priceLabel: String {
         subscriptionManager.annualProduct?.displayPrice ?? "$19.99"
@@ -332,23 +368,30 @@ struct ProPaywallView: View {
                         isPurchasing = false
                     }
                 } label: {
-                    Text("Start Pro Annual — \(priceLabel)/year")
+                    Text(isPurchasing ? "Starting Purchase…" : "Start Pro Annual — \(priceLabel)/year")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(subscriptionManager.status == .loading)
+                .disabled(subscriptionManager.status == .loading || isPurchasing || isRestoring)
 
                 Button("Restore Purchases") {
-                    Task { await subscriptionManager.restorePurchases() }
+                    guard !isRestoring else { return }
+                    isRestoring = true
+                    Task {
+                        await subscriptionManager.restorePurchases()
+                        isRestoring = false
+                    }
                 }
                 .buttonStyle(.bordered)
+                .disabled(isPurchasing || isRestoring)
             }
 
             if let errorMessage = subscriptionManager.lastErrorMessage {
                 Text(errorMessage)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
             }
 
             if allowsClose {

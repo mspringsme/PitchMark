@@ -229,7 +229,7 @@ final class LiveGameService {
         let timeoutWork = DispatchWorkItem { [weak gate] in
             guard let gate else { return }
             guard gate.tryFinish() else { return }
-            print("❌ \(self.logPrefix) createLiveGameAndJoinCode TIMEOUT after 20s (no Firestore callback) liveId=\(liveId)")
+            debugLog("❌ \(self.logPrefix) createLiveGameAndJoinCode TIMEOUT after 20s (no Firestore callback) liveId=\(liveId)")
             finishOnce(.failure(LiveGameError.timeout.nsError))
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeoutWork)
@@ -241,16 +241,16 @@ final class LiveGameService {
 
             // If timeout already fired, do nothing.
             guard gate.tryFinish() else {
-                print("⚠️ \(self.logPrefix) Callback arrived AFTER timeout; ignoring.")
+                debugLog("⚠️ \(self.logPrefix) Callback arrived AFTER timeout; ignoring.")
                 return
             }
 
             timeoutWork.cancel()
 
-            print("✅ \(self.logPrefix) liveGames setData succeeded liveId=\(liveId). Seeding lineup…")
+            debugLog("✅ \(self.logPrefix) liveGames setData succeeded liveId=\(liveId). Seeding lineup…")
             self.seedLiveLineupFromOwnerGame(ownerUid: ownerUid, ownerGameId: ownerGameId, liveId: liveId)
 
-            print("✅ \(self.logPrefix) Creating join code…")
+            debugLog("✅ \(self.logPrefix) Creating join code…")
             self.createUniqueJoinCode(
                 liveId: liveId,
                 ownerUid: ownerUid,
@@ -335,11 +335,11 @@ final class LiveGameService {
             guard let self else { return }
 
             if let err {
-                print("⚠️ \(self.logPrefix) seed lineup: failed to read owner game doc:", err.localizedDescription)
+                debugLog("⚠️ \(self.logPrefix) seed lineup: failed to read owner game doc:", err.localizedDescription)
                 return
             }
             guard let data = snap?.data() else {
-                print("⚠️ \(self.logPrefix) seed lineup: owner game doc missing data")
+                debugLog("⚠️ \(self.logPrefix) seed lineup: owner game doc missing data")
                 return
             }
 
@@ -348,7 +348,7 @@ final class LiveGameService {
 
             // Only seed if there is something to seed
             guard !jerseys.isEmpty else {
-                print("ℹ️ \(self.logPrefix) seed lineup: owner game has no jerseys; skipping")
+                debugLog("ℹ️ \(self.logPrefix) seed lineup: owner game has no jerseys; skipping")
                 return
             }
 
@@ -365,9 +365,9 @@ final class LiveGameService {
                 "batterIds": finalIds
             ]) { err in
                 if let err {
-                    print("⚠️ \(self.logPrefix) seed lineup: update live doc failed:", err.localizedDescription)
+                    debugLog("⚠️ \(self.logPrefix) seed lineup: update live doc failed:", err.localizedDescription)
                 } else {
-                    print("✅ \(self.logPrefix) seed lineup: copied \(jerseys.count) jerseys into liveGames/\(liveId)")
+                    debugLog("✅ \(self.logPrefix) seed lineup: copied \(jerseys.count) jerseys into liveGames/\(liveId)")
                 }
             }
         }
@@ -385,11 +385,11 @@ final class LiveGameService {
                 "activeSessionCode": code
             ], merge: true) { err in
                 if let err {
-                    print("⚠️ \(self.logPrefix) set activeSessionCode failed:", err.localizedDescription)
+                    debugLog("⚠️ \(self.logPrefix) set activeSessionCode failed:", err.localizedDescription)
                     completion(false)
                     return
                 }
-                print("✅ \(self.logPrefix) set activeSessionCode=\(code) on users/\(ownerUid)/games/\(gameId)")
+                debugLog("✅ \(self.logPrefix) set activeSessionCode=\(code) on users/\(ownerUid)/games/\(gameId)")
                 completion(true)
             }
     }
@@ -411,7 +411,7 @@ final class LiveGameService {
             .getDocuments { [weak self] snap, err in
                 guard let self else { return }
                 if let err {
-                    print("⚠️ \(self.logPrefix) cleanup \(collection) failed:", err.localizedDescription)
+                    debugLog("⚠️ \(self.logPrefix) cleanup \(collection) failed:", err.localizedDescription)
                     return
                 }
                 let docs = snap?.documents ?? []
@@ -424,9 +424,9 @@ final class LiveGameService {
 
                 batch.commit { err in
                     if let err {
-                        print("⚠️ \(self.logPrefix) cleanup \(collection) batch failed:", err.localizedDescription)
+                        debugLog("⚠️ \(self.logPrefix) cleanup \(collection) batch failed:", err.localizedDescription)
                     } else {
-                        print("✅ \(self.logPrefix) cleanup \(collection) deleted \(docs.count)")
+                        debugLog("✅ \(self.logPrefix) cleanup \(collection) deleted \(docs.count)")
                         if docs.count == 200 {
                             self.cleanupExpired(in: collection, ownerUid: ownerUid, now: now)
                         }
@@ -475,7 +475,7 @@ final class LiveGameService {
                 }
             }) { _, error in
                 if let nsError = error as NSError? {
-                    print("❌ \(self.logPrefix) joinCodes transaction failed domain=\(nsError.domain) code=\(nsError.code) msg=\(nsError.localizedDescription)")
+                    debugLog("❌ \(self.logPrefix) joinCodes transaction failed domain=\(nsError.domain) code=\(nsError.code) msg=\(nsError.localizedDescription)")
 
                     if nsError.domain == "JoinCode", nsError.code == 409 {
                         attempt(n + 1)
@@ -486,7 +486,7 @@ final class LiveGameService {
                     return
                 }
 
-                print("✅ \(self.logPrefix) joinCodes transaction succeeded code=\(code) liveId=\(liveId)")
+                debugLog("✅ \(self.logPrefix) joinCodes transaction succeeded code=\(code) liveId=\(liveId)")
                 completion(.success((liveId: liveId, code: code)))
             }
         }
@@ -621,14 +621,14 @@ final class LiveGameService {
         completion: ((Error?) -> Void)? = nil
     ) {
         let keys = Array(fields.keys).sorted()
-        print("📤 updateLiveFields → \(Col.liveGames)/\(liveId)")
-        print("📤 keys:", keys)
+        debugLog("📤 updateLiveFields → \(Col.liveGames)/\(liveId)")
+        debugLog("📤 keys:", keys)
 
         db.collection(Col.liveGames).document(liveId).updateData(fields) { err in
             if let err {
-                print("❌ updateLiveFields failed:", err.localizedDescription)
+                debugLog("❌ updateLiveFields failed:", err.localizedDescription)
             } else {
-                print("✅ updateLiveFields success")
+                debugLog("✅ updateLiveFields success")
             }
             completion?(err)
         }
@@ -676,9 +676,9 @@ final class LiveGameService {
             }
         }) { _, err in
             if let err {
-                print("❌ addLiveJersey failed:", err.localizedDescription)
+                debugLog("❌ addLiveJersey failed:", err.localizedDescription)
             } else {
-                print("✅ addLiveJersey success jersey=\(jerseyNumber)")
+                debugLog("✅ addLiveJersey success jersey=\(jerseyNumber)")
             }
             completion?(err)
         }
@@ -740,14 +740,14 @@ final class LiveGameService {
     }
 
     private func logCreateLiveStart(liveId: String, ownerUid: String, liveRef: DocumentReference) {
-        print("\(logPrefix) createLiveGameAndJoinCode: writing \(Col.liveGames)/\(liveId) as uid=\(ownerUid)")
-        print("\(logPrefix) About to write:", liveRef.path)
-        print("\(logPrefix) joinCodes collection:", db.collection(Col.joinCodes).path)
-        print("\(logPrefix) joinCodes ownerUid:", ownerUid)
+        debugLog("\(logPrefix) createLiveGameAndJoinCode: writing \(Col.liveGames)/\(liveId) as uid=\(ownerUid)")
+        debugLog("\(logPrefix) About to write:", liveRef.path)
+        debugLog("\(logPrefix) joinCodes collection:", db.collection(Col.joinCodes).path)
+        debugLog("\(logPrefix) joinCodes ownerUid:", ownerUid)
     }
 
     private func logLiveSetDataCallback(liveRef: DocumentReference, timedOutOrFinished: Bool, err: Error?) {
-        print("\(logPrefix) liveGames setData callback fired for \(liveRef.path) finished=\(timedOutOrFinished) err=\(err?.localizedDescription ?? "nil")")
+        debugLog("\(logPrefix) liveGames setData callback fired for \(liveRef.path) finished=\(timedOutOrFinished) err=\(err?.localizedDescription ?? "nil")")
     }
     
     private func randomInviteToken(length: Int) -> String {

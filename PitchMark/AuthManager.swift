@@ -77,9 +77,9 @@ class AuthManager: ObservableObject {
         self.isSignedIn = (current != nil)
 
         if let current {
-            print("✅ currentUser on launch uid=\(current.uid) email=\(current.email ?? "")")
+            debugLog("✅ currentUser on launch uid=\(current.uid) email=\(current.email ?? "")")
         } else {
-            print("ℹ️ No Firebase currentUser on launch.")
+            debugLog("ℹ️ No Firebase currentUser on launch.")
         }
 
         // keep state in sync
@@ -91,11 +91,11 @@ class AuthManager: ObservableObject {
                 self.isCheckingAuth = false
 
                 if let user {
-                    print("🔐 Auth -> SIGNED IN uid=\(user.uid) email=\(user.email ?? "")")
+                    debugLog("🔐 Auth -> SIGNED IN uid=\(user.uid) email=\(user.email ?? "")")
                     self.probeUserPrivateCollections(tag: "authStateDidChangeListener")
 
                 } else {
-                    print("🔐 Auth -> SIGNED OUT")
+                    debugLog("🔐 Auth -> SIGNED OUT")
                 }
             }
         }
@@ -122,7 +122,7 @@ class AuthManager: ObservableObject {
         GIDSignIn.sharedInstance.signIn(withPresenting: viewController) { result, error in
             guard let resultUser = result?.user,
                   let idToken = resultUser.idToken?.tokenString else {
-                print("Google Sign-In failed: \(error?.localizedDescription ?? "Unknown error")")
+                debugLog("Google Sign-In failed: \(error?.localizedDescription ?? "Unknown error")")
                 return
             }
 
@@ -131,7 +131,7 @@ class AuthManager: ObservableObject {
 
             Auth.auth().signIn(with: credential) { authResult, error in
                 if let error = error {
-                    print("Firebase Sign-In failed: \(error.localizedDescription)")
+                    debugLog("Firebase Sign-In failed: \(error.localizedDescription)")
                     return
                 }
 
@@ -155,26 +155,26 @@ class AuthManager: ObservableObject {
     func handleAppleSignIn(result: Result<ASAuthorization, Error>) {
         switch result {
         case .failure(let error):
-            print("Apple Sign-In failed: \(error.localizedDescription)")
+            debugLog("Apple Sign-In failed: \(error.localizedDescription)")
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-                print("Apple Sign-In failed: missing credential")
+                debugLog("Apple Sign-In failed: missing credential")
                 return
             }
             guard let nonce = currentAppleNonce else {
-                print("Apple Sign-In failed: missing nonce")
+                debugLog("Apple Sign-In failed: missing nonce")
                 return
             }
             guard let tokenData = credential.identityToken,
                   let tokenString = String(data: tokenData, encoding: .utf8) else {
-                print("Apple Sign-In failed: invalid identity token")
+                debugLog("Apple Sign-In failed: invalid identity token")
                 return
             }
 
             let oauth = OAuthProvider.credential(providerID: .apple, idToken: tokenString, rawNonce: nonce)
             Auth.auth().signIn(with: oauth) { authResult, error in
                 if let error = error {
-                    print("Firebase Apple Sign-In failed: \(error.localizedDescription)")
+                    debugLog("Firebase Apple Sign-In failed: \(error.localizedDescription)")
                     return
                 }
 
@@ -197,7 +197,7 @@ class AuthManager: ObservableObject {
         callable.call(["email": trimmed]) { _, error in
             if let error {
                 let nsError = error as NSError
-                print("❌ requestEmailOtp error domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+                debugLog("❌ requestEmailOtp error domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
                 completion(.failure(self.userFacingAuthError(error)))
                 return
             }
@@ -221,7 +221,7 @@ class AuthManager: ObservableObject {
         callable.call(["email": trimmedEmail, "code": trimmedCode]) { result, error in
             if let error {
                 let nsError = error as NSError
-                print("❌ verifyEmailOtp error domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
+                debugLog("❌ verifyEmailOtp error domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
                 completion(.failure(self.userFacingAuthError(error)))
                 return
             }
@@ -286,13 +286,13 @@ class AuthManager: ObservableObject {
         guard Auth.auth().isSignIn(withEmailLink: link) else { return false }
         guard let email = UserDefaults.standard.string(forKey: pendingEmailLinkKey),
               !email.isEmpty else {
-            print("Email link sign-in failed: missing stored email")
+            debugLog("Email link sign-in failed: missing stored email")
             return true
         }
 
         Auth.auth().signIn(withEmail: email, link: link) { authResult, error in
             if let error {
-                print("Email link sign-in failed: \(error.localizedDescription)")
+                debugLog("Email link sign-in failed: \(error.localizedDescription)")
                 return
             }
 
@@ -310,7 +310,7 @@ class AuthManager: ObservableObject {
         GIDSignIn.sharedInstance.restorePreviousSignIn { user, error in
             guard let restoredUser = user,
                   let idToken = restoredUser.idToken?.tokenString else {
-                print("No previous Google sign-in found.")
+                debugLog("No previous Google sign-in found.")
                 self.isCheckingAuth = false
                 return
             }
@@ -320,13 +320,13 @@ class AuthManager: ObservableObject {
 
             Auth.auth().signIn(with: credential) { authResult, error in
                 if let error = error {
-                    print("Firebase Sign-In failed: \(error.localizedDescription)")
+                    debugLog("Firebase Sign-In failed: \(error.localizedDescription)")
                     self.isCheckingAuth = false
                 } else if let firebaseUser = authResult?.user {
                     self.user = firebaseUser
                     self.isSignedIn = true
                     self.isCheckingAuth = false
-                    print("Restored Firebase session for: \(firebaseUser.email ?? "Unknown")")
+                    debugLog("Restored Firebase session for: \(firebaseUser.email ?? "Unknown")")
                 }
             }
         }
@@ -340,9 +340,9 @@ class AuthManager: ObservableObject {
             "createdAt": FieldValue.serverTimestamp()
         ], merge: true) { error in
             if let error {
-                print("Error creating user document: \(error.localizedDescription)")
+                debugLog("Error creating user document: \(error.localizedDescription)")
             } else {
-                print("User document created/updated successfully.")
+                debugLog("User document created/updated successfully.")
             }
         }
     }
@@ -455,7 +455,7 @@ class AuthManager: ObservableObject {
 
             ref.getDocument { snapshot, error in
                 if let error {
-                    print("⚠️ Failed to read activeSession on sign out: \(error.localizedDescription)")
+                    debugLog("⚠️ Failed to read activeSession on sign out: \(error.localizedDescription)")
                     return
                 }
 
@@ -464,7 +464,7 @@ class AuthManager: ObservableObject {
 
                 ref.delete { error in
                     if let error {
-                        print("⚠️ Failed to clear activeSession on sign out: \(error.localizedDescription)")
+                        debugLog("⚠️ Failed to clear activeSession on sign out: \(error.localizedDescription)")
                     }
                 }
             }
@@ -477,13 +477,13 @@ class AuthManager: ObservableObject {
 
         do {
             try Auth.auth().signOut()
-            print("Signed out from Firebase")
+            debugLog("Signed out from Firebase")
         } catch {
-            print("Firebase sign-out failed: \(error.localizedDescription)")
+            debugLog("Firebase sign-out failed: \(error.localizedDescription)")
         }
 
         GIDSignIn.sharedInstance.signOut()
-        print("Signed out from Google")
+        debugLog("Signed out from Google")
 
         self.user = nil
         self.isSignedIn = false
@@ -491,7 +491,7 @@ class AuthManager: ObservableObject {
     
     func saveTemplate(_ template: PitchTemplate) {
         guard let user = user else {
-            print("No signed-in user to save template for.")
+            debugLog("No signed-in user to save template for.")
             return
         }
         
@@ -562,16 +562,16 @@ class AuthManager: ObservableObject {
         
         templateRef.setData(data) { error in
             if let error = error {
-                print("Error saving template: \(error.localizedDescription)")
+                debugLog("Error saving template: \(error.localizedDescription)")
             } else {
-                print("Template saved successfully for user: \(user.email ?? "Unknown")")
+                debugLog("Template saved successfully for user: \(user.email ?? "Unknown")")
             }
         }
 
         let sharedRef = db.collection("templates").document(template.id.uuidString)
         sharedRef.setData(data, merge: true) { error in
             if let error = error {
-                print("❌ save shared template failed:", error.localizedDescription)
+                debugLog("❌ save shared template failed:", error.localizedDescription)
             }
         }
     }
@@ -601,7 +601,7 @@ class AuthManager: ObservableObject {
 
         batch.commit { error in
             if let error {
-                print("❌ shareTemplateByEmail failed:", error.localizedDescription)
+                debugLog("❌ shareTemplateByEmail failed:", error.localizedDescription)
             }
             completion?(error)
         }
@@ -609,7 +609,7 @@ class AuthManager: ObservableObject {
     
     func deleteTemplate(_ template: PitchTemplate) {
         guard let user = user else {
-            print("No signed-in user to delete template for.")
+            debugLog("No signed-in user to delete template for.")
             return
         }
         
@@ -621,9 +621,9 @@ class AuthManager: ObservableObject {
         
         templateRef.delete { error in
             if let error = error {
-                print("Error deleting template: \(error.localizedDescription)")
+                debugLog("Error deleting template: \(error.localizedDescription)")
             } else {
-                print("Template deleted successfully for user: \(user.email ?? "Unknown")")
+                debugLog("Template deleted successfully for user: \(user.email ?? "Unknown")")
             }
         }
 
@@ -631,19 +631,19 @@ class AuthManager: ObservableObject {
             .document(template.id.uuidString)
             .delete { error in
                 if let error = error {
-                    print("❌ delete shared template failed:", error.localizedDescription)
+                    debugLog("❌ delete shared template failed:", error.localizedDescription)
                 }
             }
     }
 
     func loadTemplates(completion: @escaping ([PitchTemplate]) -> Void) {
         guard let user = user else {
-            print("⚠️ loadTemplates: user=nil")
+            debugLog("⚠️ loadTemplates: user=nil")
             DispatchQueue.main.async { completion([]) }
             return
         }
 
-        print("📥 loadTemplates uid=\(user.uid)")
+        debugLog("📥 loadTemplates uid=\(user.uid)")
 
         let db = Firestore.firestore()
         let group = DispatchGroup()
@@ -654,7 +654,7 @@ class AuthManager: ObservableObject {
             .collection("templates")
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ loadTemplates (legacy) error:", error.localizedDescription)
+                    debugLog("❌ loadTemplates (legacy) error:", error.localizedDescription)
                 } else {
                     templateDocs.append(contentsOf: snapshot?.documents ?? [])
                 }
@@ -666,7 +666,7 @@ class AuthManager: ObservableObject {
             .whereField("ownerUid", isEqualTo: user.uid)
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ loadTemplates (owner) error:", error.localizedDescription)
+                    debugLog("❌ loadTemplates (owner) error:", error.localizedDescription)
                 } else {
                     templateDocs.append(contentsOf: snapshot?.documents ?? [])
                 }
@@ -678,7 +678,7 @@ class AuthManager: ObservableObject {
             .whereField("sharedWith", arrayContains: user.uid)
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ loadTemplates (shared uid) error:", error.localizedDescription)
+                    debugLog("❌ loadTemplates (shared uid) error:", error.localizedDescription)
                 } else {
                     templateDocs.append(contentsOf: snapshot?.documents ?? [])
                 }
@@ -691,7 +691,7 @@ class AuthManager: ObservableObject {
                 .whereField("sharedWithEmails", arrayContains: email)
                 .getDocuments { snapshot, error in
                     if let error = error {
-                        print("❌ loadTemplates (shared email) error:", error.localizedDescription)
+                        debugLog("❌ loadTemplates (shared email) error:", error.localizedDescription)
                     } else {
                         templateDocs.append(contentsOf: snapshot?.documents ?? [])
                     }
@@ -701,7 +701,7 @@ class AuthManager: ObservableObject {
 
         group.notify(queue: .main) {
             let docs = templateDocs
-            print("📥 loadTemplates raw docs:", docs.count)
+            debugLog("📥 loadTemplates raw docs:", docs.count)
 
             Task { @MainActor in
                 var templatesById: [UUID: PitchTemplate] = [:]
@@ -709,11 +709,11 @@ class AuthManager: ObservableObject {
                 for doc in docs {
                     let data = doc.data()
                     let keys = Array(data.keys).sorted()
-                    print("🧩 Template docId=\(doc.documentID) keys=\(keys)")
+                    debugLog("🧩 Template docId=\(doc.documentID) keys=\(keys)")
 
                     let name = (data["name"] as? String) ?? (data["templateName"] as? String) ?? ""
                     if name.isEmpty {
-                        print("❌ Template missing name (name/templateName) docId=\(doc.documentID)")
+                        debugLog("❌ Template missing name (name/templateName) docId=\(doc.documentID)")
                         continue
                     }
 
@@ -739,9 +739,9 @@ class AuthManager: ObservableObject {
                             let encrypted = dict["encryptedCode"] as? String
                             codeAssignments.append(PitchCodeAssignment(code: code, pitch: pitch, location: location, encryptedCode: encrypted))
                         }
-                        print("⚠️ codeAssignments was MAP form docId=\(doc.documentID) count=\(codeAssignments.count)")
+                        debugLog("⚠️ codeAssignments was MAP form docId=\(doc.documentID) count=\(codeAssignments.count)")
                     } else {
-                        print("⚠️ codeAssignments missing docId=\(doc.documentID) (default empty)")
+                        debugLog("⚠️ codeAssignments missing docId=\(doc.documentID) (default empty)")
                     }
 
                     let pitchGrid = data["pitchGrid"] as? [String: Any]
@@ -807,7 +807,7 @@ class AuthManager: ObservableObject {
                 }
 
                 let templates = Array(templatesById.values)
-                print("✅ loadTemplates decoded:", templates.count)
+                debugLog("✅ loadTemplates decoded:", templates.count)
                 completion(templates)
             }
         }
@@ -815,7 +815,7 @@ class AuthManager: ObservableObject {
 
     func loadPitchers(completion: @escaping ([Pitcher]) -> Void) {
         guard let user = user else {
-            print("⚠️ loadPitchers: user=nil")
+            debugLog("⚠️ loadPitchers: user=nil")
             DispatchQueue.main.async { completion([]) }
             return
         }
@@ -829,7 +829,7 @@ class AuthManager: ObservableObject {
             .whereField("ownerUid", isEqualTo: user.uid)
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ loadPitchers (owner) error:", error.localizedDescription)
+                    debugLog("❌ loadPitchers (owner) error:", error.localizedDescription)
                 } else {
                     docs.append(contentsOf: snapshot?.documents ?? [])
                 }
@@ -841,7 +841,7 @@ class AuthManager: ObservableObject {
             .whereField("sharedWith", arrayContains: user.uid)
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ loadPitchers (shared) error:", error.localizedDescription)
+                    debugLog("❌ loadPitchers (shared) error:", error.localizedDescription)
                 } else {
                     docs.append(contentsOf: snapshot?.documents ?? [])
                 }
@@ -859,7 +859,7 @@ class AuthManager: ObservableObject {
                             pitchersById[id] = pitcher
                         }
                     } catch {
-                        print("❌ Pitcher decode failed docId=\(doc.documentID) error=\(error)")
+                        debugLog("❌ Pitcher decode failed docId=\(doc.documentID) error=\(error)")
                     }
                 }
 
@@ -871,7 +871,7 @@ class AuthManager: ObservableObject {
 
     func createPitcher(name: String, templateId: String?, completion: ((Pitcher?) -> Void)? = nil) {
         guard let user = user else {
-            print("⚠️ createPitcher: user=nil")
+            debugLog("⚠️ createPitcher: user=nil")
             completion?(nil)
             return
         }
@@ -890,14 +890,14 @@ class AuthManager: ObservableObject {
         do {
             try ref.setData(from: pitcher) { err in
                 if let err {
-                    print("❌ createPitcher failed:", err.localizedDescription)
+                    debugLog("❌ createPitcher failed:", err.localizedDescription)
                     completion?(nil)
                 } else {
                     completion?(pitcher)
                 }
             }
         } catch {
-            print("❌ createPitcher encode failed:", error.localizedDescription)
+            debugLog("❌ createPitcher encode failed:", error.localizedDescription)
             completion?(nil)
         }
     }
@@ -914,13 +914,13 @@ class AuthManager: ObservableObject {
         ]
         ref.setData(data, merge: true) { err in
             if let err {
-                print("❌ updatePitcher failed:", err.localizedDescription)
+                debugLog("❌ updatePitcher failed:", err.localizedDescription)
                 completion?(nil)
                 return
             }
             ref.getDocument { snap, readErr in
                 if let readErr {
-                    print("⚠️ updatePitcher: fetch updated doc failed:", readErr.localizedDescription)
+                    debugLog("⚠️ updatePitcher: fetch updated doc failed:", readErr.localizedDescription)
                     completion?(nil)
                     return
                 }
@@ -933,7 +933,7 @@ class AuthManager: ObservableObject {
                         let updated = try snap.data(as: Pitcher.self)
                         completion?(updated)
                     } catch {
-                        print("⚠️ updatePitcher: decode updated doc failed:", error)
+                        debugLog("⚠️ updatePitcher: decode updated doc failed:", error)
                         completion?(nil)
                     }
                 }
@@ -1071,7 +1071,7 @@ class AuthManager: ObservableObject {
         ref.order(by: "timestamp", descending: false)
             .getDocuments { snapshot, error in
                 if let error {
-                    print("❌ loadPitcherEvents error:", error.localizedDescription)
+                    debugLog("❌ loadPitcherEvents error:", error.localizedDescription)
                     completion([])
                     return
                 }
@@ -1100,13 +1100,13 @@ class AuthManager: ObservableObject {
             enriched.createdByUid = Auth.auth().currentUser?.uid
             try ref.setData(from: enriched) { err in
                 if let err {
-                    print("❌ saveSharedPitcherEvent failed:", err.localizedDescription)
+                    debugLog("❌ saveSharedPitcherEvent failed:", err.localizedDescription)
                 } else {
-                    print("✅ Shared pitcher event saved.")
+                    debugLog("✅ Shared pitcher event saved.")
                 }
             }
         } catch {
-            print("❌ saveSharedPitcherEvent encode failed:", error.localizedDescription)
+            debugLog("❌ saveSharedPitcherEvent encode failed:", error.localizedDescription)
         }
     }
 
@@ -1156,7 +1156,7 @@ class AuthManager: ObservableObject {
                             let data = try Firestore.Encoder().encode(copied)
                             batch.setData(data, forDocument: targetRef)
                         } catch {
-                            print("❌ copyPitcherWithEvents encode failed:", error.localizedDescription)
+                            debugLog("❌ copyPitcherWithEvents encode failed:", error.localizedDescription)
                         }
                     }
                     batch.commit { batchError in
@@ -1174,7 +1174,7 @@ class AuthManager: ObservableObject {
     }
     func loadTemplate(id: String) async -> PitchTemplate? {
         guard let user = user else {
-            print("⚠️ loadTemplate(async): user=nil")
+            debugLog("⚠️ loadTemplate(async): user=nil")
             return nil
         }
 
@@ -1185,19 +1185,19 @@ class AuthManager: ObservableObject {
                 .getDocument()
 
             guard snap.exists else {
-                print("⚠️ loadTemplate(async): doc not found id=\(id)")
+                debugLog("⚠️ loadTemplate(async): doc not found id=\(id)")
                 return nil
             }
 
             let data = snap.data() ?? [:]
             let keys = Array(data.keys).sorted()
-            print("🧩 loadTemplate(async) id=\(id) keys=\(keys)")
+            debugLog("🧩 loadTemplate(async) id=\(id) keys=\(keys)")
 
             // ✅ Map on MainActor in case PitchTemplate is @MainActor-isolated
             return await MainActor.run {
                 let name = (data["name"] as? String) ?? (data["templateName"] as? String) ?? ""
                 if name.isEmpty {
-                    print("❌ loadTemplate(async) missing name fields id=\(id)")
+                    debugLog("❌ loadTemplate(async) missing name fields id=\(id)")
                     return nil
                 }
 
@@ -1276,7 +1276,7 @@ class AuthManager: ObservableObject {
                 )
             }
         } catch {
-            print("❌ loadTemplate(async) error:", error.localizedDescription)
+            debugLog("❌ loadTemplate(async) error:", error.localizedDescription)
             return nil
         }
     }
@@ -1284,7 +1284,7 @@ class AuthManager: ObservableObject {
     
     func savePitchEvent(_ event: PitchEvent) {
         guard let user = user else {
-            print("No signed-in user to save pitch event for.")
+            debugLog("No signed-in user to save pitch event for.")
             return
         }
         
@@ -1297,19 +1297,19 @@ class AuthManager: ObservableObject {
         do {
             try eventRef.setData(from: event) { error in
                 if let error = error {
-                    print("Error saving pitch event: \(error.localizedDescription)")
+                    debugLog("Error saving pitch event: \(error.localizedDescription)")
                 } else {
-                    print("Pitch event saved successfully.")
+                    debugLog("Pitch event saved successfully.")
                 }
             }
         } catch {
-            print("Encoding error: \(error.localizedDescription)")
+            debugLog("Encoding error: \(error.localizedDescription)")
         }
     }
     
     func loadPitchEvents(completion: @escaping ([PitchEvent]) -> Void) {
         guard let user = user else {
-            print("❌ No signed-in user.")
+            debugLog("❌ No signed-in user.")
             completion([])
             return
         }
@@ -1321,7 +1321,7 @@ class AuthManager: ObservableObject {
             .order(by: "timestamp", descending: false)
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ Firestore error: \(error.localizedDescription)")
+                    debugLog("❌ Firestore error: \(error.localizedDescription)")
                     completion([])
                     return
                 }
@@ -1343,7 +1343,7 @@ class AuthManager: ObservableObject {
             .order(by: "timestamp", descending: false)
             .getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ loadGamePitchEvents error: \(error.localizedDescription)")
+                    debugLog("❌ loadGamePitchEvents error: \(error.localizedDescription)")
                     completion([])
                     return
                 }
@@ -1357,7 +1357,7 @@ class AuthManager: ObservableObject {
     
     func deletePracticeEvents(practiceId: String?, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let user = user else {
-            print("⚠️ No signed-in user; nothing to delete.")
+            debugLog("⚠️ No signed-in user; nothing to delete.")
             completion(.success(()))
             return
         }
@@ -1372,13 +1372,13 @@ class AuthManager: ObservableObject {
             query = query.whereField("practiceId", isEqualTo: pid)
             query.getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ Failed to query practice events for practiceId=\(pid): \(error)")
+                    debugLog("❌ Failed to query practice events for practiceId=\(pid): \(error)")
                     completion(.failure(error))
                     return
                 }
                 let docs = snapshot?.documents ?? []
                 guard !docs.isEmpty else {
-                    print("🧹 No practice events found to delete for practiceId=\(pid)")
+                    debugLog("🧹 No practice events found to delete for practiceId=\(pid)")
                     completion(.success(()))
                     return
                 }
@@ -1386,10 +1386,10 @@ class AuthManager: ObservableObject {
                 docs.forEach { batch.deleteDocument($0.reference) }
                 batch.commit { err in
                     if let err = err {
-                        print("❌ Batch delete failed for practiceId=\(pid): \(err)")
+                        debugLog("❌ Batch delete failed for practiceId=\(pid): \(err)")
                         completion(.failure(err))
                     } else {
-                        print("✅ Deleted \(docs.count) practice events for practiceId=\(pid)")
+                        debugLog("✅ Deleted \(docs.count) practice events for practiceId=\(pid)")
                         completion(.success(()))
                     }
                 }
@@ -1399,7 +1399,7 @@ class AuthManager: ObservableObject {
             // Strategy: fetch practice-mode events and client-filter those with missing or empty practiceId.
             query.getDocuments { snapshot, error in
                 if let error = error {
-                    print("❌ Failed to query general practice events: \(error)")
+                    debugLog("❌ Failed to query general practice events: \(error)")
                     completion(.failure(error))
                     return
                 }
@@ -1417,7 +1417,7 @@ class AuthManager: ObservableObject {
                     }
                 }
                 guard !toDelete.isEmpty else {
-                    print("🧹 No general practice events found to delete")
+                    debugLog("🧹 No general practice events found to delete")
                     completion(.success(()))
                     return
                 }
@@ -1425,10 +1425,10 @@ class AuthManager: ObservableObject {
                 toDelete.forEach { batch.deleteDocument($0.reference) }
                 batch.commit { err in
                     if let err = err {
-                        print("❌ Batch delete failed for general practice events: \(err)")
+                        debugLog("❌ Batch delete failed for general practice events: \(err)")
                         completion(.failure(err))
                     } else {
-                        print("✅ Deleted \(toDelete.count) general practice events")
+                        debugLog("✅ Deleted \(toDelete.count) general practice events")
                         completion(.success(()))
                     }
                 }
@@ -1443,7 +1443,7 @@ class AuthManager: ObservableObject {
             "selectedBatterId": selectedBatterId as Any
         ]) { error in
             if let error = error {
-                print("❌ Error updating selectedBatterId:", error)
+                debugLog("❌ Error updating selectedBatterId:", error)
             }
         }
     }
@@ -1453,7 +1453,7 @@ class AuthManager: ObservableObject {
         
         // ✅ Only the OWNER should ever run this migration write.
         if let ownerUserId, ownerUserId != currentUid {
-            print("⏭️ migrateBatterIdsIfMissing skipped (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
+            debugLog("⏭️ migrateBatterIdsIfMissing skipped (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
             return
         }
         
@@ -1490,9 +1490,9 @@ class AuthManager: ObservableObject {
             return nil
         }) { _, error in
             if let error = error {
-                print("❌ migrateBatterIdsIfMissing failed:", error)
+                debugLog("❌ migrateBatterIdsIfMissing failed:", error)
             } else {
-                print("✅ migrateBatterIdsIfMissing complete (or already migrated)")
+                debugLog("✅ migrateBatterIdsIfMissing complete (or already migrated)")
             }
         }
     }
@@ -1503,16 +1503,16 @@ class AuthManager: ObservableObject {
             .collection("games").document(gameId)
         guard let currentUid = user?.uid else { return }
         if ownerUserId != currentUid {
-            print("⏭️ Skipping <functionName> (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
+            debugLog("⏭️ Skipping <functionName> (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
             return
         }
         ref.updateData([
             "templateName": templateName
         ]) { err in
             if let err = err {
-                print("❌ updateGameTemplateName:", err.localizedDescription)
+                debugLog("❌ updateGameTemplateName:", err.localizedDescription)
             } else {
-                print("✅ Game.templateName updated:", templateName)
+                debugLog("✅ Game.templateName updated:", templateName)
             }
         }
     }
@@ -1523,7 +1523,7 @@ class AuthManager: ObservableObject {
             .collection("games").document(gameId)
         guard let currentUid = user?.uid else { return }
         if ownerUserId != currentUid {
-            print("⏭️ Skipping updateGameLastSelections (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
+            debugLog("⏭️ Skipping updateGameLastSelections (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
             return
         }
         var updates: [String: Any] = [:]
@@ -1539,7 +1539,7 @@ class AuthManager: ObservableObject {
         }
         ref.updateData(updates) { err in
             if let err {
-                print("❌ updateGameLastSelections:", err.localizedDescription)
+                debugLog("❌ updateGameLastSelections:", err.localizedDescription)
             }
         }
     }
@@ -1561,13 +1561,13 @@ class AuthManager: ObservableObject {
             
             try ref.setData(from: enriched) { err in
                 if let err = err {
-                    print("❌ saveGamePitchEvent failed:", err.localizedDescription)
+                    debugLog("❌ saveGamePitchEvent failed:", err.localizedDescription)
                 } else {
-                    print("✅ Game pitch event saved.")
+                    debugLog("✅ Game pitch event saved.")
                 }
             }
         } catch {
-            print("❌ saveGamePitchEvent encode failed:", error.localizedDescription)
+            debugLog("❌ saveGamePitchEvent encode failed:", error.localizedDescription)
         }
     }
     
@@ -1583,13 +1583,13 @@ class AuthManager: ObservableObject {
             .collection("games").document(gameId)
             .collection("pitchEvents")
 
-        print("👂 listenGamePitchEvents path=\(ref.path)")
+        debugLog("👂 listenGamePitchEvents path=\(ref.path)")
 
         let listener = ref
             .order(by: "timestamp", descending: false)
             .addSnapshotListener { snapshot, error in
                 if let error = error {
-                    print("❌ listenGamePitchEvents error:", error.localizedDescription)
+                    debugLog("❌ listenGamePitchEvents error:", error.localizedDescription)
                     DispatchQueue.main.async { onChange([]) }
                     return
                 }
@@ -1621,13 +1621,13 @@ class AuthManager: ObservableObject {
             .collection("users").document(userId)
             .collection("pitchEvents")
 
-        print("👂 listenUserPitchEvents path=\(ref.path)")
+        debugLog("👂 listenUserPitchEvents path=\(ref.path)")
 
         let listener = ref
             .order(by: "timestamp", descending: false)
             .addSnapshotListener { snapshot, error in
                 if let error = error {
-                    print("❌ listenUserPitchEvents error:", error.localizedDescription)
+                    debugLog("❌ listenUserPitchEvents error:", error.localizedDescription)
                     DispatchQueue.main.async { onChange([]) }
                     return
                 }
@@ -1658,28 +1658,28 @@ class AuthManager: ObservableObject {
 
     func probeUserPrivateCollections(tag: String) {
         guard let u = user else {
-            print("🧪 \(tag) probe: user=nil")
+            debugLog("🧪 \(tag) probe: user=nil")
             return
         }
 
         let db = Firestore.firestore()
-        print("🧪 \(tag) probe uid=\(u.uid) email=\(u.email ?? "")")
+        debugLog("🧪 \(tag) probe uid=\(u.uid) email=\(u.email ?? "")")
 
         db.collection("users").document(u.uid).collection("templates")
             .getDocuments { snap, err in
                 if let err = err {
-                    print("🧪 \(tag) templates ERROR:", err.localizedDescription)
+                    debugLog("🧪 \(tag) templates ERROR:", err.localizedDescription)
                 } else {
-                    print("🧪 \(tag) templates count:", snap?.documents.count ?? 0)
+                    debugLog("🧪 \(tag) templates count:", snap?.documents.count ?? 0)
                 }
             }
 
         db.collection("users").document(u.uid).collection("games")
             .getDocuments { snap, err in
                 if let err = err {
-                    print("🧪 \(tag) games ERROR:", err.localizedDescription)
+                    debugLog("🧪 \(tag) games ERROR:", err.localizedDescription)
                 } else {
-                    print("🧪 \(tag) games count:", snap?.documents.count ?? 0)
+                    debugLog("🧪 \(tag) games count:", snap?.documents.count ?? 0)
                 }
             }
     }
@@ -1690,7 +1690,7 @@ class AuthManager: ObservableObject {
 extension AuthManager {
     func saveGame(_ game: Game) {
         guard let user = user else {
-            print("No signed-in user to save game for.")
+            debugLog("No signed-in user to save game for.")
             return
         }
         
@@ -1720,14 +1720,14 @@ extension AuthManager {
             
             docRef.setData(data, merge: true) { error in
                 if let error = error {
-                    print("Error saving game: \(error)")
+                    debugLog("Error saving game: \(error)")
                 } else {
-                    print("✅ Game saved: \(docRef.documentID)")
+                    debugLog("✅ Game saved: \(docRef.documentID)")
                 }
             }
             
         } catch {
-            print("Encoding error saving game: \(error)")
+            debugLog("Encoding error saving game: \(error)")
         }
     }
     
@@ -1741,7 +1741,7 @@ extension AuthManager {
             .collection("games").document(gameId)
         
         if !debugTag.isEmpty {
-            print("🧭 \(debugTag) | currentUid=\(currentUid) ownerUserId=\(ownerUserId ?? "nil") -> path=\(ref.path)")
+            debugLog("🧭 \(debugTag) | currentUid=\(currentUid) ownerUserId=\(ownerUserId ?? "nil") -> path=\(ref.path)")
         }
         return ref
     }
@@ -1749,12 +1749,12 @@ extension AuthManager {
     
     func loadGames(completion: @escaping ([Game]) -> Void) {
         guard let user = user else {
-            print("⚠️ loadGames: user=nil")
+            debugLog("⚠️ loadGames: user=nil")
             DispatchQueue.main.async { completion([]) }
             return
         }
 
-        print("📥 loadGames uid=\(user.uid)")
+        debugLog("📥 loadGames uid=\(user.uid)")
 
         let query = Firestore.firestore()
             .collection("users").document(user.uid)
@@ -1764,7 +1764,7 @@ extension AuthManager {
         // 1) Cache
         query.getDocuments(source: .cache) { snapshot, error in
             if let error = error {
-                print("❌ loadGames(cache) error:", error.localizedDescription)
+                debugLog("❌ loadGames(cache) error:", error.localizedDescription)
                 return
             }
 
@@ -1776,8 +1776,8 @@ extension AuthManager {
                     do {
                         decoded.append(try d.data(as: Game.self))
                     } catch {
-                        print("❌ Game decode failed (cache) docId=\(d.documentID) error=\(error)")
-                        print("   keys:", Array(d.data().keys).sorted())
+                        debugLog("❌ Game decode failed (cache) docId=\(d.documentID) error=\(error)")
+                        debugLog("   keys:", Array(d.data().keys).sorted())
                     }
                 }
 
@@ -1788,7 +1788,7 @@ extension AuthManager {
         // 2) Server
         query.getDocuments { snapshot, error in
             if let error = error {
-                print("❌ loadGames(server) error:", error.localizedDescription)
+                debugLog("❌ loadGames(server) error:", error.localizedDescription)
                 return
             }
 
@@ -1799,8 +1799,8 @@ extension AuthManager {
                     do {
                         decoded.append(try d.data(as: Game.self))
                     } catch {
-                        print("❌ Game decode failed (server) docId=\(d.documentID) error=\(error)")
-                        print("   keys:", Array(d.data().keys).sorted())
+                        debugLog("❌ Game decode failed (server) docId=\(d.documentID) error=\(error)")
+                        debugLog("   keys:", Array(d.data().keys).sorted())
                     }
                 }
 
@@ -1816,13 +1816,13 @@ extension AuthManager {
             .collection("games").document(gameId)
             .getDocument { snapshot, error in
                 if let error = error {
-                    print("Error loading game \(gameId) for owner \(ownerUserId): \(error.localizedDescription)")
+                    debugLog("Error loading game \(gameId) for owner \(ownerUserId): \(error.localizedDescription)")
                     DispatchQueue.main.async { completion(nil) }
                     return
                 }
                 
                 guard let snapshot = snapshot, snapshot.exists else {
-                    print("Game not found. owner=\(ownerUserId) gameId=\(gameId)")
+                    debugLog("Game not found. owner=\(ownerUserId) gameId=\(gameId)")
                     DispatchQueue.main.async { completion(nil) }
                     return
                 }
@@ -1832,7 +1832,7 @@ extension AuthManager {
                         let game = try snapshot.data(as: Game.self)
                         completion(game)
                     } catch {
-                        print("Error decoding game \(gameId): \(error)")
+                        debugLog("Error decoding game \(gameId): \(error)")
                         completion(nil)
                     }
                 }
@@ -1842,13 +1842,13 @@ extension AuthManager {
     func updateGameLineup(ownerUserId: String?, gameId: String, jerseyNumbers: [String], batterIds: [String]) {
         guard let currentUid = user?.uid else { return }
         if let ownerUserId, ownerUserId != currentUid {
-            print("⏭️ Skipping updateGameLineup (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
+            debugLog("⏭️ Skipping updateGameLineup (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
             return
         }
         
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         guard jerseyNumbers.count == batterIds.count else {
-            print("❌ Lineup mismatch: jerseyNumbers=\(jerseyNumbers.count) batterIds=\(batterIds.count)")
+            debugLog("❌ Lineup mismatch: jerseyNumbers=\(jerseyNumbers.count) batterIds=\(batterIds.count)")
             return
         }
         
@@ -1856,7 +1856,7 @@ extension AuthManager {
             "jerseyNumbers": jerseyNumbers,
             "batterIds": batterIds
         ]) { error in
-            if let error = error { print("Error updating lineup: \(error)") }
+            if let error = error { debugLog("Error updating lineup: \(error)") }
         }
     }
     
@@ -1894,9 +1894,9 @@ extension AuthManager {
             .collection("games").document(gameId)
         ref.delete { error in
             if let error = error {
-                print("Error deleting game: \(error)")
+                debugLog("Error deleting game: \(error)")
             } else {
-                print("Game \(gameId) deleted successfully")
+                debugLog("Game \(gameId) deleted successfully")
             }
         }
     }
@@ -1962,56 +1962,56 @@ extension AuthManager {
     func updateGameInning(ownerUserId: String?, gameId: String, inning: Int) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(["inning": inning]) { error in
-            if let error = error { print("Error updating inning: \(error)") }
+            if let error = error { debugLog("Error updating inning: \(error)") }
         }
     }
     
     func updateGameHits(ownerUserId: String?, gameId: String, hits: Int) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(["hits": hits]) { error in
-            if let error = error { print("Error updating hits: \(error)") }
+            if let error = error { debugLog("Error updating hits: \(error)") }
         }
     }
     
     func updateGameWalks(ownerUserId: String?, gameId: String, walks: Int) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(["walks": walks]) { error in
-            if let error = error { print("Error updating walks: \(error)") }
+            if let error = error { debugLog("Error updating walks: \(error)") }
         }
     }
     
     func updateGameBalls(ownerUserId: String?, gameId: String, balls: Int) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(["balls": balls]) { error in
-            if let error = error { print("Error updating balls: \(error)") }
+            if let error = error { debugLog("Error updating balls: \(error)") }
         }
     }
     
     func updateGameStrikes(ownerUserId: String?, gameId: String, strikes: Int) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(["strikes": strikes]) { error in
-            if let error = error { print("Error updating strikes: \(error)") }
+            if let error = error { debugLog("Error updating strikes: \(error)") }
         }
     }
     
     func updateGameUs(ownerUserId: String?, gameId: String, us: Int) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(["us": us]) { error in
-            if let error = error { print("Error updating us score: \(error)") }
+            if let error = error { debugLog("Error updating us score: \(error)") }
         }
     }
     
     func updateGameThem(ownerUserId: String?, gameId: String, them: Int) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(["them": them]) { error in
-            if let error = error { print("Error updating them score: \(error)") }
+            if let error = error { debugLog("Error updating them score: \(error)") }
         }
     }
 
     func updateGameProgressTimestamp(ownerUserId: String?, gameId: String) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(["progressUpdatedAt": FieldValue.serverTimestamp()]) { error in
-            if let error = error { print("Error updating progress timestamp: \(error)") }
+            if let error = error { debugLog("Error updating progress timestamp: \(error)") }
         }
     }
     
@@ -2039,7 +2039,7 @@ extension AuthManager {
         
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
         ref.updateData(data) { error in
-            if let error = error { print("Error updating game counts: \(error)") }
+            if let error = error { debugLog("Error updating game counts: \(error)") }
         }
     }
     
@@ -2057,10 +2057,10 @@ extension AuthManager {
             ref.updateData([
                 "pending": pendingData
             ]) { err in
-                if let err { print("❌ setPendingPitch failed:", err) }
+                if let err { debugLog("❌ setPendingPitch failed:", err) }
             }
         } catch {
-            print("❌ setPendingPitch encode failed:", error)
+            debugLog("❌ setPendingPitch encode failed:", error)
         }
     }
     
@@ -2073,7 +2073,7 @@ extension AuthManager {
         ref.updateData([
             "pending": FieldValue.delete()
         ]) { err in
-            if let err { print("❌ clearPendingPitch failed:", err) }
+            if let err { debugLog("❌ clearPendingPitch failed:", err) }
         }
     }
     
@@ -2094,7 +2094,7 @@ extension AuthManager {
         
         ref.setData(data, merge: true) { error in
             if let error = error {
-                print("❌ Failed to update selected batter: \(error)")
+                debugLog("❌ Failed to update selected batter: \(error)")
             }
         }
     }

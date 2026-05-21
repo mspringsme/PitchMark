@@ -68,6 +68,7 @@
 				Games.swift,
 				Notifications.swift,
 				"Pitch%.swift",
+				PitchResultsSheetView.swift,
 				PitchSessionManager.swift,
 				SignInView.swift,
 				SubscriptionManager.swift,

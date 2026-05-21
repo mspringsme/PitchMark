@@ -86,7 +86,7 @@ struct FieldZonesView: View {
                 ForEach(zones) { z in
                     AlphaHitButton(imageName: z.image) {
                         if selected.contains(z.id) { selected.remove(z.id) } else { selected.insert(z.id) }
-                        print("Tapped \(z.id)")
+                        debugLog("Tapped \(z.id)")
                     }
                     .frame(width: z.w * W, height: z.w * W) // square frames work well for aspectFit; adjust if needed
                     .position(x: z.cx * W, y: z.cy * H)

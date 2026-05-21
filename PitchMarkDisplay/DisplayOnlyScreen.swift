@@ -93,7 +93,7 @@ struct DisplayOnlyScreen: View {
 
         displayStateListener = ref.addSnapshotListener { snap, err in
             if let err {
-                print("❌ Display listener error:", err.localizedDescription)
+                debugLog("❌ Display listener error:", err.localizedDescription)
                 return
             }
             guard let data = snap?.data() else {
@@ -125,7 +125,7 @@ struct DisplayOnlyScreen: View {
 
         activeSessionListener = ref.addSnapshotListener { snap, err in
             if let err {
-                print("❌ Active session listener error:", err.localizedDescription)
+                debugLog("❌ Active session listener error:", err.localizedDescription)
                 return
             }
             let data = snap?.data() ?? [:]

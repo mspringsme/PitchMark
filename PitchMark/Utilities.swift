@@ -400,12 +400,12 @@ enum PitchImageDictionary {
     static func imageName(for location: String, isStrike: Bool, batterSide: BatterSide) -> String {
         let trimmedLocation = location.trimmingCharacters(in: .whitespacesAndNewlines)
         let key = "\(trimmedLocation)|\(batterSide.rawValue)"
-        print("🔍 Lookup key: \(key)")
+        debugLog("🔍 Lookup key: \(key)")
         
         if let image = imageMap[key] {
             return image
         } else {
-            print("⚠️ Missing image for key: \(key)")
+            debugLog("⚠️ Missing image for key: \(key)")
             return "Bat"
         }
     }

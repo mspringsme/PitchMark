@@ -661,11 +661,11 @@ enum PitchAssetMapper {
         let sideKey = batterSide.rawValue // "left" or "right"
         let trimmed = adjusted.trimmingCharacters(in: .whitespacesAndNewlines)
         let lookupKey = "\(prefix) \(trimmed)|\(sideKey)"
-        print("🔎 Left-image lookup key: \(lookupKey)")
+        debugLog("🔎 Left-image lookup key: \(lookupKey)")
 
         // If the dictionary has an explicit mapping, use it for perfect parity with the right image
         if let mapped = PitchImageDictionary.imageMap[lookupKey] {
-            print("✅ Using mapped asset: \(mapped)")
+            debugLog("✅ Using mapped asset: \(mapped)")
             return mapped
         }
 
@@ -680,11 +680,11 @@ enum PitchAssetMapper {
         if neutralZones.contains(normalized) {
             let candidate = (isStrike ? "Strike" : "ball") + normalized
             if UIImage(named: candidate) != nil {
-                print("🔧 Asset name (neutral): \(candidate)")
+                debugLog("🔧 Asset name (neutral): \(candidate)")
                 return candidate
             } else {
                 let fallback = isStrike ? "StrikeMiddle" : "ballMiddle"
-                print("⚠️ Missing asset: \(candidate). Falling back to \(fallback)")
+                debugLog("⚠️ Missing asset: \(candidate). Falling back to \(fallback)")
                 return fallback
             }
         }
@@ -692,7 +692,7 @@ enum PitchAssetMapper {
         // Try side-agnostic first (some assets may omit side suffix)
         let base = (isStrike ? "Strike" : "ball") + normalized
         if UIImage(named: base) != nil {
-            print("🔧 Asset name (agnostic): \(base)")
+            debugLog("🔧 Asset name (agnostic): \(base)")
             return base
         }
 
@@ -700,13 +700,13 @@ enum PitchAssetMapper {
         let suffix = batterSide == .left ? "Right" : "Left"
         let candidate = base + suffix
         if UIImage(named: candidate) != nil {
-            print("🔧 Asset name: \(candidate)")
+            debugLog("🔧 Asset name: \(candidate)")
             return candidate
         }
 
         // Final fallback
         let fallback = isStrike ? "StrikeMiddle" : "ballMiddle"
-        print("❌ Missing assets for key=\(lookupKey). Falling back to \(fallback)")
+        debugLog("❌ Missing assets for key=\(lookupKey). Falling back to \(fallback)")
         return fallback
     }
 }
@@ -824,7 +824,7 @@ struct PitchResultCard: View {
             let actualPitchNorm = normalizedPitch(actualPitchRaw)
             let calledLoc = parseLocation(calledLocRaw, batterSide: event.batterSide)
             let actualLoc = parseLocation(actualLocRaw, batterSide: event.batterSide)
-            print("🧪 Match debug — didHitLocation=\(didHitLocation)\n  called.pitch=\(calledPitchRaw) -> \(calledPitchNorm)\n  actual.pitch=\(actualPitchRaw) -> \(actualPitchNorm)\n  called.loc=\(calledLocRaw) -> type=\(calledLoc.type ?? "<none>") zone=\(calledLoc.zone)\n  actual.loc=\(actualLocRaw) -> type=\(actualLoc.type ?? "<none>") zone=\(actualLoc.zone)")
+            debugLog("🧪 Match debug — didHitLocation=\(didHitLocation)\n  called.pitch=\(calledPitchRaw) -> \(calledPitchNorm)\n  actual.pitch=\(actualPitchRaw) -> \(actualPitchNorm)\n  called.loc=\(calledLocRaw) -> type=\(calledLoc.type ?? "<none>") zone=\(calledLoc.zone)\n  actual.loc=\(actualLocRaw) -> type=\(actualLoc.type ?? "<none>") zone=\(actualLoc.zone)")
             return ()
         }()
         
@@ -2221,7 +2221,7 @@ struct PitchResultSheet: View {
         batch.commit { error in
             DispatchQueue.main.async {
                 if let error {
-                    print("❌ applyPendingSelectionChangesAndPersist failed: \(error.localizedDescription)")
+                    debugLog("❌ applyPendingSelectionChangesAndPersist failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -2294,7 +2294,7 @@ struct PitchResultSheet: View {
         }
         batch.commit { error in
             if let error {
-                print("❌ applySelectedBatterImmediately failed: \(error.localizedDescription)")
+                debugLog("❌ applySelectedBatterImmediately failed: \(error.localizedDescription)")
             }
         }
 
@@ -2331,7 +2331,7 @@ struct PitchResultSheet: View {
         }
         batch.commit { error in
             if let error {
-                print("❌ applySelectedPitcherImmediately failed: \(error.localizedDescription)")
+                debugLog("❌ applySelectedPitcherImmediately failed: \(error.localizedDescription)")
             }
         }
 
@@ -2401,7 +2401,7 @@ struct PitchResultSheet: View {
         }
         batch.commit { error in
             if let error {
-                print("❌ deleteSelectedEvents failed: \(error.localizedDescription)")
+                debugLog("❌ deleteSelectedEvents failed: \(error.localizedDescription)")
             }
         }
     }
@@ -2476,13 +2476,13 @@ struct PitchResultSheet: View {
             }
             batch.commit { error in
                 if let error {
-                    print("❌ saveEditedEvent failed: \(error.localizedDescription)")
+                    debugLog("❌ saveEditedEvent failed: \(error.localizedDescription)")
                 }
             }
             selectedEventIDs.removeAll()
             isSelecting = false
         } catch {
-            print("❌ saveEditedEvent encode failed: \(error)")
+            debugLog("❌ saveEditedEvent encode failed: \(error)")
         }
     }
     
@@ -2534,7 +2534,7 @@ struct PitchResultSheet: View {
             // Log rendering for debugging
             let fallbackTemplateName = templates.first?.name ?? "Template"
             let templateName: String = templates.first(where: { $0.id.uuidString == effectiveTemplateId })?.name ?? fallbackTemplateName
-            print("UI: Rendering card for eventId=\(eventId), effectiveTemplateId=\(effectiveTemplateId ?? "<nil>"), templateName=\(templateName)")
+            debugLog("UI: Rendering card for eventId=\(eventId), effectiveTemplateId=\(effectiveTemplateId ?? "<nil>"), templateName=\(templateName)")
 
             // Create a simple Binding for selection state
             let isSelectedBinding: Binding<Bool> = Binding<Bool>(
@@ -2544,15 +2544,15 @@ struct PitchResultSheet: View {
                 },
                 set: { newValue in
                     if event.id == nil {
-                        print("UI: Attempted to toggle selection for event with nil id")
+                        debugLog("UI: Attempted to toggle selection for event with nil id")
                         return
                     }
                     if newValue {
                         selectedEventIDs.insert(eventId)
-                        print("UI: Selected eventId=\(eventId). Now selectedEventIDs=\(Array(selectedEventIDs))")
+                        debugLog("UI: Selected eventId=\(eventId). Now selectedEventIDs=\(Array(selectedEventIDs))")
                     } else {
                         selectedEventIDs.remove(eventId)
-                        print("UI: Deselected eventId=\(eventId). Now selectedEventIDs=\(Array(selectedEventIDs))")
+                        debugLog("UI: Deselected eventId=\(eventId). Now selectedEventIDs=\(Array(selectedEventIDs))")
                     }
                 }
             )
@@ -2694,10 +2694,10 @@ extension PitchEvent {
             return try doc.data(as: PitchEvent.self)
         } catch {
             if let fallback = PitchEvent(legacyData: doc.data(), documentId: doc.documentID) {
-                print("⚠️ PitchEvent legacy decode used docId=\(doc.documentID)")
+                PitchMark.debugLog("⚠️ PitchEvent legacy decode used docId=\(doc.documentID)")
                 return fallback
             }
-            print("❌ PitchEvent decode failed docId=\(doc.documentID) error=\(error)")
+            PitchMark.debugLog("❌ PitchEvent decode failed docId=\(doc.documentID) error=\(error)")
             return nil
         }
     }
@@ -2871,10 +2871,10 @@ extension PitchEvent {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(debug), let json = String(data: data, encoding: .utf8) {
-            print("\(prefix):\n\(json)")
+            PitchMark.debugLog("\(prefix):\n\(json)")
         } else {
-            print("\(prefix): <failed to encode>")
-            print(self)
+            PitchMark.debugLog("\(prefix): <failed to encode>")
+            PitchMark.debugLog(self)
         }
     }
 }

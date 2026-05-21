@@ -47,26 +47,26 @@ struct PitchMenuContent: View {
 
                                 if isEncryptedMode {
                                     let labelForGrid = normalizedLabel(adjustedLabel, isStrike: location.isStrike)
-                                    print("[PitchMenuContent] normalized label='\(labelForGrid)' from adjusted='\(adjustedLabel)' isStrike=\(location.isStrike)")
+                                    debugLog("[PitchMenuContent] normalized label='\(labelForGrid)' from adjusted='\(adjustedLabel)' isStrike=\(location.isStrike)")
                                     if let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(label: labelForGrid, isStrike: location.isStrike) {
-                                        print("[PitchMenuContent] mapped → kind=\(gridKind) col=\(columnIndex) row=\(rowIndex)")
+                                        debugLog("[PitchMenuContent] mapped → kind=\(gridKind) col=\(columnIndex) row=\(rowIndex)")
                                         // Attempt to generate encrypted codes if a generator is provided
-                                        print("Encrypted mode: generating with gridKind=\(gridKind), col=\(columnIndex), row=\(rowIndex)")
+                                        debugLog("Encrypted mode: generating with gridKind=\(gridKind), col=\(columnIndex), row=\(rowIndex)")
                                         if let generator = generateEncryptedCodes {
                                             let generated = generator(pitch, gridKind, columnIndex, rowIndex)
                                             newCallCodes = generated
-                                            print("Generated codes: \(generated)")
+                                            debugLog("Generated codes: \(generated)")
                                         } else {
-                                            print("No generator provided. Skipping encrypted code generation.")
+                                            debugLog("No generator provided. Skipping encrypted code generation.")
                                             newCallCodes = []
                                         }
                                     } else {
-                                        print("[PitchMenuContent] mapping failed for adjusted='\(adjustedLabel)' normalized='\(labelForGrid)' isStrike=\(location.isStrike)")
+                                        debugLog("[PitchMenuContent] mapping failed for adjusted='\(adjustedLabel)' normalized='\(labelForGrid)' isStrike=\(location.isStrike)")
                                         newCallCodes = []
                                     }
                                 } else {
                                     newCallCodes = assignedCodes
-                                    print("Assigned codes (non-encrypted): \(assignedCodes)")
+                                    debugLog("Assigned codes (non-encrypted): \(assignedCodes)")
                                 }
 
                                 let newCall = PitchCall(
@@ -75,7 +75,7 @@ struct PitchMenuContent: View {
                                     isStrike: location.isStrike,
                                     codes: newCallCodes
                                 )
-                                print("New call codes: \(newCall.codes)")
+                                debugLog("New call codes: \(newCall.codes)")
 
                                 if lastTappedPosition == tappedPoint,
                                    let currentCall = calledPitch,

@@ -86,7 +86,7 @@ private struct PitchButtonView: View {
                     .frame(width: buttonSize, height: buttonSize)
             } else if isRecordingResult {
                 Button(action: {
-                    print("🔆 fullLabel=", fullLabel)
+                    debugLog("🔆 fullLabel=", fullLabel)
                     pendingResultLabel.wrappedValue = fullLabel
                     onResultLocationPicked(fullLabel)
                     showConfirmSheet.wrappedValue = true

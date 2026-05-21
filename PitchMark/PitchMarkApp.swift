@@ -122,7 +122,7 @@ struct RootView: View {
                         ]
                     )
                 case .failure(let err):
-                    print("❌ Invite link join failed:", err.localizedDescription)
+                    debugLog("❌ Invite link join failed:", err.localizedDescription)
                 }
             }
         }
@@ -135,7 +135,7 @@ struct RootView: View {
                 case .success:
                     NotificationCenter.default.post(name: .pitcherSharedUpdated, object: nil)
                 case .failure(let err):
-                    print("❌ Pitcher invite join failed:", err.localizedDescription)
+                    debugLog("❌ Pitcher invite join failed:", err.localizedDescription)
                 }
             }
         }
@@ -204,9 +204,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         #if DEBUG
         AppCheck.appCheck().token(forcingRefresh: true) { token, error in
             if let error = error {
-                print("❌ AppCheck token error:", error.localizedDescription)
+                debugLog("❌ AppCheck token error:", error.localizedDescription)
             } else {
-                print("✅ AppCheck token:", token?.token ?? "nil")
+                debugLog("✅ AppCheck token:", token?.token ?? "nil")
             }
         }
         #endif

@@ -45,11 +45,11 @@ struct EncryptedCodeGenerator {
         columnIndex: Int,
         rowIndex: Int
     ) -> [String] {
-        print("[GENERATOR START] kind=\(gridKind) selectedPitch=\(selectedPitch) col=\(columnIndex) row=\(rowIndex)")
+        debugLog("[GENERATOR START] kind=\(gridKind) selectedPitch=\(selectedPitch) col=\(columnIndex) row=\(rowIndex)")
 
         // Validate bottom grid indices
         guard (0...2).contains(columnIndex), (0...2).contains(rowIndex) else {
-            print("EncryptedCodeGenerator: invalid bottom-grid indices col=\(columnIndex) row=\(rowIndex)")
+            debugLog("EncryptedCodeGenerator: invalid bottom-grid indices col=\(columnIndex) row=\(rowIndex)")
             return []
         }
 
@@ -57,27 +57,27 @@ struct EncryptedCodeGenerator {
         let headerPitches = template.pitchGridHeaders.map { $0.pitch }
         // Warn if headers and pitches differ (count or order)
         if headerPitches.count != template.pitches.count || headerPitches != template.pitches {
-            print("[GENERATOR WARNING] pitchGridHeaders and pitches differ in count or order.")
-            print("Headers: \(headerPitches)")
-            print("Pitches: \(template.pitches)")
+            debugLog("[GENERATOR WARNING] pitchGridHeaders and pitches differ in count or order.")
+            debugLog("Headers: \(headerPitches)")
+            debugLog("Pitches: \(template.pitches)")
         }
         let pitchCol: Int
         if let headerIndex = headerPitches.firstIndex(of: selectedPitch) {
             // headerIndex maps directly to the grid column (since col 0 is the leading cell)
             pitchCol = headerIndex + 1
-            print("[GENERATOR] Using headers. headerPitches=\(headerPitches) selectedPitchIndex=\(headerIndex) pitchCol=\(pitchCol)")
+            debugLog("[GENERATOR] Using headers. headerPitches=\(headerPitches) selectedPitchIndex=\(headerIndex) pitchCol=\(pitchCol)")
         } else if let pitchIndex = template.pitches.firstIndex(of: selectedPitch) {
             // Fallback: assumes pitches are in the same order as headers
             pitchCol = pitchIndex + 1
-            print("[GENERATOR] Using pitches fallback. pitches=\(template.pitches) selectedPitchIndex=\(pitchIndex) pitchCol=\(pitchCol)")
+            debugLog("[GENERATOR] Using pitches fallback. pitches=\(template.pitches) selectedPitchIndex=\(pitchIndex) pitchCol=\(pitchCol)")
         } else {
-            print("EncryptedCodeGenerator: selected pitch not found in headers or pitches — \(selectedPitch)")
+            debugLog("EncryptedCodeGenerator: selected pitch not found in headers or pitches — \(selectedPitch)")
             return []
         }
 
         // Sanity-check top grid dimensions (expecting 4 rows)
         guard !template.pitchGridValues.isEmpty else {
-            print("EncryptedCodeGenerator: template.pitchGridValues is empty")
+            debugLog("EncryptedCodeGenerator: template.pitchGridValues is empty")
             return []
         }
 
@@ -93,10 +93,10 @@ struct EncryptedCodeGenerator {
             bottomRowsRaw = template.ballsRows
         }
         
-        print("Headers: \(template.pitchGridHeaders)")
-        print("Pitches: \(template.pitches)")
+        debugLog("Headers: \(template.pitchGridHeaders)")
+        debugLog("Pitches: \(template.pitches)")
         for (i, row) in template.pitchGridValues.enumerated() {
-            print("Row \(i): \(row)")
+            debugLog("Row \(i): \(row)")
         }
         
         // Normalize a leading blank row if present (editor sometimes stores 4 rows with first empty)
@@ -104,12 +104,12 @@ struct EncryptedCodeGenerator {
             if bottomRowsRaw.count == 4,
                bottomRowsRaw.first?.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) == true {
                 let dropped = Array(bottomRowsRaw.dropFirst())
-                print("[GENERATOR] Detected leading blank row in bottom grid; using rows=\(dropped.count)")
+                debugLog("[GENERATOR] Detected leading blank row in bottom grid; using rows=\(dropped.count)")
                 return dropped
             }
             return bottomRowsRaw
         }()
-        print("[GENERATOR] bottom headers=\(bottomHeaders) rows count=\(bottomRows.count) firstRow=\(bottomRows.first ?? [])")
+        debugLog("[GENERATOR] bottom headers=\(bottomHeaders) rows count=\(bottomRows.count) firstRow=\(bottomRows.first ?? [])")
 
         // Sanitize grid content to remove interpuncts and non-alnum chars
         let sanitizedBottomHeaders = bottomHeaders.map { sanitize($0) }
@@ -117,30 +117,30 @@ struct EncryptedCodeGenerator {
         let sanitizedPitchGridValues = template.pitchGridValues.map { row in row.map { sanitize($0) } }
 
         guard bottomHeaders.count == 3 else {
-            print("EncryptedCodeGenerator: bottom header count != 3 (\(bottomHeaders.count))")
+            debugLog("EncryptedCodeGenerator: bottom header count != 3 (\(bottomHeaders.count))")
             return []
         }
         guard bottomRows.count >= 3, bottomRows.allSatisfy({ $0.count >= 3 }) else {
-            print("EncryptedCodeGenerator: bottom grid rows must be 3x3")
+            debugLog("EncryptedCodeGenerator: bottom grid rows must be 3x3")
             return []
         }
 
         // C3 from header’s first character of tapped column
         let header = sanitizedBottomHeaders[columnIndex]
         guard let c3 = header.first else {
-            print("EncryptedCodeGenerator: tapped column header is empty at col=\(columnIndex)")
+            debugLog("EncryptedCodeGenerator: tapped column header is empty at col=\(columnIndex)")
             return []
         }
-        print("[GENERATOR] tapped header='\(header)' C3='\(c3)'")
+        debugLog("[GENERATOR] tapped header='\(header)' C3='\(c3)'")
 
         // C4 options from each character in the tapped cell
         let tappedCell = sanitizedBottomRows[rowIndex][columnIndex]
         let c4Options = tappedCell.map { String($0) }
         if c4Options.isEmpty {
-            print("EncryptedCodeGenerator: tapped cell is empty at (r=\(rowIndex), c=\(columnIndex))")
+            debugLog("EncryptedCodeGenerator: tapped cell is empty at (r=\(rowIndex), c=\(columnIndex))")
             return []
         }
-        print("[GENERATOR] tapped cell at (r=\(rowIndex), c=\(columnIndex)) value='\(tappedCell)' C4Options=\(c4Options)")
+        debugLog("[GENERATOR] tapped cell at (r=\(rowIndex), c=\(columnIndex)) value='\(tappedCell)' C4Options=\(c4Options)")
 
         var results: [String] = []
 
@@ -148,7 +148,7 @@ struct EncryptedCodeGenerator {
         for (rowIdx, row) in sanitizedPitchGridValues.enumerated() {
             // Row must at least contain the leading cell and the selected pitch column
             guard row.count > max(0, pitchCol) else {
-                print("EncryptedCodeGenerator: top grid row \(rowIdx) has insufficient columns")
+                debugLog("EncryptedCodeGenerator: top grid row \(rowIdx) has insufficient columns")
                 continue
             }
 
@@ -167,7 +167,7 @@ struct EncryptedCodeGenerator {
                 continue
             }
             let c2 = String(c2Char)
-            print("[GENERATOR ROW] idx=\(rowIdx) leading='\(leading)' C1Options=\(c1Options) C2='\(c2)'")
+            debugLog("[GENERATOR ROW] idx=\(rowIdx) leading='\(leading)' C1Options=\(c1Options) C2='\(c2)'")
 
             // Combine C1 x C2 x C3 x C4
             for c1 in c1Options {
@@ -180,9 +180,9 @@ struct EncryptedCodeGenerator {
 
         // Print for debugging as requested
         if results.isEmpty {
-            print("[GENERATOR RESULT] no codes generated")
+            debugLog("[GENERATOR RESULT] no codes generated")
         } else {
-            print("[GENERATOR RESULT] count=\(results.count) codes=\(results.joined(separator: ", "))")
+            debugLog("[GENERATOR RESULT] count=\(results.count) codes=\(results.joined(separator: ", "))")
         }
 
         return results

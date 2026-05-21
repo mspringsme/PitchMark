@@ -1139,7 +1139,7 @@ struct SettingsView: View {
                             map[id] = pitcher
                         }
                     } catch {
-                        print("❌ Pitcher decode failed (listener) docId=\(doc.documentID) error=\(error)")
+                        debugLog("❌ Pitcher decode failed (listener) docId=\(doc.documentID) error=\(error)")
                     }
                 }
                 livePitchersById = map
@@ -1149,7 +1149,7 @@ struct SettingsView: View {
 
         ownedPitchersListener = ownedRef.addSnapshotListener { snapshot, error in
             if let error {
-                print("❌ owned pitchers listener error:", error.localizedDescription)
+                debugLog("❌ owned pitchers listener error:", error.localizedDescription)
                 return
             }
             let docs = snapshot?.documents ?? []
@@ -1158,7 +1158,7 @@ struct SettingsView: View {
 
         sharedPitchersListener = sharedRef.addSnapshotListener { snapshot, error in
             if let error {
-                print("❌ shared pitchers listener error:", error.localizedDescription)
+                debugLog("❌ shared pitchers listener error:", error.localizedDescription)
                 return
             }
             let docs = snapshot?.documents ?? []
@@ -3842,7 +3842,7 @@ struct PitcherStatsSheetView: View {
 
         ref.getDocument { snap, error in
             if let error {
-                print("❌ loadCachedStats error:", error.localizedDescription)
+                debugLog("❌ loadCachedStats error:", error.localizedDescription)
                 return
             }
             guard let snap, snap.exists else { return }
@@ -3851,7 +3851,7 @@ struct PitcherStatsSheetView: View {
                     let doc = try snap.data(as: PitcherStatsDoc.self)
                     self.cachedStats = doc
                 } catch {
-                    print("❌ decode cached stats failed:", error.localizedDescription)
+                    debugLog("❌ decode cached stats failed:", error.localizedDescription)
                 }
             }
         }
@@ -3869,7 +3869,7 @@ struct PitcherStatsSheetView: View {
 
         liveEventsListener = ref.addSnapshotListener { snapshot, error in
             if let error {
-                print("❌ live stats pitchEvents listener error:", error.localizedDescription)
+                debugLog("❌ live stats pitchEvents listener error:", error.localizedDescription)
                 return
             }
 
@@ -3902,12 +3902,12 @@ struct PitcherStatsSheetView: View {
 
         sharedPitcherEventsListener = ref.addSnapshotListener { snapshot, error in
             if let error {
-                print("❌ shared pitcherEvents listener error:", error.localizedDescription)
+                debugLog("❌ shared pitcherEvents listener error:", error.localizedDescription)
                 return
             }
 
             let docs = snapshot?.documents ?? []
-            print("🧾 shared pitcherEvents snapshot count=\(docs.count) pitcherId=\(pitcherId)")
+            debugLog("🧾 shared pitcherEvents snapshot count=\(docs.count) pitcherId=\(pitcherId)")
 
             let events: [PitchEvent] = docs.compactMap { doc in
                 PitchEvent.decodeFirestoreDocument(doc)
@@ -3916,7 +3916,7 @@ struct PitcherStatsSheetView: View {
             let sharedGame = events.filter { $0.mode == .game || ($0.gameId?.isEmpty == false) }
 
             if let sample = events.last {
-                print("🧾 shared pitcherEvents sample gameId=\(sample.gameId ?? "<nil>") mode=\(sample.mode.rawValue) pitcherId=\(sample.pitcherId ?? "<nil>") location=\(sample.location)")
+                debugLog("🧾 shared pitcherEvents sample gameId=\(sample.gameId ?? "<nil>") mode=\(sample.mode.rawValue) pitcherId=\(sample.pitcherId ?? "<nil>") location=\(sample.location)")
             }
 
             DispatchQueue.main.async {

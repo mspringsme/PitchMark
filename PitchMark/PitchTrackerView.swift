@@ -489,11 +489,11 @@ struct PitchTrackerView: View {
 
         ref.getDocument { snap, err in
             if let err = err {
-                print("❌ hydrateChosenGameUI getDocument error:", err)
+                debugLog("❌ hydrateChosenGameUI getDocument error:", err)
                 return
             }
             guard let snap, snap.exists else {
-                print("⚠️ hydrateChosenGameUI missing game doc:", ref.path)
+                debugLog("⚠️ hydrateChosenGameUI missing game doc:", ref.path)
                 return
             }
 
@@ -523,7 +523,7 @@ struct PitchTrackerView: View {
                     self.showParticipantOverlay = !self.isOwnerForActiveGame
 
                 } catch {
-                    print("❌ hydrateChosenGameUI decode error:", error)
+                    debugLog("❌ hydrateChosenGameUI decode error:", error)
                 }
             }
         }
@@ -598,7 +598,7 @@ struct PitchTrackerView: View {
         guard let liveId = activeLiveId else {
             deferredPendingPitch = pending
             ensureAutoLiveSessionIfNeeded()
-            print("⚠️ No activeLiveId — deferring pending write until live session exists.")
+            debugLog("⚠️ No activeLiveId — deferring pending write until live session exists.")
             return
         }
 
@@ -608,10 +608,10 @@ struct PitchTrackerView: View {
                 "pending": pendingData,
                 "displayCode": FieldValue.delete()
             ]) { err in
-                if let err { print("❌ pending update error:", err.localizedDescription) }
+                if let err { debugLog("❌ pending update error:", err.localizedDescription) }
             }
         } catch {
-            print("❌ encode pending failed:", error)
+            debugLog("❌ encode pending failed:", error)
         }
 
 
@@ -828,10 +828,10 @@ struct PitchTrackerView: View {
         // ✅ CRITICAL: do NOT overwrite participant's chosen actual location while they are confirming/saving
         if !showConfirmSheet && pendingResultLabel == nil {
             pendingResultLabel = resolvedLabel
-            print("🔆 pendingResultLabel seeded from Firestore=", resolvedLabel)
+            debugLog("🔆 pendingResultLabel seeded from Firestore=", resolvedLabel)
         } else {
             // Keep whatever the participant selected
-            // print("🔆 keeping local pendingResultLabel=", pendingResultLabel ?? "nil")
+            // debugLog("🔆 keeping local pendingResultLabel=", pendingResultLabel ?? "nil")
         }
 
         calledPitch = PitchCall(
@@ -919,7 +919,7 @@ struct PitchTrackerView: View {
 
         ref.getDocuments { snap, err in
             if let err {
-                print("❌ seed live pitchEvents failed:", err.localizedDescription)
+                debugLog("❌ seed live pitchEvents failed:", err.localizedDescription)
                 return
             }
             let events: [PitchEvent] = snap?.documents.compactMap { doc in
@@ -967,19 +967,19 @@ struct PitchTrackerView: View {
             .collection("pitchEvents")
             .order(by: "timestamp", descending: false)
 
-        print("👂 live pitchEvents listener start liveId=\(liveId)")
+        debugLog("👂 live pitchEvents listener start liveId=\(liveId)")
 
         livePitchEventsListener = ref.addSnapshotListener { snap, err in
             if let err = err {
-                print("❌ Live pitchEvents listener error:", err.localizedDescription)
+                debugLog("❌ Live pitchEvents listener error:", err.localizedDescription)
                 return
             }
             guard let docs = snap?.documents else {
-                print("⚠️ Live pitchEvents snapshot has no documents")
+                debugLog("⚠️ Live pitchEvents snapshot has no documents")
                 return
             }
 
-            print("🧾 Live pitchEvents snapshot count=\(docs.count) isOwner=\(self.isOwnerForActiveGame) activeLiveId=\(self.activeLiveId ?? "<nil>") selectedGameId=\(self.selectedGameId ?? "<nil>") ownerUid=\(self.effectiveGameOwnerUserId ?? self.activeGameOwnerUserId ?? "<nil>")")
+            debugLog("🧾 Live pitchEvents snapshot count=\(docs.count) isOwner=\(self.isOwnerForActiveGame) activeLiveId=\(self.activeLiveId ?? "<nil>") selectedGameId=\(self.selectedGameId ?? "<nil>") ownerUid=\(self.effectiveGameOwnerUserId ?? self.activeGameOwnerUserId ?? "<nil>")")
 
             // Decode for UI (existing behavior)
             let events: [PitchEvent] = docs.compactMap { doc in
@@ -998,7 +998,7 @@ struct PitchTrackerView: View {
                 if !combined.isEmpty {
                     self.gamePitchEvents = combined
                 } else {
-                    print("⚠️ Live merge produced 0 events (seeded=\(self.seededGamePitchEventsForLive.count), live=\(events.count))")
+                    debugLog("⚠️ Live merge produced 0 events (seeded=\(self.seededGamePitchEventsForLive.count), live=\(events.count))")
                 }
 
                 // ✅ OWNER ONLY: mirror live events into owner’s real game doc
@@ -1027,9 +1027,9 @@ struct PitchTrackerView: View {
 
                     dst.setData(data, merge: false) { err in
                         if let err {
-                            print("❌ mirror live pitchEvent failed:", err.localizedDescription)
+                            debugLog("❌ mirror live pitchEvent failed:", err.localizedDescription)
                         } else {
-                            print("✅ mirrored live pitchEvent → users/\(ownerUid)/games/\(gameId)/pitchEvents/\(liveEventId)")
+                            debugLog("✅ mirrored live pitchEvent → users/\(ownerUid)/games/\(gameId)/pitchEvents/\(liveEventId)")
                         }
                     }
                 }
@@ -1052,11 +1052,11 @@ struct PitchTrackerView: View {
 
         gameListener = ref.addSnapshotListener { snap, err in
             if let err = err {
-                print("❌ Game listener error:", err.localizedDescription)
+                debugLog("❌ Game listener error:", err.localizedDescription)
                 return
             }
             guard let snap, snap.exists else {
-                print("⚠️ Game doc missing while listening:", ref.path)
+                debugLog("⚠️ Game doc missing while listening:", ref.path)
                 return
             }
 
@@ -1069,7 +1069,7 @@ struct PitchTrackerView: View {
 
                     if self.activeLiveId == nil {
                         if shouldApplyProgress {
-                            print("🧭[PROG] gameSnap APPLY gid=\(gid) snapStamp=\(String(describing: updated.progressUpdatedAt)) localStamp=\(String(describing: self.lastLocalProgressUpdate)) snap=\(updated.balls)/\(updated.strikes)/\(updated.inning)/\(updated.hits)/\(updated.walks)/\(updated.us)/\(updated.them)")
+                            debugLog("🧭[PROG] gameSnap APPLY gid=\(gid) snapStamp=\(String(describing: updated.progressUpdatedAt)) localStamp=\(String(describing: self.lastLocalProgressUpdate)) snap=\(updated.balls)/\(updated.strikes)/\(updated.inning)/\(updated.hits)/\(updated.walks)/\(updated.us)/\(updated.them)")
                             self.balls = updated.balls
                             self.strikes = updated.strikes
                             self.inning = updated.inning
@@ -1081,7 +1081,7 @@ struct PitchTrackerView: View {
                                 self.lastLocalProgressUpdate = stamp
                             }
                         } else {
-                            print("🧭[PROG] gameSnap SKIP gid=\(gid) snapStamp=\(String(describing: updated.progressUpdatedAt)) localStamp=\(String(describing: self.lastLocalProgressUpdate)) keep=\(self.balls)/\(self.strikes)/\(self.inning)/\(self.hits)/\(self.walks)/\(self.us)/\(self.them)")
+                            debugLog("🧭[PROG] gameSnap SKIP gid=\(gid) snapStamp=\(String(describing: updated.progressUpdatedAt)) localStamp=\(String(describing: self.lastLocalProgressUpdate)) keep=\(self.balls)/\(self.strikes)/\(self.inning)/\(self.hits)/\(self.walks)/\(self.us)/\(self.them)")
                             merged.balls = self.balls
                             merged.strikes = self.strikes
                             merged.inning = self.inning
@@ -1114,7 +1114,7 @@ struct PitchTrackerView: View {
                     }
                 }
             } catch {
-                print("❌ decode Game failed:", error)
+                debugLog("❌ decode Game failed:", error)
             }
         }
     }
@@ -1142,7 +1142,7 @@ struct PitchTrackerView: View {
 
         gamePitchEventsListener = ref.addSnapshotListener { snap, err in
             if let err = err {
-                print("❌ Game pitchEvents listener error:", err.localizedDescription)
+                debugLog("❌ Game pitchEvents listener error:", err.localizedDescription)
                 return
             }
             guard let docs = snap?.documents else { return }
@@ -1173,7 +1173,7 @@ struct PitchTrackerView: View {
         guard let owner = (effectiveGameOwnerUserId ?? activeGameOwnerUserId),
               let gid = selectedGameId
         else {
-            print("⚠️ seedOwnerGamePitchEventsForLiveIfNeeded missing owner/gid")
+            debugLog("⚠️ seedOwnerGamePitchEventsForLiveIfNeeded missing owner/gid")
             return
         }
 
@@ -1185,7 +1185,7 @@ struct PitchTrackerView: View {
 
         ref.getDocuments { snap, err in
             if let err {
-                print("❌ seed owner game pitchEvents failed:", err.localizedDescription)
+                debugLog("❌ seed owner game pitchEvents failed:", err.localizedDescription)
                 return
             }
 
@@ -1199,7 +1199,7 @@ struct PitchTrackerView: View {
                 self.didSeedOwnerGameEventsForLive = true
                 self.seededGamePitchEventsForLive = events
 
-                print("✅ seeded owner game pitchEvents count=\(events.count)")
+                debugLog("✅ seeded owner game pitchEvents count=\(events.count)")
 
                 let combined = self.mergeLiveAndSeededEvents(liveEvents: [])
                 if !combined.isEmpty {
@@ -1217,7 +1217,7 @@ struct PitchTrackerView: View {
               let gid = selectedGameId,
               let liveId = activeLiveId
         else {
-            print("⚠️ seedLivePitchEventsFromOwnerGameIfNeeded missing owner/gid/liveId")
+            debugLog("⚠️ seedLivePitchEventsFromOwnerGameIfNeeded missing owner/gid/liveId")
             return
         }
 
@@ -1229,13 +1229,13 @@ struct PitchTrackerView: View {
 
         source.getDocuments { snap, err in
             if let err {
-                print("❌ seed live pitchEvents from owner game failed:", err.localizedDescription)
+                debugLog("❌ seed live pitchEvents from owner game failed:", err.localizedDescription)
                 return
             }
 
             let docs = snap?.documents ?? []
             guard !docs.isEmpty else {
-                print("⚠️ seed live pitchEvents: owner game has 0 events")
+                debugLog("⚠️ seed live pitchEvents: owner game has 0 events")
                 return
             }
 
@@ -1258,12 +1258,12 @@ struct PitchTrackerView: View {
 
             batch.commit { err in
                 if let err {
-                    print("❌ seed live pitchEvents batch failed:", err.localizedDescription)
+                    debugLog("❌ seed live pitchEvents batch failed:", err.localizedDescription)
                 } else {
                     DispatchQueue.main.async {
                         self.didSeedLivePitchEventsFromOwnerGame = true
                     }
-                    print("✅ seeded live pitchEvents from owner game history count=\(docs.count)")
+                    debugLog("✅ seeded live pitchEvents from owner game history count=\(docs.count)")
                 }
             }
         }
@@ -1317,7 +1317,7 @@ struct PitchTrackerView: View {
         let ref = Firestore.firestore().collection("liveGames").document(liveId)
         liveListener = ref.addSnapshotListener { snap, err in
             if let err {
-                print("❌ Live listener error:", err)
+                debugLog("❌ Live listener error:", err)
                 DispatchQueue.main.async {
                     if self.activeLiveId == liveId {
                         self.uiConnected = false
@@ -1329,7 +1329,7 @@ struct PitchTrackerView: View {
                 return
             }
             guard let snap, snap.exists, let data = snap.data() else {
-                print("⚠️ Live game doc missing:", ref.path)
+                debugLog("⚠️ Live game doc missing:", ref.path)
                 DispatchQueue.main.async {
                     if self.activeLiveId == liveId {
                         self.uiConnected = false
@@ -1357,7 +1357,7 @@ struct PitchTrackerView: View {
                         self.lastLocalProgressUpdate = liveStamp
                     }
                 } else {
-                    print("🧭[PROG] liveSnap SKIP stamp=\(String(describing: liveStamp)) localStamp=\(String(describing: self.lastLocalProgressUpdate))")
+                    debugLog("🧭[PROG] liveSnap SKIP stamp=\(String(describing: liveStamp)) localStamp=\(String(describing: self.lastLocalProgressUpdate))")
                 }
                 // ✅ FIX: restore opponent label for the Game button in LIVE mode
                 if let opp = data["opponent"] as? String, !opp.isEmpty {
@@ -1510,7 +1510,7 @@ struct PitchTrackerView: View {
                 // ✅ Apply pending/result ONLY while LIVE is active
                 let liveStatus = (data["status"] as? String) ?? "active"
                 if liveStatus != "active" {
-                    print("🔌 Live session ended remotely → disconnecting")
+                    debugLog("🔌 Live session ended remotely → disconnecting")
 
                     self.uiConnected = false
                     self.endLiveSessionLocally(keepCurrentGame: self.isOwnerForActiveGame)
@@ -1563,7 +1563,7 @@ struct PitchTrackerView: View {
 
         participantsListener = ref.addSnapshotListener { snap, err in
             if let err {
-                print("❌ Live participants listener error:", err.localizedDescription)
+                debugLog("❌ Live participants listener error:", err.localizedDescription)
                 DispatchQueue.main.async { self.uiConnected = false }
                 return
             }
@@ -1763,7 +1763,7 @@ struct PitchTrackerView: View {
 
         var merged = loaded
         if let idx = merged.firstIndex(where: { $0.id == gid }) {
-            print("🧭[PROG] mergeLoadedGames gid=\(gid) localStamp=\(String(describing: lastLocalProgressUpdate)) snapshotStamp=\(String(describing: merged[idx].progressUpdatedAt)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them) snap=\(merged[idx].balls)/\(merged[idx].strikes)/\(merged[idx].inning)/\(merged[idx].hits)/\(merged[idx].walks)/\(merged[idx].us)/\(merged[idx].them)")
+            debugLog("🧭[PROG] mergeLoadedGames gid=\(gid) localStamp=\(String(describing: lastLocalProgressUpdate)) snapshotStamp=\(String(describing: merged[idx].progressUpdatedAt)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them) snap=\(merged[idx].balls)/\(merged[idx].strikes)/\(merged[idx].inning)/\(merged[idx].hits)/\(merged[idx].walks)/\(merged[idx].us)/\(merged[idx].them)")
             if lastLocalProgressUpdate == nil, let local = loadLocalProgressSnapshot(for: gid) {
                 balls = local.balls
                 strikes = local.strikes
@@ -1809,7 +1809,7 @@ struct PitchTrackerView: View {
     private func markLocalProgressChange() {
         lastLocalProgressUpdate = Date()
         persistLocalProgressSnapshot()
-        print("🧭[PROG] markLocalProgressChange gid=\(selectedGameId ?? "<nil>") stamp=\(String(describing: lastLocalProgressUpdate)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
+        debugLog("🧭[PROG] markLocalProgressChange gid=\(selectedGameId ?? "<nil>") stamp=\(String(describing: lastLocalProgressUpdate)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
         persistProgressSnapshotToOwnerGameAndLive()
     }
 
@@ -1877,9 +1877,9 @@ struct PitchTrackerView: View {
                     "participants.\(uid)": FieldValue.delete()
                 ]) { err in
                     if let err = err {
-                        print("❌ Failed to remove participant:", err.localizedDescription)
+                        debugLog("❌ Failed to remove participant:", err.localizedDescription)
                     } else {
-                        print("✅ Participant removed from game participants")
+                        debugLog("✅ Participant removed from game participants")
                     }
                 }
         }
@@ -2134,9 +2134,9 @@ struct PitchTrackerView: View {
                 "batterSideUpdatedBy": authManager.user?.uid ?? ""
             ]) { err in
                 if let err = err {
-                    print("❌ update batterSide:", err.localizedDescription)
+                    debugLog("❌ update batterSide:", err.localizedDescription)
                 } else {
-                    print("✅ batterSide updated:", sideString)
+                    debugLog("✅ batterSide updated:", sideString)
                 }
             }
     }
@@ -2527,7 +2527,7 @@ struct PitchTrackerView: View {
         activeGameOwnerUserId = ownerUid
         selectedGameId = gameId
         currentTrackingMode = games.first(where: { $0.id == gameId })?.trackingMode ?? .coach
-        print("🧭[PROG] chooseGame gid=\(gameId) owner=\(ownerUid)")
+        debugLog("🧭[PROG] chooseGame gid=\(gameId) owner=\(ownerUid)")
 
         isGame = true
         sessionManager.switchMode(to: .game)
@@ -2550,7 +2550,7 @@ struct PitchTrackerView: View {
             us = local.us
             them = local.them
             lastLocalProgressUpdate = Date(timeIntervalSince1970: local.updatedAt)
-            print("🧭[PROG] chooseGame loadLocalSnapshot gid=\(gameId) stamp=\(lastLocalProgressUpdate!) values=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
+            debugLog("🧭[PROG] chooseGame loadLocalSnapshot gid=\(gameId) stamp=\(lastLocalProgressUpdate!) values=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
         } else if let cached = games.first(where: { $0.id == gameId }) {
             balls = cached.balls
             strikes = cached.strikes
@@ -2570,7 +2570,7 @@ struct PitchTrackerView: View {
                         || cached.them != 0 {
                 lastLocalProgressUpdate = Date()
             }
-            print("🧭[PROG] chooseGame loadCached gid=\(gameId) stamp=\(String(describing: lastLocalProgressUpdate)) values=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
+            debugLog("🧭[PROG] chooseGame loadCached gid=\(gameId) stamp=\(String(describing: lastLocalProgressUpdate)) values=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
         }
 
         hydrateChosenGameUI(ownerUid: ownerUid, gameId: gameId)
@@ -2800,7 +2800,7 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].inning = newValue
                 }
-                print("🧭[PROG] set inning=\(newValue) gid=\(gid)")
+                debugLog("🧭[PROG] set inning=\(newValue) gid=\(gid)")
                 markLocalProgressChange()
             }
         )
@@ -2826,7 +2826,7 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].hits = newValue
                 }
-                print("🧭[PROG] set hits=\(newValue) gid=\(gid)")
+                debugLog("🧭[PROG] set hits=\(newValue) gid=\(gid)")
                 markLocalProgressChange()
             }
         )
@@ -2852,7 +2852,7 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].walks = newValue
                 }
-                print("🧭[PROG] set walks=\(newValue) gid=\(gid)")
+                debugLog("🧭[PROG] set walks=\(newValue) gid=\(gid)")
                 markLocalProgressChange()
             }
         )
@@ -2877,7 +2877,7 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].balls = newValue
                 }
-                print("🧭[PROG] set balls=\(newValue) gid=\(gid)")
+                debugLog("🧭[PROG] set balls=\(newValue) gid=\(gid)")
                 markLocalProgressChange()
             }
         )
@@ -2902,7 +2902,7 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].strikes = newValue
                 }
-                print("🧭[PROG] set strikes=\(newValue) gid=\(gid)")
+                debugLog("🧭[PROG] set strikes=\(newValue) gid=\(gid)")
                 markLocalProgressChange()
             }
         )
@@ -2926,7 +2926,7 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].us = newValue
                 }
-                print("🧭[PROG] set us=\(newValue) gid=\(gid)")
+                debugLog("🧭[PROG] set us=\(newValue) gid=\(gid)")
                 markLocalProgressChange()
             }
         )
@@ -2950,7 +2950,7 @@ struct PitchTrackerView: View {
                 if let idx = games.firstIndex(where: { $0.id == gid }) {
                     games[idx].them = newValue
                 }
-                print("🧭[PROG] set them=\(newValue) gid=\(gid)")
+                debugLog("🧭[PROG] set them=\(newValue) gid=\(gid)")
                 markLocalProgressChange()
             }
         )
@@ -3459,7 +3459,7 @@ struct PitchTrackerView: View {
                 }
                 batch.commit { err in
                     if let err {
-                        print("❌ migrate jersey batch failed:", err.localizedDescription)
+                        debugLog("❌ migrate jersey batch failed:", err.localizedDescription)
                     }
                 }
                 start = end
@@ -3795,13 +3795,13 @@ struct PitchTrackerView: View {
             return "[g:\(gid) p:\(pid) batter:\(batterId) jersey:\(jersey) pitch:\(event.pitch) ts:\(event.timestamp.timeIntervalSince1970)]"
         }.joined(separator: " | ")
 
-        print("⚠️ Jersey detail miss (\(reason)) cell=\(cell.jerseyNumber) id=\(cell.id.uuidString) normalized=\(normalizedSelectedJersey ?? "nil") totalEvents=\(total) isGame=\(isGame) selectedGameId=\(selectedGameId ?? "nil") activeLiveId=\(activeLiveId ?? "nil") sample=\(sampleSummary)")
+        debugLog("⚠️ Jersey detail miss (\(reason)) cell=\(cell.jerseyNumber) id=\(cell.id.uuidString) normalized=\(normalizedSelectedJersey ?? "nil") totalEvents=\(total) isGame=\(isGame) selectedGameId=\(selectedGameId ?? "nil") activeLiveId=\(activeLiveId ?? "nil") sample=\(sampleSummary)")
     }
 
     private func debugLogJerseyDetailOpen(cell: JerseyCell, context: String) {
         let normalizedSelectedJersey = normalizeJersey(cell.jerseyNumber)
         let eventCount = isGame ? gamePitchEvents.count : pitchEvents.count
-        print("🟨 Jersey detail open (\(context)) cell=\(cell.jerseyNumber) id=\(cell.id.uuidString) normalized=\(normalizedSelectedJersey ?? "nil") selectedBatterId=\(selectedBatterId?.uuidString ?? "nil") selectedBatterJersey=\(selectedBatterJersey ?? "nil") isGame=\(isGame) selectedGameId=\(selectedGameId ?? "nil") activeLiveId=\(activeLiveId ?? "nil") events=\(eventCount)")
+        debugLog("🟨 Jersey detail open (\(context)) cell=\(cell.jerseyNumber) id=\(cell.id.uuidString) normalized=\(normalizedSelectedJersey ?? "nil") selectedBatterId=\(selectedBatterId?.uuidString ?? "nil") selectedBatterJersey=\(selectedBatterJersey ?? "nil") isGame=\(isGame) selectedGameId=\(selectedGameId ?? "nil") activeLiveId=\(activeLiveId ?? "nil") events=\(eventCount)")
     }
 
     private var cardsAndOverlay: some View {
@@ -5320,7 +5320,7 @@ struct PitchTrackerView: View {
                                                         batterIds: batterIds
                                                     )
                                                 } else {
-                                                    print("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                                                    debugLog("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
                                                 }
                                             }
 
@@ -5440,7 +5440,7 @@ struct PitchTrackerView: View {
                                                 batterIds: batterIds
                                             )
                                         } else {
-                                            print("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                                            debugLog("⚠️ Cannot update lineup: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
                                         }
                                     }
 
@@ -6214,7 +6214,7 @@ struct PitchTrackerView: View {
 
                 liveRef.setData(eventData, merge: false) { err in
                     if let err {
-                        print("❌ live pitchEvent save failed:", err.localizedDescription)
+                        debugLog("❌ live pitchEvent save failed:", err.localizedDescription)
                     }
                 }
 
@@ -6227,11 +6227,11 @@ struct PitchTrackerView: View {
                         .collection("pitchEvents").document(liveEventId)
                     ownerRef.setData(eventData, merge: false) { err in
                         if let err {
-                            print("❌ owner pitchEvent save failed:", err.localizedDescription)
+                            debugLog("❌ owner pitchEvent save failed:", err.localizedDescription)
                         }
                     }
                 } else {
-                    print("⚠️ Owner path unavailable; saved only to liveGames.")
+                    debugLog("⚠️ Owner path unavailable; saved only to liveGames.")
                 }
 
                 // clear pending in live doc
@@ -6239,7 +6239,7 @@ struct PitchTrackerView: View {
                     "pending": FieldValue.delete()
                 ])
             } catch {
-                print("❌ encode event failed:", error)
+                debugLog("❌ encode event failed:", error)
             }
         } else if isGame, let gid = selectedGameId, let owner = effectiveGameOwnerUserId {
             // Legacy fallback
@@ -6426,7 +6426,7 @@ struct PitchTrackerView: View {
             let decoded = try JSONDecoder().decode([BufferedPitcherEvent].self, from: data)
             bufferedSharedPitcherEvents = decoded
         } catch {
-            print("❌ Failed to decode buffered pitcher events:", error.localizedDescription)
+            debugLog("❌ Failed to decode buffered pitcher events:", error.localizedDescription)
             bufferedSharedPitcherEvents = []
         }
     }
@@ -6436,7 +6436,7 @@ struct PitchTrackerView: View {
             let data = try JSONEncoder().encode(bufferedSharedPitcherEvents)
             try data.write(to: bufferedSharedEventsURL, options: [.atomic])
         } catch {
-            print("❌ Failed to persist buffered pitcher events:", error.localizedDescription)
+            debugLog("❌ Failed to persist buffered pitcher events:", error.localizedDescription)
         }
     }
 
@@ -6447,7 +6447,7 @@ struct PitchTrackerView: View {
 
     private func flushBufferedSharedPitcherEvents(reason: String) {
         guard !bufferedSharedPitcherEvents.isEmpty else { return }
-        print("📤 Flushing \(bufferedSharedPitcherEvents.count) buffered pitcher events (reason: \(reason))")
+        debugLog("📤 Flushing \(bufferedSharedPitcherEvents.count) buffered pitcher events (reason: \(reason))")
         for buffered in bufferedSharedPitcherEvents {
             authManager.saveSharedPitcherEvent(pitcherId: buffered.pitcherId, event: buffered.event)
         }
@@ -6468,7 +6468,7 @@ struct PitchTrackerView: View {
         let isOwner = pitcher.isActiveOwner(currentUid: uid)
         let isShared = pitcher.sharedWith.contains(uid)
         if !isOwner && !isShared {
-            print("⚠️ Shared pitcher write not confirmed (owner/shared missing); attempting save to let rules decide.")
+            debugLog("⚠️ Shared pitcher write not confirmed (owner/shared missing); attempting save to let rules decide.")
         }
 
         if shouldWriteSharedPitcherEventImmediately {
@@ -6562,11 +6562,11 @@ struct PitchTrackerView: View {
         displayStateListener = nil
 
         guard let uid = authManager.user?.uid, !uid.isEmpty else {
-            print("⚠️ Display state listener missing uid")
+            debugLog("⚠️ Display state listener missing uid")
             return
         }
 
-        print("🖥️ Display state listener attaching to users/\(uid)/displayState/current")
+        debugLog("🖥️ Display state listener attaching to users/\(uid)/displayState/current")
         let ref = Firestore.firestore()
             .collection("users")
             .document(uid)
@@ -6575,11 +6575,11 @@ struct PitchTrackerView: View {
 
         displayStateListener = ref.addSnapshotListener { snap, err in
             if let err {
-                print("❌ Display state listener error:", err.localizedDescription)
+                debugLog("❌ Display state listener error:", err.localizedDescription)
                 return
             }
             guard let data = snap?.data() else {
-                print("🖥️ Display state cleared / missing. raw=nil")
+                debugLog("🖥️ Display state cleared / missing. raw=nil")
                 DispatchQueue.main.async {
                     self.displayCodePayload = nil
                 }
@@ -6590,12 +6590,12 @@ struct PitchTrackerView: View {
                let code = data["code"] as? String,
                !colorName.isEmpty,
                !code.isEmpty {
-                print("🖥️ Display state received color=\(colorName) code=\(code)")
+                debugLog("🖥️ Display state received color=\(colorName) code=\(code)")
                 DispatchQueue.main.async {
                     self.showDisplayCode(colorName: colorName, code: code)
                 }
             } else {
-                print("🖥️ Display state missing fields raw=\(data)")
+                debugLog("🖥️ Display state missing fields raw=\(data)")
                 DispatchQueue.main.async {
                     self.displayCodePayload = nil
                 }
@@ -6711,17 +6711,17 @@ struct PitchTrackerView: View {
         guard let ref = activeSessionDocRef else { return }
         displaySessionListener?.remove()
         displaySessionListener = nil
-        print("🖥️ Display session listener attaching to activeSession")
+        debugLog("🖥️ Display session listener attaching to activeSession")
         displaySessionListener = ref.addSnapshotListener { snap, err in
             if let err {
-                print("⚠️ display session listener error:", err.localizedDescription)
+                debugLog("⚠️ display session listener error:", err.localizedDescription)
                 return
             }
             let data = snap?.data() ?? [:]
             let liveId = data["liveId"] as? String
             let mode = data["mode"] as? String ?? "<nil>"
             let claimedDevice = data["deviceId"] as? String
-            print("🖥️ Display session update mode=\(mode) liveId=\(liveId ?? "<nil>")")
+            debugLog("🖥️ Display session update mode=\(mode) liveId=\(liveId ?? "<nil>")")
 
             if !self.isDisplayOnlyMode {
                 if let claimedDevice, !claimedDevice.isEmpty, claimedDevice != self.deviceSessionId {
@@ -6799,7 +6799,7 @@ struct PitchTrackerView: View {
                         ]
                     )
                 case .failure(let err):
-                    print("❌ Auto live session create failed:", err.localizedDescription)
+                    debugLog("❌ Auto live session create failed:", err.localizedDescription)
                 }
             }
         }
@@ -6830,7 +6830,7 @@ struct PitchTrackerView: View {
         ref.getDocument { snap, err in
             sessionCheckInProgress = false
             if let err {
-                print("⚠️ activeSession read failed:", err.localizedDescription)
+                debugLog("⚠️ activeSession read failed:", err.localizedDescription)
                 return
             }
 
@@ -6859,7 +6859,7 @@ struct PitchTrackerView: View {
         ]
         ref.setData(payload, merge: true) { err in
             if let err {
-                print("⚠️ activeSession claim failed:", err.localizedDescription)
+                debugLog("⚠️ activeSession claim failed:", err.localizedDescription)
                 return
             }
             self.isDisplayOnlyMode = false
@@ -6966,7 +6966,7 @@ struct PitchTrackerView: View {
         // If we aren't signed in yet, do NOT mark anything as presented.
         // We'll be called again when sign-in completes.
         guard authManager.isSignedIn else {
-            print("⏳ handleInitialAppear: not signed in yet — deferring boot flow")
+            debugLog("⏳ handleInitialAppear: not signed in yet — deferring boot flow")
             startupPhase = .ready
             return
         }
@@ -7026,7 +7026,7 @@ struct PitchTrackerView: View {
            !persistedLiveId.isEmpty {
 
             didRestoreLiveSession = true
-            print("🔁 Restoring live session:", persistedLiveId)
+            debugLog("🔁 Restoring live session:", persistedLiveId)
 
             self.activeLiveId = persistedLiveId
             self.updateActiveSessionLiveId(persistedLiveId)
@@ -7086,7 +7086,7 @@ struct PitchTrackerView: View {
         // -----------------------------------------
 
         authManager.loadTemplates { loadedTemplates in
-            print("✅ Loaded templates:", loadedTemplates.count)
+            debugLog("✅ Loaded templates:", loadedTemplates.count)
             self.templates = loadedTemplates
             if self.selectedTemplate == nil {
                 let restored = self.restorePersistedTemplateIfPossible(from: loadedTemplates)
@@ -7120,7 +7120,7 @@ struct PitchTrackerView: View {
             if let gid = self.pendingRestoreGameId,
                let game = loadedGames.first(where: { $0.id == gid }) {
 
-                print("🔁 Applying deferred restore for game:", gid)
+                debugLog("🔁 Applying deferred restore for game:", gid)
 
                 self.opponentName = game.opponent
 
@@ -8008,7 +8008,7 @@ struct PitchTrackerView: View {
 
     private func pauseLiveSessionForBackground() {
         guard activeLiveId != nil else { return }
-        print("🔌 Scene inactive/background → pausing live presence (no disconnect)")
+        debugLog("🔌 Scene inactive/background → pausing live presence (no disconnect)")
         stopHeartbeat()
         liveListener?.remove()
         liveListener = nil
@@ -8035,7 +8035,7 @@ struct PitchTrackerView: View {
             }
         }
         guard let liveId = activeLiveId, !liveId.isEmpty else { return }
-        print("🔌 Scene active → resuming live presence")
+        debugLog("🔌 Scene active → resuming live presence")
         startListeningToActiveGame()
         startListeningToLiveGame(liveId: liveId)
         startListeningToLivePitchEvents(liveId: liveId)
@@ -8058,7 +8058,7 @@ struct PitchTrackerView: View {
             .collection("games").document(gameId)
             .getDocument { snap, err in
                 if let err {
-                    print("❌ recover live: owner game lookup failed:", err.localizedDescription)
+                    debugLog("❌ recover live: owner game lookup failed:", err.localizedDescription)
                     return
                 }
                 guard let data = snap?.data(),
@@ -8069,7 +8069,7 @@ struct PitchTrackerView: View {
 
                 Firestore.firestore().collection("joinCodes").document(code).getDocument { codeSnap, codeErr in
                     if let codeErr {
-                        print("❌ recover live: joinCode lookup failed:", codeErr.localizedDescription)
+                        debugLog("❌ recover live: joinCode lookup failed:", codeErr.localizedDescription)
                         return
                     }
                     guard let codeData = codeSnap?.data(),
@@ -8084,13 +8084,13 @@ struct PitchTrackerView: View {
 
                         let needsSwitch = self.activeLiveId != liveId
                         if needsSwitch {
-                            print("🔁 recover live: switching to owner liveId=\(liveId)")
+                            debugLog("🔁 recover live: switching to owner liveId=\(liveId)")
                             self.activeLiveId = liveId
                             defaults.set(liveId, forKey: "activeLiveId")
                             self.updateActiveSessionLiveId(liveId)
                             self.startListeningToLiveGame(liveId: liveId)
                         } else {
-                            print("🔁 recover live: liveId already current, refreshing listeners")
+                            debugLog("🔁 recover live: liveId already current, refreshing listeners")
                         }
 
                         self.startListeningToLivePitchEvents(liveId: liveId)
@@ -8531,11 +8531,11 @@ struct PitchTrackerView: View {
                                 "pending": pendingData,
                                 "displayCode": FieldValue.delete()
                             ]) { err in
-                                if let err { print("❌ deferred pending update error:", err.localizedDescription) }
+                                if let err { debugLog("❌ deferred pending update error:", err.localizedDescription) }
                             }
                             self.deferredPendingPitch = nil
                         } catch {
-                            print("❌ encode deferred pending failed:", error)
+                            debugLog("❌ encode deferred pending failed:", error)
                         }
                     }
 
@@ -8547,7 +8547,7 @@ struct PitchTrackerView: View {
                                 "updatedAt": FieldValue.serverTimestamp()
                             ]
                         ]) { err in
-                            if let err { print("❌ deferred displayCode update error:", err.localizedDescription) }
+                            if let err { debugLog("❌ deferred displayCode update error:", err.localizedDescription) }
                         }
                         self.deferredDisplayCode = nil
                     }
@@ -8612,7 +8612,7 @@ struct PitchTrackerView: View {
                     let ownerUid = owner ?? (authManager.user?.uid ?? "")
                     guard !ownerUid.isEmpty else { return }
 
-                    print("✅ Resolver received game:", gid, "owner:", ownerUid)
+                    debugLog("✅ Resolver received game:", gid, "owner:", ownerUid)
                     self.resetCallAndResultUIState()
                     self.requestGameConfirmation(gameId: gid, ownerUid: ownerUid)
 
@@ -9298,7 +9298,7 @@ private struct ProgressSummaryView: View {
         let debugSummary = mapped.map { item in
             "\(item.pitch) [t: \(item.templateName)] hits: \(item.hits)/\(item.attempts) pct: \(String(format: "%.2f", item.percent))"
         }.joined(separator: "\n")
-        print("[Metrics] pitchStats summary:\n\(debugSummary)")
+        debugLog("[Metrics] pitchStats summary:\n\(debugSummary)")
         return mapped.sorted { lhs, rhs in
             if lhs.percent == rhs.percent { return lhs.attempts > rhs.attempts }
             return lhs.percent > rhs.percent
@@ -9308,12 +9308,12 @@ private struct ProgressSummaryView: View {
     private var pitchRanking: [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
         for ev in practiceEvents {
-            print("[Metrics] Ranking consider id=\(ev.id ?? "-") pitch=\(ev.pitch) hasCall=\(ev.calledPitch != nil) didHit=\(didHitLocation(ev))")
+            debugLog("[Metrics] Ranking consider id=\(ev.id ?? "-") pitch=\(ev.pitch) hasCall=\(ev.calledPitch != nil) didHit=\(didHitLocation(ev))")
             guard ev.calledPitch != nil else { continue }
             guard didHitLocation(ev) else { continue }
             let name = ev.pitch
             guard !name.isEmpty else { continue }
-            print("[Metrics]  Increment ranking for \(name)")
+            debugLog("[Metrics]  Increment ranking for \(name)")
             counts[name, default: 0] += 1
         }
 
@@ -9322,7 +9322,7 @@ private struct ProgressSummaryView: View {
         }
 
         let summary = rankingArray.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
-        print("[Metrics] pitchRanking counts: \(summary)")
+        debugLog("[Metrics] pitchRanking counts: \(summary)")
 
         return rankingArray.sorted { lhs, rhs in
             if lhs.count == rhs.count { return lhs.name < rhs.name }
@@ -9778,7 +9778,7 @@ struct JerseyRow: View {
                                 batterIds: batterIds
                             )
                         } else {
-                            print("⚠️ Cannot persist delete: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+                            debugLog("⚠️ Cannot persist delete: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
                         }
 
                         showActionsSheet = false
@@ -9814,7 +9814,7 @@ struct JerseyRow: View {
             let owner = effectiveGameOwnerUserId,
             !owner.isEmpty
         else {
-            print("⚠️ Cannot sync selected batter: missing selectedGameId or effectiveGameOwnerUserId")
+            debugLog("⚠️ Cannot sync selected batter: missing selectedGameId or effectiveGameOwnerUserId")
             return
         }
 
@@ -9835,7 +9835,7 @@ struct JerseyRow: View {
               let owner = effectiveGameOwnerUserId,
               !owner.isEmpty
         else {
-            print("⚠️ selectJersey: missing gameId/owner")
+            debugLog("⚠️ selectJersey: missing gameId/owner")
             return
         }
 
@@ -10247,14 +10247,14 @@ struct CalledPitchView: View {
 
     private func broadcastDisplayCode(colorName: String, code: String) {
         guard !isPracticeMode else {
-            print("⚠️ broadcastDisplayCode skipped (practice mode) color=\(colorName) code=\(code)")
+            debugLog("⚠️ broadcastDisplayCode skipped (practice mode) color=\(colorName) code=\(code)")
             return
         }
         guard let uid = Auth.auth().currentUser?.uid else {
-            print("⚠️ broadcastDisplayCode skipped (missing uid) color=\(colorName) code=\(code)")
+            debugLog("⚠️ broadcastDisplayCode skipped (missing uid) color=\(colorName) code=\(code)")
             return
         }
-        print("📤 broadcastDisplayCode user=\(uid) color=\(colorName) code=\(code)")
+        debugLog("📤 broadcastDisplayCode user=\(uid) color=\(colorName) code=\(code)")
         Firestore.firestore()
             .collection("users")
             .document(uid)
@@ -10689,7 +10689,7 @@ private struct CodeShareSheet: View {
         }
 
         isGenerating = true
-        print("🧩 Generate tapped | gameId=\(gameId) isGame=\(isGame)")
+        debugLog("🧩 Generate tapped | gameId=\(gameId) isGame=\(isGame)")
         writeErrorMessage = nil
         generated = ""
         inviteLink = ""
@@ -10704,7 +10704,7 @@ private struct CodeShareSheet: View {
                 self.isGenerating = false
                 switch result {
                 case .success(let tuple):
-                    print("✅ Generated code=\(tuple.code) liveId=\(tuple.liveId)")
+                    debugLog("✅ Generated code=\(tuple.code) liveId=\(tuple.liveId)")
                     self.generated = tuple.code
                     self.inviteLink = "pitchmark://join?token=\(tuple.inviteToken)"
 
@@ -10726,7 +10726,7 @@ private struct CodeShareSheet: View {
                     )
 
                 case .failure(let err):
-                    print("❌ Generate failed:", err.localizedDescription)
+                    debugLog("❌ Generate failed:", err.localizedDescription)
                     self.writeErrorMessage = err.localizedDescription
                 }
             }
@@ -10924,7 +10924,7 @@ struct GameSelectionSheet: View {
                     }
                     authManager.deleteGameCascade(gameId: id) { result in
                         if case .failure(let error) = result {
-                            print("❌ deleteGameCascade failed:", error.localizedDescription)
+                            debugLog("❌ deleteGameCascade failed:", error.localizedDescription)
                         }
                     }
                     NotificationCenter.default.post(name: .gameOrSessionDeleted, object: nil, userInfo: ["type": "game", "gameId": id])

@@ -116,7 +116,7 @@ struct SignInView: View {
 
     private func handleGoogleSignIn() {
         guard let rootViewController = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow?.rootViewController }).first else {
-            print("No root view controller found")
+            debugLog("No root view controller found")
             return
         }
 

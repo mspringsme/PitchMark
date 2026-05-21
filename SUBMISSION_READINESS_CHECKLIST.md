@@ -42,20 +42,21 @@ Status key:
 • Privacy ​Policy ​URL | ​Live ​URL accessible, current, and linked in app + ​App ​Store ​Connect|
 | [x] | Terms of Use URL | Live URL accessible and linked where required |  |  
 • terms loads and in-app link opens that same /terms URL.|
-| [ ] | App Privacy Nutrition Label | Matches actual data collection/sharing and SDK behavior |  |  |
-| [ ] | Support URL | Points to valid support destination (`support@pitchmark.app` path included) |  |  |
-| [ ] | Export compliance answers | Encryption/export responses accurate in App Store Connect |  |  |
-| [ ] | IAP metadata completeness | Subscription name, duration, pricing, screenshots, review notes complete |  |  |
+| [x] | App Privacy Nutrition Label | Matches actual data collection/sharing and SDK behavior |  |  
+• Matches actual data collection​/sharing and ​SDK behavior|
+| [x] | Support URL | Points to valid support destination (`support@pitchmark.app` path included) |  |  |
+| [x] | Export compliance answers | Encryption/export responses accurate in App Store Connect |  |  |
+| [x] | IAP metadata completeness | Subscription name, duration, pricing, screenshots, review notes complete |  |  |
 
 ## 3) Reliability and Quality Gates
 
 | Status | Item | Pass Criteria | Owner | Evidence |
 |---|---|---|---|---|
-| [ ] | Release build smoke test | Core app flows complete in Release config on physical device |  |  |
-| [ ] | Crash-free smoke cycle | No crashes across sign-in, game flow, subscription flow, restore |  |  |
-| [ ] | Network resilience | Graceful handling for poor network/timeouts in critical flows |  |  |
-| [ ] | Foreground/background stability | No state corruption or duplicate listeners after app lifecycle transitions |  |  |
-| [ ] | Debug log hygiene | Verbose debug logs reduced/guarded for production builds |  |  |
+| [x] | Release build smoke test | Core app flows complete in Release config on physical device |  |  |
+| [x] | Crash-free smoke cycle | No crashes across sign-in, game flow, subscription flow, restore |  |  |
+| [x] | Network resilience | Graceful handling for poor network/timeouts in critical flows |  |  |
+| [x] | Foreground/background stability | No state corruption or duplicate listeners after app lifecycle transitions |  |  |
+| [x] | Debug log hygiene | Verbose debug logs reduced/guarded for production builds |  |  |
 
 ## 4) Security and Abuse Controls
 

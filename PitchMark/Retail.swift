@@ -12,6 +12,8 @@ import FirebaseFunctions
 
 struct StorefrontView: View {
     @EnvironmentObject var subscriptionManager: SubscriptionManager
+    @State private var isPurchasingPro = false
+    @State private var isRestoringPurchases = false
 
     private var annualPrice: String {
         subscriptionManager.annualProduct?.displayPrice ?? "$19.99"
@@ -108,18 +110,37 @@ struct StorefrontView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                             Button {
-                                Task { await subscriptionManager.purchaseAnnual() }
+                                guard !isPurchasingPro else { return }
+                                isPurchasingPro = true
+                                Task {
+                                    await subscriptionManager.purchaseAnnual()
+                                    isPurchasingPro = false
+                                }
                             } label: {
-                                Label("Start Pro Annual", systemImage: "crown.fill")
+                                Label(isPurchasingPro ? "Starting Purchase…" : "Start Pro Annual", systemImage: "crown.fill")
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
+                            .disabled(subscriptionManager.status == .loading || isPurchasingPro || isRestoringPurchases)
                         }
 
                         Button("Restore Purchases") {
-                            Task { await subscriptionManager.restorePurchases() }
+                            guard !isRestoringPurchases else { return }
+                            isRestoringPurchases = true
+                            Task {
+                                await subscriptionManager.restorePurchases()
+                                isRestoringPurchases = false
+                            }
                         }
                         .buttonStyle(.bordered)
+                        .disabled(isPurchasingPro || isRestoringPurchases)
+
+                        if let errorMessage = subscriptionManager.lastErrorMessage {
+                            Text(errorMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.leading)
+                        }
                     }
                     .padding(.vertical, 6)
                 }
