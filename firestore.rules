@@ -29,13 +29,29 @@ service cloud.firestore {
       return signedIn() && activeOwnerUid(data) == uid();
     }
 
+    function isRetailAdmin() {
+      return signedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email == "support@pitchmark.app";
+    }
+
+    match /retailOrders/{orderId} {
+      allow get, list: if signedIn()
+        && (resource.data.firebaseUid == uid() || isRetailAdmin());
+
+      allow create: if false;
+      allow update, delete: if isRetailAdmin();
+    }
+
+
     // ─────────────────────────────────────────────
     // TOP-LEVEL TEMPLATES: /templates/{templateId}
     // ─────────────────────────────────────────────
     match /templates/{templateId} {
       allow get: if signedIn()
         && (resource.data.ownerUid == uid() || sharedWithMe(resource.data));
-      allow list: if signedIn();
+      allow list: if signedIn()
+        && (resource.data.ownerUid == uid() || sharedWithMe(resource.data));
 
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid();
@@ -54,7 +70,12 @@ service cloud.firestore {
           || sharedWithMe(resource.data)
           || resource.data.claimedByUid == uid()
         );
-      allow list: if signedIn();
+      allow list: if signedIn()
+        && (
+          resource.data.ownerUid == uid()
+          || sharedWithMe(resource.data)
+          || resource.data.claimedByUid == uid()
+        );
 
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid();

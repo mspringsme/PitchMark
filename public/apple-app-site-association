@@ -6,7 +6,9 @@
         "appID": "E3TJVK4339.com.MarkSpringer.PitchMark",
         "paths": [
           "/signin",
-          "/signin*"
+          "/signin*",
+          "/stripe/success",
+          "/stripe/cancel"
         ]
       }
     ]

@@ -9,14 +9,21 @@ import UIKit
 import StoreKit
 import Combine
 import FirebaseFunctions
+import FirebaseAuth
 
 struct StorefrontView: View {
+    @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var isPurchasingPro = false
     @State private var isRestoringPurchases = false
 
     private var annualPrice: String {
         subscriptionManager.annualProduct?.displayPrice ?? "$19.99"
+    }
+
+    private var isOwnerFulfillmentAccessEnabled: Bool {
+        guard let email = authManager.user?.email?.lowercased() else { return false }
+        return email == "support@pitchmark.app"
     }
 
     var body: some View {
@@ -102,13 +109,7 @@ struct StorefrontView: View {
                             Text("Active subscription")
                                 .font(.caption)
                                 .foregroundStyle(.green)
-                            Text("Debug: isPro = true")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
                         } else {
-                            Text("Debug: isPro = false")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
                             Button {
                                 guard !isPurchasingPro else { return }
                                 isPurchasingPro = true
@@ -121,7 +122,9 @@ struct StorefrontView: View {
                                     .frame(maxWidth: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
+                            .frame(minHeight: 44)
                             .disabled(subscriptionManager.status == .loading || isPurchasingPro || isRestoringPurchases)
+                            .accessibilityHint("Starts the annual PitchMark Pro subscription purchase flow.")
                         }
 
                         Button("Restore Purchases") {
@@ -133,7 +136,9 @@ struct StorefrontView: View {
                             }
                         }
                         .buttonStyle(.bordered)
+                        .frame(minHeight: 44)
                         .disabled(isPurchasingPro || isRestoringPurchases)
+                        .accessibilityHint("Restores previously purchased subscriptions for this Apple ID.")
 
                         if let errorMessage = subscriptionManager.lastErrorMessage {
                             Text(errorMessage)
@@ -141,8 +146,31 @@ struct StorefrontView: View {
                                 .foregroundStyle(.red)
                                 .multilineTextAlignment(.leading)
                         }
+
+                        if let statusMessage = subscriptionManager.lastStatusMessage {
+                            Text(statusMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.leading)
+                        }
                     }
                     .padding(.vertical, 6)
+
+                    NavigationLink {
+                        RetailOrderHistoryView(uid: authManager.user?.uid ?? "")
+                    } label: {
+                        Label("Order History", systemImage: "clock.arrow.circlepath")
+                            .font(.subheadline.weight(.semibold))
+                    }
+
+                    if isOwnerFulfillmentAccessEnabled {
+                        NavigationLink {
+                            RetailFulfillmentAdminView()
+                        } label: {
+                            Label("Fulfillment Queue", systemImage: "shippingbox")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -152,7 +180,7 @@ struct StorefrontView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Text("PitchMark Store")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.headline.weight(.semibold))
                         .padding(.top, -20)
                 }
             }
@@ -1075,6 +1103,7 @@ private final class StripeCheckoutManager: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var lastErrorMessage: String? = nil
     @Published private(set) var checkoutURL: URL? = nil
+    private var idempotencyKeyByRequest: [String: String] = [:]
 
     func beginCheckout(
         retailProductId: String,
@@ -1086,13 +1115,18 @@ private final class StripeCheckoutManager: ObservableObject {
         isLoading = true
         lastErrorMessage = nil
         checkoutURL = nil
+        let requestFingerprint = [retailProductId, kind == .gridKey ? "gridKey" : "printableSheet", selectedTemplate.id.uuidString, storeTemplate.name]
+            .joined(separator: "|")
+        let idempotencyKey = idempotencyKeyByRequest[requestFingerprint] ?? makeIdempotencyKey()
+        idempotencyKeyByRequest[requestFingerprint] = idempotencyKey
 
         let payload: [String: Any] = [
             "retailProductId": retailProductId,
             "itemKind": kind == .gridKey ? "gridKey" : "printableSheet",
             "templateId": selectedTemplate.id.uuidString,
             "templateName": selectedTemplate.name,
-            "storeTemplateName": storeTemplate.name
+            "storeTemplateName": storeTemplate.name,
+            "idempotencyKey": idempotencyKey
         ]
 
         do {
@@ -1111,10 +1145,24 @@ private final class StripeCheckoutManager: ObservableObject {
 
             checkoutURL = url
         } catch {
-            lastErrorMessage = "Unable to start checkout. \(error.localizedDescription)"
+            lastErrorMessage = userFacingCheckoutErrorMessage(from: error)
         }
 
         isLoading = false
+    }
+
+    private func makeIdempotencyKey() -> String {
+        "pm_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+    }
+
+    private func userFacingCheckoutErrorMessage(from error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == FunctionsErrorDomain {
+            if let message = nsError.userInfo[NSLocalizedDescriptionKey] as? String, !message.isEmpty {
+                return message
+            }
+        }
+        return "Unable to start checkout. \(error.localizedDescription)"
     }
 }
 

@@ -16,10 +16,17 @@ private final class PitchMarkAppCheckProviderFactory: NSObject, AppCheckProvider
 }
 
 struct RootView: View {
+    private struct CheckoutAlert: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+    }
+
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var showDisplayCover = false
     @State private var showProPaywall = false
+    @State private var checkoutAlert: CheckoutAlert? = nil
 
     var body: some View {
         Group {
@@ -42,6 +49,13 @@ struct RootView: View {
                 allowsClose: true
             )
         }
+        .alert(item: $checkoutAlert) { alert in
+            Alert(
+                title: Text(alert.title),
+                message: Text(alert.message),
+                dismissButton: .default(Text("OK"))
+            )
+        }
         .onAppear {
             authManager.restoreSignIn() // ✅ safe here
         }
@@ -49,11 +63,17 @@ struct RootView: View {
             if authManager.handleEmailSignInLink(url) {
                 return
             }
+            if handleRetailCheckoutReturn(url) {
+                return
+            }
             handleInviteLink(url)
         }
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
             guard let url = activity.webpageURL else { return }
             if authManager.handleEmailSignInLink(url) {
+                return
+            }
+            if handleRetailCheckoutReturn(url) {
                 return
             }
             handleInviteLink(url)
@@ -99,6 +119,26 @@ struct RootView: View {
             joinLiveGameByInviteToken(token)
         } else {
             UserDefaults.standard.set(token, forKey: "pendingInviteToken")
+        }
+    }
+
+    private func handleRetailCheckoutReturn(_ url: URL) -> Bool {
+        let normalizedPath = url.path.lowercased()
+        switch normalizedPath {
+        case "/stripe/success":
+            checkoutAlert = CheckoutAlert(
+                title: "Order Received",
+                message: "Your Stripe checkout finished successfully. We can fulfill the order from the payment details captured in Stripe."
+            )
+            return true
+        case "/stripe/cancel":
+            checkoutAlert = CheckoutAlert(
+                title: "Checkout Canceled",
+                message: "No charge was made. You can return to the store and try again anytime."
+            )
+            return true
+        default:
+            return false
         }
     }
 
@@ -206,7 +246,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             if let error = error {
                 debugLog("❌ AppCheck token error:", error.localizedDescription)
             } else {
-                debugLog("✅ AppCheck token:", token?.token ?? "nil")
+                debugLog("✅ AppCheck token fetched")
             }
         }
         #endif

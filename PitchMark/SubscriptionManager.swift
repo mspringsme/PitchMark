@@ -34,6 +34,7 @@ final class SubscriptionManager: ObservableObject {
     @Published private(set) var forcePaywallForSandboxTesting: Bool = false
     @Published private(set) var debugSubscriptionOverride: DebugSubscriptionOverride = .off
     @Published var lastErrorMessage: String? = nil
+    @Published var lastStatusMessage: String? = nil
     private var transactionUpdatesTask: Task<Void, Never>? = nil
     private var isRefreshingEntitlements = false
     private var pendingEntitlementRefresh = false
@@ -125,6 +126,7 @@ final class SubscriptionManager: ObservableObject {
 
     func purchaseAnnual() async {
         lastErrorMessage = nil
+        lastStatusMessage = nil
         log("purchase start")
 
         if annualProduct == nil {
@@ -153,12 +155,14 @@ final class SubscriptionManager: ObservableObject {
                     await transaction.finish()
                     log("purchase transaction finished txnId=\(transaction.id)")
                     await refreshEntitlements(reason: "purchase-success")
+                    lastStatusMessage = "Purchase successful. PitchMark Pro is now active."
                 case .unverified:
                     lastErrorMessage = "Purchase could not be verified."
                     log("purchase unverified")
                 }
             case .userCancelled:
                 log("purchase cancelled by user")
+                lastStatusMessage = "Purchase canceled."
             case .pending:
                 lastErrorMessage = "Purchase pending approval."
                 log("purchase pending")
@@ -173,11 +177,15 @@ final class SubscriptionManager: ObservableObject {
 
     func restorePurchases() async {
         lastErrorMessage = nil
+        lastStatusMessage = nil
         log("restore start")
         do {
             try await AppStore.sync()
             log("restore sync complete")
             await refreshEntitlements(reason: "restore")
+            lastStatusMessage = isPro
+                ? "Purchases restored. PitchMark Pro is active."
+                : "No active purchases were found to restore."
         } catch {
             lastErrorMessage = userFacingPurchaseErrorMessage(from: error)
             log("restore failed error=\(error.localizedDescription)")
@@ -339,69 +347,87 @@ struct ProPaywallView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            Text(title)
-                .font(.title2.bold())
+        ScrollView {
+            VStack(spacing: 16) {
+                Text(title)
+                    .font(.title2.bold())
 
-            Text(message)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("PitchMark Pro includes:")
-                    .font(.headline)
-
-                Text("• Add more than 2 pitches to grid keys")
-                Text("• Connect a participant during games")
-                Text("• Display app access")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .font(.subheadline)
-
-            VStack(spacing: 10) {
-                Button {
-                    guard !isPurchasing else { return }
-                    isPurchasing = true
-                    Task {
-                        await subscriptionManager.purchaseAnnual()
-                        isPurchasing = false
-                    }
-                } label: {
-                    Text(isPurchasing ? "Starting Purchase…" : "Start Pro Annual — \(priceLabel)/year")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(subscriptionManager.status == .loading || isPurchasing || isRestoring)
-
-                Button("Restore Purchases") {
-                    guard !isRestoring else { return }
-                    isRestoring = true
-                    Task {
-                        await subscriptionManager.restorePurchases()
-                        isRestoring = false
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isPurchasing || isRestoring)
-            }
-
-            if let errorMessage = subscriptionManager.lastErrorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 8)
-            }
 
-            if allowsClose {
-                Button("Not Now") {
-                    dismiss()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("PitchMark Pro includes:")
+                        .font(.headline)
+
+                    Text("• Add more than 2 pitches to grid keys")
+                    Text("• Connect a participant during games")
+                    Text("• Display app access")
                 }
-                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.subheadline)
+
+                VStack(spacing: 10) {
+                    Button {
+                        guard !isPurchasing else { return }
+                        isPurchasing = true
+                        Task {
+                            await subscriptionManager.purchaseAnnual()
+                            isPurchasing = false
+                        }
+                    } label: {
+                        Text(isPurchasing ? "Starting Purchase…" : "Start Pro Annual — \(priceLabel)/year")
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .frame(minHeight: 44)
+                    .disabled(subscriptionManager.status == .loading || isPurchasing || isRestoring)
+                    .accessibilityHint("Starts the annual PitchMark Pro subscription purchase flow.")
+
+                    Button("Restore Purchases") {
+                        guard !isRestoring else { return }
+                        isRestoring = true
+                        Task {
+                            await subscriptionManager.restorePurchases()
+                            isRestoring = false
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .frame(minHeight: 44)
+                    .disabled(isPurchasing || isRestoring)
+                    .accessibilityHint("Restores previously purchased subscriptions for this Apple ID.")
+                }
+
+                if let errorMessage = subscriptionManager.lastErrorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+                }
+
+                if let statusMessage = subscriptionManager.lastStatusMessage {
+                    Text(statusMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+                }
+
+                if allowsClose {
+                    Button("Not Now") {
+                        dismiss()
+                    }
+                    .buttonStyle(.plain)
+                    .frame(minHeight: 44)
+                    .accessibilityLabel("Close paywall")
+                }
             }
+            .padding()
         }
-        .padding()
         .onChange(of: subscriptionManager.isPro) { _, newValue in
             if newValue {
                 dismiss()

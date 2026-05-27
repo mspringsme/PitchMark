@@ -35,7 +35,9 @@ struct SignInView: View {
                 ) {
                     handleGoogleSignIn()
                 }
-                .frame(width: 250, height: 50)
+                .frame(maxWidth: 320, minHeight: 50, maxHeight: 50)
+                .accessibilityLabel("Sign in with Google")
+                .accessibilityHint("Authenticates your PitchMark account using Google.")
 
                 SignInWithAppleButton(.signIn, onRequest: { request in
                     authManager.prepareAppleSignIn(request)
@@ -43,9 +45,12 @@ struct SignInView: View {
                     authManager.handleAppleSignIn(result: result)
                 })
                 .signInWithAppleButtonStyle(.black)
-                .frame(width: 250, height: 50)
+                .frame(maxWidth: 320, minHeight: 50, maxHeight: 50)
+                .accessibilityLabel("Sign in with Apple")
+                .accessibilityHint("Authenticates your PitchMark account using Apple.")
 
             }
+            .frame(maxWidth: 420)
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("Email one-time code")
@@ -56,6 +61,8 @@ struct SignInView: View {
                     .autocorrectionDisabled()
                     .keyboardType(.emailAddress)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Email address")
+                    .accessibilityHint("Enter the email where you want to receive a one-time sign-in code.")
 
                 Button(isSendingEmail ? "Sending..." : "Send Code") {
                     isSendingEmail = true
@@ -73,11 +80,15 @@ struct SignInView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity, minHeight: 44)
                 .disabled(isSendingEmail || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityHint("Sends a one-time verification code to your email.")
 
                 TextField("6-digit code", text: $otpCode)
                     .keyboardType(.numberPad)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("One-time code")
+                    .accessibilityHint("Enter the 6-digit code sent to your email.")
 
                 Button(isVerifyingOtp ? "Verifying..." : "Verify Code") {
                     isVerifyingOtp = true
@@ -95,19 +106,22 @@ struct SignInView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .frame(maxWidth: .infinity, minHeight: 44)
                 .disabled(
                     isVerifyingOtp ||
                     email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                     otpCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 )
+                .accessibilityHint("Verifies your one-time code and signs you in.")
 
                 if let emailStatus {
                     Text(emailStatus)
                         .font(.caption)
-                        .foregroundColor(emailStatus.hasPrefix("Signed") || emailStatus.hasPrefix("Check") ? .secondary : .red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundColor(emailStatus.hasPrefix("Signed") || emailStatus.hasPrefix("Check") ? .primary : .red)
                 }
             }
-            .frame(maxWidth: 320)
+            .frame(maxWidth: 420)
 
             Spacer()
         }

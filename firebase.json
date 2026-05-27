@@ -1,6 +1,16 @@
 {
   "hosting": {
     "public": "public",
+    "rewrites": [
+      {
+        "source": "/stripe/success",
+        "destination": "/stripe-success.html"
+      },
+      {
+        "source": "/stripe/cancel",
+        "destination": "/stripe-cancel.html"
+      }
+    ],
     "redirects": [
       {
         "source": "/privacy",
@@ -26,5 +36,8 @@
   },
   "functions": {
     "source": "functions"
-  }
+  },
+  "firestore": {
+  "rules": "firestore.rules"
+}
 }

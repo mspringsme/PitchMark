@@ -36,385 +36,302 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const functions = __importStar(require("firebase-functions/v1"));
-const admin = __importStar(require("firebase-admin"));
-const params_1 = require("firebase-functions/params");
-const crypto_1 = __importDefault(require("crypto"));
-admin.initializeApp();
-const otpSecret = (0, params_1.defineSecret)("OTP_SECRET");
-const resendApiKey = (0, params_1.defineSecret)("RESEND_API_KEY");
-function normalizePitch(raw) {
-    return (raw || "").trim().toLowerCase();
-}
-function swapInOut(raw) {
-    let output = raw;
-    const replaceWholeWord = (word, replacement) => {
-        if (output === word)
-            output = replacement;
-        output = output.replace(new RegExp(`\\b${word}\\b`, "g"), replacement);
-        output = output.replace(new RegExp(`&\\s+${word}\\b`, "g"), `& ${replacement}`);
-        output = output.replace(new RegExp(`\\b${word}\\s+&`, "g"), `${replacement} &`);
-    };
-    replaceWholeWord("In", "__TEMP_IN__");
-    replaceWholeWord("Out", "In");
-    replaceWholeWord("__TEMP_IN__", "Out");
-    return output;
-}
-function normalizeLocation(raw, batterSide) {
-    let adjusted = raw || "";
-    if (batterSide === "left") {
-        adjusted = swapInOut(adjusted);
+exports.stripeWebhook = exports.createRetailCheckoutSession = void 0;
+const https_1 = require("firebase-functions/v2/https");
+const logger = __importStar(require("firebase-functions/logger"));
+const app_1 = require("firebase-admin/app");
+const firestore_1 = require("firebase-admin/firestore");
+const stripe_1 = __importDefault(require("stripe"));
+(0, app_1.initializeApp)();
+const db = (0, firestore_1.getFirestore)();
+const retailCatalog = {
+    grid_5x3: { priceId: "price_1TbQjpHGR9piiykPmnX6Lj5J", label: "Grid Key 5 x 3" },
+    grid_3_5x2_75: { priceId: "price_1TbQkPHGR9piiykPAIvImeVz", label: "Grid Key 3.5 x 2.75" },
+    grid_custom: { priceId: "price_1TbQkuHGR9piiykPFoJgsxTf", label: "Grid Key Custom" },
+    sheet_8_5x11: { priceId: "price_1TbQmqHGR9piiykPAKJpnQQP", label: "Printable Sheet 8.5 x 11" }
+};
+const allowedItemKinds = new Set(["gridKey", "printableSheet", ""]);
+const idempotencyKeyPattern = /^[a-zA-Z0-9._-]{8,80}$/;
+const checkoutThrottleWindowMs = 60_000;
+const checkoutThrottleMaxAttempts = 5;
+function getStripeClient() {
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+    if (!stripeSecretKey) {
+        throw new https_1.HttpsError("failed-precondition", "Missing STRIPE_SECRET_KEY environment variable.");
     }
-    const cleaned = adjusted
-        .replace(/—/g, " ")
-        .replace(/–/g, " ")
-        .replace(/-/g, " ")
-        .replace(/&/g, "and")
+    return new stripe_1.default(stripeSecretKey, {
+        apiVersion: "2024-06-20"
+    });
+}
+function requireEnv(name) {
+    const value = process.env[name];
+    if (!value) {
+        throw new https_1.HttpsError("failed-precondition", `Missing ${name} environment variable.`);
+    }
+    return value;
+}
+function optionalEnv(name) {
+    return process.env[name]?.trim() ?? "";
+}
+function parseRequestData(data) {
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+        throw new https_1.HttpsError("invalid-argument", "Request payload must be an object.");
+    }
+    return data;
+}
+function readOptionalString(data, key, maxLength) {
+    const raw = data[key];
+    if (raw == null) {
+        return "";
+    }
+    if (typeof raw !== "string") {
+        throw new https_1.HttpsError("invalid-argument", `${key} must be a string.`);
+    }
+    const value = raw.trim();
+    if (value.length > maxLength) {
+        throw new https_1.HttpsError("invalid-argument", `${key} exceeds ${maxLength} characters.`);
+    }
+    return value;
+}
+function sanitizeMetadataValue(value, maxLength) {
+    return value
+        .replace(/[\u0000-\u001F\u007F]/g, " ")
         .replace(/\s+/g, " ")
         .trim()
-        .toLowerCase();
-    if (cleaned.startsWith("strike ")) {
-        return { type: "strike", zone: cleaned.substring("strike ".length).trim() };
-    }
-    if (cleaned.startsWith("ball ")) {
-        return { type: "ball", zone: cleaned.substring("ball ".length).trim() };
-    }
-    return { type: null, zone: cleaned };
+        .slice(0, maxLength);
 }
-function strictIsLocationMatch(event) {
-    if (!event.calledPitch)
-        return false;
-    const called = event.calledPitch;
-    const calledPitchNorm = normalizePitch(called.pitch);
-    const actualPitchNorm = normalizePitch(event.pitch);
-    if (calledPitchNorm !== actualPitchNorm)
-        return false;
-    const calledLoc = normalizeLocation(called.location, event.batterSide);
-    const actualLoc = normalizeLocation(event.location, event.batterSide);
-    if (calledLoc.zone !== actualLoc.zone)
-        return false;
-    if (calledLoc.type && actualLoc.type) {
-        return calledLoc.type === actualLoc.type;
+function requireHttpsUrl(value, name) {
+    let parsed;
+    try {
+        parsed = new URL(value);
     }
-    if (calledLoc.type && !actualLoc.type) {
-        const actualType = event.isStrike ? "strike" : "ball";
-        return calledLoc.type === actualType;
+    catch {
+        throw new https_1.HttpsError("failed-precondition", `${name} must be a valid URL.`);
     }
-    if (!calledLoc.type && actualLoc.type) {
-        const calledType = called.isStrike ? "strike" : "ball";
-        return calledType === actualLoc.type;
+    if (parsed.protocol !== "https:") {
+        throw new https_1.HttpsError("failed-precondition", `${name} must use https.`);
     }
-    return true;
+    return parsed.toString();
 }
-function resultType(event) {
-    const raw = (event.location || "").trim().toLowerCase();
-    if (raw.startsWith("strike "))
-        return "strike";
-    if (raw.startsWith("ball "))
-        return "ball";
-    return null;
-}
-function defaultStats(pitcherId, scope, scopeId) {
-    return {
-        pitcherId,
-        scope,
-        scopeId,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        totalCount: 0,
-        strikeCount: 0,
-        ballCount: 0,
-        swingingStrikeCount: 0,
-        lookingStrikeCount: 0,
-        wildPitchCount: 0,
-        passedBallCount: 0,
-        walkCount: 0,
-        hitSpotCount: 0,
-        pitchStats: {},
-        outcomeStats: {},
-        pitchLocationStats: {}
-    };
-}
-function applyEvent(stats, event) {
-    const updated = { ...stats };
-    updated.updatedAt = admin.firestore.FieldValue.serverTimestamp();
-    updated.totalCount += 1;
-    const type = resultType(event);
-    if (type === "strike")
-        updated.strikeCount += 1;
-    if (type === "ball")
-        updated.ballCount += 1;
-    if (event.strikeSwinging && event.outcome === "K")
-        updated.swingingStrikeCount += 1;
-    if (event.strikeLooking && event.outcome === "ꓘ")
-        updated.lookingStrikeCount += 1;
-    if (event.wildPitch)
-        updated.wildPitchCount += 1;
-    if (event.passedBall)
-        updated.passedBallCount += 1;
-    const outcome = (event.outcome || "").trim();
-    if (outcome === "BB" || outcome === "Walk")
-        updated.walkCount += 1;
-    const hitSpot = strictIsLocationMatch(event);
-    if (hitSpot)
-        updated.hitSpotCount += 1;
-    const pitchKey = (event.pitch || "Unknown Pitch").trim() || "Unknown Pitch";
-    if (!updated.pitchStats[pitchKey]) {
-        updated.pitchStats[pitchKey] = { count: 0, hitSpotCount: 0 };
-    }
-    updated.pitchStats[pitchKey].count += 1;
-    if (hitSpot)
-        updated.pitchStats[pitchKey].hitSpotCount += 1;
-    if (outcome) {
-        if (!updated.outcomeStats[outcome]) {
-            updated.outcomeStats[outcome] = { count: 0, jerseys: [] };
-        }
-        updated.outcomeStats[outcome].count += 1;
-        const jersey = (event.opponentJersey || "").trim();
-        if (jersey && !updated.outcomeStats[outcome].jerseys.includes(jersey)) {
-            updated.outcomeStats[outcome].jerseys.push(jersey);
-        }
-    }
-    const safePitch = (event.pitch || "Unknown Pitch").trim() || "Unknown Pitch";
-    const safeLocation = (event.location || "Unknown Location").trim() || "Unknown Location";
-    const locKey = `${safePitch}||${safeLocation}`;
-    if (!updated.pitchLocationStats[locKey]) {
-        updated.pitchLocationStats[locKey] = { count: 0, hitCount: 0, missCount: 0, jerseys: [] };
-    }
-    updated.pitchLocationStats[locKey].count += 1;
-    if (hitSpot)
-        updated.pitchLocationStats[locKey].hitCount += 1;
-    else
-        updated.pitchLocationStats[locKey].missCount += 1;
-    const jersey = (event.opponentJersey || "").trim();
-    if (jersey && !updated.pitchLocationStats[locKey].jerseys.includes(jersey)) {
-        updated.pitchLocationStats[locKey].jerseys.push(jersey);
-    }
-    return updated;
-}
-async function updateStatsDoc(pitcherId, scope, scopeId, event) {
-    const db = admin.firestore();
-    const docId = scope === "overall" ? "overall" : `${scope}_${scopeId}`;
-    const ref = db.collection("pitchers").doc(pitcherId).collection("stats").doc(docId);
+async function enforceCheckoutRateLimit(uid) {
+    const bucket = Math.floor(Date.now() / checkoutThrottleWindowMs);
+    const key = `${uid}_${bucket}`;
+    const ref = db.collection("rateLimits").doc("checkout").collection("users").doc(key);
     await db.runTransaction(async (tx) => {
         const snap = await tx.get(ref);
-        const base = snap.exists
-            ? snap.data()
-            : defaultStats(pitcherId, scope, scopeId);
-        const updated = applyEvent({ ...base }, event);
-        tx.set(ref, updated, { merge: false });
+        const count = snap.exists ? Number(snap.data()?.count ?? 0) : 0;
+        if (count >= checkoutThrottleMaxAttempts) {
+            throw new https_1.HttpsError("resource-exhausted", "Too many checkout attempts. Please wait a minute and try again.");
+        }
+        tx.set(ref, {
+            uid,
+            count: count + 1,
+            bucket,
+            updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            expiresAt: Date.now() + (2 * checkoutThrottleWindowMs)
+        }, { merge: true });
     });
 }
-exports.onPitcherPitchEventCreate = functions.firestore
-    .document("pitchers/{pitcherId}/pitchEvents/{eventId}")
-    .onCreate(async (snap, context) => {
-    const pitcherId = context.params.pitcherId;
-    const event = snap.data();
-    if (!pitcherId || !event)
-        return;
-    const updates = [];
-    updates.push(updateStatsDoc(pitcherId, "overall", "overall", event));
-    if (event.gameId) {
-        updates.push(updateStatsDoc(pitcherId, "game", event.gameId, event));
+function readOptionalIdempotencyKey(data) {
+    const raw = data.idempotencyKey;
+    if (raw == null) {
+        return "";
     }
-    const practiceId = (event.practiceId || "").trim();
-    if (event.mode === "practice") {
-        updates.push(updateStatsDoc(pitcherId, "practice", practiceId || "__GENERAL__", event));
+    if (typeof raw !== "string") {
+        throw new https_1.HttpsError("invalid-argument", "idempotencyKey must be a string.");
     }
-    await Promise.all(updates);
-});
-const OTP_TTL_MINUTES = 10;
-const OTP_ATTEMPT_LIMIT = 3;
-function requireString(input, field) {
-    if (typeof input !== "string") {
-        throw new functions.https.HttpsError("invalid-argument", `${field} must be a string`);
+    const value = raw.trim();
+    if (!value) {
+        return "";
     }
-    const trimmed = input.trim().toLowerCase();
-    if (!trimmed) {
-        throw new functions.https.HttpsError("invalid-argument", `${field} is required`);
+    if (!idempotencyKeyPattern.test(value)) {
+        throw new https_1.HttpsError("invalid-argument", "idempotencyKey format is invalid.");
     }
-    return trimmed;
+    return value;
 }
-function getOtpSecret() {
-    const secret = otpSecret.value() || process.env.OTP_SECRET;
-    if (!secret) {
-        throw new functions.https.HttpsError("failed-precondition", "OTP secret not configured");
+exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1" }, async (request) => {
+    if (!request.auth?.uid) {
+        throw new https_1.HttpsError("unauthenticated", "You must be signed in to purchase.");
     }
-    return secret;
-}
-function hashOtp(email, code) {
-    const secret = getOtpSecret();
-    return crypto_1.default.createHash("sha256").update(`${secret}:${email}:${code}`).digest("hex");
-}
-function generateOtp() {
-    const value = Math.floor(100000 + Math.random() * 900000);
-    return String(value);
-}
-async function sendOtpEmail(email, code) {
-    const resendKey = resendApiKey.value() || process.env.RESEND_API_KEY;
-    if (!resendKey) {
-        throw new functions.https.HttpsError("failed-precondition", "Resend API key not configured");
+    const data = parseRequestData(request.data);
+    const retailProductId = readOptionalString(data, "retailProductId", 64);
+    const itemKind = readOptionalString(data, "itemKind", 32);
+    const templateId = readOptionalString(data, "templateId", 128);
+    const templateName = readOptionalString(data, "templateName", 120);
+    const storeTemplateName = readOptionalString(data, "storeTemplateName", 120);
+    const idempotencyKey = readOptionalIdempotencyKey(data);
+    if (!retailProductId) {
+        throw new https_1.HttpsError("invalid-argument", "retailProductId is required.");
     }
-    const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${resendKey}`,
-            "Content-Type": "application/json"
+    if (!allowedItemKinds.has(itemKind)) {
+        throw new https_1.HttpsError("invalid-argument", "itemKind is invalid.");
+    }
+    const catalogItem = retailCatalog[retailProductId];
+    if (!catalogItem) {
+        throw new https_1.HttpsError("invalid-argument", "Unknown retailProductId.");
+    }
+    if (idempotencyKey) {
+        const idemRef = db.collection("checkoutRequests").doc(request.auth.uid).collection("keys").doc(idempotencyKey);
+        const idemSnap = await idemRef.get();
+        if (idemSnap.exists) {
+            const previous = idemSnap.data() ?? {};
+            const checkoutUrl = typeof previous.checkoutUrl === "string" ? previous.checkoutUrl : "";
+            const sessionId = typeof previous.sessionId === "string" ? previous.sessionId : "";
+            const displayName = typeof previous.displayName === "string" ? previous.displayName : catalogItem.label;
+            if (checkoutUrl && sessionId) {
+                return { checkoutUrl, sessionId, displayName };
+            }
+        }
+    }
+    const successUrl = requireHttpsUrl(requireEnv("STRIPE_CHECKOUT_SUCCESS_URL"), "STRIPE_CHECKOUT_SUCCESS_URL");
+    const cancelUrl = requireHttpsUrl(requireEnv("STRIPE_CHECKOUT_CANCEL_URL"), "STRIPE_CHECKOUT_CANCEL_URL");
+    await enforceCheckoutRateLimit(request.auth.uid);
+    const stripe = getStripeClient();
+    const metadata = {
+        app: "PitchMark",
+        firebaseUid: request.auth.uid,
+        retailProductId: sanitizeMetadataValue(retailProductId, 64),
+        itemKind: sanitizeMetadataValue(itemKind, 32),
+        templateId: sanitizeMetadataValue(templateId, 128),
+        templateName: sanitizeMetadataValue(templateName, 120),
+        storeTemplateName: sanitizeMetadataValue(storeTemplateName, 120)
+    };
+    const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items: [
+            {
+                price: catalogItem.priceId,
+                quantity: 1
+            }
+        ],
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        metadata,
+        payment_intent_data: {
+            metadata
         },
-        body: JSON.stringify({
-            from: "PitchMark <no-reply@mail.pitchmarkcode.com>",
-            to: [email],
-            subject: "Your PitchMark sign-in code",
-            html: `<p>Your PitchMark sign-in code is <strong>${code}</strong>.</p><p>This code expires in ${OTP_TTL_MINUTES} minutes.</p>`,
-            text: `Your PitchMark sign-in code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes.`
-        })
-    });
-    if (!response.ok) {
-        const body = await response.text();
-        throw new functions.https.HttpsError("internal", `Failed to send OTP email: ${response.status} ${body}`);
+        allow_promotion_codes: true
+    }, idempotencyKey ? {
+        idempotencyKey: `checkout_${request.auth.uid}_${idempotencyKey}`
+    } : undefined);
+    if (!session.url) {
+        logger.error("Stripe checkout session created without URL", { retailProductId, uid: request.auth.uid });
+        throw new https_1.HttpsError("internal", "Failed to create checkout URL.");
     }
-}
-const DELETE_BATCH_SIZE = 400;
-async function deleteQueryBatch(db, query) {
-    const snapshot = await query.limit(DELETE_BATCH_SIZE).get();
-    if (snapshot.empty)
-        return;
-    const batch = db.batch();
-    snapshot.docs.forEach((doc) => batch.delete(doc.ref));
-    await batch.commit();
-    if (snapshot.size === DELETE_BATCH_SIZE) {
-        await deleteQueryBatch(db, query);
+    if (idempotencyKey) {
+        const idemRef = db.collection("checkoutRequests").doc(request.auth.uid).collection("keys").doc(idempotencyKey);
+        await idemRef.set({
+            checkoutUrl: session.url,
+            sessionId: session.id,
+            displayName: catalogItem.label,
+            retailProductId,
+            itemKind,
+            createdAt: firestore_1.FieldValue.serverTimestamp()
+        }, { merge: true });
     }
-}
-async function deleteSubcollection(db, docRef, subcollection) {
-    await deleteQueryBatch(db, docRef.collection(subcollection));
-}
-exports.requestEmailOtp = functions
-    .runWith({ secrets: [otpSecret, resendApiKey] })
-    .https.onCall(async (data) => {
-    const email = requireString(data?.email, "email");
-    const code = generateOtp();
-    const db = admin.firestore();
-    const now = admin.firestore.Timestamp.now();
-    const expiresAt = admin.firestore.Timestamp.fromDate(new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000));
-    const ref = db.collection("otpRequests").doc(email);
-    await ref.set({
-        email,
-        codeHash: hashOtp(email, code),
-        createdAt: now,
-        expiresAt,
-        attemptsRemaining: OTP_ATTEMPT_LIMIT
-    }, { merge: false });
-    await sendOtpEmail(email, code);
-    return { status: "sent" };
+    return {
+        checkoutUrl: session.url,
+        sessionId: session.id,
+        displayName: catalogItem.label
+    };
 });
-exports.verifyEmailOtp = functions
-    .runWith({ secrets: [otpSecret] })
-    .https.onCall(async (data) => {
-    const email = requireString(data?.email, "email");
-    const code = requireString(data?.code, "code");
-    const db = admin.firestore();
-    const ref = db.collection("otpRequests").doc(email);
-    const result = await db.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists) {
-            throw new functions.https.HttpsError("not-found", "No OTP request found");
-        }
-        const payload = snap.data();
-        if (payload.expiresAt.toMillis() < Date.now()) {
-            tx.delete(ref);
-            throw new functions.https.HttpsError("deadline-exceeded", "OTP expired");
-        }
-        if (payload.attemptsRemaining <= 0) {
-            tx.delete(ref);
-            throw new functions.https.HttpsError("resource-exhausted", "OTP attempts exceeded");
-        }
-        const matches = payload.codeHash === hashOtp(email, code);
-        if (!matches) {
-            tx.update(ref, { attemptsRemaining: payload.attemptsRemaining - 1 });
-            throw new functions.https.HttpsError("permission-denied", "Invalid OTP code");
-        }
-        tx.delete(ref);
-        return true;
-    });
-    if (!result) {
-        throw new functions.https.HttpsError("internal", "OTP verification failed");
+const checkoutWebhookHandlers = {
+    "checkout.session.completed": async (event) => {
+        const session = event.data.object;
+        await persistRetailOrder(session, "completed");
+    },
+    "checkout.session.async_payment_succeeded": async (event) => {
+        const session = event.data.object;
+        await persistRetailOrder(session, "async_payment_succeeded");
+    },
+    "checkout.session.async_payment_failed": async (event) => {
+        const session = event.data.object;
+        await persistRetailOrder(session, "async_payment_failed");
     }
-    let userRecord;
+};
+async function persistRetailOrder(session, fulfillmentState) {
+    const metadata = session.metadata ?? {};
+    const uid = metadata.firebaseUid ?? "";
+    const sessionId = session.id;
+    if (!sessionId) {
+        logger.error("Stripe webhook missing session id", { fulfillmentState });
+        return;
+    }
+    const orderRef = db.collection("retailOrders").doc(sessionId);
+    await db.runTransaction(async (tx) => {
+        const existingSnap = await tx.get(orderRef);
+        const existing = existingSnap.exists ? existingSnap.data() ?? {} : {};
+        const defaultFulfillmentStatus = fulfillmentState === "async_payment_failed" ? "payment_failed" : "new";
+        tx.set(orderRef, {
+            sessionId,
+            fulfillmentState,
+            checkoutStatus: session.status ?? "",
+            paymentStatus: session.payment_status ?? "",
+            amountSubtotal: session.amount_subtotal ?? null,
+            amountTotal: session.amount_total ?? null,
+            currency: session.currency ?? "",
+            customerEmail: session.customer_details?.email ?? session.customer_email ?? "",
+            customerName: session.customer_details?.name ?? "",
+            customerPhone: session.customer_details?.phone ?? "",
+            shippingName: session.shipping_details?.name ?? "",
+            shippingAddress: session.shipping_details?.address ?? null,
+            stripeCustomerId: typeof session.customer === "string" ? session.customer : "",
+            paymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : "",
+            firebaseUid: uid,
+            retailProductId: metadata.retailProductId ?? "",
+            itemKind: metadata.itemKind ?? "",
+            templateId: metadata.templateId ?? "",
+            templateName: metadata.templateName ?? "",
+            storeTemplateName: metadata.storeTemplateName ?? "",
+            fulfillmentStatus: typeof existing.fulfillmentStatus === "string" && existing.fulfillmentStatus
+                ? existing.fulfillmentStatus
+                : defaultFulfillmentStatus,
+            shippingCarrier: typeof existing.shippingCarrier === "string" ? existing.shippingCarrier : "",
+            trackingNumber: typeof existing.trackingNumber === "string" ? existing.trackingNumber : "",
+            internalNotes: typeof existing.internalNotes === "string" ? existing.internalNotes : "",
+            createdAt: existingSnap.exists ? (existing.createdAt ?? firestore_1.FieldValue.serverTimestamp()) : firestore_1.FieldValue.serverTimestamp(),
+            updatedAt: firestore_1.FieldValue.serverTimestamp(),
+            stripeCreatedAtMs: session.created ? session.created * 1000 : null
+        }, { merge: true });
+    });
+}
+exports.stripeWebhook = (0, https_1.onRequest)({ region: "us-central1" }, async (req, res) => {
+    if (req.method !== "POST") {
+        res.status(405).send("Method Not Allowed");
+        return;
+    }
+    const signature = req.headers["stripe-signature"];
+    const webhookSecret = optionalEnv("STRIPE_WEBHOOK_SECRET");
+    if (!signature || Array.isArray(signature) || !webhookSecret) {
+        logger.error("Stripe webhook misconfigured", {
+            hasSignature: Boolean(signature),
+            hasWebhookSecret: Boolean(webhookSecret)
+        });
+        res.status(400).send("Webhook misconfigured");
+        return;
+    }
+    const stripe = getStripeClient();
+    let event;
     try {
-        userRecord = await admin.auth().getUserByEmail(email);
+        event = stripe.webhooks.constructEvent(req.rawBody, signature, webhookSecret);
     }
     catch (error) {
-        userRecord = await admin.auth().createUser({ email });
+        logger.error("Stripe webhook signature verification failed", error);
+        res.status(400).send("Invalid signature");
+        return;
     }
-    const customToken = await admin.auth().createCustomToken(userRecord.uid);
-    return { token: customToken };
-});
-exports.deleteAccount = functions.https.onCall(async (_, context) => {
-    if (!context.auth?.uid) {
-        throw new functions.https.HttpsError("unauthenticated", "Not signed in.");
+    const handler = checkoutWebhookHandlers[event.type];
+    if (!handler) {
+        logger.info("Ignoring unhandled Stripe event", { type: event.type });
+        res.status(200).send({ received: true, ignored: true });
+        return;
     }
-    const authTime = context.auth.token.auth_time || 0;
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    if (nowSeconds - authTime > 5 * 60) {
-        throw new functions.https.HttpsError("unauthenticated", "Recent login required.");
+    try {
+        await handler(event);
+        res.status(200).send({ received: true });
     }
-    const uid = context.auth.uid;
-    const db = admin.firestore();
-    const userRef = db.collection("users").doc(uid);
-    const userRecord = await admin.auth().getUser(uid);
-    const userEmail = userRecord.email || null;
-    // user-scoped subcollections
-    await deleteQueryBatch(db, userRef.collection("templates"));
-    await deleteQueryBatch(db, userRef.collection("pitchEvents"));
-    const gamesSnap = await userRef.collection("games").get();
-    for (const gameDoc of gamesSnap.docs) {
-        await deleteSubcollection(db, gameDoc.ref, "pitchEvents");
-        await gameDoc.ref.delete();
+    catch (error) {
+        logger.error("Stripe webhook handler failed", { type: event.type, error });
+        res.status(500).send("Webhook handler failed");
     }
-    // shared templates (owner) + shared with arrays cleanup
-    const ownedTemplatesSnap = await db.collection("templates").where("ownerUid", "==", uid).get();
-    for (const doc of ownedTemplatesSnap.docs) {
-        await doc.ref.delete();
-    }
-    const sharedTemplatesSnap = await db.collection("templates").where("sharedWith", "array-contains", uid).get();
-    for (const doc of sharedTemplatesSnap.docs) {
-        const updates = {
-            sharedWith: admin.firestore.FieldValue.arrayRemove(uid)
-        };
-        if (userEmail) {
-            updates.sharedWithEmails = admin.firestore.FieldValue.arrayRemove(userEmail);
-        }
-        await doc.ref.update(updates);
-    }
-    // pitchers (owner) + shared with arrays cleanup
-    const ownedPitchersSnap = await db.collection("pitchers").where("ownerUid", "==", uid).get();
-    for (const doc of ownedPitchersSnap.docs) {
-        await deleteSubcollection(db, doc.ref, "pitchEvents");
-        await deleteSubcollection(db, doc.ref, "stats");
-        await doc.ref.delete();
-    }
-    const sharedPitchersSnap = await db.collection("pitchers").where("sharedWith", "array-contains", uid).get();
-    for (const doc of sharedPitchersSnap.docs) {
-        await doc.ref.update({
-            sharedWith: admin.firestore.FieldValue.arrayRemove(uid)
-        });
-    }
-    // live games owned by user
-    const liveGamesSnap = await db.collection("liveGames").where("ownerUid", "==", uid).get();
-    for (const doc of liveGamesSnap.docs) {
-        await deleteSubcollection(db, doc.ref, "participants");
-        await deleteSubcollection(db, doc.ref, "pitchEvents");
-        await doc.ref.delete();
-    }
-    // join/invite tokens owned by user
-    await deleteQueryBatch(db, db.collection("joinCodes").where("ownerUid", "==", uid));
-    await deleteQueryBatch(db, db.collection("inviteTokens").where("ownerUid", "==", uid));
-    await deleteQueryBatch(db, db.collection("pitcherInviteTokens").where("ownerUid", "==", uid));
-    // remove OTP request keyed by email if present
-    if (userEmail) {
-        await db.collection("otpRequests").doc(userEmail).delete().catch(() => { });
-    }
-    await userRef.delete().catch(() => { });
-    await admin.auth().deleteUser(uid);
-    return { status: "deleted" };
 });

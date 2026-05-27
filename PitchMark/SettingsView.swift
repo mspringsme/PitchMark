@@ -887,10 +887,12 @@ struct SettingsView: View {
                 .font(.subheadline.weight(.semibold))
             Text("Join a Game")
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .foregroundColor(.black)
         .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .background(
             Capsule().fill(Color.black.opacity(0.06))
         )
@@ -905,6 +907,9 @@ struct SettingsView: View {
                 .font(.footnote.weight(.semibold))
             Text("Signed in as: \(authManager.userEmail)")
                 .font(.footnote.weight(.semibold))
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .multilineTextAlignment(.leading)
             Image(systemName: "chevron.up")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -913,6 +918,7 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
         .padding(.horizontal, 16)
+        .frame(minHeight: 44)
         .background(
             Capsule().fill(Color.black.opacity(0.06))
         )
@@ -1610,57 +1616,6 @@ struct SettingsView: View {
                 }
             }
 
-            if subscriptionManager.isSandboxTestingOverrideAvailable {
-                Divider()
-                    .padding(.horizontal)
-
-                Toggle(isOn: Binding(
-                    get: { subscriptionManager.forcePaywallForSandboxTesting },
-                    set: { subscriptionManager.setForcePaywallForSandboxTesting($0) }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Subscription Test Mode")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Show the paywall even when this sandbox receipt is already Pro.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Debug Subscription State")
-                        .font(.subheadline.weight(.semibold))
-                    Text("Override Pro state for UI testing without changing sandbox account history.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    Picker(
-                        "Debug Subscription State",
-                        selection: Binding(
-                            get: { subscriptionManager.debugSubscriptionOverride },
-                            set: { subscriptionManager.setDebugSubscriptionOverride($0) }
-                        )
-                    ) {
-                        ForEach(SubscriptionManager.DebugSubscriptionOverride.allCases) { option in
-                            Text(option.label).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-                .padding(.horizontal)
-
-                Button {
-                    Task {
-                        await subscriptionManager.refresh(reason: "settings-sandbox-test-refresh")
-                    }
-                } label: {
-                    Label("Refresh Subscription Status", systemImage: "arrow.clockwise")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
-                .padding(.horizontal)
-            }
         }
     }
 
@@ -1982,6 +1937,8 @@ struct SettingsView: View {
                         accountFooterButtonLabel
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Account options")
+                    .accessibilityHint("Opens account actions including sign out and account management.")
                     .padding(.vertical, 8)
                     .padding(.horizontal)
                     .background(.ultraThinMaterial)
@@ -2153,6 +2110,8 @@ struct SettingsView: View {
                     } label: {
                         joinGameButtonLabel
                     }
+                    .accessibilityLabel("Join a Game")
+                    .accessibilityHint("Open join flow for invite link or QR code.")
                     .transaction { transaction in
                         transaction.animation = nil
                     }
