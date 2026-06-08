@@ -16,6 +16,7 @@ struct StorefrontView: View {
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var isPurchasingPro = false
     @State private var isRestoringPurchases = false
+    @State private var openOrderHistoryAfterCheckout = false
 
     private var annualPrice: String {
         subscriptionManager.annualProduct?.displayPrice ?? "$19.99"
@@ -193,9 +194,16 @@ struct StorefrontView: View {
                     PrintableSheetDetailView(template: template)
                 }
             }
+            .navigationDestination(isPresented: $openOrderHistoryAfterCheckout) {
+                RetailOrderHistoryView(uid: authManager.user?.uid ?? "")
+            }
         }
         .task {
             await subscriptionManager.refresh()
+            if UserDefaults.standard.bool(forKey: "openOrderHistoryAfterCheckout") {
+                UserDefaults.standard.set(false, forKey: "openOrderHistoryAfterCheckout")
+                openOrderHistoryAfterCheckout = true
+            }
         }
     }
 }
@@ -639,7 +647,7 @@ private struct TemplateDetailView: View {
     }
 }
 
-private struct PrintableLocation: Identifiable {
+struct PrintableLocation: Identifiable {
     let id = UUID()
     let title: String
     let assetName: String
@@ -648,7 +656,7 @@ private struct PrintableLocation: Identifiable {
     let col: Int
 }
 
-private let strikePrintableLocations: [PrintableLocation] = [
+let strikePrintableLocations: [PrintableLocation] = [
     .init(title: "Strike High Left", assetName: "Strike High Left_Inside_Lefty", gridKind: .strikes, row: 0, col: 0),
     .init(title: "Strike High", assetName: "Strike High", gridKind: .strikes, row: 0, col: 1),
     .init(title: "Strike High Right", assetName: "Strike High Right_Outside_Lefty", gridKind: .strikes, row: 0, col: 2),
@@ -660,7 +668,7 @@ private let strikePrintableLocations: [PrintableLocation] = [
     .init(title: "Strike Low Right", assetName: "Strike Low Right_Outside_Lefty", gridKind: .strikes, row: 2, col: 2)
 ]
 
-private let ballPrintableLocations: [PrintableLocation] = [
+let ballPrintableLocations: [PrintableLocation] = [
     .init(title: "Ball High Left", assetName: "Ball High Left_Inside_Lefty", gridKind: .balls, row: 0, col: 0),
     .init(title: "Ball High", assetName: "Ball High", gridKind: .balls, row: 0, col: 1),
     .init(title: "Ball High Right", assetName: "Ball High Right_Outside_Lefty", gridKind: .balls, row: 0, col: 2),
@@ -671,7 +679,7 @@ private let ballPrintableLocations: [PrintableLocation] = [
     .init(title: "Ball Low Right", assetName: "Ball Low Right_Outside_Lefty", gridKind: .balls, row: 2, col: 2)
 ]
 
-private struct PrintableLocationSheetView: View {
+struct PrintableLocationSheetView: View {
     let template: PitchTemplate
     let title: String
     let locations: [PrintableLocation]
@@ -1126,6 +1134,7 @@ private final class StripeCheckoutManager: ObservableObject {
             "templateId": selectedTemplate.id.uuidString,
             "templateName": selectedTemplate.name,
             "storeTemplateName": storeTemplate.name,
+            "templateSnapshotJson": makeTemplateSnapshotJson(selectedTemplate),
             "idempotencyKey": idempotencyKey
         ]
 
@@ -1153,6 +1162,15 @@ private final class StripeCheckoutManager: ObservableObject {
 
     private func makeIdempotencyKey() -> String {
         "pm_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+    }
+
+    private func makeTemplateSnapshotJson(_ template: PitchTemplate) -> String {
+        do {
+            let data = try JSONEncoder().encode(template)
+            return String(data: data, encoding: .utf8) ?? ""
+        } catch {
+            return ""
+        }
     }
 
     private func userFacingCheckoutErrorMessage(from error: Error) -> String {

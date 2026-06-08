@@ -265,6 +265,7 @@ struct PitchTrackerView: View {
     @State private var isReorderingMode: Bool = false
     @State private var colorRefreshToken = UUID()
     @State private var hasPresentedInitialSettings = false
+    @State private var lastAuthenticatedUserId: String? = nil
 
     @State private var suppressNextGameSheet = false
 
@@ -7019,7 +7020,27 @@ struct PitchTrackerView: View {
 
         let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
         let persistedOwnerId = defaults.string(forKey: DefaultsKeys.activeGameOwnerUserId)
+        let currentUid = authManager.user?.uid
         let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
+
+        // Never restore a prior user's game/session selection.
+        if let restoredOwner = persistedOwnerId,
+           let currentUid,
+           restoredOwner != currentUid {
+            defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+            defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
+            defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
+            defaults.removeObject(forKey: DefaultsKeys.activeIsPractice)
+            defaults.removeObject(forKey: "activeLiveId")
+            defaults.removeObject(forKey: "activeOpponentName")
+            selectedGameId = nil
+            activeGameOwnerUserId = nil
+            activeLiveId = nil
+            opponentName = nil
+            selectedPracticeId = nil
+            practiceName = nil
+            showSettings = true
+        }
         // ✅ Restore LIVE session if one was active
         var didRestoreLiveSession = false
         if let persistedLiveId = defaults.string(forKey: "activeLiveId"),
@@ -7070,7 +7091,8 @@ struct PitchTrackerView: View {
             defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
             selectedPracticeId = nil
             practiceName = nil
-        } else if let gid = persistedGameId {
+        } else if let gid = persistedGameId,
+                  persistedOwnerId == nil || persistedOwnerId == currentUid {
             isGame = true
             sessionManager.switchMode(to: .game)
 
@@ -7178,6 +7200,55 @@ struct PitchTrackerView: View {
             }
         }
 
+    }
+
+    private func resetStateForAuthenticatedUserChange(oldUserId: String?, newUserId: String?) {
+        guard let oldUserId else { return }
+        guard oldUserId != newUserId else { return }
+
+        let defaults = UserDefaults.standard
+
+        gameListener?.remove()
+        gameListener = nil
+        liveListener?.remove()
+        liveListener = nil
+        participantsListener?.remove()
+        participantsListener = nil
+        livePitchEventsListener?.remove()
+        livePitchEventsListener = nil
+        gamePitchEventsListener?.remove()
+        gamePitchEventsListener = nil
+        displayListener?.remove()
+        displayListener = nil
+        displayStateListener?.remove()
+        displayStateListener = nil
+        displaySessionListener?.remove()
+        displaySessionListener = nil
+        stopHeartbeat()
+
+        activeLiveId = nil
+        selectedGameId = nil
+        selectedPracticeId = nil
+        practiceName = nil
+        opponentName = nil
+        activeGameOwnerUserId = nil
+        showParticipantOverlay = false
+
+        defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+        defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
+        defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
+        defaults.removeObject(forKey: DefaultsKeys.activeIsPractice)
+        defaults.removeObject(forKey: "activeLiveId")
+        defaults.removeObject(forKey: "activeOpponentName")
+        defaults.set("settings", forKey: DefaultsKeys.lastView)
+
+        hasPresentedInitialSettings = false
+
+        if newUserId != nil {
+            isGame = false
+            sessionManager.switchMode(to: .practice)
+            showSettings = true
+        }
     }
 
     @ViewBuilder private var gameSheetView: some View {
@@ -7341,7 +7412,7 @@ struct PitchTrackerView: View {
               shareCode: $shareCode,
               codeShareSheetID: $codeShareSheetID,
               showCodeShareModePicker: $showCodeShareModePicker,
-              hasActiveSessionSelection: (activeLiveId != nil) || (selectedGameId != nil)
+              hasActiveSessionSelection: (selectedGameId != nil)
           )
         .environmentObject(authManager)
         .environmentObject(subscriptionManager)
@@ -8340,7 +8411,15 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v8 = v7
-            .sheet(isPresented: $showSettings) { settingsSheetView }
+            .sheet(isPresented: $showSettings) {
+                settingsSheetView
+                    .interactiveDismissDisabled({
+                        guard selectedGameId != nil else { return true }
+                        guard let currentUid = authManager.user?.uid else { return true }
+                        guard let ownerUid = activeGameOwnerUserId else { return false }
+                        return ownerUid != currentUid
+                    }())
+            }
             .eraseToAnyView()
 
         let v9 = v8
@@ -8464,6 +8543,9 @@ struct PitchTrackerView: View {
             }
             .overlay { accountInUseOverlay }
             .onAppear {
+                if lastAuthenticatedUserId == nil {
+                    lastAuthenticatedUserId = authManager.user?.uid
+                }
                 handleInitialAppear()
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -8472,9 +8554,20 @@ struct PitchTrackerView: View {
                 }
             }
             .onChange(of: authManager.isSignedIn) { _, newValue in
+                let currentUid = authManager.user?.uid
+                resetStateForAuthenticatedUserChange(oldUserId: lastAuthenticatedUserId, newUserId: currentUid)
+                lastAuthenticatedUserId = currentUid
+
                 if newValue {
                     // ✅ If sign-in/restore completes AFTER first appear,
                     // rerun the boot flow so games/templates load and initial sheets can present.
+                    handleInitialAppear()
+                }
+            }
+            .onChange(of: authManager.user?.uid) { oldUid, newUid in
+                resetStateForAuthenticatedUserChange(oldUserId: oldUid, newUserId: newUid)
+                lastAuthenticatedUserId = newUid
+                if newUid != nil {
                     handleInitialAppear()
                 }
             }

@@ -2151,10 +2151,10 @@ struct SettingsView: View {
                 }
             }
             .interactiveDismissDisabled(!hasActiveSessionSelection)
-            .alert("Select Game Or Practice", isPresented: $showSelectSessionBeforeCloseAlert) {
+            .alert("Select Game First", isPresented: $showSelectSessionBeforeCloseAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
-                Text("Choose a game or practice session before closing Settings.")
+                Text("Choose a game before closing Settings.")
             }
             //.navigationTitle("Settings")
             .sheet(item: $editorTemplate) { template in

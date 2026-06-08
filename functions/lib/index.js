@@ -45,15 +45,16 @@ const stripe_1 = __importDefault(require("stripe"));
 (0, app_1.initializeApp)();
 const db = (0, firestore_1.getFirestore)();
 const retailCatalog = {
-    grid_5x3: { priceId: "price_1TbQjpHGR9piiykPmnX6Lj5J", label: "Grid Key 5 x 3" },
-    grid_3_5x2_75: { priceId: "price_1TbQkPHGR9piiykPAIvImeVz", label: "Grid Key 3.5 x 2.75" },
-    grid_custom: { priceId: "price_1TbQkuHGR9piiykPFoJgsxTf", label: "Grid Key Custom" },
-    sheet_8_5x11: { priceId: "price_1TbQmqHGR9piiykPAKJpnQQP", label: "Printable Sheet 8.5 x 11" }
+    grid_5x3: { priceId: "price_1TbQjpHGR9piiykPmnX6Lj5J", label: "Grid Key 5 x 3", unitAmountCents: 1200 },
+    grid_3_5x2_75: { priceId: "price_1TbQkPHGR9piiykPAIvImeVz", label: "Grid Key 3.5 x 2.75", unitAmountCents: 1200 },
+    grid_custom: { priceId: "price_1TbQkuHGR9piiykPFoJgsxTf", label: "Grid Key Custom", unitAmountCents: 1400 },
+    sheet_8_5x11: { priceId: "price_1TbQmqHGR9piiykPAKJpnQQP", label: "Printable Sheet 8.5 x 11", unitAmountCents: 1200 }
 };
 const allowedItemKinds = new Set(["gridKey", "printableSheet", ""]);
 const idempotencyKeyPattern = /^[a-zA-Z0-9._-]{8,80}$/;
 const checkoutThrottleWindowMs = 60_000;
 const checkoutThrottleMaxAttempts = 5;
+const checkoutConfigVersion = "shipping_v1";
 function getStripeClient() {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
@@ -62,6 +63,10 @@ function getStripeClient() {
     return new stripe_1.default(stripeSecretKey, {
         apiVersion: "2024-06-20"
     });
+}
+function isStripeTestMode() {
+    const stripeSecretKey = process.env.STRIPE_SECRET_KEY ?? "";
+    return stripeSecretKey.startsWith("sk_test_");
 }
 function requireEnv(name) {
     const value = process.env[name];
@@ -72,6 +77,31 @@ function requireEnv(name) {
 }
 function optionalEnv(name) {
     return process.env[name]?.trim() ?? "";
+}
+function parseAllowedShippingCountries(raw) {
+    const defaults = ["US"];
+    if (!raw) {
+        return defaults;
+    }
+    const parsed = raw
+        .split(",")
+        .map((value) => value.trim().toUpperCase())
+        .filter((value) => /^[A-Z]{2}$/.test(value));
+    return parsed.length > 0 ? Array.from(new Set(parsed)) : defaults;
+}
+function readShippingAmountCents(name, fallback) {
+    const value = optionalEnv(name);
+    if (!value) {
+        return fallback;
+    }
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new https_1.HttpsError("failed-precondition", `${name} must be a non-negative integer (cents).`);
+    }
+    return parsed;
+}
+function normalizeShippingAmountCents(value) {
+    return value <= 0 ? 1 : value;
 }
 function parseRequestData(data) {
     if (!data || typeof data !== "object" || Array.isArray(data)) {
@@ -153,12 +183,14 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
     if (!request.auth?.uid) {
         throw new https_1.HttpsError("unauthenticated", "You must be signed in to purchase.");
     }
+    const stripeTestMode = isStripeTestMode();
     const data = parseRequestData(request.data);
     const retailProductId = readOptionalString(data, "retailProductId", 64);
     const itemKind = readOptionalString(data, "itemKind", 32);
     const templateId = readOptionalString(data, "templateId", 128);
     const templateName = readOptionalString(data, "templateName", 120);
     const storeTemplateName = readOptionalString(data, "storeTemplateName", 120);
+    const templateSnapshotJson = readOptionalString(data, "templateSnapshotJson", 120000);
     const idempotencyKey = readOptionalIdempotencyKey(data);
     if (!retailProductId) {
         throw new https_1.HttpsError("invalid-argument", "retailProductId is required.");
@@ -170,21 +202,26 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
     if (!catalogItem) {
         throw new https_1.HttpsError("invalid-argument", "Unknown retailProductId.");
     }
-    if (idempotencyKey) {
+    if (idempotencyKey && !stripeTestMode) {
         const idemRef = db.collection("checkoutRequests").doc(request.auth.uid).collection("keys").doc(idempotencyKey);
         const idemSnap = await idemRef.get();
         if (idemSnap.exists) {
             const previous = idemSnap.data() ?? {};
+            const previousConfigVersion = typeof previous.checkoutConfigVersion === "string" ? previous.checkoutConfigVersion : "";
             const checkoutUrl = typeof previous.checkoutUrl === "string" ? previous.checkoutUrl : "";
             const sessionId = typeof previous.sessionId === "string" ? previous.sessionId : "";
             const displayName = typeof previous.displayName === "string" ? previous.displayName : catalogItem.label;
-            if (checkoutUrl && sessionId) {
+            if (checkoutUrl && sessionId && previousConfigVersion === checkoutConfigVersion) {
                 return { checkoutUrl, sessionId, displayName };
             }
         }
     }
     const successUrl = requireHttpsUrl(requireEnv("STRIPE_CHECKOUT_SUCCESS_URL"), "STRIPE_CHECKOUT_SUCCESS_URL");
     const cancelUrl = requireHttpsUrl(requireEnv("STRIPE_CHECKOUT_CANCEL_URL"), "STRIPE_CHECKOUT_CANCEL_URL");
+    const allowedShippingCountries = parseAllowedShippingCountries(optionalEnv("STRIPE_SHIPPING_ALLOWED_COUNTRIES"));
+    const shippingCurrency = optionalEnv("STRIPE_SHIPPING_CURRENCY").toLowerCase() || "usd";
+    const standardShippingAmountCents = normalizeShippingAmountCents(readShippingAmountCents("STRIPE_SHIPPING_STANDARD_CENTS", 0));
+    const expressShippingAmountCents = normalizeShippingAmountCents(readShippingAmountCents("STRIPE_SHIPPING_EXPRESS_CENTS", 1299));
     await enforceCheckoutRateLimit(request.auth.uid);
     const stripe = getStripeClient();
     const metadata = {
@@ -194,30 +231,96 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
         itemKind: sanitizeMetadataValue(itemKind, 32),
         templateId: sanitizeMetadataValue(templateId, 128),
         templateName: sanitizeMetadataValue(templateName, 120),
-        storeTemplateName: sanitizeMetadataValue(storeTemplateName, 120)
+        storeTemplateName: sanitizeMetadataValue(storeTemplateName, 120),
+        checkoutRequestKey: sanitizeMetadataValue(idempotencyKey, 80)
     };
-    const session = await stripe.checkout.sessions.create({
-        mode: "payment",
-        line_items: [
-            {
-                price: catalogItem.priceId,
-                quantity: 1
+    const lineItem = stripeTestMode ? {
+        quantity: 1,
+        price_data: {
+            currency: shippingCurrency,
+            unit_amount: catalogItem.unitAmountCents,
+            product_data: {
+                name: catalogItem.label,
+                description: "PitchMark physical product"
             }
-        ],
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-        metadata,
-        payment_intent_data: {
-            metadata
-        },
-        allow_promotion_codes: true
-    }, idempotencyKey ? {
-        idempotencyKey: `checkout_${request.auth.uid}_${idempotencyKey}`
-    } : undefined);
+        }
+    } : {
+        price: catalogItem.priceId,
+        quantity: 1
+    };
+    let session;
+    try {
+        session = await stripe.checkout.sessions.create({
+            mode: "payment",
+            line_items: [
+                lineItem
+            ],
+            success_url: successUrl,
+            cancel_url: cancelUrl,
+            billing_address_collection: "required",
+            metadata,
+            payment_intent_data: {
+                metadata
+            },
+            allow_promotion_codes: true,
+            phone_number_collection: {
+                enabled: true
+            },
+            shipping_address_collection: {
+                allowed_countries: allowedShippingCountries
+            },
+            shipping_options: [
+                {
+                    shipping_rate_data: {
+                        type: "fixed_amount",
+                        fixed_amount: {
+                            amount: standardShippingAmountCents,
+                            currency: shippingCurrency
+                        },
+                        display_name: "Standard Shipping",
+                        delivery_estimate: {
+                            minimum: { unit: "business_day", value: 5 },
+                            maximum: { unit: "business_day", value: 8 }
+                        }
+                    }
+                },
+                {
+                    shipping_rate_data: {
+                        type: "fixed_amount",
+                        fixed_amount: {
+                            amount: expressShippingAmountCents,
+                            currency: shippingCurrency
+                        },
+                        display_name: "Express Shipping",
+                        delivery_estimate: {
+                            minimum: { unit: "business_day", value: 2 },
+                            maximum: { unit: "business_day", value: 3 }
+                        }
+                    }
+                }
+            ]
+        }, (idempotencyKey && !stripeTestMode) ? {
+            idempotencyKey: `checkout_${request.auth.uid}_${idempotencyKey}_${checkoutConfigVersion}`
+        } : undefined);
+    }
+    catch (error) {
+        logger.error("Stripe checkout session create failed", error);
+        const message = error instanceof Error ? error.message : "Unknown Stripe error";
+        throw new https_1.HttpsError("internal", `Stripe checkout create failed: ${message}`);
+    }
     if (!session.url) {
         logger.error("Stripe checkout session created without URL", { retailProductId, uid: request.auth.uid });
         throw new https_1.HttpsError("internal", "Failed to create checkout URL.");
     }
+    logger.info("Checkout session created", {
+        uid: request.auth.uid,
+        sessionId: session.id,
+        retailProductId,
+        stripeTestMode,
+        shippingAddressCollection: session.shipping_address_collection ?? null,
+        shippingOptionsCount: session.shipping_options?.length ?? 0,
+        phoneCollectionEnabled: session.phone_number_collection?.enabled ?? null
+    });
     if (idempotencyKey) {
         const idemRef = db.collection("checkoutRequests").doc(request.auth.uid).collection("keys").doc(idempotencyKey);
         await idemRef.set({
@@ -226,6 +329,12 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
             displayName: catalogItem.label,
             retailProductId,
             itemKind,
+            templateId,
+            templateName,
+            storeTemplateName,
+            templateSnapshotJson,
+            checkoutConfigVersion,
+            stripeTestMode,
             createdAt: firestore_1.FieldValue.serverTimestamp()
         }, { merge: true });
     }
@@ -252,16 +361,43 @@ const checkoutWebhookHandlers = {
 async function persistRetailOrder(session, fulfillmentState) {
     const metadata = session.metadata ?? {};
     const uid = metadata.firebaseUid ?? "";
+    const checkoutRequestKey = metadata.checkoutRequestKey ?? "";
     const sessionId = session.id;
     if (!sessionId) {
         logger.error("Stripe webhook missing session id", { fulfillmentState });
         return;
+    }
+    let templateSnapshotJson = "";
+    if (uid && checkoutRequestKey) {
+        try {
+            const checkoutRequestSnap = await db
+                .collection("checkoutRequests")
+                .doc(uid)
+                .collection("keys")
+                .doc(checkoutRequestKey)
+                .get();
+            if (checkoutRequestSnap.exists) {
+                const data = checkoutRequestSnap.data() ?? {};
+                if (typeof data.templateSnapshotJson === "string") {
+                    templateSnapshotJson = data.templateSnapshotJson;
+                }
+            }
+        }
+        catch (error) {
+            logger.error("Unable to load checkout request snapshot", { uid, checkoutRequestKey, error });
+        }
     }
     const orderRef = db.collection("retailOrders").doc(sessionId);
     await db.runTransaction(async (tx) => {
         const existingSnap = await tx.get(orderRef);
         const existing = existingSnap.exists ? existingSnap.data() ?? {} : {};
         const defaultFulfillmentStatus = fulfillmentState === "async_payment_failed" ? "payment_failed" : "new";
+        const shippingName = session.shipping_details?.name
+            ?? session.customer_details?.name
+            ?? "";
+        const shippingAddress = session.shipping_details?.address
+            ?? session.customer_details?.address
+            ?? null;
         tx.set(orderRef, {
             sessionId,
             fulfillmentState,
@@ -273,8 +409,8 @@ async function persistRetailOrder(session, fulfillmentState) {
             customerEmail: session.customer_details?.email ?? session.customer_email ?? "",
             customerName: session.customer_details?.name ?? "",
             customerPhone: session.customer_details?.phone ?? "",
-            shippingName: session.shipping_details?.name ?? "",
-            shippingAddress: session.shipping_details?.address ?? null,
+            shippingName,
+            shippingAddress,
             stripeCustomerId: typeof session.customer === "string" ? session.customer : "",
             paymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : "",
             firebaseUid: uid,
@@ -283,6 +419,7 @@ async function persistRetailOrder(session, fulfillmentState) {
             templateId: metadata.templateId ?? "",
             templateName: metadata.templateName ?? "",
             storeTemplateName: metadata.storeTemplateName ?? "",
+            orderedTemplateSnapshotJson: templateSnapshotJson,
             fulfillmentStatus: typeof existing.fulfillmentStatus === "string" && existing.fulfillmentStatus
                 ? existing.fulfillmentStatus
                 : defaultFulfillmentStatus,

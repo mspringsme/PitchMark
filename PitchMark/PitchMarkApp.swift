@@ -126,6 +126,7 @@ struct RootView: View {
         let normalizedPath = url.path.lowercased()
         switch normalizedPath {
         case "/stripe/success":
+            UserDefaults.standard.set(true, forKey: "openOrderHistoryAfterCheckout")
             checkoutAlert = CheckoutAlert(
                 title: "Order Received",
                 message: "Your Stripe checkout finished successfully. We can fulfill the order from the payment details captured in Stripe."
