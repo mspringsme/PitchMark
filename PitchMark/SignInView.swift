@@ -15,9 +15,7 @@ struct SignInView: View {
     @EnvironmentObject var authManager: AuthManager
 
     @State private var email: String = ""
-    @State private var otpCode: String = ""
     @State private var isSendingEmail: Bool = false
-    @State private var isVerifyingOtp: Bool = false
     @State private var emailStatus: String? = nil
 
     var body: some View {
@@ -53,7 +51,7 @@ struct SignInView: View {
             .frame(maxWidth: 420)
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("Email one-time code")
+                Text("Email sign in")
                     .font(.headline)
 
                 TextField("you@email.com", text: $email)
@@ -62,17 +60,17 @@ struct SignInView: View {
                     .keyboardType(.emailAddress)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityLabel("Email address")
-                    .accessibilityHint("Enter the email where you want to receive a one-time sign-in code.")
+                    .accessibilityHint("Enter the email where you want to receive a sign-in link.")
 
-                Button(isSendingEmail ? "Sending..." : "Send Code") {
+                Button(isSendingEmail ? "Sending..." : "Send Sign-In Link") {
                     isSendingEmail = true
                     emailStatus = nil
-                    authManager.requestEmailOtp(email: email) { result in
+                    authManager.sendEmailSignInLink(email: email) { result in
                         DispatchQueue.main.async {
                             isSendingEmail = false
                             switch result {
                             case .success:
-                                emailStatus = "Check your email for a 6-digit code."
+                                emailStatus = "Check your email for a sign-in link."
                             case .failure(let error):
                                 emailStatus = error.localizedDescription
                             }
@@ -82,43 +80,13 @@ struct SignInView: View {
                 .buttonStyle(.borderedProminent)
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .disabled(isSendingEmail || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .accessibilityHint("Sends a one-time verification code to your email.")
-
-                TextField("6-digit code", text: $otpCode)
-                    .keyboardType(.numberPad)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("One-time code")
-                    .accessibilityHint("Enter the 6-digit code sent to your email.")
-
-                Button(isVerifyingOtp ? "Verifying..." : "Verify Code") {
-                    isVerifyingOtp = true
-                    emailStatus = nil
-                    authManager.verifyEmailOtp(email: email, code: otpCode) { result in
-                        DispatchQueue.main.async {
-                            isVerifyingOtp = false
-                            switch result {
-                            case .success:
-                                emailStatus = "Signed in successfully."
-                            case .failure(let error):
-                                emailStatus = error.localizedDescription
-                            }
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .disabled(
-                    isVerifyingOtp ||
-                    email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    otpCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                )
-                .accessibilityHint("Verifies your one-time code and signs you in.")
+                .accessibilityHint("Sends a sign-in link to your email.")
 
                 if let emailStatus {
                     Text(emailStatus)
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
-                        .foregroundColor(emailStatus.hasPrefix("Signed") || emailStatus.hasPrefix("Check") ? .primary : .red)
+                        .foregroundColor(emailStatus.hasPrefix("Check") ? .primary : .red)
                 }
             }
             .frame(maxWidth: 420)

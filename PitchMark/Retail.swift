@@ -324,6 +324,7 @@ private struct TemplateDetailView: View {
 
         let preview = PrintableEncryptedGridsView(
             grid: template.pitchGridValues,
+            pitchHeaders: template.pitchGridHeaders,
             strikeTopRow: template.strikeTopRow,
             strikeRows: template.strikeRows,
             ballsTopRow: template.ballsTopRow,
@@ -358,6 +359,7 @@ private struct TemplateDetailView: View {
 
         let printableView = PrintableEncryptedGridsView(
             grid: template.pitchGridValues,
+            pitchHeaders: template.pitchGridHeaders,
             strikeTopRow: template.strikeTopRow,
             strikeRows: template.strikeRows,
             ballsTopRow: template.ballsTopRow,
@@ -385,12 +387,6 @@ private struct TemplateDetailView: View {
             try renderer.writePDF(to: url, withActions: { context in
                 context.beginPage()
                 image.draw(in: CGRect(origin: .zero, size: targetSize))
-                let guideRect = CGRect(origin: .zero, size: targetSize).insetBy(dx: 8, dy: 8)
-                let guidePath = UIBezierPath(roundedRect: guideRect, cornerRadius: 6)
-                UIColor.black.withAlphaComponent(0.16).setStroke()
-                guidePath.setLineDash([5, 4], count: 2, phase: 0)
-                guidePath.lineWidth = 1
-                guidePath.stroke()
             })
             return url
         } catch {
@@ -409,15 +405,6 @@ private struct TemplateDetailView: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
                             .stroke(Color.black.opacity(0.18), lineWidth: 1)
-                    )
-                    .overlay(
-                        // Faint cut guide for the insert boundary.
-                        RoundedRectangle(cornerRadius: 8)
-                            .inset(by: 8)
-                            .stroke(
-                                Color.black.opacity(0.16),
-                                style: StrokeStyle(lineWidth: 1, dash: [5, 4])
-                            )
                     )
                     .overlay(
                         Group {
@@ -690,12 +677,19 @@ struct PrintableLocationSheetView: View {
     private let columnCount = 6
     private let columnSpacing: CGFloat = 12
 
-    private var pitchNames: [String] {
-        let fromHeaders = template.pitchGridHeaders
-            .map { $0.pitch.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+    private var printablePitchRows: [(raw: String, display: String)] {
+        let fromHeaders = template.pitchGridHeaders.compactMap { header -> (raw: String, display: String)? in
+            let raw = header.pitch.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { return nil }
+            let abbreviation = header.abbreviation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return (raw: raw, display: abbreviation.isEmpty ? raw : abbreviation)
+        }
         if !fromHeaders.isEmpty { return fromHeaders }
-        return template.pitches.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+
+        return template.pitches
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { (raw: $0, display: $0) }
     }
 
     private var pitchFirstColors: [Color] {
@@ -765,7 +759,7 @@ struct PrintableLocationSheetView: View {
             let pitchColumnWidth: CGFloat = min(52, max(40, tableWidth * 0.18))
             let availableForCodes = max(0, tableWidth - pitchColumnWidth)
             let codeColumnWidth = availableForCodes / CGFloat(columnCount)
-            let rowCount = max(pitchNames.count + 1, 2)
+            let rowCount = max(printablePitchRows.count + 1, 2)
             let rowHeight = max(16, blockHeight / CGFloat(rowCount))
 
             VStack(alignment: .leading, spacing: blockSpacing) {
@@ -858,10 +852,10 @@ struct PrintableLocationSheetView: View {
                 .frame(width: imageSize, height: imageSize)
 
             VStack(spacing: 0) {
-                ForEach(pitchNames, id: \.self) { pitch in
-                    let codes = codes(for: pitch, location: location)
+                ForEach(printablePitchRows, id: \.raw) { pitch in
+                    let codes = codes(for: pitch.raw, location: location)
                     HStack(spacing: 0) {
-                        printableCell(text: pitch, width: pitchColumnWidth, height: rowHeight, bold: false)
+                        printableCell(text: pitch.display, width: pitchColumnWidth, height: rowHeight, bold: false)
                         ForEach(0..<columnCount, id: \.self) { index in
                             printableCell(text: codes[index], width: codeColumnWidth, height: rowHeight, bold: false)
                         }

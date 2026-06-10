@@ -27,7 +27,7 @@
 - If checkout callable is unstable, fail fast with clear messaging and prevent repeated retries.
 
 ## Verification After Rollback
-- Sign-in (Email OTP, Apple, Google) succeeds.
+- Sign-in (Apple and Google) succeeds.
 - Core game/session reads and writes succeed.
 - Purchase UI loads; restore/purchase messaging behaves correctly.
 - No elevated crash/error reports in first recovery window.

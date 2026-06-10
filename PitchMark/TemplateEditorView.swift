@@ -509,10 +509,13 @@ struct TemplateEditorView: View {
     // Added new states for initial snapshot injection
     @State private var initialPitchGridHeaders: [PitchHeader]? = nil
     @State private var initialPitchGridValues: [[String]]? = nil
+    @State private var initialStrikeTopRow: [String] = []
+    @State private var initialStrikeRows: [[String]] = []
+    @State private var initialBallsTopRow: [String] = []
+    @State private var initialBallsRows: [[String]] = []
     @State private var gridPaletteSelections: [GridPaletteColor?] = Array(repeating: nil, count: 5)
     
     @StateObject private var topRowCoordinator = TopRowValidationCoordinator()
-    @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     
     let allPitches: [String]
@@ -527,6 +530,11 @@ struct TemplateEditorView: View {
             return Set(arr)
         }
         return Set(fallback)
+    }
+
+    private static func saveActivePitches(for templateId: UUID, active: Set<String>) {
+        let key = "activePitches." + templateId.uuidString
+        UserDefaults.standard.set(Array(active), forKey: key)
     }
     
     private func saveTemplate() {
@@ -575,6 +583,7 @@ struct TemplateEditorView: View {
             pitchFirstColors: pitchFirstColors,
             locationFirstColors: locationFirstColors
         )
+        Self.saveActivePitches(for: templateID, active: selectedPitches)
         onSave(newTemplate)
     }
     
@@ -594,11 +603,23 @@ struct TemplateEditorView: View {
         let initialAssignments = template?.codeAssignments ?? []
         let id = template?.id ?? UUID()
         let initialPalette = Self.paletteSelections(from: template)
+        let initialHeaders = template?.pitchGridHeaders
+        let initialGrid = template?.pitchGridValues
+        let strikeTop = template?.strikeTopRow ?? []
+        let strikeRows = template?.strikeRows ?? []
+        let ballsTop = template?.ballsTopRow ?? []
+        let ballsRows = template?.ballsRows ?? []
         
         _name = State(initialValue: initialName)
         _selectedPitches = State(initialValue: initialPitches)
         _codeAssignments = State(initialValue: initialAssignments)
         _customPitches = State(initialValue: (template?.pitches ?? []).filter { !pitchOrder.contains($0) })
+        _initialPitchGridHeaders = State(initialValue: initialHeaders)
+        _initialPitchGridValues = State(initialValue: initialGrid)
+        _initialStrikeTopRow = State(initialValue: strikeTop)
+        _initialStrikeRows = State(initialValue: strikeRows)
+        _initialBallsTopRow = State(initialValue: ballsTop)
+        _initialBallsRows = State(initialValue: ballsRows)
         _gridPaletteSelections = State(initialValue: initialPalette)
         self.templateID = id
         
@@ -800,6 +821,7 @@ struct TemplateEditorView: View {
 
                                 PitchGridView2(
                                     availablePitches: availablePitches,
+                                    selectedPitches: $selectedPitches,
                                     hasAnyPitchInTopRow: $hasAnyPitchInTopRow,
                                     showProPitchLimitAlert: $showProPitchLimitAlert,
                                     onProvideRandomizeAction: { action in
@@ -1106,23 +1128,19 @@ struct TemplateEditorView: View {
                     
                 }
                 .padding(.horizontal)
-                .task {
-                    let loaded = await authManager.loadTemplate(id: templateID.uuidString)
-                    guard let t = loaded else { return }
-
-                    // already on main actor because the async loader returns via MainActor.run
-                    self.name = t.name
-                    self.codeAssignments = t.codeAssignments
-                    self.selectedPitches = Self.loadActivePitches(for: t.id, fallback: t.pitches)
-                    self.customPitches = t.pitches.filter { !pitchOrder.contains($0) }
-                    self.initialPitchGridHeaders = t.pitchGridHeaders
-                    self.initialPitchGridValues = t.pitchGridValues
-
-                    if t.strikeTopRow.count == 3 { self.topRowCoordinator.strikeTopRow = t.strikeTopRow }
-                    if t.ballsTopRow.count == 3 { self.topRowCoordinator.ballsTopRow = t.ballsTopRow }
-                    if t.strikeRows.count == 4 { self.topRowCoordinator.strikeRows = t.strikeRows }
-                    if t.ballsRows.count == 4 { self.topRowCoordinator.ballsRows = t.ballsRows }
-                    self.gridPaletteSelections = Self.paletteSelections(from: t)
+                .onAppear {
+                    if initialStrikeTopRow.count == 3 {
+                        topRowCoordinator.strikeTopRow = initialStrikeTopRow
+                    }
+                    if initialBallsTopRow.count == 3 {
+                        topRowCoordinator.ballsTopRow = initialBallsTopRow
+                    }
+                    if initialStrikeRows.count == 4 {
+                        topRowCoordinator.strikeRows = initialStrikeRows
+                    }
+                    if initialBallsRows.count == 4 {
+                        topRowCoordinator.ballsRows = initialBallsRows
+                    }
                 }
 
             }
@@ -1914,6 +1932,7 @@ struct AssignedLocationsOverview: View {
 
 struct PitchGridView2: View {
     let availablePitches: [String]
+    @Binding var selectedPitches: Set<String>
     @Binding var hasAnyPitchInTopRow: Bool
     @Binding var showProPitchLimitAlert: Bool
     var onProvideRandomizeAction: ((@escaping () -> Void) -> Void)? = nil
@@ -1922,8 +1941,6 @@ struct PitchGridView2: View {
 
     @EnvironmentObject var subscriptionManager: SubscriptionManager
 
-    private let freePitchLimit = 2
-    
     var initialHeaders: [PitchHeader]? = nil
     var initialGrid: [[String]]? = nil
     
@@ -1931,20 +1948,10 @@ struct PitchGridView2: View {
     @State private var showAbbrevEditorForIndex: Int? = nil
     @State private var pendingAbbreviation: String = ""
     
-    private let maxAssignedPitches = 7
-    
     private let cellWidth: CGFloat = 46
     private let cellHeight: CGFloat = 30
     
     @State private var grid: [[String]] = Array(repeating: ["", ""], count: 4)
-    
-    private var assignedHeaderCount: Int {
-        grid[0].dropFirst().filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
-    }
-    
-    private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: grid[0].count)
-    }
     
     private func displayName(for pitch: String) -> String {
         if let abbr = abbreviations[pitch], !abbr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1952,23 +1959,49 @@ struct PitchGridView2: View {
         }
         return pitch
     }
-    
-    private func expandGridIfNeeded(col: Int) {
-        let lastCol = grid[0].count - 1
-        guard col == lastCol, !grid[0][col].isEmpty else { return }
-        guard assignedHeaderCount < maxAssignedPitches else { return }
-        for r in 0..<grid.count { grid[r].append("") }
+
+    private var orderedSelectedPitches: [String] {
+        let base = availablePitches.filter { selectedPitches.contains($0) }
+        let extras = selectedPitches.subtracting(Set(availablePitches)).sorted()
+        return base + extras
     }
     
-    private func removeColumn(at col: Int) {
-        guard grid.first?.indices.contains(col) == true else { return }
-        for r in 0..<grid.count { grid[r].remove(at: col) }
-        while grid.first?.count ?? 0 < 2 { for r in 0..<grid.count { grid[r].append("") } }
-        while let first = grid.first, first.count > 2 {
-            let lastIndex = first.count - 1
-            let isLastEmpty = (0..<grid.count).allSatisfy { grid[$0][lastIndex].isEmpty }
-            if isLastEmpty { for r in 0..<grid.count { grid[r].remove(at: lastIndex) } } else { break }
+    private func syncGridColumns(to pitches: [String]) {
+        var preservedColumns: [String: [String]] = [:]
+        let preservedLeadColumn: [String] = (0..<grid.count).map { row in
+            grid[row].indices.contains(0) ? grid[row][0] : ""
         }
+
+        if let headerRow = grid.first {
+            for col in 1..<headerRow.count {
+                let pitch = headerRow[col].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !pitch.isEmpty else { continue }
+                preservedColumns[pitch] = (1..<grid.count).map { row in
+                    grid[row].indices.contains(col) ? grid[row][col] : ""
+                }
+            }
+        }
+
+        let columnCount = max(2, pitches.count + 1)
+        var newGrid = Array(repeating: Array(repeating: "", count: columnCount), count: 4)
+
+        for row in 0..<min(newGrid.count, preservedLeadColumn.count) {
+            newGrid[row][0] = preservedLeadColumn[row]
+        }
+
+        for (index, pitch) in pitches.enumerated() {
+            let col = index + 1
+            newGrid[0][col] = pitch
+            if let preserved = preservedColumns[pitch] {
+                for row in 1..<min(grid.count, preserved.count + 1) {
+                    newGrid[row][col] = preserved[row - 1]
+                }
+            }
+        }
+
+        abbreviations = abbreviations.filter { pitches.contains($0.key) }
+        grid = newGrid
+        hasAnyPitchInTopRow = !pitches.isEmpty
     }
     
     private func baseCell<Content: View>(
@@ -2117,9 +2150,8 @@ struct PitchGridView2: View {
     }
     
     func clearAll() {
-        grid = Array(repeating: ["", ""], count: 4)
         abbreviations.removeAll()
-        hasAnyPitchInTopRow = false
+        syncGridColumns(to: orderedSelectedPitches)
     }
     
     private func buildHeadersFromTopRow() -> [PitchHeader] {
@@ -2137,14 +2169,17 @@ struct PitchGridView2: View {
     
     private func headerCell(col: Int, binding: Binding<String>) -> some View {
         let isEmpty = binding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let shouldGate = isEmpty && !subscriptionManager.isPro && assignedHeaderCount >= freePitchLimit
 
         return baseCell(strokeColor: .black) {
-            if shouldGate {
+            if isEmpty {
+                Text("")
+                    .frame(minWidth: 44, minHeight: 30)
+            } else {
                 Button {
-                    showProPitchLimitAlert = true
+                    pendingAbbreviation = abbreviations[binding.wrappedValue] ?? ""
+                    showAbbrevEditorForIndex = col
                 } label: {
-                    Text("+")
+                    Text(displayName(for: binding.wrappedValue))
                         .fontWeight(.bold)
                         .multilineTextAlignment(.center)
                         .lineLimit(1)
@@ -2153,44 +2188,6 @@ struct PitchGridView2: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-            } else {
-                Menu {
-                    ForEach(availablePitches, id: \.self) { pitch in
-                        Button {
-                            let wasEmpty = binding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            if wasEmpty && assignedHeaderCount >= maxAssignedPitches { return }
-                            if wasEmpty && !subscriptionManager.isPro && assignedHeaderCount >= freePitchLimit {
-                                showProPitchLimitAlert = true
-                                return
-                            }
-                            binding.wrappedValue = pitch
-                            expandGridIfNeeded(col: col)
-                            hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-                        } label: {
-                            HStack {
-                                Text(pitch)
-                                if binding.wrappedValue == pitch { Spacer(); Image(systemName: "checkmark") }
-                            }
-                        }
-                    }
-                    
-                    if !binding.wrappedValue.isEmpty {
-                        Button(role: .destructive) { removeColumn(at: col) } label: { Label("Remove Column", systemImage: "minus.circle") }
-                        Divider()
-                        Button { pendingAbbreviation = abbreviations[binding.wrappedValue] ?? ""; showAbbrevEditorForIndex = col } label: { Label("Edit Abbreviation", systemImage: "character.cursor.ibeam") }
-                        if abbreviations[binding.wrappedValue] != nil {
-                            Button(role: .destructive) { abbreviations[binding.wrappedValue] = nil } label: { Label("Clear Abbreviation", systemImage: "trash") }
-                        }
-                    }
-                } label: {
-                    Text(binding.wrappedValue.isEmpty ? "+" : displayName(for: binding.wrappedValue))
-                        .fontWeight(.bold)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                        .frame(minWidth: 44, minHeight: 30)
-                        .contentShape(Rectangle())
-                }
             }
         }
         .alert("Edit Abbreviation", isPresented: Binding(
@@ -2208,61 +2205,6 @@ struct PitchGridView2: View {
         } message: { Text("Enter a short label to display for this pitch.") }
     }
     
-    private func cellBinding(row: Int, col: Int) -> some View {
-        let binding = Binding(
-            get: { grid[row][col] },
-            set: { newValue in
-                if col == 0 {
-                    let sanitized = sanitizeFirstColumnInput(row: row, newValue: newValue)
-                    grid[row][col] = sanitized
-                } else {
-                    let sanitized = sanitizeNonLeftmostBodyCell(row: row, col: col, newValue: newValue)
-                    grid[row][col] = sanitized
-                }
-                if row == 0 { expandGridIfNeeded(col: col) }
-            }
-        )
-        
-        if row == 0 && col > 0 { return AnyView(headerCell(col: col, binding: binding)) }
-        if row > 0 && col > 0 {
-            let isPlusColumn = col == grid[0].count - 1 && grid[0][col].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            if isPlusColumn && !subscriptionManager.isPro && assignedHeaderCount >= freePitchLimit {
-                return AnyView(
-                    baseCell(strokeColor: .blue) {
-                        Text("")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        showProPitchLimitAlert = true
-                    }
-                )
-            }
-        }
-        let stroke: Color = (row == 0 || col == 0) ? .black : .blue
-        let width: CGFloat = (col == 0 && row > 0) ? 2.0 : 1.0
-        return AnyView(
-            baseCell(strokeColor: stroke, lineWidth: width) {
-                ZStack {
-                    TextField("", text: binding)
-                        .textFieldStyle(.plain)
-                        .multilineTextAlignment(.center)
-                        .fontWeight((row == 0 || col == 0) ? .bold : .regular)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                        .foregroundColor(.clear)
-                        .tint(.blue)
-                    Text(displayAttributedText(for: binding.wrappedValue, isBold: row == 0 || col == 0))
-                        .fontWeight((row == 0 || col == 0) ? .bold : .regular)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                        .allowsHitTesting(false)
-                }
-            }
-        )
-    }
-
     private func leftColumnCell(row: Int) -> some View {
         let binding = Binding(
             get: { grid[row][0] },
@@ -2299,23 +2241,9 @@ struct PitchGridView2: View {
             set: { newValue in
                 let sanitized = sanitizeNonLeftmostBodyCell(row: row, col: col, newValue: newValue)
                 grid[row][col] = sanitized
-                if row == 0 { expandGridIfNeeded(col: col) }
             }
         )
         if row == 0 { return AnyView(headerCell(col: col, binding: binding)) }
-        let isPlusColumn = col == grid[0].count - 1 && grid[0][col].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if isPlusColumn && !subscriptionManager.isPro && assignedHeaderCount >= freePitchLimit {
-            return AnyView(
-                baseCell(strokeColor: .blue) {
-                    Text("")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    showProPitchLimitAlert = true
-                }
-            )
-        }
         let stroke: Color = (row == 0) ? .black : .blue
         return AnyView(
             baseCell(strokeColor: stroke, lineWidth: 1.0) {
@@ -2371,16 +2299,21 @@ struct PitchGridView2: View {
             }
             .onAppear {
                 if let ih = initialHeaders, let ig = initialGrid { applySnapshot(headers: ih, grid: ig) }
-                hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                syncGridColumns(to: orderedSelectedPitches)
                 onProvideRandomizeAction?(self.randomizeFirstColumn)
                 onProvideClearAction?(self.clearAll)
                 onProvideSnapshot?({ let headers = buildHeadersFromTopRow(); let snapshotGrid = grid; return (headers, snapshotGrid) })
             }
             .onChange(of: initialHeaders?.map { $0.pitch + ( $0.abbreviation ?? "" ) } ?? []) { _, _ in
                 if let ih = initialHeaders, let ig = initialGrid { applySnapshot(headers: ih, grid: ig) }
+                syncGridColumns(to: orderedSelectedPitches)
             }
             .onChange(of: initialGrid?.flatMap { $0 } ?? []) { _, _ in
                 if let ih = initialHeaders, let ig = initialGrid { applySnapshot(headers: ih, grid: ig) }
+                syncGridColumns(to: orderedSelectedPitches)
+            }
+            .onChange(of: orderedSelectedPitches) { _, newValue in
+                syncGridColumns(to: newValue)
             }
             .onChange(of: grid) { _, _ in
                 hasAnyPitchInTopRow = grid[0].dropFirst().contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -2470,9 +2403,15 @@ struct StrikeLocationGridView: View {
                 .onAppear {
                     if let coord = topRowCoordinator {
                         if row == 0 {
-                            if coord.strikeTopRow.indices.contains(col) { coord.strikeTopRow[col] = binding.wrappedValue }
+                            if coord.strikeTopRow.indices.contains(col) {
+                                let v = coord.strikeTopRow[col]
+                                if binding.wrappedValue != v { binding.wrappedValue = v }
+                            }
                         } else {
-                            if coord.strikeRows.indices.contains(row) && coord.strikeRows[row].indices.contains(col) { coord.strikeRows[row][col] = binding.wrappedValue }
+                            if coord.strikeRows.indices.contains(row) && coord.strikeRows[row].indices.contains(col) {
+                                let v = coord.strikeRows[row][col]
+                                if binding.wrappedValue != v { binding.wrappedValue = v }
+                            }
                         }
                     }
                 }
@@ -2578,9 +2517,15 @@ struct BallsLocationGridView: View {
                 .onAppear {
                     if let coord = topRowCoordinator {
                         if row == 0 {
-                            if coord.ballsTopRow.indices.contains(col) { coord.ballsTopRow[col] = binding.wrappedValue }
+                            if coord.ballsTopRow.indices.contains(col) {
+                                let v = coord.ballsTopRow[col]
+                                if binding.wrappedValue != v { binding.wrappedValue = v }
+                            }
                         } else {
-                            if coord.ballsRows.indices.contains(row) && coord.ballsRows[row].indices.contains(col) { coord.ballsRows[row][col] = binding.wrappedValue }
+                            if coord.ballsRows.indices.contains(row) && coord.ballsRows[row].indices.contains(col) {
+                                let v = coord.ballsRows[row][col]
+                                if binding.wrappedValue != v { binding.wrappedValue = v }
+                            }
                         }
                     }
                 }
@@ -2622,6 +2567,7 @@ import SwiftUI
 /// - Skips printing the trailing "+" pitch column (if present in grid[0].last)
 struct PrintableEncryptedGridsView: View {
     let grid: [[String]]
+    let pitchHeaders: [PitchHeader]
 
     let strikeTopRow: [String]
     let strikeRows: [[String]]   // expects count == 4, uses rows 1..3
@@ -2648,6 +2594,7 @@ struct PrintableEncryptedGridsView: View {
 
     init(
         grid: [[String]],
+        pitchHeaders: [PitchHeader] = [],
         strikeTopRow: [String],
         strikeRows: [[String]],
         ballsTopRow: [String],
@@ -2659,6 +2606,7 @@ struct PrintableEncryptedGridsView: View {
         textScale: CGFloat = 1.0
     ) {
         self.grid = grid
+        self.pitchHeaders = pitchHeaders
         self.strikeTopRow = strikeTopRow
         self.strikeRows = strikeRows
         self.ballsTopRow = ballsTopRow
@@ -2960,6 +2908,18 @@ private extension PrintableEncryptedGridsView {
     func printablePitchHeaders(from headerRow: [String]) -> [String] {
         let n = printablePitchColumnCount(from: headerRow)
         guard n > 0, headerRow.count >= n + 1 else { return [] }
-        return Array(headerRow[1...n])
+        return Array(headerRow[1...n]).map { pitch in
+            let trimmedPitch = pitch.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard
+                let header = pitchHeaders.first(where: {
+                    $0.pitch.trimmingCharacters(in: .whitespacesAndNewlines) == trimmedPitch
+                })
+            else {
+                return trimmedPitch
+            }
+
+            let abbreviation = header.abbreviation?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return abbreviation.isEmpty ? trimmedPitch : abbreviation
+        }
     }
 }

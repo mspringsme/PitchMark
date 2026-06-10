@@ -661,9 +661,9 @@ struct PitchResultSheetView: View {
         }
 
         if intent == .pitchOnly {
-            event.debugLog(prefix: "📤 Saving Pitch-Only PitchEvent")
+            event.logDebugPayload(prefix: "📤 Saving Pitch-Only PitchEvent")
         } else {
-            event.debugLog()
+            event.logDebugPayload()
         }
         onCountChanged?(event.atBatBalls ?? 0, event.atBatStrikes ?? 0)
         saveAction(event)

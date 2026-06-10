@@ -17,7 +17,6 @@ Status key:
 |---|---|---|---|---|
 | [x] | New purchase unlock | `isPro` flips to `true` immediately after verified purchase in StoreKit config and Sandbox |  | 
 • “Launch entitlement restore passed in local StoreKit run: is​Pro false -> true on init.”
-• “App Check 403 present in logs; unresolved.”
 • “StoreKit config PASS on 2026-05-15. Immediate unlock confirmed (is​Pro false -> true) and entitlement refresh completed active.” 
 • “Sandbox purchase-path PASS on 2026-05-17: verified purchase observed, immediate unlock (is​Pro false -> true), and entitlement refresh completed active."|
 
@@ -43,7 +42,7 @@ Status key:
 | [x] | Terms of Use URL | Live URL accessible and linked where required |  |  
 • terms loads and in-app link opens that same /terms URL.|
 | [x] | App Privacy Nutrition Label | Matches actual data collection/sharing and SDK behavior |  |  
-• Matches actual data collection​/sharing and ​SDK behavior|
+• 2026-06-04: Privacy policy updated to explicitly cover Firebase account data, user-entered pitch/game data, StoreKit subscription status, Stripe retail checkout/order data, shipping/billing/contact details, service providers, retention, and in-app deletion. App Store Connect privacy answers must mirror these categories before submission.|
 | [x] | Support URL | Points to valid support destination (`support@pitchmark.app` path included) |  |  |
 | [x] | Export compliance answers | Encryption/export responses accurate in App Store Connect |  |  |
 | [x] | IAP metadata completeness | Subscription name, duration, pricing, screenshots, review notes complete |  |  |
@@ -63,9 +62,9 @@ Status key:
 | Status | Item | Pass Criteria | Owner | Evidence |
 |---|---|---|---|---|
 | [x] | Firestore rules audit | Least-privilege rules validated with owner/non-owner/adversarial cases |  | 2026-05-21: Rules review + hardening pass completed. Validated auth gate, owner-only writes in `/users/{ownerUid}/...`, active-session scoped participant access for live game flows, and server-only writes for `/pitchers/{pitcherId}/stats/*`. Fixed least-privilege gap by tightening `/templates/*` and `/pitchers/*` `list` from any signed-in user to owner/shared/claimed-only. |
-| [x] | Callable function validation | Server validates auth, input schema, and authorization for every callable |  | 2026-05-21: Audited all callable exports in `functions/src/index.ts` (1 callable: `createRetailCheckoutSession`). Enforced auth (`request.auth.uid` required), strict payload schema (object-only payload + typed/length-bounded/sanitized strings), allowed-value authorization (`itemKind` enum + `retailProductId` allowlist), and secure env config checks (HTTPS-only checkout redirect URLs). |
+| [x] | Callable function validation | Server validates auth, input schema, and authorization for every callable |  | 2026-06-04: Audited callable exports in `functions/src/index.ts` (`createRetailCheckoutSession`, `deleteAccount`). Checkout enforces auth, strict payload schema, allowed-value authorization, HTTPS redirect config, rate limiting, and idempotency. Delete account requires auth, removes or unlinks user-owned/shared Firestore data, unlinks retained retail order records from the Firebase account, and deletes the Firebase Auth user. |
 | [x] | Rate limiting strategy | Sensitive endpoints have abuse controls and retry-safe behavior |  | 2026-05-21: Added abuse controls to `createRetailCheckoutSession` in `functions/src/index.ts` — per-user throttle (max 5 attempts per 60s, server-enforced via Firestore transaction) + retry-safe idempotency key support (replays return the same checkout session payload instead of creating duplicates). |
-| [ ] | App Check rollout | App Check enforcement plan defined and tested for production impact |  |  |
+| [~] | App Check rollout | App Check enforcement plan defined and tested for production impact |  | 2026-06-04: Main and Display app code use App Check Debug provider only in DEBUG and App Attest provider in Release. Complete Firebase console enforcement review plus TestFlight production-token smoke test before App Store submission. |
 | [x] | Secret/config hygiene | No secrets in client repo; env vars and key scopes reviewed |  |  |
 
 ## 5) UX and Accessibility
@@ -76,7 +75,7 @@ Status key:
 | [x] | Purchase UX clarity | Pending/cancel/failure/success states are explicit and user-friendly |  | 2026-05-21: Added explicit user-facing purchase state messaging in subscription flows. `SubscriptionManager` now publishes status text for success/cancel/restore outcomes and friendly failure messaging for network/store errors; surfaced in both Pro paywall and Store screens (`SubscriptionManager.swift`, `Retail.swift`). Pending state remains explicit via in-button progress/disabled state + pending error text. |
 | [x] | Restore discoverability | Restore Purchases is easy to find and communicates outcome clearly |  | 2026-05-21: `Restore Purchases` is prominently exposed in both subscription surfaces (Store screen and Pro paywall). Restore flow now returns explicit outcome messaging: success (`Purchases restored. PitchMark Pro is active.`), no-active-purchases (`No active purchases were found to restore.`), and friendly network/store failure text. |
 | [x] | Dynamic Type support | Core screens remain usable at large accessibility text sizes |  | 2026-05-21: Implemented targeted AX text-size hardening on core flows. Sign-in buttons now use flexible width (`maxWidth`) and status text can wrap without clipping (`SignInView.swift`). Pro paywall content is scrollable for large text and primary purchase CTA supports multi-line wrapping (`SubscriptionManager.swift`). Settings action/footer labels now support multi-line + scale-down safeguards for long text (`SettingsView.swift`). Store title switched from fixed point size to dynamic text style (`Retail.swift`). |
-| [x] | VoiceOver labels | Interactive controls have meaningful accessibility labels/traits |  | 2026-05-21: Added explicit accessibility labels/hints on core interactive controls. Sign-in methods and OTP controls now have descriptive VoiceOver labels/hints (`SignInView.swift`). Purchase/restore/close actions in Pro paywall include actionable VoiceOver hints (`SubscriptionManager.swift`). Store purchase/restore controls include explicit restore/purchase hints (`Retail.swift`). Key Settings actions (`Join a Game`, account footer button) now expose meaningful labels/hints (`SettingsView.swift`). |
+| [x] | VoiceOver labels | Interactive controls have meaningful accessibility labels/traits |  | 2026-06-04: Sign-in exposes Apple and Google controls with descriptive VoiceOver labels/hints (`SignInView.swift`). Purchase/restore/close actions in Pro paywall include actionable VoiceOver hints (`SubscriptionManager.swift`). Store purchase/restore controls include explicit restore/purchase hints (`Retail.swift`). Key Settings actions (`Join a Game`, account footer button) now expose meaningful labels/hints (`SettingsView.swift`). |
 | [x] | Color contrast and tap targets | Meets baseline accessibility expectations on real devices |  | 2026-05-21: Accessibility hardening pass completed on core flows. Enforced 44pt minimum tap targets on primary actions in sign-in/paywall/store/settings (`SignInView.swift`, `SubscriptionManager.swift`, `Retail.swift`, `SettingsView.swift`), including purchase/restore/join/account actions. Improved sign-in success/status text contrast from secondary gray to primary where appropriate. Verified no diagnostics issues after changes. |
 
 ## 6) Operations and Support Readiness
@@ -104,6 +103,7 @@ Status key:
 - [ ] Premium gating is inconsistent
 - [ ] Firestore rules permit unauthorized access
 - [ ] Privacy/App Store compliance fields incomplete or inaccurate
+- [ ] App Check enforcement/token validation unresolved in TestFlight or production
 - [ ] Reproducible crash in primary user flows
 
 ## Notes

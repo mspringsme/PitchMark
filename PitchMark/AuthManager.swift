@@ -186,99 +186,28 @@ class AuthManager: ObservableObject {
         }
     }
 
-    func requestEmailOtp(email: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    func sendEmailSignInLink(email: String, completion: @escaping (Result<Void, Error>) -> Void) {
         let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            completion(.failure(NSError(domain: "Auth", code: 400, userInfo: [NSLocalizedDescriptionKey: "Email required"])) )
+            completion(.failure(NSError(domain: "Auth", code: 400, userInfo: [NSLocalizedDescriptionKey: "Email required."])))
             return
         }
 
-        let callable = Functions.functions().httpsCallable("requestEmailOtp")
-        callable.call(["email": trimmed]) { _, error in
+        let actionCodeSettings = ActionCodeSettings()
+        actionCodeSettings.url = URL(string: "https://pitchmark-fb9f8.web.app/signin")
+        actionCodeSettings.handleCodeInApp = true
+        actionCodeSettings.setIOSBundleID(Bundle.main.bundleIdentifier ?? "com.MarkSpringer.PitchMark")
+
+        Auth.auth().sendSignInLink(toEmail: trimmed, actionCodeSettings: actionCodeSettings) { error in
             if let error {
-                let nsError = error as NSError
-                debugLog("❌ requestEmailOtp error domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
-                completion(.failure(self.userFacingAuthError(error)))
+                debugLog("Email link sign-in request failed: \(error.localizedDescription)")
+                completion(.failure(error))
                 return
             }
+
+            UserDefaults.standard.set(trimmed, forKey: self.pendingEmailLinkKey)
             completion(.success(()))
         }
-    }
-
-    func verifyEmailOtp(email: String, code: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedEmail.isEmpty else {
-            completion(.failure(NSError(domain: "Auth", code: 400, userInfo: [NSLocalizedDescriptionKey: "Email required"])) )
-            return
-        }
-        guard !trimmedCode.isEmpty else {
-            completion(.failure(NSError(domain: "Auth", code: 400, userInfo: [NSLocalizedDescriptionKey: "Code required"])) )
-            return
-        }
-
-        let callable = Functions.functions().httpsCallable("verifyEmailOtp")
-        callable.call(["email": trimmedEmail, "code": trimmedCode]) { result, error in
-            if let error {
-                let nsError = error as NSError
-                debugLog("❌ verifyEmailOtp error domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)")
-                completion(.failure(self.userFacingAuthError(error)))
-                return
-            }
-
-            guard let data = result?.data as? [String: Any],
-                  let token = data["token"] as? String else {
-                completion(.failure(NSError(domain: "Auth", code: 500, userInfo: [NSLocalizedDescriptionKey: "Missing custom token"])) )
-                return
-            }
-
-            Auth.auth().signIn(withCustomToken: token) { authResult, signInError in
-                if let signInError {
-                    completion(.failure(self.userFacingAuthError(signInError)))
-                    return
-                }
-
-                guard let firebaseUser = authResult?.user else {
-                    completion(.failure(NSError(domain: "Auth", code: 500, userInfo: [NSLocalizedDescriptionKey: "Missing user"])) )
-                    return
-                }
-
-                self.user = firebaseUser
-                self.isSignedIn = true
-                self.upsertUserDocument(for: firebaseUser)
-                completion(.success(()))
-            }
-        }
-    }
-
-    private func userFacingAuthError(_ error: Error) -> Error {
-        let nsError = error as NSError
-        guard nsError.domain == FunctionsErrorDomain,
-              let code = FunctionsErrorCode(rawValue: nsError.code) else {
-            return error
-        }
-
-        let message: String
-        switch code {
-        case .invalidArgument:
-            message = "Invalid email or code."
-        case .unauthenticated:
-            message = "Please sign in again."
-        case .permissionDenied:
-            message = "Permission denied."
-        case .notFound:
-            message = "Code not found."
-        case .resourceExhausted:
-            message = "Too many attempts. Try again later."
-        case .deadlineExceeded:
-            message = "Request timed out. Try again."
-        case .internal:
-            message = "Server error. Please try again."
-        default:
-            message = "Something went wrong. Please try again."
-        }
-
-        return NSError(domain: nsError.domain, code: nsError.code, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     func handleEmailSignInLink(_ url: URL) -> Bool {
@@ -299,6 +228,7 @@ class AuthManager: ObservableObject {
             guard let firebaseUser = authResult?.user else { return }
             self.user = firebaseUser
             self.isSignedIn = true
+            UserDefaults.standard.removeObject(forKey: self.pendingEmailLinkKey)
             self.upsertUserDocument(for: firebaseUser)
         }
 
@@ -573,6 +503,25 @@ class AuthManager: ObservableObject {
             if let error = error {
                 debugLog("❌ save shared template failed:", error.localizedDescription)
             }
+        }
+    }
+
+    func hasRetailOrders(forTemplateId templateId: String) async -> Bool {
+        guard let user = user, !templateId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        do {
+            let snapshot = try await Firestore.firestore()
+                .collection("retailOrders")
+                .whereField("firebaseUid", isEqualTo: user.uid)
+                .whereField("templateId", isEqualTo: templateId)
+                .limit(to: 1)
+                .getDocuments()
+            return !snapshot.documents.isEmpty
+        } catch {
+            debugLog("⚠️ hasRetailOrders(forTemplateId:) failed:", error.localizedDescription)
+            return false
         }
     }
 

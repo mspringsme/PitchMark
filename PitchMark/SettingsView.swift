@@ -568,12 +568,21 @@ struct SettingsView: View {
     @State private var showAddPitcher = false
     @State private var newPitcherName: String = ""
     @State private var editingPitcher: Pitcher? = nil
+    @State private var showPitcherPhotoPicker = false
+    @State private var pitcherPortraitTarget: Pitcher? = nil
+    @State private var pitcherPortraitSourceImage: UIImage? = nil
+    @State private var showPitcherPortraitEditor = false
+    @State private var pitcherImageErrorMessage: String = ""
+    @State private var showPitcherImageError = false
 
     @State private var templatePendingShare: PitchTemplate? = nil
     @State private var showShareTemplateSheet = false
     @State private var shareTargetEmail: String = ""
     @State private var shareTemplateError: String = ""
     @State private var isSharingTemplate = false
+    @State private var purchasedTemplateEditTarget: PitchTemplate? = nil
+    @State private var showPurchasedTemplateEditAlert = false
+    @State private var isCheckingPurchasedTemplate = false
     @State private var isRefreshingTemplates = false
     @State private var hiddenTemplateIds: Set<String> = []
     @State private var hiddenPitcherIds: Set<String> = []
@@ -955,6 +964,24 @@ struct SettingsView: View {
         authManager.saveTemplate(updatedTemplate)
     }
 
+    private func beginEditTemplate(_ template: PitchTemplate) {
+        guard isTemplateEditable(template), !isCheckingPurchasedTemplate else { return }
+
+        isCheckingPurchasedTemplate = true
+        Task {
+            let hasOrders = await authManager.hasRetailOrders(forTemplateId: template.id.uuidString)
+            await MainActor.run {
+                isCheckingPurchasedTemplate = false
+                if hasOrders {
+                    purchasedTemplateEditTarget = template
+                    showPurchasedTemplateEditAlert = true
+                } else {
+                    editorTemplate = template
+                }
+            }
+        }
+    }
+
     private var pitcherShareSheetItems: [Any] {
         if let qr = sharePitcherQR {
             return [sharePitcherLink, qr]
@@ -1011,15 +1038,23 @@ struct SettingsView: View {
         editingPitcher = nil
     }
 
+    private func updatePitcherInMemory(_ updated: Pitcher) {
+        guard let id = updated.id else { return }
+        if let idx = pitchers.firstIndex(where: { $0.id == id }) {
+            pitchers[idx] = updated
+        } else {
+            pitchers.append(updated)
+        }
+    }
+
     private func savePitcherFromSheet() {
         let name = newPitcherName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
 
         if let editing = editingPitcher, let pid = editing.id {
             authManager.updatePitcher(id: pid, name: name, templateId: editing.templateId) { updated in
-                if let updated,
-                   let idx = pitchers.firstIndex(where: { $0.id == pid }) {
-                    pitchers[idx] = updated
+                if let updated {
+                    updatePitcherInMemory(updated)
                 }
                 dismissPitcherEditor()
             }
@@ -1029,6 +1064,50 @@ struct SettingsView: View {
                 handleCreatedPitcher(created)
             }
         }
+    }
+
+    private func beginPitcherPortraitSelection(for pitcher: Pitcher) {
+        guard pitcher.id != nil else { return }
+        pitcherPortraitTarget = pitcher
+        pitcherPortraitSourceImage = nil
+        showPitcherPhotoPicker = true
+    }
+
+    private func handlePickedPitcherPortrait(_ image: UIImage?) {
+        guard let image else {
+            pitcherPortraitTarget = nil
+            pitcherPortraitSourceImage = nil
+            return
+        }
+        pitcherPortraitSourceImage = image
+        DispatchQueue.main.async {
+            showPitcherPortraitEditor = true
+        }
+    }
+
+    private func savePitcherPortrait(_ image: UIImage) {
+        guard let target = pitcherPortraitTarget, let id = target.id else {
+            pitcherPortraitSourceImage = nil
+            showPitcherPortraitEditor = false
+            return
+        }
+
+        let didSave = saveLocalPitcherPortrait(image, pitcherId: id)
+        if !didSave {
+            pitcherImageErrorMessage = "Unable to save that image."
+            showPitcherImageError = true
+        } else {
+            updatePitcherInMemory(target)
+        }
+        pitcherPortraitSourceImage = nil
+        showPitcherPortraitEditor = false
+        pitcherPortraitTarget = nil
+    }
+
+    private func resetPitcherPortraitEditorState() {
+        pitcherPortraitSourceImage = nil
+        showPitcherPortraitEditor = false
+        pitcherPortraitTarget = nil
     }
 
     private var addPitcherSheetView: some View {
@@ -1118,6 +1197,9 @@ struct SettingsView: View {
                 switch result {
                 case .success(let newPitcher):
                     pitchers.append(newPitcher)
+                    if let sourceId = pitcher.id, let newId = newPitcher.id {
+                        copyLocalPitcherPortrait(from: sourceId, to: newId)
+                    }
                     NotificationCenter.default.post(name: .pitcherSharedUpdated, object: nil)
                 case .failure(let error):
                     self.pitcherShareError = error.localizedDescription
@@ -1328,20 +1410,29 @@ struct SettingsView: View {
                     HStack(spacing: 10) {
                         ForEach(visiblePitchers) { pitcher in
                             let isActive = pitcher.id == pitcherActionTargetId
-                            let isOwned = pitcher.isActiveOwner(currentUid: authManager.user?.uid)
-                            Button(pitcher.name) {
+                            Button {
                                 pitcherActionTargetId = (pitcherActionTargetId == pitcher.id) ? nil : pitcher.id
+                            } label: {
+                                VStack(spacing: 4) {
+                                    PitcherAvatarView(pitcher: pitcher, size: 58)
+                                        .padding(6)
+                                        .background(
+                                            Circle().fill(isActive ? Color.black.opacity(0.12) : Color.clear)
+                                        )
+                                        .overlay(
+                                            Circle().stroke(Color.black, lineWidth: isActive ? 2 : 1)
+                                        )
+
+                                    Text(pitcher.name)
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.6)
+                                        .allowsTightening(true)
+                                        .frame(width: 64)
+                                }
                             }
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(isOwned ? .black : Color.gray.opacity(0.45))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(
-                                Capsule().fill(isActive ? Color.black.opacity(0.14) : Color.clear)
-                            )
-                            .overlay(
-                                Capsule().stroke(Color.black, lineWidth: 1)
-                            )
+                            .buttonStyle(.plain)
                         }
 
                         if !hiddenPitchers.isEmpty {
@@ -1360,7 +1451,13 @@ struct SettingsView: View {
 
                 if let pitcher = selected {
                     let isActiveOwner = pitcher.isActiveOwner(currentUid: authManager.user?.uid)
-                    HStack(spacing: 8) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                        Button("Image") {
+                            beginPitcherPortraitSelection(for: pitcher)
+                        }
+                        .buttonStyle(.bordered)
+
                         Button("Edit") {
                             editingPitcher = pitcher
                             newPitcherName = pitcher.name
@@ -1409,8 +1506,9 @@ struct SettingsView: View {
                             .font(.caption)
                             .disabled(isCopyingPitcher)
                         }
+                        }
+                        .padding(.horizontal)
                     }
-                    .padding(.horizontal)
                 }
 
                 Spacer().frame(height: 8)
@@ -1478,10 +1576,10 @@ struct SettingsView: View {
                         .disabled(!isTemplateEditable(template))
 
                         Button("Edit") {
-                            editorTemplate = template
+                            beginEditTemplate(template)
                         }
                         .buttonStyle(.bordered)
-                        .disabled(!isTemplateEditable(template))
+                        .disabled(!isTemplateEditable(template) || isCheckingPurchasedTemplate)
 
                         Spacer()
 
@@ -2166,8 +2264,46 @@ struct SettingsView: View {
                     }
                 )
             }
+            .alert("Edit Purchased Template?", isPresented: $showPurchasedTemplateEditAlert) {
+                Button("Cancel", role: .cancel) {
+                    purchasedTemplateEditTarget = nil
+                }
+                Button("Continue Editing") {
+                    editorTemplate = purchasedTemplateEditTarget
+                    purchasedTemplateEditTarget = nil
+                }
+            } message: {
+                Text("This grid key has already been used in a store purchase. Changes you make now will only affect future use and future orders. Existing purchased orders will not change.")
+            }
             .sheet(isPresented: $showAddPitcher) {
                 addPitcherSheetView
+            }
+            .sheet(isPresented: $showPitcherPhotoPicker) {
+                PitcherImagePicker { image in
+                    showPitcherPhotoPicker = false
+                    handlePickedPitcherPortrait(image)
+                }
+            }
+            .sheet(isPresented: $showPitcherPortraitEditor) {
+                if let sourceImage = pitcherPortraitSourceImage, let target = pitcherPortraitTarget {
+                    PitcherPortraitCropEditor(
+                        sourceImage: sourceImage,
+                        pitcherName: target.name,
+                        onCancel: {
+                            resetPitcherPortraitEditorState()
+                        },
+                        onSave: { croppedImage in
+                            savePitcherPortrait(croppedImage)
+                        }
+                    )
+                }
+            }
+            .alert("Pitcher Image", isPresented: $showPitcherImageError) {
+                Button("OK", role: .cancel) {
+                    pitcherImageErrorMessage = ""
+                }
+            } message: {
+                Text(pitcherImageErrorMessage)
             }
             .sheet(item: $statsPitcher) { pitcher in
                 PitcherStatsSheetView(
@@ -2206,6 +2342,162 @@ struct SettingsView: View {
                     games: $games,
                 )
             }
+        }
+    }
+}
+
+private struct PitcherImagePicker: UIViewControllerRepresentable {
+    let onComplete: (UIImage?) -> Void
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .photoLibrary
+        picker.mediaTypes = ["public.image"]
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onComplete: onComplete)
+    }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let onComplete: (UIImage?) -> Void
+
+        init(onComplete: @escaping (UIImage?) -> Void) {
+            self.onComplete = onComplete
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            onComplete(nil)
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            let image = info[.originalImage] as? UIImage
+            onComplete(image)
+        }
+    }
+}
+
+private struct PitcherPortraitCropEditor: View {
+    let sourceImage: UIImage
+    let pitcherName: String
+    let onCancel: () -> Void
+    let onSave: (UIImage) -> Void
+
+    @State private var zoom: CGFloat = 1.0
+    @State private var dragOffset: CGSize = .zero
+    @State private var dragBaseOffset: CGSize = .zero
+
+    private let previewSize: CGFloat = 280
+    private let outputSize: CGFloat = 512
+
+    var body: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 4) {
+                Text("Crop Image")
+                    .font(.headline)
+                Text(pitcherName)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color.black.opacity(0.06))
+                GeometryReader { _ in
+                    let baseSize = fittedSize(for: sourceImage.size, in: CGSize(width: previewSize, height: previewSize))
+                    Image(uiImage: sourceImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: baseSize.width * zoom, height: baseSize.height * zoom)
+                        .offset(dragOffset)
+                        .clipped()
+                }
+                .frame(width: previewSize, height: previewSize)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(.white.opacity(0.9), lineWidth: 2)
+                )
+                .contentShape(Circle())
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            dragOffset = CGSize(
+                                width: dragBaseOffset.width + value.translation.width,
+                                height: dragBaseOffset.height + value.translation.height
+                            )
+                        }
+                        .onEnded { _ in
+                            dragBaseOffset = dragOffset
+                        }
+                )
+            }
+            .frame(width: previewSize, height: previewSize)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Resize")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button("Reset") {
+                        zoom = 1.0
+                        dragOffset = .zero
+                        dragBaseOffset = .zero
+                    }
+                    .font(.footnote.weight(.semibold))
+                }
+
+                Slider(value: $zoom, in: 1.0...2.8)
+            }
+
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Button("Use Image") {
+                    onSave(renderCroppedImage())
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .presentationDetents([.fraction(0.72)])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func fittedSize(for imageSize: CGSize, in targetSize: CGSize) -> CGSize {
+        guard imageSize.width > 0, imageSize.height > 0 else { return targetSize }
+        let scale = max(targetSize.width / imageSize.width, targetSize.height / imageSize.height)
+        return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+    }
+
+    private func renderCroppedImage() -> UIImage {
+        let targetSize = CGSize(width: outputSize, height: outputSize)
+        let normalizedImage = sourceImage.normalizedUpOrientation()
+        let baseSize = fittedSize(for: normalizedImage.size, in: CGSize(width: previewSize, height: previewSize))
+        let offsetScale = outputSize / previewSize
+        let renderSize = CGSize(width: baseSize.width * zoom * offsetScale, height: baseSize.height * zoom * offsetScale)
+        let origin = CGPoint(
+            x: dragOffset.width * offsetScale,
+            y: dragOffset.height * offsetScale
+        )
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+        return renderer.image { context in
+            context.cgContext.addEllipse(in: CGRect(origin: .zero, size: targetSize))
+            context.cgContext.clip()
+            normalizedImage.draw(in: CGRect(origin: origin, size: renderSize))
         }
     }
 }

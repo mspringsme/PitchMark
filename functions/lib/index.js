@@ -36,14 +36,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.stripeWebhook = exports.createRetailCheckoutSession = void 0;
+exports.stripeWebhook = exports.createRetailCheckoutSession = exports.deleteAccount = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const logger = __importStar(require("firebase-functions/logger"));
 const app_1 = require("firebase-admin/app");
+const auth_1 = require("firebase-admin/auth");
 const firestore_1 = require("firebase-admin/firestore");
 const stripe_1 = __importDefault(require("stripe"));
 (0, app_1.initializeApp)();
 const db = (0, firestore_1.getFirestore)();
+const auth = (0, auth_1.getAuth)();
 const retailCatalog = {
     grid_5x3: { priceId: "price_1TbQjpHGR9piiykPmnX6Lj5J", label: "Grid Key 5 x 3", unitAmountCents: 1200 },
     grid_3_5x2_75: { priceId: "price_1TbQkPHGR9piiykPAIvImeVz", label: "Grid Key 3.5 x 2.75", unitAmountCents: 1200 },
@@ -55,6 +57,7 @@ const idempotencyKeyPattern = /^[a-zA-Z0-9._-]{8,80}$/;
 const checkoutThrottleWindowMs = 60_000;
 const checkoutThrottleMaxAttempts = 5;
 const checkoutConfigVersion = "shipping_v1";
+const accountDeletionBatchSize = 400;
 function getStripeClient() {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
     if (!stripeSecretKey) {
@@ -179,6 +182,198 @@ function readOptionalIdempotencyKey(data) {
     }
     return value;
 }
+async function deleteQueryDocuments(query) {
+    let deleted = 0;
+    while (true) {
+        const snap = await query.limit(accountDeletionBatchSize).get();
+        if (snap.empty) {
+            return deleted;
+        }
+        const batch = db.batch();
+        for (const doc of snap.docs) {
+            batch.delete(doc.ref);
+            deleted += 1;
+        }
+        await batch.commit();
+    }
+}
+async function recursiveDeleteQueryDocuments(query) {
+    let deleted = 0;
+    while (true) {
+        const snap = await query.limit(25).get();
+        if (snap.empty) {
+            return deleted;
+        }
+        await Promise.all(snap.docs.map((doc) => db.recursiveDelete(doc.ref)));
+        deleted += snap.docs.length;
+    }
+}
+async function updateQueryDocuments(query, updates) {
+    let updated = 0;
+    while (true) {
+        const snap = await query.limit(accountDeletionBatchSize).get();
+        if (snap.empty) {
+            return updated;
+        }
+        const batch = db.batch();
+        for (const doc of snap.docs) {
+            batch.update(doc.ref, updates);
+            updated += 1;
+        }
+        await batch.commit();
+    }
+}
+async function deleteUserPresenceDocs(collectionName, uid) {
+    const liveGamesSnap = await db.collection("liveGames").get();
+    let deleted = 0;
+    for (const liveGameDoc of liveGamesSnap.docs) {
+        const presenceRef = liveGameDoc.ref.collection(collectionName).doc(uid);
+        const presenceSnap = await presenceRef.get();
+        if (!presenceSnap.exists) {
+            continue;
+        }
+        await presenceRef.delete();
+        deleted += 1;
+    }
+    return deleted;
+}
+async function deleteDocumentsByScanningCollection(collectionName, predicate) {
+    const snap = await db.collection(collectionName).get();
+    let deleted = 0;
+    for (const doc of snap.docs) {
+        const data = doc.data();
+        if (!predicate(data)) {
+            continue;
+        }
+        await db.recursiveDelete(doc.ref);
+        deleted += 1;
+    }
+    return deleted;
+}
+async function updateDocumentsByScanningCollection(collectionName, predicate, updates) {
+    const snap = await db.collection(collectionName).get();
+    let updated = 0;
+    for (const doc of snap.docs) {
+        const data = doc.data();
+        if (!predicate(data)) {
+            continue;
+        }
+        await doc.ref.set(updates, { merge: true });
+        updated += 1;
+    }
+    return updated;
+}
+async function deletePitchEventsByScanningOwnerCollections(uid) {
+    const liveGamesSnap = await db.collection("liveGames").get();
+    const pitchersSnap = await db.collection("pitchers").get();
+    const usersSnap = await db.collection("users").get();
+    let updated = 0;
+    for (const liveGameDoc of liveGamesSnap.docs) {
+        const pitchEventsSnap = await liveGameDoc.ref.collection("pitchEvents").get();
+        for (const eventDoc of pitchEventsSnap.docs) {
+            const data = eventDoc.data();
+            if (data.createdByUid !== uid) {
+                continue;
+            }
+            await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
+            updated += 1;
+        }
+    }
+    for (const pitcherDoc of pitchersSnap.docs) {
+        const pitchEventsSnap = await pitcherDoc.ref.collection("pitchEvents").get();
+        for (const eventDoc of pitchEventsSnap.docs) {
+            const data = eventDoc.data();
+            if (data.createdByUid !== uid) {
+                continue;
+            }
+            await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
+            updated += 1;
+        }
+    }
+    for (const userDoc of usersSnap.docs) {
+        const gamesSnap = await userDoc.ref.collection("games").get();
+        for (const gameDoc of gamesSnap.docs) {
+            const eventsSnap = await gameDoc.ref.collection("pitchEvents").get();
+            for (const eventDoc of eventsSnap.docs) {
+                const data = eventDoc.data();
+                if (data.createdByUid !== uid) {
+                    continue;
+                }
+                await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
+                updated += 1;
+            }
+        }
+    }
+    return updated;
+}
+exports.deleteAccount = (0, https_1.onCall)({ region: "us-central1", timeoutSeconds: 540 }, async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+        throw new https_1.HttpsError("unauthenticated", "Please sign in again to delete your account.");
+    }
+    const email = typeof request.auth?.token.email === "string"
+        ? request.auth.token.email.trim().toLowerCase()
+        : "";
+    const deletedAt = firestore_1.FieldValue.serverTimestamp();
+    const summary = {};
+    summary.ownedTemplates = await deleteDocumentsByScanningCollection("templates", (data) => data.ownerUid === uid);
+    summary.sharedTemplateUidRefs = await updateDocumentsByScanningCollection("templates", (data) => Array.isArray(data.sharedWith) && data.sharedWith.includes(uid), {
+        sharedWith: firestore_1.FieldValue.arrayRemove(uid),
+        updatedAt: deletedAt
+    });
+    if (email) {
+        summary.sharedTemplateEmailRefs = await updateDocumentsByScanningCollection("templates", (data) => Array.isArray(data.sharedWithEmails) && data.sharedWithEmails.includes(email), {
+            sharedWithEmails: firestore_1.FieldValue.arrayRemove(email),
+            updatedAt: deletedAt
+        });
+    }
+    summary.ownedPitchers = await deleteDocumentsByScanningCollection("pitchers", (data) => data.ownerUid === uid);
+    summary.claimedPitchers = await updateDocumentsByScanningCollection("pitchers", (data) => data.claimedByUid === uid, {
+        claimedByUid: firestore_1.FieldValue.delete(),
+        updatedAt: deletedAt
+    });
+    summary.sharedPitcherRefs = await updateDocumentsByScanningCollection("pitchers", (data) => Array.isArray(data.sharedWith) && data.sharedWith.includes(uid), {
+        sharedWith: firestore_1.FieldValue.arrayRemove(uid),
+        updatedAt: deletedAt
+    });
+    summary.inviteTokens = await deleteDocumentsByScanningCollection("inviteTokens", (data) => data.ownerUid === uid);
+    summary.displayInviteTokens = await deleteDocumentsByScanningCollection("displayInviteTokens", (data) => data.ownerUid === uid);
+    summary.pitcherInviteTokens = await deleteDocumentsByScanningCollection("pitcherInviteTokens", (data) => data.ownerUid === uid);
+    summary.joinCodes = await deleteDocumentsByScanningCollection("joinCodes", (data) => data.ownerUid === uid);
+    summary.liveGames = await deleteDocumentsByScanningCollection("liveGames", (data) => data.ownerUid === uid);
+    summary.liveConnections = await updateDocumentsByScanningCollection("liveGames", (data) => {
+        const connection = data.connection;
+        return (connection?.participantUid ?? "") === uid;
+    }, {
+        connection: firestore_1.FieldValue.delete(),
+        updatedAt: deletedAt
+    });
+    summary.liveParticipants = await deleteUserPresenceDocs("participants", uid);
+    summary.liveDisplayParticipants = await deleteUserPresenceDocs("displayParticipants", uid);
+    summary.createdPitchEvents = await deletePitchEventsByScanningOwnerCollections(uid);
+    summary.checkoutRateLimits = await deleteDocumentsByScanningCollection("rateLimits", () => false);
+    summary.retailOrdersUnlinked = await updateDocumentsByScanningCollection("retailOrders", (data) => data.firebaseUid === uid, {
+        firebaseUid: "",
+        accountDeleted: true,
+        accountDeletedAt: deletedAt
+    });
+    await db.recursiveDelete(db.collection("checkoutRequests").doc(uid));
+    await db.recursiveDelete(db.collection("users").doc(uid));
+    try {
+        await auth.deleteUser(uid);
+    }
+    catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error
+            ? String(error.code)
+            : "";
+        if (code !== "auth/user-not-found") {
+            logger.error("Firebase Auth user deletion failed", { uid, error });
+            throw new https_1.HttpsError("internal", "Account data was removed, but sign-in deletion failed. Contact support.");
+        }
+    }
+    logger.info("Account deleted", { uid, summary });
+    return { success: true };
+});
 exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1" }, async (request) => {
     if (!request.auth?.uid) {
         throw new https_1.HttpsError("unauthenticated", "You must be signed in to purchase.");

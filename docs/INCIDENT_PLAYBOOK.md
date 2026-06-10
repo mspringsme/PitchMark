@@ -23,7 +23,7 @@ This playbook defines response steps for:
 
 ### Detection signals
 - Sign-in failures spike.
-- OTP / Apple / Google sign-in callbacks failing.
+- Apple / Google sign-in callbacks failing.
 - Auth-related cloud function errors increase.
 
 ### Immediate actions
@@ -37,8 +37,7 @@ This playbook defines response steps for:
 - Provide expected retry interval and status updates.
 
 ### Recovery checks
-- Email OTP request/verify works.
-- Apple/Google sign-in works.
+- Apple and Google sign-in work.
 - Session persistence remains intact after relaunch.
 
 ## StoreKit / Purchase Outage

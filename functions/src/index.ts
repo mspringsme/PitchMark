@@ -1,11 +1,13 @@
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
 import { initializeApp } from "firebase-admin/app";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore, FieldValue, type Query } from "firebase-admin/firestore";
 import Stripe from "stripe";
 
 initializeApp();
 const db = getFirestore();
+const auth = getAuth();
 
 type RetailCatalogItem = {
     priceId: string;
@@ -25,6 +27,7 @@ const idempotencyKeyPattern = /^[a-zA-Z0-9._-]{8,80}$/;
 const checkoutThrottleWindowMs = 60_000;
 const checkoutThrottleMaxAttempts = 5;
 const checkoutConfigVersion = "shipping_v1";
+const accountDeletionBatchSize = 400;
 
 function getStripeClient(): Stripe {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -170,6 +173,238 @@ function readOptionalIdempotencyKey(data: Record<string, unknown>): string {
     }
     return value;
 }
+
+async function deleteQueryDocuments(query: Query): Promise<number> {
+    let deleted = 0;
+
+    while (true) {
+        const snap = await query.limit(accountDeletionBatchSize).get();
+        if (snap.empty) {
+            return deleted;
+        }
+
+        const batch = db.batch();
+        for (const doc of snap.docs) {
+            batch.delete(doc.ref);
+            deleted += 1;
+        }
+        await batch.commit();
+    }
+}
+
+async function recursiveDeleteQueryDocuments(query: Query): Promise<number> {
+    let deleted = 0;
+
+    while (true) {
+        const snap = await query.limit(25).get();
+        if (snap.empty) {
+            return deleted;
+        }
+
+        await Promise.all(snap.docs.map((doc) => db.recursiveDelete(doc.ref)));
+        deleted += snap.docs.length;
+    }
+}
+
+async function updateQueryDocuments(query: Query, updates: Record<string, unknown>): Promise<number> {
+    let updated = 0;
+
+    while (true) {
+        const snap = await query.limit(accountDeletionBatchSize).get();
+        if (snap.empty) {
+            return updated;
+        }
+
+        const batch = db.batch();
+        for (const doc of snap.docs) {
+            batch.update(doc.ref, updates);
+            updated += 1;
+        }
+        await batch.commit();
+    }
+}
+
+async function deleteUserPresenceDocs(collectionName: "participants" | "displayParticipants", uid: string): Promise<number> {
+    const liveGamesSnap = await db.collection("liveGames").get();
+    let deleted = 0;
+
+    for (const liveGameDoc of liveGamesSnap.docs) {
+        const presenceRef = liveGameDoc.ref.collection(collectionName).doc(uid);
+        const presenceSnap = await presenceRef.get();
+        if (!presenceSnap.exists) {
+            continue;
+        }
+
+        await presenceRef.delete();
+        deleted += 1;
+    }
+
+    return deleted;
+}
+
+async function deleteDocumentsByScanningCollection(
+    collectionName: string,
+    predicate: (data: Record<string, unknown>) => boolean
+): Promise<number> {
+    const snap = await db.collection(collectionName).get();
+    let deleted = 0;
+
+    for (const doc of snap.docs) {
+        const data = doc.data() as Record<string, unknown>;
+        if (!predicate(data)) {
+            continue;
+        }
+
+        await db.recursiveDelete(doc.ref);
+        deleted += 1;
+    }
+
+    return deleted;
+}
+
+async function updateDocumentsByScanningCollection(
+    collectionName: string,
+    predicate: (data: Record<string, unknown>) => boolean,
+    updates: Record<string, unknown>
+): Promise<number> {
+    const snap = await db.collection(collectionName).get();
+    let updated = 0;
+
+    for (const doc of snap.docs) {
+        const data = doc.data() as Record<string, unknown>;
+        if (!predicate(data)) {
+            continue;
+        }
+
+        await doc.ref.set(updates, { merge: true });
+        updated += 1;
+    }
+
+    return updated;
+}
+
+async function deletePitchEventsByScanningOwnerCollections(uid: string): Promise<number> {
+    const liveGamesSnap = await db.collection("liveGames").get();
+    const pitchersSnap = await db.collection("pitchers").get();
+    const usersSnap = await db.collection("users").get();
+    let updated = 0;
+
+    for (const liveGameDoc of liveGamesSnap.docs) {
+        const pitchEventsSnap = await liveGameDoc.ref.collection("pitchEvents").get();
+        for (const eventDoc of pitchEventsSnap.docs) {
+            const data = eventDoc.data() as Record<string, unknown>;
+            if (data.createdByUid !== uid) {
+                continue;
+            }
+            await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: FieldValue.serverTimestamp() }, { merge: true });
+            updated += 1;
+        }
+    }
+
+    for (const pitcherDoc of pitchersSnap.docs) {
+        const pitchEventsSnap = await pitcherDoc.ref.collection("pitchEvents").get();
+        for (const eventDoc of pitchEventsSnap.docs) {
+            const data = eventDoc.data() as Record<string, unknown>;
+            if (data.createdByUid !== uid) {
+                continue;
+            }
+            await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: FieldValue.serverTimestamp() }, { merge: true });
+            updated += 1;
+        }
+    }
+
+    for (const userDoc of usersSnap.docs) {
+        const gamesSnap = await userDoc.ref.collection("games").get();
+        for (const gameDoc of gamesSnap.docs) {
+            const eventsSnap = await gameDoc.ref.collection("pitchEvents").get();
+            for (const eventDoc of eventsSnap.docs) {
+                const data = eventDoc.data() as Record<string, unknown>;
+                if (data.createdByUid !== uid) {
+                    continue;
+                }
+                await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: FieldValue.serverTimestamp() }, { merge: true });
+                updated += 1;
+            }
+        }
+    }
+
+    return updated;
+}
+
+export const deleteAccount = onCall({ region: "us-central1", timeoutSeconds: 540 }, async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+        throw new HttpsError("unauthenticated", "Please sign in again to delete your account.");
+    }
+
+    const email = typeof request.auth?.token.email === "string"
+        ? request.auth.token.email.trim().toLowerCase()
+        : "";
+    const deletedAt = FieldValue.serverTimestamp();
+    const summary: Record<string, number> = {};
+
+    summary.ownedTemplates = await deleteDocumentsByScanningCollection("templates", (data) => data.ownerUid === uid);
+    summary.sharedTemplateUidRefs = await updateDocumentsByScanningCollection("templates", (data) => Array.isArray(data.sharedWith) && data.sharedWith.includes(uid), {
+        sharedWith: FieldValue.arrayRemove(uid),
+        updatedAt: deletedAt
+    });
+    if (email) {
+        summary.sharedTemplateEmailRefs = await updateDocumentsByScanningCollection("templates", (data) => Array.isArray(data.sharedWithEmails) && data.sharedWithEmails.includes(email), {
+            sharedWithEmails: FieldValue.arrayRemove(email),
+            updatedAt: deletedAt
+        });
+    }
+
+    summary.ownedPitchers = await deleteDocumentsByScanningCollection("pitchers", (data) => data.ownerUid === uid);
+    summary.claimedPitchers = await updateDocumentsByScanningCollection("pitchers", (data) => data.claimedByUid === uid, {
+        claimedByUid: FieldValue.delete(),
+        updatedAt: deletedAt
+    });
+    summary.sharedPitcherRefs = await updateDocumentsByScanningCollection("pitchers", (data) => Array.isArray(data.sharedWith) && data.sharedWith.includes(uid), {
+        sharedWith: FieldValue.arrayRemove(uid),
+        updatedAt: deletedAt
+    });
+
+    summary.inviteTokens = await deleteDocumentsByScanningCollection("inviteTokens", (data) => data.ownerUid === uid);
+    summary.displayInviteTokens = await deleteDocumentsByScanningCollection("displayInviteTokens", (data) => data.ownerUid === uid);
+    summary.pitcherInviteTokens = await deleteDocumentsByScanningCollection("pitcherInviteTokens", (data) => data.ownerUid === uid);
+    summary.joinCodes = await deleteDocumentsByScanningCollection("joinCodes", (data) => data.ownerUid === uid);
+    summary.liveGames = await deleteDocumentsByScanningCollection("liveGames", (data) => data.ownerUid === uid);
+    summary.liveConnections = await updateDocumentsByScanningCollection("liveGames", (data) => {
+        const connection = data.connection as Record<string, unknown> | undefined;
+        return (connection?.participantUid ?? "") === uid;
+    }, {
+        connection: FieldValue.delete(),
+        updatedAt: deletedAt
+    });
+    summary.liveParticipants = await deleteUserPresenceDocs("participants", uid);
+    summary.liveDisplayParticipants = await deleteUserPresenceDocs("displayParticipants", uid);
+    summary.createdPitchEvents = await deletePitchEventsByScanningOwnerCollections(uid);
+    summary.checkoutRateLimits = await deleteDocumentsByScanningCollection("rateLimits", () => false);
+    summary.retailOrdersUnlinked = await updateDocumentsByScanningCollection("retailOrders", (data) => data.firebaseUid === uid, {
+        firebaseUid: "",
+        accountDeleted: true,
+        accountDeletedAt: deletedAt
+    });
+
+    await db.recursiveDelete(db.collection("checkoutRequests").doc(uid));
+    await db.recursiveDelete(db.collection("users").doc(uid));
+
+    try {
+        await auth.deleteUser(uid);
+    } catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error
+            ? String((error as { code?: unknown }).code)
+            : "";
+        if (code !== "auth/user-not-found") {
+            logger.error("Firebase Auth user deletion failed", { uid, error });
+            throw new HttpsError("internal", "Account data was removed, but sign-in deletion failed. Contact support.");
+        }
+    }
+
+    logger.info("Account deleted", { uid, summary });
+    return { success: true };
+});
 
 export const createRetailCheckoutSession = onCall({ region: "us-central1" }, async (request) => {
     if (!request.auth?.uid) {

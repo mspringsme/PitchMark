@@ -309,6 +309,7 @@ struct RetailFulfillmentAdminView: View {
 
         let printableView = PrintableEncryptedGridsView(
             grid: template.pitchGridValues,
+            pitchHeaders: template.pitchGridHeaders,
             strikeTopRow: template.strikeTopRow,
             strikeRows: template.strikeRows,
             ballsTopRow: template.ballsTopRow,

@@ -226,6 +226,8 @@ struct PitchTrackerView: View {
     @State private var showBulkJerseyPrompt = false
     @State private var showBulkJerseyInput = false
     @State private var bulkJerseyNumbers: String = ""
+    @State private var showDummyLineupInput = false
+    @State private var dummyLineupCount: String = ""
     @State private var selectedBatterId: UUID? = nil
     @State private var selectedBatterJersey: String? = nil
     @State private var jerseyDetailEvent: PitchEvent? = nil
@@ -342,6 +344,7 @@ struct PitchTrackerView: View {
         static let lastBackgroundAt = "lastBackgroundAt"
         static let forceSettingsOnNextLaunch = "forceSettingsOnNextLaunch"
         static let lastProgressByGameId = "lastProgressByGameId"
+        static let didShowDisplayOnboarding = "didShowDisplayOnboarding"
     }
 
     private struct LocalProgressSnapshot: Codable {
@@ -3229,11 +3232,11 @@ struct PitchTrackerView: View {
                 atBatHeatmapResultFilter = .all
             }
             .confirmationDialog("Choose Pitch Type", isPresented: $showAllPitchesHeatmapPitchPicker, titleVisibility: .visible) {
-                ForEach(batterHeatmapPitchStats) { stat in
-                    Button(stat.pitch) {
+                ForEach(availablePitches(for: selectedTemplate), id: \.self) { pitch in
+                    Button(pitch) {
                         guard let pendingTap = pendingAllPitchesHeatmapTap else { return }
                         beginCallFromHeatmap(
-                            pitch: stat.pitch,
+                            pitch: pitch,
                             location: pendingTap.location,
                             isStrike: pendingTap.isStrike
                         )
@@ -4342,44 +4345,35 @@ struct PitchTrackerView: View {
                                 }
                             }
                         } label: {
-                            let currentLabel = selectedPitcherName
-                            let widestLabel = ([currentLabel] + visiblePitchers.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+                            let currentPitcher = pitchers.first(where: { $0.id == selectedPitcherId })
 
-                            ZStack {
-                                HStack(spacing: 8) {
-                                    Text(widestLabel)
-                                        .font(.subheadline)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.7)
-                                        .allowsTightening(true)
-                                        .opacity(0)
+                            VStack(alignment: .center, spacing: 4) {
+                                ZStack(alignment: .bottomTrailing) {
+                                    PitcherAvatarView(pitcher: currentPitcher, size: 52)
+
                                     Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                        .opacity(0)
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.primary)
+                                        .padding(4)
+                                        .background(Color.white.opacity(0.78))
+                                        .clipShape(Circle())
+                                        .offset(x: 2, y: 2)
                                 }
 
-                                HStack(spacing: 8) {
-                                    Text(currentLabel)
-                                        .font(.subheadline)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.7)
-                                        .allowsTightening(true)
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                }
+                                Text(currentPitcher?.name ?? "Select a pitcher")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.75)
+                                    .allowsTightening(true)
+                                    .frame(width: 86)
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .foregroundColor(.primary)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
                             .opacity((visiblePitchers.isEmpty || !canSelectPitcherInGame) ? 0.6 : 1.0)
-                            .contentShape(Capsule())
+                            .contentShape(Rectangle())
+                            .transaction { transaction in
+                                transaction.animation = nil
+                            }
+                            .animation(nil, value: atBatPulse)
                         }
                         .disabled(visiblePitchers.isEmpty || !canSelectPitcherInGame)
                     }
@@ -5383,6 +5377,10 @@ struct PitchTrackerView: View {
                                     showAddJerseyPopover = true
                                     jerseyInputFocused = true
                                 }
+                                Button("Add Dummy Lineup") {
+                                    dummyLineupCount = ""
+                                    showDummyLineupInput = true
+                                }
                             } message: {
                                 Text("Speak or type the jersey numbers with commas in between (example: 2, 7, 18).")
                             }
@@ -5451,6 +5449,33 @@ struct PitchTrackerView: View {
                                 }
                             } message: {
                                 Text("Speak or type the jersey numbers with commas in between.")
+                            }
+                            .alert("Add dummy lineup", isPresented: $showDummyLineupInput) {
+                                TextField("6", text: $dummyLineupCount)
+                                Button("Cancel", role: .cancel) {
+                                    dummyLineupCount = ""
+                                }
+                                Button("Add") {
+                                    let trimmed = dummyLineupCount.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    guard let count = Int(trimmed), count > 0 else {
+                                        dummyLineupCount = ""
+                                        return
+                                    }
+
+                                    jerseyCells = (1...count).map { JerseyCell(jerseyNumber: "\($0)") }
+                                    selectedBatterId = nil
+                                    selectedBatterJersey = nil
+                                    editingCell = nil
+                                    showAddJerseyPopover = false
+                                    jerseyInputFocused = false
+                                    newJerseyNumber = ""
+
+                                    persistLineupFromDetail()
+
+                                    dummyLineupCount = ""
+                                }
+                            } message: {
+                                Text("Enter how many batters to generate, starting at 1.")
                             }
                         }
                         .padding(.vertical,12)
@@ -5917,7 +5942,7 @@ struct PitchTrackerView: View {
             practiceId: selectedPracticeId,
             pitcherId: selectedPitcherId
         )
-        event.debugLog(prefix: "📤 Auto-saving Practice PitchEvent")
+        event.logDebugPayload(prefix: "📤 Auto-saving Practice PitchEvent")
 
         // Persist and update UI state
         authManager.savePitchEvent(event)

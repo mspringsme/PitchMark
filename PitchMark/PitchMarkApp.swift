@@ -25,8 +25,11 @@ struct RootView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var showDisplayCover = false
+    @State private var showDisplayOnboarding = false
     @State private var showProPaywall = false
     @State private var checkoutAlert: CheckoutAlert? = nil
+    @AppStorage(PitchTrackerView.DefaultsKeys.didShowDisplayOnboarding) private var didShowDisplayOnboarding = false
+    private let displayAppSearchURL = URL(string: "https://apps.apple.com/us/search?term=Pitchmark%20Display")!
 
     var body: some View {
         Group {
@@ -45,8 +48,21 @@ struct RootView: View {
         .sheet(isPresented: $showProPaywall) {
             ProPaywallView(
                 title: "PitchMark Pro",
-                message: "Invite links and participant connections require PitchMark Pro.",
+                message: "PitchMark Pro unlocks the main app features and gives you access to the separate Pitchmark Display companion app. You can install Display from the App Store after purchase.",
                 allowsClose: true
+            )
+        }
+        .sheet(isPresented: $showDisplayOnboarding) {
+            DisplayOnboardingView(
+                displayAppSearchURL: displayAppSearchURL,
+                openDisplayApp: {
+                    guard let url = URL(string: "pitchmarkdisplay://") else { return }
+                    UIApplication.shared.open(url)
+                },
+                dismissAction: {
+                    didShowDisplayOnboarding = true
+                    showDisplayOnboarding = false
+                }
             )
         }
         .alert(item: $checkoutAlert) { alert in
@@ -94,6 +110,13 @@ struct RootView: View {
                 }
             } else {
                 showDisplayCover = false
+                showDisplayOnboarding = false
+            }
+        }
+        .onChange(of: subscriptionManager.isPro) { _, isPro in
+            guard isPro, !didShowDisplayOnboarding else { return }
+            DispatchQueue.main.async {
+                showDisplayOnboarding = true
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .displayOnlyPresentRequested)) { _ in
@@ -198,6 +221,70 @@ struct RootView: View {
         guard host == "pitcher" || path == "/pitcher" else { return nil }
         let token = components?.queryItems?.first(where: { $0.name == "token" })?.value
         return token
+    }
+}
+
+private struct DisplayOnboardingView: View {
+    let displayAppSearchURL: URL
+    let openDisplayApp: () -> Void
+    let dismissAction: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("PitchMark Display is a separate app")
+                        .font(.title2.bold())
+
+                    Text("PitchMark Pro unlocks access to the companion Display app, but it installs separately from the App Store.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("Buy Pro in the main app", systemImage: "checkmark.circle.fill")
+                        Label("Install Pitchmark Display from the App Store", systemImage: "arrow.down.circle.fill")
+                        Label("Open Display when you are ready to run a live session", systemImage: "play.circle.fill")
+                    }
+                    .font(.subheadline)
+
+                    VStack(spacing: 12) {
+                        Button {
+                            openDisplayApp()
+                        } label: {
+                            Label("Open Display App", systemImage: "app.badge")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Link(destination: displayAppSearchURL) {
+                            Label("Get Pitchmark Display", systemImage: "square.and.arrow.up")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button("Maybe Later") {
+                            dismissAction()
+                            dismiss()
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.top, 8)
+                }
+                .padding()
+            }
+            .navigationTitle("Display Setup")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismissAction()
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 

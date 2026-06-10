@@ -470,8 +470,8 @@ struct PitchCardView: View {
     }
 
     private var scoutCompactContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
                 if let primaryLine = scoutPrimaryLine {
                     scoutSummaryLine(primaryLine, font: .system(size: 20, weight: .medium))
                 } else {
@@ -479,70 +479,71 @@ struct PitchCardView: View {
                         .font(.system(size: 20, weight: .medium))
                         .foregroundColor(.black)
                 }
-                Spacer(minLength: 0)
-            }
 
-            HStack(alignment: .top, spacing: 8) {
-                if let num = jerseyNumber, !num.isEmpty {
-                    HStack(spacing: 6) {
-                        Text(num)
-                            .font(.system(size: 12, weight: .bold))
-                            .monospacedDigit()
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .padding(.horizontal, num.count > 1 ? 6 : 0)
-                            .frame(width: num.count > 1 ? nil : 18, height: 18)
-                            .background(
-                                Group {
-                                    if num.count > 1 {
-                                        Capsule().fill(Color.blue)
-                                    } else {
-                                        Circle().fill(Color.blue)
-                                    }
-                                }
-                            )
-                        if let count = atBatCountText, !count.isEmpty {
-                            Text(count)
-                                .font(.system(size: 12, weight: .semibold))
+                HStack(alignment: .top, spacing: 8) {
+                    if let num = jerseyNumber, !num.isEmpty {
+                        HStack(spacing: 6) {
+                            Text(num)
+                                .font(.system(size: 12, weight: .bold))
                                 .monospacedDigit()
-                                .foregroundColor(.black.opacity(0.75))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
+                                .padding(.horizontal, num.count > 1 ? 6 : 0)
+                                .frame(width: num.count > 1 ? nil : 18, height: 18)
+                                .background(
+                                    Group {
+                                        if num.count > 1 {
+                                            Capsule().fill(Color.blue)
+                                        } else {
+                                            Circle().fill(Color.blue)
+                                        }
+                                    }
+                                )
+                            if let count = atBatCountText, !count.isEmpty {
+                                Text(count)
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .monospacedDigit()
+                                    .foregroundColor(.black.opacity(0.75))
+                            }
+                        }
+                    } else if let count = atBatCountText, !count.isEmpty {
+                        Text(count)
+                            .font(.system(size: 12, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundColor(.black.opacity(0.75))
+                    }
+
+                    if !scoutSecondaryLines.isEmpty {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(scoutSecondaryLines, id: \.self) { line in
+                                scoutSummaryLine(line, font: .system(size: 12, weight: .regular))
+                            }
                         }
                     }
-                } else if let count = atBatCountText, !count.isEmpty {
-                    Text(count)
-                        .font(.system(size: 12, weight: .semibold))
-                        .monospacedDigit()
-                        .foregroundColor(.black.opacity(0.75))
-                }
 
-                if !scoutSecondaryLines.isEmpty {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(scoutSecondaryLines, id: \.self) { line in
-                            scoutSummaryLine(line, font: .system(size: 12, weight: .regular))
-                        }
-                    }
+                    Spacer(minLength: 0)
                 }
-
-                Spacer(minLength: 0)
-
-                Group {
-                    if let rightImage {
-                        rightImage
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 60, height: 90)
-                            .shadow(
-                                color: rightImageShouldHighlight ? .green.opacity(0.7) : .red.opacity(0.5),
-                                radius: 6, x: 0, y: 0
-                            )
-                    } else {
-                        Color.clear
-                            .frame(width: 60, height: 90)
-                    }
-                }
-                .padding(.vertical, 6)
             }
+
+            Spacer(minLength: 0)
+
+            Group {
+                if let rightImage {
+                    rightImage
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 60, height: 90, alignment: .top)
+                        .shadow(
+                            color: rightImageShouldHighlight ? .green.opacity(0.7) : .red.opacity(0.5),
+                            radius: 6, x: 0, y: 0
+                        )
+                } else {
+                    Color.clear
+                        .frame(width: 60, height: 90)
+                }
+            }
+            .padding(.top, 2)
         }
         .padding(.horizontal, 12)
         .padding(.top, 4)
@@ -2694,10 +2695,10 @@ extension PitchEvent {
             return try doc.data(as: PitchEvent.self)
         } catch {
             if let fallback = PitchEvent(legacyData: doc.data(), documentId: doc.documentID) {
-                PitchMark.debugLog("⚠️ PitchEvent legacy decode used docId=\(doc.documentID)")
+                debugLog("⚠️ PitchEvent legacy decode used docId=\(doc.documentID)")
                 return fallback
             }
-            PitchMark.debugLog("❌ PitchEvent decode failed docId=\(doc.documentID) error=\(error)")
+            debugLog("❌ PitchEvent decode failed docId=\(doc.documentID) error=\(error)")
             return nil
         }
     }
@@ -2806,7 +2807,7 @@ extension PitchEvent {
         }
     }
 
-    func debugLog(prefix: String = "📤 Saving PitchEvent") {
+    func logDebugPayload(prefix: String = "📤 Saving PitchEvent") {
         struct DebugEvent: Encodable {
             let id: String?
             let timestamp: Date
@@ -2871,10 +2872,10 @@ extension PitchEvent {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         if let data = try? encoder.encode(debug), let json = String(data: data, encoding: .utf8) {
-            PitchMark.debugLog("\(prefix):\n\(json)")
+            debugLog("\(prefix):\n\(json)")
         } else {
-            PitchMark.debugLog("\(prefix): <failed to encode>")
-            PitchMark.debugLog(self)
+            debugLog("\(prefix): <failed to encode>")
+            debugLog(self)
         }
     }
 }

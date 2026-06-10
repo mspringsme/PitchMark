@@ -304,6 +304,158 @@ extension Pitcher {
         guard let currentUid else { return false }
         return activeOwnerUid == currentUid
     }
+
+    var localPortraitImage: UIImage? {
+        guard let id else { return nil }
+        return localPitcherPortraitImage(for: id)
+    }
+
+    var avatarInitials: String {
+        let parts = name
+            .split(whereSeparator: { $0.isWhitespace })
+            .prefix(2)
+        let initials = parts.compactMap { $0.first }.map(String.init).joined()
+        return initials.isEmpty ? "P" : initials.uppercased()
+    }
+}
+
+private func localPitcherPortraitsDirectory() -> URL? {
+    guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+        return nil
+    }
+    return base.appendingPathComponent("PitchMark/PitcherPortraits", isDirectory: true)
+}
+
+func localPitcherPortraitURL(for pitcherId: String) -> URL? {
+    guard !pitcherId.isEmpty, let directory = localPitcherPortraitsDirectory() else { return nil }
+    return directory.appendingPathComponent("\(pitcherId).png")
+}
+
+func localPitcherPortraitImage(for pitcherId: String) -> UIImage? {
+    guard let url = localPitcherPortraitURL(for: pitcherId),
+          let data = try? Data(contentsOf: url) else {
+        return nil
+    }
+    return UIImage(data: data)
+}
+
+func saveLocalPitcherPortrait(_ image: UIImage, pitcherId: String) -> Bool {
+    guard let url = localPitcherPortraitURL(for: pitcherId) else { return false }
+    do {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let normalizedImage = image.normalizedUpOrientation()
+        guard let data = normalizedImage.pngData() else { return false }
+        try data.write(to: url, options: [.atomic])
+        NotificationCenter.default.post(name: .pitcherPortraitDidChange, object: pitcherId)
+        return true
+    } catch {
+        debugLog("❌ saveLocalPitcherPortrait failed: \(error.localizedDescription)")
+        return false
+    }
+}
+
+func copyLocalPitcherPortrait(from sourcePitcherId: String, to destinationPitcherId: String) {
+    guard let sourceURL = localPitcherPortraitURL(for: sourcePitcherId),
+          let destinationURL = localPitcherPortraitURL(for: destinationPitcherId) else {
+        return
+    }
+    do {
+        try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        NotificationCenter.default.post(name: .pitcherPortraitDidChange, object: destinationPitcherId)
+    } catch {
+        debugLog("⚠️ copyLocalPitcherPortrait failed: \(error.localizedDescription)")
+    }
+}
+
+func removeLocalPitcherPortrait(pitcherId: String) {
+    guard let url = localPitcherPortraitURL(for: pitcherId) else { return }
+    try? FileManager.default.removeItem(at: url)
+    NotificationCenter.default.post(name: .pitcherPortraitDidChange, object: pitcherId)
+}
+
+extension UIImage {
+    func normalizedUpOrientation() -> UIImage {
+        if imageOrientation == .up {
+            return self
+        }
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = scale
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        return renderer.image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
+    func resizedToFit(maxDimension: CGFloat) -> UIImage {
+        let largestDimension = max(size.width, size.height)
+        guard largestDimension > maxDimension, largestDimension > 0 else {
+            return self
+        }
+
+        let scaleFactor = maxDimension / largestDimension
+        let targetSize = CGSize(width: size.width * scaleFactor, height: size.height * scaleFactor)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: targetSize, format: format)
+        return renderer.image { _ in
+            draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+    }
+}
+
+struct PitcherAvatarView: View {
+    let pitcher: Pitcher?
+    var size: CGFloat = 28
+    @State private var refreshToken = UUID()
+
+    private var accentColors: [Color] {
+        [.indigo, .teal, .orange, .pink, .mint]
+    }
+
+    private var fallbackGradient: LinearGradient {
+        let key = pitcher?.name.lowercased() ?? "pitcher"
+        var hash = 0
+        for scalar in key.unicodeScalars {
+            hash = (hash &* 31) &+ Int(scalar.value)
+        }
+        let seed = abs(hash) % accentColors.count
+        let first = accentColors[seed]
+        let second = accentColors[(seed + 2) % accentColors.count]
+        return LinearGradient(colors: [first, second], startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(fallbackGradient)
+
+            if let image = pitcher?.localPortraitImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Text(pitcher?.avatarInitials ?? "P")
+                    .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(
+            Circle().stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .onReceive(NotificationCenter.default.publisher(for: .pitcherPortraitDidChange)) { notification in
+            guard let pitcherId = pitcher?.id,
+                  let changedId = notification.object as? String,
+                  changedId == pitcherId else { return }
+            refreshToken = UUID()
+        }
+    }
 }
 
 struct PitchTemplate: Identifiable, Hashable, Codable {
