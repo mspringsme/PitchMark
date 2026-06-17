@@ -138,6 +138,10 @@ private struct ToggleSection: View {
                     isStrikeSwinging = next
                     if next {
                         isStrikeLooking = false
+                        isBall = false
+                        if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                            selectedOutcome = nil
+                        }
                     }
                 }
 
@@ -146,12 +150,19 @@ private struct ToggleSection: View {
                     isStrikeLooking = next
                     if next {
                         isStrikeSwinging = false
+                        isBall = false
+                        if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                            selectedOutcome = nil
+                        }
                     }
                 }
 
                 Button {
                     let next = (selectedOutcome == "Foul") ? nil : "Foul"
                     selectedOutcome = next
+                    if next != nil {
+                        isBall = false
+                    }
                 } label: {
                     Text("Foul")
                         .font(.system(size: 14, weight: .semibold))
@@ -173,6 +184,13 @@ private struct ToggleSection: View {
                 OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
                 toggleButton("Ball", isOn: isBall, disabled: isBallDisabled) {
                     isBall.toggle()
+                    if isBall {
+                        isStrikeSwinging = false
+                        isStrikeLooking = false
+                        if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" {
+                            selectedOutcome = nil
+                        }
+                    }
                 }
             }
 
@@ -608,10 +626,10 @@ struct PitchResultSheetView: View {
     }
 
     private func foulMarkerSymbol(prior: (balls: Int, strikes: Int)) -> String {
-        if prior.strikes >= 2 || confirmedStrikesCount >= 2 {
+        if prior.strikes >= 2 {
             return "f.circle"
         }
-        return "\(max(1, min(2, confirmedStrikesCount))).circle"
+        return "\(max(1, min(2, prior.strikes + 1))).circle"
     }
 
     private var effectiveOpponentJersey: String? {
@@ -636,6 +654,11 @@ struct PitchResultSheetView: View {
         }
         guard var event = buildCurrentEvent() else { return }
 
+        let suggested = refreshedCountFromCurrentSelection()
+        if suggested.balls != confirmedBallsCount || suggested.strikes != confirmedStrikesCount {
+            confirmedBallsCount = suggested.balls
+            confirmedStrikesCount = suggested.strikes
+        }
         let balls = max(0, min(3, confirmedBallsCount))
         let strikes = max(0, min(2, confirmedStrikesCount))
         let prior = priorCount(for: event)
@@ -687,6 +710,49 @@ struct PitchResultSheetView: View {
         guard normalizedBalls != confirmedBallsCount || normalizedStrikes != confirmedStrikesCount else { return }
         confirmedBallsCount = normalizedBalls
         confirmedStrikesCount = normalizedStrikes
+    }
+
+    private func refreshedCountFromCurrentSelection() -> (balls: Int, strikes: Int) {
+        let source = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
+        var balls = source.balls
+        var strikes = source.strikes
+
+        let normalizedOutcome = (selectedOutcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let isWalk = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame
+        let isK = normalizedOutcome == "K" || normalizedOutcome == "ꓘ"
+        let isHBP = isHitBatter || normalizedOutcome.caseInsensitiveCompare("HBP") == .orderedSame
+        let isFoul = normalizedOutcome.caseInsensitiveCompare("Foul") == .orderedSame
+
+        if isWalk || isK || isHBP {
+            return (0, 0)
+        }
+
+        if isBall {
+            balls = min(3, balls + 1)
+            return (balls, strikes)
+        }
+
+        if isStrikeSwinging || isStrikeLooking {
+            strikes = min(2, strikes + 1)
+            return (balls, strikes)
+        }
+
+        if isFoul {
+            if strikes < 2 {
+                strikes += 1
+            }
+            return (balls, strikes)
+        }
+
+        return (balls, strikes)
+    }
+
+    private func applySelectionDrivenCountUpdate() {
+        let next = refreshedCountFromCurrentSelection()
+        guard next.balls != confirmedBallsCount || next.strikes != confirmedStrikesCount else { return }
+        confirmedBallsCount = next.balls
+        confirmedStrikesCount = next.strikes
+        onCountChanged?(next.balls, next.strikes)
     }
 
     private func priorCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
@@ -1145,6 +1211,24 @@ struct PitchResultSheetView: View {
             }
             .onChange(of: currentCountSeed?.strikes) { _, _ in
                 syncManualCountFromCurrentSeed()
+            }
+            .onChange(of: isStrikeSwinging) { _, _ in
+                applySelectionDrivenCountUpdate()
+            }
+            .onChange(of: isStrikeLooking) { _, _ in
+                applySelectionDrivenCountUpdate()
+            }
+            .onChange(of: isBall) { _, _ in
+                applySelectionDrivenCountUpdate()
+            }
+            .onChange(of: isHitBatter) { _, _ in
+                applySelectionDrivenCountUpdate()
+            }
+            .onChange(of: selectedOutcome) { _, _ in
+                if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                    isBall = false
+                }
+                applySelectionDrivenCountUpdate()
             }
             .onChange(of: isPresented) { _, newValue in
                 guard newValue else { return }

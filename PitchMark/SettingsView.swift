@@ -1431,6 +1431,10 @@ struct SettingsView: View {
                                         .allowsTightening(true)
                                         .frame(width: 64)
                                 }
+                                .transaction { transaction in
+                                    transaction.animation = nil
+                                }
+                                .animation(nil, value: pitcherActionTargetId)
                             }
                             .buttonStyle(.plain)
                         }

@@ -133,6 +133,12 @@ private extension View {
 struct PitchTrackerView: View {
     private static let allPitchersSummarySelection = "__ALL_PITCHERS__"
 
+    enum PitchResultBannerPhase {
+        case code
+        case tapLocation
+        case chooseAny
+    }
+
     @State private var mirroredLivePitchEventIds: Set<String> = []
     @State private var didAutoDismissCodeSheetForLiveId: String? = nil
     @State private var uiConnected: Bool = false
@@ -204,6 +210,7 @@ struct PitchTrackerView: View {
     @State private var isGame = false
     @State private var selectedOutcome: String? = nil
     @State private var selectedDescriptor: String? = nil
+    @State private var pitchResultBannerPhase: PitchResultBannerPhase = .code
     @State private var isError: Bool = false
     @State private var showGameSheet = false
     @State private var showGameStatsSheet = false
@@ -557,7 +564,7 @@ struct PitchTrackerView: View {
         showConfirmSheet = (newCall != nil)
         isRecordingResult = (newCall != nil)
         if newCall != nil {
-            calledPitchComposerDetent = .fraction(0.28)
+            calledPitchComposerDetent = (newCall?.pitch == "Catcher") ? .large : .fraction(0.28)
         }
         lastCallInitiatedAt = newCall == nil ? nil : Date()
 
@@ -4044,6 +4051,7 @@ struct PitchTrackerView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 8) {
                         CalledPitchView(
+                            pitchResultBannerPhase: $pitchResultBannerPhase,
                             isRecordingResult: $isRecordingResult,
                             activeCalledPitchId: $activeCalledPitchId,
                             pitchFirst: $pitchFirst,
@@ -4255,12 +4263,17 @@ struct PitchTrackerView: View {
         )
     }
 
+    private var calledPitchComposerDetents: Set<PresentationDetent> {
+        return [.fraction(0.28), .fraction(0.5), .large]
+    }
+
     @ViewBuilder
     private var calledPitchComposerSheetView: some View {
         if let call = calledPitch {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 8) {
                     CalledPitchView(
+                        pitchResultBannerPhase: $pitchResultBannerPhase,
                         isRecordingResult: $isRecordingResult,
                         activeCalledPitchId: $activeCalledPitchId,
                         pitchFirst: $pitchFirst,
@@ -5781,12 +5794,14 @@ struct PitchTrackerView: View {
                 showResultConfirmation: $showResultConfirmation,
                 showConfirmSheet: confirmSheetBinding,
                 onResultLocationPicked: { pickedLabel in
+                    pitchResultBannerPhase = .chooseAny
                     expandCalledPitchComposerToLarge()
                     if sessionManager.currentMode == .game, !isOwnerForActiveGame {
                         writeResultSelection(label: pickedLabel)
                     }
                 },
                 onCatcherLocationTap: {
+                    pitchResultBannerPhase = .chooseAny
                     beginCatcherCoachCall()
                 },
                 isEncryptedMode: {
@@ -6174,6 +6189,8 @@ struct PitchTrackerView: View {
             if nextStrikes < 2 {
                 nextStrikes += 1
             }
+        } else if event.isStrike {
+            nextStrikes = min(2, nextStrikes + 1)
         }
 
         return (nextBalls, nextStrikes)
@@ -6380,6 +6397,9 @@ struct PitchTrackerView: View {
             if strikes < 2 {
                 strikesBinding.wrappedValue = strikes + 1
             }
+        } else if event.isStrike {
+            let nextStrikes = min(2, max(0, strikes + 1))
+            strikesBinding.wrappedValue = nextStrikes
         }
     }
 
@@ -8459,10 +8479,9 @@ struct PitchTrackerView: View {
             }
             .sheet(isPresented: calledPitchComposerBinding) {
                 calledPitchComposerSheetView
-                    .presentationDetents([.fraction(0.28), .fraction(0.5), .large], selection: $calledPitchComposerDetent)
+                    .presentationDetents(calledPitchComposerDetents, selection: $calledPitchComposerDetent)
                     .presentationDragIndicator(.visible)
                     .presentationBackgroundInteraction(.enabled)
-                    .interactiveDismissDisabled(true)
             }
             .eraseToAnyView()
 
@@ -8849,7 +8868,7 @@ private struct ProgressGameView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
-                ScoreTrackerCompact(usScore: $us, themScore: $them)
+                ScoreTrackerCompact(usScore: $us, themScore: $them, onProgressChange: onProgressChange)
                     .padding(.top, 8)
                     .padding(.leading, 12)
                 Spacer()
@@ -9207,6 +9226,7 @@ struct WalksCounterCompact: View {
 struct ScoreTrackerCompact: View {
     @Binding var usScore: Int
     @Binding var themScore: Int
+    let onProgressChange: () -> Void
     
     var body: some View {
         VStack(alignment: .center) {
@@ -9251,13 +9271,16 @@ struct ScoreTrackerCompact: View {
     
     // MARK: - Row (no leading label)
     private func scoreRow(score: Binding<Int>) -> some View {
-        HStack(spacing: 8) {
-            // Decrement
-            Button {
-                let generator = UIImpactFeedbackGenerator(style: .light)
-                generator.impactOccurred()
-                if score.wrappedValue > 0 { score.wrappedValue -= 1 }
-            } label: {
+            HStack(spacing: 8) {
+                // Decrement
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    if score.wrappedValue > 0 {
+                        score.wrappedValue -= 1
+                        onProgressChange()
+                    }
+                } label: {
                 Image(systemName: "minus")
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 28, height: 28)
@@ -9288,11 +9311,12 @@ struct ScoreTrackerCompact: View {
                 )
             
             // Increment
-            Button {
-                let generator = UIImpactFeedbackGenerator(style: .light)
-                generator.impactOccurred()
-                score.wrappedValue += 1
-            } label: {
+                Button {
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
+                    score.wrappedValue += 1
+                    onProgressChange()
+                } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 28, height: 28)
@@ -10322,6 +10346,7 @@ struct CalledPitchView: View {
     @State private var showResultOverlay = false
     @State private var selectedActualLocation: String?
     @State private var tappedCode: String?
+    @Binding var pitchResultBannerPhase: PitchTrackerView.PitchResultBannerPhase
     @State private var codeDisplayOverlayPayload: CodeDisplayOverlayPayload?
     @AppStorage(PitchTrackerView.DefaultsKeys.practiceCodesEnabled) private var codesEnabled: Bool = true
     @Binding var isRecordingResult: Bool
@@ -10430,6 +10455,17 @@ struct CalledPitchView: View {
             (tappedCode != nil) ||
             (isPracticeMode && !codesEnabled) ||
             autoPitchOnlyEnabled
+        let bannerText: String = {
+            guard bannerShowsTapResult else { return "Code" }
+            switch pitchResultBannerPhase {
+            case .code:
+                return "Code"
+            case .tapLocation:
+                return "Tap Location"
+            case .chooseAny:
+                return "Choose any"
+            }
+        }()
         
         return HStack(spacing: 12) {
             // Left: Details
@@ -10453,6 +10489,7 @@ struct CalledPitchView: View {
                     
                     PitchResultBanner(
                         isRecording: bannerShowsTapResult,
+                        text: bannerText,
                         callColor: callColor
                     )
                     Spacer()
@@ -10483,6 +10520,7 @@ struct CalledPitchView: View {
                                     generator.impactOccurred()
                                     tappedCode = code
                                     isRecordingResult = true
+                                    pitchResultBannerPhase = .tapLocation
                                 } label: {
                                     ZStack {
                                         // Base chip background
@@ -10614,12 +10652,31 @@ struct CalledPitchView: View {
                 // When turning Codes Off, immediately allow result selection; when On, require code tap again
                 isRecordingResult = !newValue
                 tappedCode = nil
+                pitchResultBannerPhase = .code
             }
         }
         .onChange(of: tappedCode) { _, newValue in
             if newValue == nil {
                 codeDisplayOverlayPayload = nil
                 clearDisplayCode()
+                pitchResultBannerPhase = .code
+            }
+        }
+        .onChange(of: isRecordingResult) { _, newValue in
+            if !newValue {
+                pitchResultBannerPhase = .code
+            }
+        }
+        .onChange(of: bannerShowsTapResult) { _, newValue in
+            if newValue, pitchResultBannerPhase == .code {
+                pitchResultBannerPhase = .tapLocation
+            } else if !newValue {
+                pitchResultBannerPhase = .code
+            }
+        }
+        .onAppear {
+            if bannerShowsTapResult, pitchResultBannerPhase == .code {
+                pitchResultBannerPhase = .tapLocation
             }
         }
         
@@ -10628,6 +10685,7 @@ struct CalledPitchView: View {
 
 struct PitchResultBanner: View {
     let isRecording: Bool
+    let text: String
     let callColor: Color
 
     var body: some View {
@@ -10640,7 +10698,7 @@ struct PitchResultBanner: View {
                     BlendedStrokeCircle(lineWidth: 3, size: 24)
                 }
 
-                Text(isRecording ? " Tap result" : "Code")
+                Text(text)
                     .font(.footnote.weight(.semibold))
             }
         }
@@ -10659,7 +10717,7 @@ struct PitchResultBanner: View {
         .padding(.top, 6)
         .transition(.opacity.combined(with: .move(edge: .top)))
         .animation(.easeInOut(duration: 0.25), value: isRecording)
-        .accessibilityLabel(isRecording ? "Tap result" : "Code")
+        .accessibilityLabel(isRecording ? text : "Code")
     }
 }
 private struct CodeShareSheet: View {

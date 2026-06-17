@@ -1,5 +1,7 @@
 # PitchMark Firebase Functions
 
+If you're setting this project up on Windows to help with the website, see [`../docs/WINDOWS_SETUP.md`](../docs/WINDOWS_SETUP.md).
+
 ## Callable functions
 - `createRetailCheckoutSession`
 - `deleteAccount`

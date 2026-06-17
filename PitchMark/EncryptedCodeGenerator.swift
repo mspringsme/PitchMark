@@ -12,7 +12,7 @@ enum EncryptedGridKind {
 /// It follows the reference algorithm:
 /// - C1: each character from the first two-character cell in the first column of a top-grid row
 /// - C2: the character at the selected pitch’s column for that same row
-/// - C3: first character of the tapped column’s header in the selected bottom grid (strikes/balls)
+/// - C3: each character inside the tapped column’s header cell in the selected bottom grid (strikes/balls)
 /// - C4: each character inside the tapped cell (rowIndex, columnIndex) of the selected bottom grid
 ///
 /// Notes/assumptions:
@@ -127,11 +127,12 @@ struct EncryptedCodeGenerator {
 
         // C3 from header’s first character of tapped column
         let header = sanitizedBottomHeaders[columnIndex]
-        guard let c3 = header.first else {
+        let c3Options = header.map { String($0) }
+        if c3Options.isEmpty {
             debugLog("EncryptedCodeGenerator: tapped column header is empty at col=\(columnIndex)")
             return []
         }
-        debugLog("[GENERATOR] tapped header='\(header)' C3='\(c3)'")
+        debugLog("[GENERATOR] tapped header='\(header)' C3Options=\(c3Options)")
 
         // C4 options from each character in the tapped cell
         let tappedCell = sanitizedBottomRows[rowIndex][columnIndex]
@@ -171,9 +172,11 @@ struct EncryptedCodeGenerator {
 
             // Combine C1 x C2 x C3 x C4
             for c1 in c1Options {
-                for c4 in c4Options {
-                    let code = c1 + c2 + String(c3) + c4
-                    results.append(code)
+                for c3 in c3Options {
+                    for c4 in c4Options {
+                        let code = c1 + c2 + c3 + c4
+                        results.append(code)
+                    }
                 }
             }
         }
