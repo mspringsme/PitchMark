@@ -403,7 +403,6 @@ class AuthManager: ObservableObject {
         defaults.removeObject(forKey: "displayOnlyMode")
         defaults.removeObject(forKey: "displayOnlyLiveId")
         defaults.removeObject(forKey: "activeLiveId")
-        defaults.removeObject(forKey: "activeIsPractice")
 
         do {
             try Auth.auth().signOut()
@@ -1304,87 +1303,6 @@ class AuthManager: ObservableObject {
             }
     }
     
-    func deletePracticeEvents(practiceId: String?, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard let user = user else {
-            debugLog("⚠️ No signed-in user; nothing to delete.")
-            completion(.success(()))
-            return
-        }
-        let db = Firestore.firestore()
-        let collectionRef = db.collection("users").document(user.uid).collection("pitchEvents")
-        
-        // Base query: practice mode only
-        var query: Query = collectionRef.whereField("mode", isEqualTo: "practice")
-        
-        if let pid = practiceId {
-            // Filter to specific practice session
-            query = query.whereField("practiceId", isEqualTo: pid)
-            query.getDocuments { snapshot, error in
-                if let error = error {
-                    debugLog("❌ Failed to query practice events for practiceId=\(pid): \(error)")
-                    completion(.failure(error))
-                    return
-                }
-                let docs = snapshot?.documents ?? []
-                guard !docs.isEmpty else {
-                    debugLog("🧹 No practice events found to delete for practiceId=\(pid)")
-                    completion(.success(()))
-                    return
-                }
-                let batch = db.batch()
-                docs.forEach { batch.deleteDocument($0.reference) }
-                batch.commit { err in
-                    if let err = err {
-                        debugLog("❌ Batch delete failed for practiceId=\(pid): \(err)")
-                        completion(.failure(err))
-                    } else {
-                        debugLog("✅ Deleted \(docs.count) practice events for practiceId=\(pid)")
-                        completion(.success(()))
-                    }
-                }
-            }
-        } else {
-            // General session (no practiceId stored). Firestore cannot query for missing fields directly.
-            // Strategy: fetch practice-mode events and client-filter those with missing or empty practiceId.
-            query.getDocuments { snapshot, error in
-                if let error = error {
-                    debugLog("❌ Failed to query general practice events: \(error)")
-                    completion(.failure(error))
-                    return
-                }
-                let allDocs = snapshot?.documents ?? []
-                let toDelete = allDocs.filter { doc in
-                    let data = doc.data()
-                    // Consider missing or empty string as General. Adjust if you use a sentinel value.
-                    if let pidAny = data["practiceId"] {
-                        if let pidStr = pidAny as? String {
-                            return pidStr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        }
-                        return false
-                    } else {
-                        return true // missing field
-                    }
-                }
-                guard !toDelete.isEmpty else {
-                    debugLog("🧹 No general practice events found to delete")
-                    completion(.success(()))
-                    return
-                }
-                let batch = db.batch()
-                toDelete.forEach { batch.deleteDocument($0.reference) }
-                batch.commit { err in
-                    if let err = err {
-                        debugLog("❌ Batch delete failed for general practice events: \(err)")
-                        completion(.failure(err))
-                    } else {
-                        debugLog("✅ Deleted \(toDelete.count) general practice events")
-                        completion(.success(()))
-                    }
-                }
-            }
-        }
-    }
-    
     func updateGameSelectedBatter(ownerUserId: String?, gameId: String, selectedBatterId: String?) {
         guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId, debugTag: "updateGameSelectedBatter") else { return }
         
@@ -1846,6 +1764,33 @@ extension AuthManager {
                 debugLog("Error deleting game: \(error)")
             } else {
                 debugLog("Game \(gameId) deleted successfully")
+            }
+        }
+    }
+
+    func archiveGame(gameId: String) {
+        setGameArchivedState(gameId: gameId, isArchived: true)
+    }
+
+    func unarchiveGame(gameId: String) {
+        setGameArchivedState(gameId: gameId, isArchived: false)
+    }
+
+    private func setGameArchivedState(gameId: String, isArchived: Bool) {
+        guard let user = user else { return }
+        let ref = Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("games").document(gameId)
+
+        let updates: [String: Any] = isArchived
+            ? ["archivedAt": FieldValue.serverTimestamp()]
+            : ["archivedAt": FieldValue.delete()]
+
+        ref.updateData(updates) { error in
+            if let error = error {
+                debugLog("Error updating game archive state: \(error)")
+            } else {
+                debugLog("Game \(gameId) archive state updated. archived=\(isArchived)")
             }
         }
     }

@@ -29,7 +29,5 @@
 	<array>
 		<string>pitchmarkdisplay</string>
 	</array>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>PitchMark needs photo library access so you can choose a pitcher image.</string>
 </dict>
 </plist>

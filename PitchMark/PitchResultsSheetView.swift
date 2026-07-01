@@ -182,6 +182,7 @@ private struct ToggleSection: View {
                 OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
                 OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
                 OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
+                OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
                 toggleButton("Ball", isOn: isBall, disabled: isBallDisabled) {
                     isBall.toggle()
                     if isBall {
@@ -368,6 +369,7 @@ struct PitchResultSheetView: View {
     @State private var confirmedBallsCount: Int = 0
     @State private var confirmedStrikesCount: Int = 0
     @State private var didInitializeManualCount: Bool = false
+    @State private var pendingCountSyncWorkItem: DispatchWorkItem? = nil
     @State private var overrideOpponentJersey: String? = nil
     @State private var overrideOpponentBatterId: String? = nil
     @State private var showMissingLocationPrompt: Bool = false
@@ -626,9 +628,6 @@ struct PitchResultSheetView: View {
     }
 
     private func foulMarkerSymbol(prior: (balls: Int, strikes: Int)) -> String {
-        if prior.strikes >= 2 {
-            return "f.circle"
-        }
         return "\(max(1, min(2, prior.strikes + 1))).circle"
     }
 
@@ -654,16 +653,12 @@ struct PitchResultSheetView: View {
         }
         guard var event = buildCurrentEvent() else { return }
 
-        let suggested = refreshedCountFromCurrentSelection()
-        if suggested.balls != confirmedBallsCount || suggested.strikes != confirmedStrikesCount {
-            confirmedBallsCount = suggested.balls
-            confirmedStrikesCount = suggested.strikes
-        }
         let balls = max(0, min(3, confirmedBallsCount))
         let strikes = max(0, min(2, confirmedStrikesCount))
         let prior = priorCount(for: event)
 
         let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let isOutOutcome = normalizedOutcome.caseInsensitiveCompare("Out") == .orderedSame
         let isWalkOutcome = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame
         let isKOutcome = normalizedOutcome == "K" || normalizedOutcome == "ꓘ"
         let isStrikeTerminal = isKOutcome || ((event.strikeLooking || event.strikeSwinging) && prior.strikes >= 2)
@@ -674,7 +669,12 @@ struct PitchResultSheetView: View {
             event.atBatBalls = 0
             event.atBatStrikes = 0
         } else if isBallTerminal {
+            event.outcome = "Walk"
             event.atBatCount = "Ball 4"
+            event.atBatBalls = 0
+            event.atBatStrikes = 0
+        } else if isOutOutcome {
+            event.atBatCount = "Out"
             event.atBatBalls = 0
             event.atBatStrikes = 0
         } else {
@@ -710,6 +710,16 @@ struct PitchResultSheetView: View {
         guard normalizedBalls != confirmedBallsCount || normalizedStrikes != confirmedStrikesCount else { return }
         confirmedBallsCount = normalizedBalls
         confirmedStrikesCount = normalizedStrikes
+    }
+
+    private func scheduleSelectionDrivenCountUpdate() {
+        pendingCountSyncWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [self] in
+            applySelectionDrivenCountUpdate()
+            pendingCountSyncWorkItem = nil
+        }
+        pendingCountSyncWorkItem = workItem
+        DispatchQueue.main.async(execute: workItem)
     }
 
     private func refreshedCountFromCurrentSelection() -> (balls: Int, strikes: Int) {
@@ -771,6 +781,8 @@ struct PitchResultSheetView: View {
             .sorted(by: { $0.timestamp < $1.timestamp })
             .last
 
+        let preferredSeed = currentCountSeed ?? suggestedCountSeed
+
         let parsedFromText: (Int, Int)? = {
             guard let text = baseEvent?.atBatCount else { return nil }
             let parts = text.split(separator: "-", maxSplits: 1).map { Int($0.trimmingCharacters(in: .whitespaces)) }
@@ -778,8 +790,8 @@ struct PitchResultSheetView: View {
             return (b, s)
         }()
 
-        let balls = baseEvent?.atBatBalls ?? parsedFromText?.0 ?? suggestedCountSeed?.balls ?? currentCountSeed?.balls ?? 0
-        let strikes = baseEvent?.atBatStrikes ?? parsedFromText?.1 ?? suggestedCountSeed?.strikes ?? currentCountSeed?.strikes ?? 0
+        let balls = preferredSeed?.balls ?? baseEvent?.atBatBalls ?? parsedFromText?.0 ?? 0
+        let strikes = preferredSeed?.strikes ?? baseEvent?.atBatStrikes ?? parsedFromText?.1 ?? 0
         return (balls, strikes)
     }
 
@@ -895,7 +907,6 @@ struct PitchResultSheetView: View {
             gameId: selectedGameId,
             opponentJersey: effectiveOpponentJersey,
             opponentBatterId: effectiveOpponentBatterId,
-            practiceId: nil,
             pitcherId: selectedPitcherId
         ))
 
@@ -940,7 +951,6 @@ struct PitchResultSheetView: View {
             gameId: selectedGameId,
             opponentJersey: effectiveOpponentJersey,
             opponentBatterId: effectiveOpponentBatterId,
-            practiceId: nil,
             pitcherId: selectedPitcherId,
             strikeSwingingMarker: isStrikeSwinging ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
             strikeLookingMarker: isStrikeLooking ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
@@ -975,7 +985,6 @@ struct PitchResultSheetView: View {
                 .onChange(of: isPassedBall) { _, _ in deselectIfDisabled() }
                 .onChange(of: isBall) { _, _ in deselectIfDisabled() }
                 .onChange(of: isHitBatter) { _, _ in deselectIfDisabled() }
-                .onChange(of: selectedOutcome) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedDescriptor) { _, _ in deselectIfDisabled() }
                 .onChange(of: isError) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedOutcome) { _, newValue in
@@ -1212,23 +1221,23 @@ struct PitchResultSheetView: View {
             .onChange(of: currentCountSeed?.strikes) { _, _ in
                 syncManualCountFromCurrentSeed()
             }
-            .onChange(of: isStrikeSwinging) { _, _ in
-                applySelectionDrivenCountUpdate()
+                .onChange(of: isStrikeSwinging) { _, _ in
+                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: isStrikeLooking) { _, _ in
-                applySelectionDrivenCountUpdate()
+                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: isBall) { _, _ in
-                applySelectionDrivenCountUpdate()
+                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: isHitBatter) { _, _ in
-                applySelectionDrivenCountUpdate()
+                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: selectedOutcome) { _, _ in
                 if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
                     isBall = false
                 }
-                applySelectionDrivenCountUpdate()
+                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: isPresented) { _, newValue in
                 guard newValue else { return }

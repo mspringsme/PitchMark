@@ -156,6 +156,10 @@ struct PitchTrackerView: View {
     @State private var selectedLocation: String = ""
     @State private var gameIsActive: Bool = false
     @State private var showSettings = false
+    #if DEBUG
+    @State private var showStatsSimulationAlert = false
+    @State private var statsSimulationMessage: String = ""
+    #endif
     @State private var showProfile = false
     @State private var templates: [PitchTemplate] = []
     @EnvironmentObject var authManager: AuthManager
@@ -223,8 +227,6 @@ struct PitchTrackerView: View {
     // Participant overlay state
     @State private var showParticipantOverlay: Bool = false
     @State private var ownerTemplateName: String? = nil
-    @State private var practiceName: String? = nil
-    @State private var selectedPracticeId: String? = nil
     
     @State private var jerseyCells: [JerseyCell] = sampleJerseyCells
     @State private var draggingJersey: JerseyCell?
@@ -235,6 +237,8 @@ struct PitchTrackerView: View {
     @State private var bulkJerseyNumbers: String = ""
     @State private var showDummyLineupInput = false
     @State private var dummyLineupCount: String = ""
+    @State private var showActivateNewBatterPrompt = false
+    @State private var pendingNewBatterActivation: JerseyCell? = nil
     @State private var selectedBatterId: UUID? = nil
     @State private var selectedBatterJersey: String? = nil
     @State private var jerseyDetailEvent: PitchEvent? = nil
@@ -289,7 +293,6 @@ struct PitchTrackerView: View {
 
     // Added per instructions:
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
-    @State private var encryptedSelectionByPracticeId: [String: Bool] = [:]
     
     // Added progressRefreshToken as per instruction 1
     @State private var progressRefreshToken = UUID()
@@ -334,15 +337,10 @@ struct PitchTrackerView: View {
         static let activePitchesPrefix = "activePitches."
         static let lastView = "lastView"
         static let activeGameId = "activeGameId"
-        static let activeIsPractice = "activeIsPractice"
-        static let activePracticeId = "activePracticeId"
-        static let storedPracticeSessions = "storedPracticeSessions"
         static let lastPitcherId = "lastPitcherId"
         static let lastTemplateByGameId = "lastTemplateByGameId"
         static let lastPitcherByGameId = "lastPitcherByGameId"
         static let encryptedByGameId = "encryptedByGameId"
-        static let encryptedByPracticeId = "encryptedByPracticeId"
-        static let practiceCodesEnabled = "practiceCodesEnabled"
         static let activeGameOwnerUserId = "activeGameOwnerUserId"
         static let displayOnlyLiveId = "displayOnlyLiveId"
         static let displayOnlyMode = "displayOnlyMode"
@@ -414,6 +412,7 @@ struct PitchTrackerView: View {
     // ✅ Live-room mirrored scoreboard fields (used when activeLiveId != nil)
     @State private var balls: Int = 0
     @State private var strikes: Int = 0
+    @State private var outs: Int = 0
     @State private var inning: Int = 1
     @State private var hits: Int = 0
     @State private var walks: Int = 0
@@ -434,7 +433,7 @@ struct PitchTrackerView: View {
         // NOTE: do NOT touch confirmSheetBinding/showConfirmSheet here unless you truly want to cancel it.
     }
 
-    private func presentExclusive(settings: Bool = false, game: Bool = false, practice: Bool = false) {
+    private func presentExclusive(settings: Bool = false, game: Bool = false) {
         dismissAllTopLevelSheets()
         if settings { showSettings = true }
         else if game { showGameSheet = true }
@@ -555,8 +554,7 @@ struct PitchTrackerView: View {
     }
 
     private var canInitiateCall: Bool {
-        // Practice: always allowed. Game: owner only.
-        return !isGame || isOwnerForActiveGame
+        return isGame && isOwnerForActiveGame
     }
 
     private func handleSetCalledPitch(_ newCall: PitchCall?) {
@@ -1434,6 +1432,8 @@ struct PitchTrackerView: View {
                 self.pendingLiveTemplateId = liveTemplateId
                 self.pendingLiveTemplateName = liveTemplateName
                 self.applyPendingLiveTemplateIfPossible()
+                let previousSelectedBatterId = self.selectedBatterId
+
                 // ✅ selected batter comes over Firestore as STRING uuid
                 if let idStr = data["selectedBatterId"] as? String, let uuid = UUID(uuidString: idStr) {
                     self.selectedBatterId = uuid
@@ -1451,6 +1451,10 @@ struct PitchTrackerView: View {
                     // keep existing to avoid UI flicker
                 } else {
                     self.selectedBatterJersey = nil
+                }
+
+                if previousSelectedBatterId != self.selectedBatterId {
+                    self.syncCountFromComposer(balls: 0, strikes: 0)
                 }
 
 
@@ -1488,7 +1492,6 @@ struct PitchTrackerView: View {
                         if let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty {
                             defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
                         }
-                        defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
                         defaults.set("tracker", forKey: DefaultsKeys.lastView)
                     }
 
@@ -1702,7 +1705,7 @@ struct PitchTrackerView: View {
             startListeningToGamePitchEvents()
         } else {
             isGame = false
-            sessionManager.switchMode(to: .practice)
+            sessionManager.switchMode(to: .game)
         }
 
         if !isOwnerForActiveGame {
@@ -1921,9 +1924,9 @@ struct PitchTrackerView: View {
         defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
         defaults.set("tracker", forKey: DefaultsKeys.lastView)
 
-        // Switch to practice mode locally
+        // Keep the tracker in game mode locally.
         isGame = false
-        sessionManager.switchMode(to: .practice)
+        sessionManager.switchMode(to: .game)
     }
 
 
@@ -1988,13 +1991,7 @@ struct PitchTrackerView: View {
         if isGame {
             return gamePitchEvents.sorted { $0.timestamp > $1.timestamp }
         } else if !isGame {
-            if let pid = selectedPracticeId {
-                return pitchEvents.filter { $0.practiceId == pid }
-                    .sorted { $0.timestamp > $1.timestamp }
-            } else {
-                return pitchEvents.filter { $0.mode == .practice }
-                    .sorted { $0.timestamp > $1.timestamp }
-            }
+            return pitchEvents.sorted { $0.timestamp > $1.timestamp }
         }
         return []
     }
@@ -2213,15 +2210,11 @@ struct PitchTrackerView: View {
         if let gameData = defaults.dictionary(forKey: DefaultsKeys.encryptedByGameId) as? [String: Bool] {
             encryptedSelectionByGameId = gameData
         }
-        if let practiceData = defaults.dictionary(forKey: DefaultsKeys.encryptedByPracticeId) as? [String: Bool] {
-            encryptedSelectionByPracticeId = practiceData
-        }
     }
 
     private func persistEncryptedSelections() {
         let defaults = UserDefaults.standard
         defaults.set(encryptedSelectionByGameId, forKey: DefaultsKeys.encryptedByGameId)
-        defaults.set(encryptedSelectionByPracticeId, forKey: DefaultsKeys.encryptedByPracticeId)
     }
     
     // Determine if a template carries encrypted grid data
@@ -2234,9 +2227,6 @@ struct PitchTrackerView: View {
         guard let template = template else { return false }
         // Prefer explicit per-session selection
         if isGame, let gid = selectedGameId, let explicit = encryptedSelectionByGameId[gid] {
-            return explicit
-        }
-        if !isGame, let pid = selectedPracticeId, let explicit = encryptedSelectionByPracticeId[pid] {
             return explicit
         }
         // Fallback: infer from template data presence
@@ -2548,8 +2538,6 @@ struct PitchTrackerView: View {
         let defaults = UserDefaults.standard
         defaults.set(gameId, forKey: DefaultsKeys.activeGameId)
         defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
-        defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
-        defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
         defaults.set("tracker", forKey: DefaultsKeys.lastView)
 
         if let local = loadLocalProgressSnapshot(for: gameId) {
@@ -2797,9 +2785,9 @@ struct PitchTrackerView: View {
         intBinding(
             get: { inning },
             set: { newValue in
+                inning = newValue
                 if let liveId = activeLiveId {
                     LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["inning": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    inning = newValue
                     mirrorLiveProgressToGame(field: "inning", value: newValue)
                     return
                 }
@@ -2923,9 +2911,9 @@ struct PitchTrackerView: View {
         intBinding(
             get: { us },
             set: { newValue in
+                us = newValue
                 if let liveId = activeLiveId {
                     LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["us": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    us = newValue
                     mirrorLiveProgressToGame(field: "us", value: newValue)
                     return
                 }
@@ -2947,9 +2935,9 @@ struct PitchTrackerView: View {
         intBinding(
             get: { them },
             set: { newValue in
+                them = newValue
                 if let liveId = activeLiveId {
                     LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["them": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    them = newValue
                     mirrorLiveProgressToGame(field: "them", value: newValue)
                     return
                 }
@@ -3036,8 +3024,6 @@ struct PitchTrackerView: View {
             if isGame, let gid = selectedGameId {
                 if let evGameId = event.gameId, !evGameId.isEmpty, evGameId != gid { return false }
             }
-            if !isGame, let pid = selectedPracticeId, event.practiceId != pid { return false }
-
             if let selectedBatterIdValue, event.opponentBatterId == selectedBatterIdValue {
                 return true
             }
@@ -3054,9 +3040,6 @@ struct PitchTrackerView: View {
             guard event.supportsLocationAnalytics else { return false }
             if isGame, let gid = selectedGameId {
                 return event.gameId == gid
-            }
-            if !isGame, let pid = selectedPracticeId {
-                return event.practiceId == pid
             }
             return !isGame
         }
@@ -3408,29 +3391,14 @@ struct PitchTrackerView: View {
             return
         }
 
-        if sessionManager.currentMode == .practice,
-           let uid = authManager.user?.uid,
-           !uid.isEmpty {
-            let practiceRef = Firestore.firestore()
-                .collection("users")
-                .document(uid)
-                .collection("pitchEvents")
-            updateOpponentJerseyInCollection(
-                collectionRef: practiceRef,
-                batterId: batterId,
-                oldJersey: oldNorm,
-                newJersey: newNorm,
-                requiredPracticeId: selectedPracticeId
-            )
-        }
+        // Jersey migration only applies to active game collections.
     }
 
     private func updateOpponentJerseyInCollection(
         collectionRef: CollectionReference,
         batterId: String,
         oldJersey: String,
-        newJersey: String,
-        requiredPracticeId: String? = nil
+        newJersey: String
     ) {
         let db = Firestore.firestore()
         let group = DispatchGroup()
@@ -3453,10 +3421,7 @@ struct PitchTrackerView: View {
             }
 
         group.notify(queue: .main) {
-            var docs = Array(merged.values)
-            if let requiredPracticeId {
-                docs = docs.filter { ($0.data()["practiceId"] as? String) == requiredPracticeId }
-            }
+            let docs = Array(merged.values)
             guard !docs.isEmpty else { return }
 
             let chunkSize = 400
@@ -3559,7 +3524,6 @@ struct PitchTrackerView: View {
             if isGame, let gid = selectedGameId {
                 if let evGameId = event.gameId, !evGameId.isEmpty, evGameId != gid { return false }
             }
-            if !isGame, let pid = selectedPracticeId, event.practiceId != pid { return false }
             if let evId = event.opponentBatterId, evId == cell.id.uuidString { return true }
             if let selJersey = normalizedSelectedJersey, let evJersey = normalizeJersey(event.opponentJersey), selJersey == evJersey { return true }
             return false
@@ -3587,8 +3551,13 @@ struct PitchTrackerView: View {
     }
 
     private func syncSelectedBatterFromDetail(_ cell: JerseyCell?) {
+        let previousSelection = selectedBatterId
         selectedBatterId = cell?.id
         selectedBatterJersey = cell?.jerseyNumber
+
+        if previousSelection != cell?.id {
+            syncCountFromComposer(balls: 0, strikes: 0)
+        }
 
         if let liveId = activeLiveId, !liveId.isEmpty {
             var fields: [String: Any] = [:]
@@ -3691,8 +3660,7 @@ struct PitchTrackerView: View {
         await MainActor.run {
             pendingJerseyDetailCell = cell
             didAutoRetryJerseyDetail = false
-            selectedBatterId = cell.id
-            selectedBatterJersey = cell.jerseyNumber
+            syncSelectedBatterFromDetail(cell)
             jerseyDetailEvent = placeholder
             if !keepSheetVisible {
                 jerseyDetailPayload = nil
@@ -3754,7 +3722,7 @@ struct PitchTrackerView: View {
             codes: [],
             isStrike: false,
             isBall: nil,
-            mode: isGame ? .game : .practice,
+            mode: .game,
             calledPitch: nil,
             batterSide: .right,
             templateId: selectedTemplate?.id.uuidString,
@@ -3772,7 +3740,6 @@ struct PitchTrackerView: View {
             gameId: selectedGameId,
             opponentJersey: cell.jerseyNumber,
             opponentBatterId: cell.id.uuidString,
-            practiceId: selectedPracticeId,
             pitcherId: selectedPitcherId,
             createdByUid: authManager.user?.uid
         )
@@ -3800,10 +3767,9 @@ struct PitchTrackerView: View {
         let sample = (isGame ? gamePitchEvents : pitchEvents).suffix(8)
         let sampleSummary = sample.map { event in
             let gid = event.gameId ?? "-"
-            let pid = event.practiceId ?? "-"
             let batterId = event.opponentBatterId ?? "-"
             let jersey = event.opponentJersey ?? "-"
-            return "[g:\(gid) p:\(pid) batter:\(batterId) jersey:\(jersey) pitch:\(event.pitch) ts:\(event.timestamp.timeIntervalSince1970)]"
+            return "[g:\(gid) batter:\(batterId) jersey:\(jersey) pitch:\(event.pitch) ts:\(event.timestamp.timeIntervalSince1970)]"
         }.joined(separator: " | ")
 
         debugLog("⚠️ Jersey detail miss (\(reason)) cell=\(cell.jerseyNumber) id=\(cell.id.uuidString) normalized=\(normalizedSelectedJersey ?? "nil") totalEvents=\(total) isGame=\(isGame) selectedGameId=\(selectedGameId ?? "nil") activeLiveId=\(activeLiveId ?? "nil") sample=\(sampleSummary)")
@@ -3824,7 +3790,7 @@ struct PitchTrackerView: View {
                     .padding(.top, 5)
 
                 overlayContent
-                    .padding(.top, -14)
+                    .padding(.top, 0)
                     .frame(maxWidth: .infinity)
                     .frame(height: 170, alignment: .top)
             }
@@ -3850,10 +3816,12 @@ struct PitchTrackerView: View {
 
     private var overlayTabsHeader: some View {
         let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
-        return ZStack {
+        return VStack(spacing: 8) {
             if sessionManager.currentMode == .game {
                 HStack {
                     ballsInlineView
+                    Spacer(minLength: 0)
+                    outsInlineView
                     Spacer(minLength: 0)
                     strikesInlineView
                 }
@@ -4045,6 +4013,31 @@ struct PitchTrackerView: View {
         }
         .frame(minWidth: 44, alignment: .trailing)
     }
+
+    private var outsInlineView: some View {
+        VStack(alignment: .center, spacing: 6) {
+            Text("Outs")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.black)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 8) {
+                ForEach(0..<3, id: \.self) { idx in
+                    let value = idx + 1
+                    Button {
+                        let next = (outs == value) ? max(0, value - 1) : value
+                        outs = next
+                    } label: {
+                        Image(systemName: idx < max(0, min(3, outs)) ? "circle.fill" : "circle")
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(idx < max(0, min(3, outs)) ? Color.primary : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(minWidth: 44, alignment: .center)
+    }
     private var calledPitchLayer: some View {
         Group {
             if let call = calledPitch {
@@ -4062,7 +4055,6 @@ struct PitchTrackerView: View {
                             batterSide: batterSide,
                             template: selectedTemplate,
                             isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
-                            isPracticeMode: sessionManager.currentMode == .practice,
                             onDeferDisplayCode: { colorName, code in
                                 deferredDisplayCode = (colorName: colorName, code: code)
                                 ensureAutoLiveSessionIfNeeded()
@@ -4097,33 +4089,22 @@ struct PitchTrackerView: View {
 
     @ViewBuilder
     private var progressOverlayContent: some View {
-        if sessionManager.currentMode == .practice {
-            ProgressSummaryView(
-                events: pitchEvents,
-                currentMode: sessionManager.currentMode,
-                selectedPracticeId: selectedPracticeId,
-                templates: templates
-            )
-            .id(progressRefreshToken)
-            .frame(maxWidth: .infinity, minHeight: 170)
-        } else {
-            ProgressGameView(
-                ownerUserId: effectiveGameOwnerUserId,
-                balls: ballsBinding,
-                strikes: strikesBinding,
-                inning: inningBinding,
-                hits: hitsBinding,
-                walks: walksBinding,
-                us: usBinding,
-                them: themBinding,
-                selectedGameId: $selectedGameId,
-                onProgressChange: {
-                    markLocalProgressChange()
-                }
-            )
-            .environmentObject(authManager)
-            .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
-        }
+        ProgressGameView(
+            ownerUserId: effectiveGameOwnerUserId,
+            balls: ballsBinding,
+            strikes: strikesBinding,
+            inning: inningBinding,
+            hits: hitsBinding,
+            walks: walksBinding,
+            us: usBinding,
+            them: themBinding,
+            selectedGameId: $selectedGameId,
+            onProgressChange: {
+                markLocalProgressChange()
+            }
+        )
+        .environmentObject(authManager)
+        .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
     }
 
 
@@ -4245,7 +4226,7 @@ struct PitchTrackerView: View {
                 if sessionManager.currentMode == .game {
                     showConfirmSheet = newValue
                 } else {
-                    // In practice, never allow the sheet to appear
+                    // Keep the sheet hidden here.
                     showConfirmSheet = false
                 }
             }
@@ -4281,13 +4262,12 @@ struct PitchTrackerView: View {
                         liveId: activeLiveId,
                         call: call,
                         pitchCodeAssignments: pitchCodeAssignments,
-                        batterSide: batterSide,
-                        template: selectedTemplate,
-                        isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
-                        isPracticeMode: sessionManager.currentMode == .practice,
-                        onDeferDisplayCode: { colorName, code in
-                            deferredDisplayCode = (colorName: colorName, code: code)
-                            ensureAutoLiveSessionIfNeeded()
+                            batterSide: batterSide,
+                            template: selectedTemplate,
+                            isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
+                            onDeferDisplayCode: { colorName, code in
+                                deferredDisplayCode = (colorName: colorName, code: code)
+                                ensureAutoLiveSessionIfNeeded()
                         }
                     )
                     .padding(.top, 4)
@@ -4712,6 +4692,10 @@ struct PitchTrackerView: View {
         .overlay(alignment: .bottom) {
             scoutBottomActionBar(width: width)
         }
+        .overlay(alignment: .center) {
+            batterSideOverlay(SZwidth: width, verticalOffset: 0)
+        }
+        .clipped()
         .sheet(isPresented: $showScoutFieldMap) {
             ScoutFieldMapSheet(
                 selectedOutcome: $scoutInPlayOutcome,
@@ -5270,6 +5254,7 @@ struct PitchTrackerView: View {
                                             jerseyInputFocused = false
                                             newJerseyNumber = ""
                                             editingCell = nil
+                                            pendingNewBatterActivation = nil
                                         }
                                         Spacer()
                                         Button("Save") {
@@ -5281,6 +5266,7 @@ struct PitchTrackerView: View {
                                             // 1) Apply local change (edit vs add)
                                             var editedBatterId: String? = nil
                                             var oldEditedJersey: String? = nil
+                                            pendingNewBatterActivation = nil
                                             if let editing = editingCell,
                                                let idx = jerseyCells.firstIndex(where: { $0.id == editing.id }) {
                                                 editedBatterId = editing.id.uuidString
@@ -5289,7 +5275,12 @@ struct PitchTrackerView: View {
                                             } else {
                                                 // Add new cell (keep UUID stable across devices by storing batterIds)
                                                 let newCell = JerseyCell(jerseyNumber: normalized)
+                                                let shouldOfferActivation = !jerseyCells.isEmpty
                                                 jerseyCells.append(newCell)
+
+                                                if shouldOfferActivation {
+                                                    pendingNewBatterActivation = newCell
+                                                }
                                             }
 
                                             // 2) Persist lineup (single source of truth)
@@ -5348,6 +5339,12 @@ struct PitchTrackerView: View {
                                             jerseyInputFocused = false
                                             newJerseyNumber = ""
                                             editingCell = nil
+
+                                            if pendingNewBatterActivation != nil {
+                                                DispatchQueue.main.async {
+                                                    showActivateNewBatterPrompt = true
+                                                }
+                                            }
                                         }
                                         .disabled(newJerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
@@ -5616,7 +5613,7 @@ struct PitchTrackerView: View {
     }
     
     @ViewBuilder
-    private func batterSideOverlay(SZwidth: CGFloat) -> some View {
+    private func batterSideOverlay(SZwidth: CGFloat, verticalOffset: CGFloat = -20) -> some View {
         HStack {
             let iconSize: CGFloat = 36
             Button(action: {
@@ -5650,7 +5647,7 @@ struct PitchTrackerView: View {
         .frame(width: SZwidth)
         .padding(.horizontal, 12)
         .padding(.top, 6)
-        .offset(y: -20)
+        .offset(y: verticalOffset)
     }
     
     private struct StrikeZoneCard: View {
@@ -5892,7 +5889,7 @@ struct PitchTrackerView: View {
     
     // MARK: - Change Handlers
     private func handlePendingResultChange(_ newValue: String?) {
-        // Auto-save in Practice, notify owner in Game (participant side)
+        // Auto-save the current pitch event when the result is confirmed.
         guard newValue != nil else { return }
 
         // Composer flow owns save/submit now; do not auto-dismiss via legacy paths.
@@ -5923,11 +5920,8 @@ struct PitchTrackerView: View {
             return
         }
 
-        // Practice: existing auto-save path
-        guard sessionManager.currentMode == .practice else { return }
+        // Build minimal game event for the current tracker session.
         guard let pitchCall = calledPitch, let label = pendingResultLabel else { return }
-
-        // Build minimal practice event
         let event = PitchEvent(
             id: nil,
             timestamp: Date(),
@@ -5936,7 +5930,7 @@ struct PitchTrackerView: View {
             codes: pitchCall.codes,
             isStrike: pitchCall.isStrike,
             isBall: false,
-            mode: sessionManager.currentMode,
+            mode: .game,
             calledPitch: pitchCall,
             batterSide: batterSide,
             templateId: selectedTemplate?.id.uuidString,
@@ -5954,10 +5948,9 @@ struct PitchTrackerView: View {
             gameId: nil,
             opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             opponentBatterId: selectedBatterId?.uuidString,
-            practiceId: selectedPracticeId,
             pitcherId: selectedPitcherId
         )
-        event.logDebugPayload(prefix: "📤 Auto-saving Practice PitchEvent")
+        event.logDebugPayload(prefix: "📤 Auto-saving PitchEvent")
 
         // Persist and update UI state
         authManager.savePitchEvent(event)
@@ -5969,9 +5962,7 @@ struct PitchTrackerView: View {
         authManager.loadPitchEvents { events in
             self.pitchEvents = events
         }
-        // Added per instruction 4: Refresh progress tab token after auto save
-        // Ensure Progress tab reflects the latest practice stats immediately
-        if overlayTab == .progress && sessionManager.currentMode == .practice {
+        if overlayTab == .progress {
             progressRefreshToken = UUID()
         }
 
@@ -6033,7 +6024,6 @@ struct PitchTrackerView: View {
             gameId: selectedGameId,
             opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             opponentBatterId: selectedBatterId?.uuidString,
-            practiceId: selectedPracticeId,
             pitcherId: effectivePitcherIdForSave
         )
     }
@@ -6089,7 +6079,6 @@ struct PitchTrackerView: View {
             gameId: selectedGameId,
             opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             opponentBatterId: selectedBatterId?.uuidString,
-            practiceId: selectedPracticeId,
             pitcherId: effectivePitcherIdForSave,
             trackingMode: .scout
         )
@@ -6113,36 +6102,7 @@ struct PitchTrackerView: View {
     }
 
     private func priorScoutCount() -> (balls: Int, strikes: Int) {
-        let sourceEvents = isGame ? gamePitchEvents : pitchEvents
-        let fallbackBatterId = selectedBatterId?.uuidString
-        let fallbackJersey = jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber ?? selectedBatterJersey
-
-        let latestEvent = sourceEvents
-            .filter { event in
-                if isGame, let gid = selectedGameId, event.gameId != gid { return false }
-                if !isGame, let pid = selectedPracticeId, event.practiceId != pid { return false }
-                if let batterId = fallbackBatterId, !batterId.isEmpty {
-                    return event.opponentBatterId == batterId
-                }
-                if let jersey = fallbackJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
-                    return event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) == jersey
-                }
-                return false
-            }
-            .sorted(by: { $0.timestamp < $1.timestamp })
-            .last
-
-        let parsedFromText: (Int, Int)? = {
-            guard let text = latestEvent?.atBatCount else { return nil }
-            let parts = text.split(separator: "-", maxSplits: 1).map { Int($0.trimmingCharacters(in: .whitespaces)) }
-            guard parts.count == 2, let balls = parts[0], let strikes = parts[1] else { return nil }
-            return (balls, strikes)
-        }()
-
-        return (
-            latestEvent?.atBatBalls ?? parsedFromText?.0 ?? balls,
-            latestEvent?.atBatStrikes ?? parsedFromText?.1 ?? strikes
-        )
+        return (balls: balls, strikes: strikes)
     }
 
     private func scoutOutcome(for observed: ScoutObservedResult, prior: (balls: Int, strikes: Int)) -> String? {
@@ -6289,7 +6249,6 @@ struct PitchTrackerView: View {
             authManager.saveGamePitchEvent(ownerUserId: owner, gameId: gid, event: eventToPersist)
             authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
         } else {
-            // Practice
             authManager.savePitchEvent(eventToPersist)
         }
 
@@ -6304,7 +6263,7 @@ struct PitchTrackerView: View {
         }
 
         // ✅ LIVE: do NOT append to local pitchEvents (prevents “saved on participant” feeling).
-        // Owner will show cards from live listener; practice/legacy continue using pitchEvents.
+        // Owner will show cards from live listener; legacy continue using pitchEvents.
         if activeLiveId == nil {
             withAnimation(.easeInOut(duration: 0.3)) {
                 pitchEvents.append(eventToPersist)
@@ -6312,7 +6271,7 @@ struct PitchTrackerView: View {
             authManager.loadPitchEvents { events in
                 self.pitchEvents = events
             }
-            if overlayTab == .progress && sessionManager.currentMode == .practice {
+            if overlayTab == .progress {
                 progressRefreshToken = UUID()
             }
         }
@@ -6366,7 +6325,25 @@ struct PitchTrackerView: View {
 
     private func shouldAdvanceBatterSelection(after event: PitchEvent) -> Bool {
         let outcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if ["Walk", "1B", "2B", "3B", "HR", "HBP", "K", "ꓘ"].contains(outcome) {
+        if outcome.caseInsensitiveCompare("Foul") == .orderedSame {
+            return false
+        }
+
+        let descriptor = (event.descriptor ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let battedBallType = (event.battedBallType ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let battedBallRegion = (event.battedBallRegion ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !descriptor.isEmpty || !battedBallType.isEmpty || !battedBallRegion.isEmpty {
+            let advancementDescriptors: Set<String> = ["Grounder", "Line", "Pop", "Fly", "Bunt"]
+            if advancementDescriptors.contains(descriptor) || advancementDescriptors.contains(battedBallType) {
+                return true
+            }
+            if !battedBallRegion.isEmpty && !battedBallRegion.localizedCaseInsensitiveContains("foul") {
+                return true
+            }
+        }
+
+        if ["Walk", "Out", "1B", "2B", "3B", "HR", "HBP", "K", "ꓘ"].contains(outcome) {
             return true
         }
         return event.atBatCount == "Strikeout"
@@ -7066,24 +7043,18 @@ struct PitchTrackerView: View {
         let persistedGameId = defaults.string(forKey: DefaultsKeys.activeGameId)
         let persistedOwnerId = defaults.string(forKey: DefaultsKeys.activeGameOwnerUserId)
         let currentUid = authManager.user?.uid
-        let persistedIsPractice = defaults.bool(forKey: DefaultsKeys.activeIsPractice)
-
         // Never restore a prior user's game/session selection.
         if let restoredOwner = persistedOwnerId,
            let currentUid,
            restoredOwner != currentUid {
             defaults.removeObject(forKey: DefaultsKeys.activeGameId)
             defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
-            defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
-            defaults.removeObject(forKey: DefaultsKeys.activeIsPractice)
             defaults.removeObject(forKey: "activeLiveId")
             defaults.removeObject(forKey: "activeOpponentName")
             selectedGameId = nil
             activeGameOwnerUserId = nil
             activeLiveId = nil
             opponentName = nil
-            selectedPracticeId = nil
-            practiceName = nil
             showSettings = true
         }
         // ✅ Restore LIVE session if one was active
@@ -7129,13 +7100,6 @@ struct PitchTrackerView: View {
             // We'll present settings after startupPhase becomes .ready (below)
             // so this doesn't race other boot steps.
 
-        } else if persistedIsPractice {
-            isGame = true
-            sessionManager.switchMode(to: .game)
-            defaults.set(false, forKey: DefaultsKeys.activeIsPractice)
-            defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
-            selectedPracticeId = nil
-            practiceName = nil
         } else if let gid = persistedGameId,
                   persistedOwnerId == nil || persistedOwnerId == currentUid {
             isGame = true
@@ -7239,7 +7203,7 @@ struct PitchTrackerView: View {
                 self.presentExclusive(settings: true)
             } else {
                 // If no active restored session, show the normal chooser sheet
-                if !persistedIsPractice && persistedGameId == nil {
+                if persistedGameId == nil {
                     self.presentInitialSheetIfNeeded()
                 }
             }
@@ -7273,16 +7237,12 @@ struct PitchTrackerView: View {
 
         activeLiveId = nil
         selectedGameId = nil
-        selectedPracticeId = nil
-        practiceName = nil
         opponentName = nil
         activeGameOwnerUserId = nil
         showParticipantOverlay = false
 
         defaults.removeObject(forKey: DefaultsKeys.activeGameId)
         defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
-        defaults.removeObject(forKey: DefaultsKeys.activePracticeId)
-        defaults.removeObject(forKey: DefaultsKeys.activeIsPractice)
         defaults.removeObject(forKey: "activeLiveId")
         defaults.removeObject(forKey: "activeOpponentName")
         defaults.set("settings", forKey: DefaultsKeys.lastView)
@@ -7291,7 +7251,7 @@ struct PitchTrackerView: View {
 
         if newUserId != nil {
             isGame = false
-            sessionManager.switchMode(to: .practice)
+            sessionManager.switchMode(to: .game)
             showSettings = true
         }
     }
@@ -7446,21 +7406,50 @@ struct PitchTrackerView: View {
     }
 
     @ViewBuilder private var settingsSheetView: some View {
-        SettingsView(
-              templates: $templates,
-              games: $games,
-              pitchers: $pitchers,
-              allPitches: allPitches,
-              selectedTemplate: $selectedTemplate,
-              codeShareInitialTab: $codeShareInitialTab,
-              showCodeShareSheet: $showCodeShareSheet,
-              shareCode: $shareCode,
-              codeShareSheetID: $codeShareSheetID,
-              showCodeShareModePicker: $showCodeShareModePicker,
-              hasActiveSessionSelection: (selectedGameId != nil)
-          )
-        .environmentObject(authManager)
-        .environmentObject(subscriptionManager)
+        VStack(spacing: 0) {
+            #if DEBUG
+            Button {
+                let report = PitchStatsSimulationLibrary.runCoverageSuite()
+                debugLog("📊 Stats simulation report:\n\(report.summary)")
+                statsSimulationMessage = "Passed \(report.passedCount)/\(report.results.count), failed \(report.failedCount)"
+                showStatsSimulationAlert = true
+            } label: {
+                HStack {
+                    Image(systemName: "ladybug")
+                    Text("Run Stats Simulations")
+                    Spacer()
+                }
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .buttonStyle(.plain)
+            .background(.thinMaterial)
+            #endif
+
+            SettingsView(
+                templates: $templates,
+                games: $games,
+                pitchers: $pitchers,
+                allPitches: allPitches,
+                selectedTemplate: $selectedTemplate,
+                codeShareInitialTab: $codeShareInitialTab,
+                showCodeShareSheet: $showCodeShareSheet,
+                shareCode: $shareCode,
+                codeShareSheetID: $codeShareSheetID,
+                showCodeShareModePicker: $showCodeShareModePicker,
+                hasActiveSessionSelection: (selectedGameId != nil)
+            )
+            .environmentObject(authManager)
+            .environmentObject(subscriptionManager)
+        }
+        #if DEBUG
+        .alert("Stats Simulations", isPresented: $showStatsSimulationAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(statsSimulationMessage)
+        }
+        #endif
     }
 
     @ViewBuilder private var gameStatsSheetView: some View {
@@ -7556,77 +7545,39 @@ struct PitchTrackerView: View {
             }
     }
 
-    private var summaryTotalPitches: Int { gameSummaryEvents.count }
-    private var summaryStrikePitches: Int {
-        gameSummaryEvents.filter { inferredPitchResultType(for: $0) == .strike }.count
+    private var summaryStats: PitchStatsSnapshot {
+        PitchStatsCalculator.snapshot(for: gameSummaryEvents)
     }
-    private var summaryBallPitches: Int {
-        gameSummaryEvents.filter { inferredPitchResultType(for: $0) == .ball }.count
-    }
-    private var summaryHitSpotPitches: Int {
-        gameSummaryEvents.filter { event in
-            event.supportsLocationAnalytics && isLocationMatch(event)
-        }.count
-    }
-    private var summaryLocationAnalyticsEligibleCount: Int {
-        gameSummaryEvents.filter(\.supportsLocationAnalytics).count
-    }
-    private var summaryFirstPitchStrike: (made: Int, total: Int) {
-        sharedFirstPitchStrikeMetrics(for: gameSummaryEvents)
-    }
-    private var gameSummaryHasLocationAnalytics: Bool {
-        gameSummaryEvents.contains(where: \.supportsLocationAnalytics)
-    }
-    private var summaryStrikeLookingCount: Int {
-        gameSummaryEvents.filter { $0.strikeLooking }.count
-    }
-    private var summaryStrikeSwingingCount: Int {
-        gameSummaryEvents.filter { $0.strikeSwinging }.count
-    }
-    private var summaryWildPitchCount: Int {
-        gameSummaryEvents.filter { $0.wildPitch }.count
-    }
-    private var summaryPassedBallCount: Int {
-        gameSummaryEvents.filter { $0.passedBall }.count
-    }
+
+    private var summaryTotalPitches: Int { summaryStats.totalPitches }
+    private var summaryStrikePitches: Int { summaryStats.strikePitches }
+    private var summaryBallPitches: Int { summaryStats.ballPitches }
+    private var summaryHitSpotPitches: Int { summaryStats.hitSpotPitches }
+    private var summaryLocationAnalyticsEligibleCount: Int { summaryStats.locationAnalyticsEligibleCount }
+    private var summaryFirstPitchStrike: (made: Int, total: Int) { summaryStats.firstPitchStrike }
+    private var gameSummaryHasLocationAnalytics: Bool { summaryStats.hasLocationAnalytics }
+    private var summaryStrikeLookingCount: Int { summaryStats.strikeLookingCount }
+    private var summaryStrikeSwingingCount: Int { summaryStats.strikeSwingingCount }
+    private var summaryWildPitchCount: Int { summaryStats.wildPitchCount }
+    private var summaryPassedBallCount: Int { summaryStats.passedBallCount }
     private var summaryWalkCount: Int {
         if gameSummaryPitcherId == nil {
             return max(0, walks)
         }
-        return gameSummaryEvents.filter {
-            guard let outcome = $0.outcome, !outcome.isEmpty else { return false }
-            return outcome == "BB" || outcome == "Walk"
-        }.count
+        return summaryStats.walkCount
     }
     private var summaryHitCount: Int {
         if gameSummaryPitcherId == nil {
             return max(0, hits)
         }
-        return gameSummaryEvents.filter(eventCountsAsHit).count
+        return summaryStats.hitCount
     }
     private var summaryPitchBreakdown: [(pitch: String, count: Int)] {
-        let grouped = Dictionary(grouping: gameSummaryEvents, by: { event in
-            event.pitch.isEmpty ? "-" : event.pitch
-        })
-        return grouped
-            .map { (pitch: $0.key, count: $0.value.count) }
-            .sorted { lhs, rhs in
-                if lhs.count == rhs.count { return lhs.pitch < rhs.pitch }
-                return lhs.count > rhs.count
-            }
+        summaryStats.pitchBreakdown.map { (pitch: $0.name, count: $0.count) }
     }
 
     private var summaryOutcomeBreakdown: [(name: String, count: Int)] {
-        let grouped = Dictionary(grouping: gameSummaryEvents, by: { event in
-            let trimmed = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return trimmed.isEmpty ? "No outcome" : trimmed
-        })
-        return grouped
-            .map { (name: $0.key, count: $0.value.count) }
-            .sorted { lhs, rhs in
-                if lhs.count == rhs.count { return lhs.name < rhs.name }
-                return lhs.count > rhs.count
-            }
+        summaryStats.outcomeBreakdown
     }
 
     private var summaryHeatmapsByPitch: [(pitch: String, events: [PitchEvent])] {
@@ -8370,7 +8321,7 @@ struct PitchTrackerView: View {
                 }
             }
             .onChange(of: overlayTab) { _, newValue in
-                if newValue == .progress && sessionManager.currentMode == .practice {
+                if newValue == .progress {
                     progressRefreshToken = UUID()
                 }
             }
@@ -8388,9 +8339,8 @@ struct PitchTrackerView: View {
                 refreshGamesList()
                 guard !isJoiningSession else { return }
 
-                // ✅ Only force practice if there is no game selected
                 if sessionManager.currentMode == .game && selectedGameId == nil {
-                    sessionManager.switchMode(to: .practice)
+                    sessionManager.switchMode(to: .game)
                     isGame = false
                 }
             }) { gameSheetView }
@@ -8540,7 +8490,6 @@ struct PitchTrackerView: View {
                     templateName: templateName,
                     pitcherNameById: pitcherNameById,
                     gameIdFilter: selectedGameId,
-                    practiceIdFilter: selectedPracticeId,
                     lineupBatters: jerseyCells,
                     selectedLineupBatterId: selectedBatterId,
                     onSelectLineupBatter: { cell in
@@ -8584,6 +8533,27 @@ struct PitchTrackerView: View {
             }
             .sheet(item: $pendingGameConfirmation) { item in
                 sessionConfirmationSheet(pending: item)
+            }
+            .confirmationDialog(
+                "Activate New Batter?",
+                isPresented: $showActivateNewBatterPrompt,
+                titleVisibility: .visible
+            ) {
+                Button("Activate Batter") {
+                    if let cell = pendingNewBatterActivation {
+                        syncSelectedBatterFromDetail(cell)
+                    }
+                    pendingNewBatterActivation = nil
+                }
+                Button("Keep Current Batter", role: .cancel) {
+                    pendingNewBatterActivation = nil
+                }
+            } message: {
+                if let cell = pendingNewBatterActivation {
+                    Text("Would you like to activate #\(cell.jerseyNumber) now?")
+                } else {
+                    Text("Would you like to activate the new batter now?")
+                }
             }
             .overlay { accountInUseOverlay }
             .onAppear {
@@ -8641,12 +8611,10 @@ struct PitchTrackerView: View {
                     return
                 }
 
-                if let type = info["type"] as? String, type == "practice" { return }
-
                 if let type = info["type"] as? String, type == "liveGame" {
                     guard let liveId = info["liveId"] as? String else { return }
 
-                    // 🔴 Clear any stale practice/game UI state before switching
+                    // 🔴 Clear any stale game UI state before switching
                     self.resetCallAndResultUIState()
                     self.resetLiveTemplateOverrideLock()
                     self.gamePitchEvents.removeAll()
@@ -8697,7 +8665,6 @@ struct PitchTrackerView: View {
                     // Persist
                     let defaults = UserDefaults.standard
                     defaults.set(liveId, forKey: "activeLiveId")
-                    defaults.set(false, forKey: "activeIsPractice")
                     defaults.set("tracker", forKey: DefaultsKeys.lastView)
 
                     if let gid = info["gameId"] as? String, !gid.isEmpty {
@@ -8807,14 +8774,6 @@ struct PitchTrackerView: View {
 
                     // Ensure PitchResultSheet filters as game
                     sessionManager.switchMode(to: .game)
-                } else if type == "practice" {
-                    // Optional: If you want live practice updates, attach a per-user listener
-                    authManager.stopListening(pitchEventsListener)
-                    pitchEventsListener = authManager.listenUserPitchEvents(userId: authManager.user?.uid ?? "") { events in
-                        // PitchResultSheet will filter to the active practiceId via sessionManager
-                        self.gameEvents = events
-                    }
-                    sessionManager.switchMode(to: .practice)
                 }
             }
             .onAppear {
@@ -8884,6 +8843,7 @@ private struct ProgressGameView: View {
             }
             Divider()
         }
+        .contentShape(Rectangle())
         .padding(.vertical, 2)
         .onAppear {
             let clampedBalls = max(0, min(3, balls))
@@ -9055,6 +9015,7 @@ struct InningCounterCompact: View {
         }
         .padding(.trailing, 12)
         .padding(.top, 18)
+        .contentShape(Rectangle())
     }
 }
 struct HitsCounterCompact: View {
@@ -9331,13 +9292,13 @@ struct ScoreTrackerCompact: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 8)
+        .contentShape(Rectangle())
     }
 }
 
 private struct ProgressSummaryView: View {
     let events: [PitchEvent]
     let currentMode: PitchMode
-    let selectedPracticeId: String?
     let templates: [PitchTemplate]
     
     @State private var isReset: Bool = false
@@ -9346,52 +9307,46 @@ private struct ProgressSummaryView: View {
         return isLocationMatch(event)
     }
     
-    private var practiceEvents: [PitchEvent] {
+    private var summaryEvents: [PitchEvent] {
         if isReset { return [] }
-        return events.filter { ev in
-            guard ev.mode == .practice else { return false }
-            if let pid = selectedPracticeId {
-                return ev.practiceId == pid
-            }
-            return true
-        }
+        return events
     }
 
     private var hasLocationAnalytics: Bool {
-        practiceEvents.contains(where: \.supportsLocationAnalytics)
+        summaryEvents.contains(where: \.supportsLocationAnalytics)
     }
     
-    private var totalCount: Int { practiceEvents.count }
-    private var strikeCount: Int { practiceEvents.filter { inferredPitchResultType(for: $0) == .strike }.count }
-    private var ballCount: Int { practiceEvents.filter { inferredPitchResultType(for: $0) == .ball }.count }
-    private var hitSpotEligibleCount: Int { practiceEvents.filter(\.supportsLocationAnalytics).count }
+    private var totalCount: Int { summaryEvents.count }
+    private var strikeCount: Int { summaryEvents.filter { inferredPitchResultType(for: $0) == .strike }.count }
+    private var ballCount: Int { summaryEvents.filter { inferredPitchResultType(for: $0) == .ball }.count }
+    private var hitSpotEligibleCount: Int { summaryEvents.filter(\.supportsLocationAnalytics).count }
     private var strikeHitSpotEligibleCount: Int {
-        practiceEvents.filter { $0.supportsLocationAnalytics && inferredPitchResultType(for: $0) == .strike }.count
+        summaryEvents.filter { $0.supportsLocationAnalytics && inferredPitchResultType(for: $0) == .strike }.count
     }
     private var ballHitSpotEligibleCount: Int {
-        practiceEvents.filter { $0.supportsLocationAnalytics && inferredPitchResultType(for: $0) == .ball }.count
+        summaryEvents.filter { $0.supportsLocationAnalytics && inferredPitchResultType(for: $0) == .ball }.count
     }
     private var hitSpotCount: Int {
-        practiceEvents.filter { ev in
+        summaryEvents.filter { ev in
             ev.supportsLocationAnalytics && didHitLocation(ev)
         }.count
     }
     
     private var strikeHitSpotCount: Int {
-        practiceEvents.filter { ev in
+        summaryEvents.filter { ev in
             ev.supportsLocationAnalytics && inferredPitchResultType(for: ev) == .strike && didHitLocation(ev)
         }.count
     }
 
     private var ballHitSpotCount: Int {
-        practiceEvents.filter { ev in
+        summaryEvents.filter { ev in
             ev.supportsLocationAnalytics && inferredPitchResultType(for: ev) == .ball && didHitLocation(ev)
         }.count
     }
 
-    private var firstPitchStrikeCount: Int { sharedFirstPitchStrikeMetrics(for: practiceEvents).made }
+    private var firstPitchStrikeCount: Int { sharedFirstPitchStrikeMetrics(for: summaryEvents).made }
 
-    private var firstPitchStrikeOpportunities: Int { sharedFirstPitchStrikeMetrics(for: practiceEvents).total }
+    private var firstPitchStrikeOpportunities: Int { sharedFirstPitchStrikeMetrics(for: summaryEvents).total }
 
     private var firstPitchStrikePercent: String {
         percent(firstPitchStrikeCount, of: max(firstPitchStrikeOpportunities, 1))
@@ -9413,7 +9368,7 @@ private struct ProgressSummaryView: View {
     private var pitchStats: [(pitch: String, templateId: String?, templateName: String, hits: Int, attempts: Int, percent: Double)] {
         // Aggregate attempts and hits per (pitch, template) based on matching actual == called location
         var dict: [String: (hits: Int, attempts: Int, templateId: String?)] = [:]
-        for ev in practiceEvents {
+        for ev in summaryEvents {
             guard ev.calledPitch != nil else { continue }
             let name = ev.pitch
             let tid = ev.templateId
@@ -9449,7 +9404,7 @@ private struct ProgressSummaryView: View {
     
     private var pitchRanking: [(name: String, count: Int)] {
         var counts: [String: Int] = [:]
-        for ev in practiceEvents {
+        for ev in summaryEvents {
             debugLog("[Metrics] Ranking consider id=\(ev.id ?? "-") pitch=\(ev.pitch) hasCall=\(ev.calledPitch != nil) didHit=\(didHitLocation(ev))")
             guard ev.calledPitch != nil else { continue }
             guard didHitLocation(ev) else { continue }
@@ -9557,13 +9512,6 @@ private struct ProgressSummaryView: View {
         }
         .padding(.horizontal)
         .offset(y: 20)
-        .onReceive(NotificationCenter.default.publisher(for: .practiceProgressReset)) { notification in
-            guard let userInfo = notification.userInfo as? [String: Any], let pid = userInfo["practiceId"] as? String? else { return }
-            // If current view is showing the same practice session (or general when nil), reset displayed stats
-            if pid == selectedPracticeId {
-                isReset = true
-            }
-        }
     }
     
     @ViewBuilder
@@ -9933,15 +9881,26 @@ struct JerseyRow: View {
             }
     }
     private func syncSelection(_ nextSelection: UUID?) {
-        // ✅ optimistic UI
+        let selectedCell = nextSelection.flatMap { id in jerseyCells.first(where: { $0.id == id }) }
         selectedBatterId = nextSelection
 
-        // ✅ LIVE MODE: write to liveGames so both devices reflect selection
+        guard let gameId = selectedGameId,
+              let owner = effectiveGameOwnerUserId,
+              !owner.isEmpty
+        else {
+            debugLog("⚠️ Cannot sync selected batter: missing selectedGameId or effectiveGameOwnerUserId")
+            return
+        }
+
         if let liveId = activeLiveId, !liveId.isEmpty {
             var fields: [String: Any] = [:]
             if let nextSelection {
                 fields["selectedBatterId"] = nextSelection.uuidString
-                fields["selectedBatterJersey"] = cell.jerseyNumber
+                if let jersey = selectedCell?.jerseyNumber {
+                    fields["selectedBatterJersey"] = jersey
+                } else {
+                    fields["selectedBatterJersey"] = FieldValue.delete()
+                }
             } else {
                 fields["selectedBatterId"] = FieldValue.delete()
                 fields["selectedBatterJersey"] = FieldValue.delete()
@@ -9950,21 +9909,11 @@ struct JerseyRow: View {
             return
         }
 
-        // ✅ NON-LIVE: write to owner's game doc as before
-        guard
-            let gameId = selectedGameId,
-            let owner = effectiveGameOwnerUserId,
-            !owner.isEmpty
-        else {
-            debugLog("⚠️ Cannot sync selected batter: missing selectedGameId or effectiveGameOwnerUserId")
-            return
-        }
-
         authManager.updateGameSelectedBatter(
             ownerUserId: owner,
             gameId: gameId,
             selectedBatterId: nextSelection?.uuidString,
-            selectedBatterJersey: nextSelection == nil ? nil : cell.jerseyNumber
+            selectedBatterJersey: selectedCell?.jerseyNumber
         )
     }
 
@@ -10346,9 +10295,9 @@ struct CalledPitchView: View {
     @State private var showResultOverlay = false
     @State private var selectedActualLocation: String?
     @State private var tappedCode: String?
+    @State private var previousOrientationLockForCodeDisplay: UIInterfaceOrientationMask? = nil
     @Binding var pitchResultBannerPhase: PitchTrackerView.PitchResultBannerPhase
     @State private var codeDisplayOverlayPayload: CodeDisplayOverlayPayload?
-    @AppStorage(PitchTrackerView.DefaultsKeys.practiceCodesEnabled) private var codesEnabled: Bool = true
     @Binding var isRecordingResult: Bool
     @Binding var activeCalledPitchId: String?
     @Binding var pitchFirst: Bool
@@ -10359,7 +10308,6 @@ struct CalledPitchView: View {
     let batterSide: BatterSide
     let template: PitchTemplate?
     let isEncryptedMode: Bool
-    let isPracticeMode: Bool
     let onDeferDisplayCode: ((String, String) -> Void)?
     
     private func normalizeCode(_ code: String) -> String {
@@ -10389,10 +10337,6 @@ struct CalledPitchView: View {
     }
 
     private func broadcastDisplayCode(colorName: String, code: String) {
-        guard !isPracticeMode else {
-            debugLog("⚠️ broadcastDisplayCode skipped (practice mode) color=\(colorName) code=\(code)")
-            return
-        }
         guard let uid = Auth.auth().currentUser?.uid else {
             debugLog("⚠️ broadcastDisplayCode skipped (missing uid) color=\(colorName) code=\(code)")
             return
@@ -10411,7 +10355,6 @@ struct CalledPitchView: View {
     }
 
     private func clearDisplayCode() {
-        guard !isPracticeMode else { return }
         guard let uid = Auth.auth().currentUser?.uid else { return }
         Firestore.firestore()
             .collection("users")
@@ -10423,6 +10366,26 @@ struct CalledPitchView: View {
                 "code": FieldValue.delete(),
                 "updatedAt": FieldValue.serverTimestamp()
             ], merge: true)
+    }
+
+    private func beginCodeDisplayOrientationUnlock() {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+        guard previousOrientationLockForCodeDisplay == nil else { return }
+        let currentLock = AppDelegate.orientationLock
+
+        // Only widen the lock when this flow is actually constrained to portrait.
+        guard currentLock == .portrait else { return }
+
+        previousOrientationLockForCodeDisplay = currentLock
+        AppDelegate.setOrientationLock(.allButUpsideDown)
+    }
+
+    private func endCodeDisplayOrientationUnlock() {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+        guard let previousLock = previousOrientationLockForCodeDisplay else { return }
+
+        previousOrientationLockForCodeDisplay = nil
+        AppDelegate.setOrientationLock(previousLock)
     }
 
     var body: some View {
@@ -10453,7 +10416,6 @@ struct CalledPitchView: View {
         let bannerShowsTapResult: Bool =
             isCatcherCall ||
             (tappedCode != nil) ||
-            (isPracticeMode && !codesEnabled) ||
             autoPitchOnlyEnabled
         let bannerText: String = {
             guard bannerShowsTapResult else { return "Code" }
@@ -10509,7 +10471,7 @@ struct CalledPitchView: View {
                     .buttonStyle(.plain)
                 }
                 // Assigned codes as chips
-                if !displayCodes.isEmpty && (!isPracticeMode || codesEnabled) {
+                if !displayCodes.isEmpty {
                        ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(displayCodes, id: \.self) { code in
@@ -10559,63 +10521,28 @@ struct CalledPitchView: View {
                         .frame(height: 60)
                     }
                     .padding(.top, 2)
-                    // Code order toggle (hidden in practice when codes are Off)
-                    if !isPracticeMode || codesEnabled {
-                        CodeOrderToggle(
-                            pitchFirst: $pitchFirst,
-                            template: template,
-                            selectedCode: selectedDisplayedCode,
-                            onColorTap: { colorName in
-                                guard let selectedDisplayedCode else { return }
-                                codeDisplayOverlayPayload = CodeDisplayOverlayPayload(
-                                    colorName: colorName,
-                                    code: selectedDisplayedCode
-                                )
-                                broadcastDisplayCode(colorName: colorName, code: selectedDisplayedCode)
-                            }
-                        )
-                    }
+                    CodeOrderToggle(
+                        pitchFirst: $pitchFirst,
+                        template: template,
+                        selectedCode: selectedDisplayedCode,
+                        onColorTap: { colorName in
+                            guard let selectedDisplayedCode else { return }
+                            codeDisplayOverlayPayload = CodeDisplayOverlayPayload(
+                                colorName: colorName,
+                                code: selectedDisplayedCode
+                            )
+                            broadcastDisplayCode(colorName: colorName, code: selectedDisplayedCode)
+                        }
+                    )
                     
                 } else {
-                    // Keep CalledPitchView height stable when Codes are turned Off in Practice
-                    if isPracticeMode && !codesEnabled && !displayCodes.isEmpty {
-                        // Reserve the chips area height
-                        Color.clear
-                            .frame(height: 60)
-                            .padding(.top, 2)
-                        // Reserve space for the CodeOrderToggle to prevent layout jump
-                        CodeOrderToggle(
-                            pitchFirst: $pitchFirst,
-                            template: template,
-                            selectedCode: selectedDisplayedCode,
-                            onColorTap: { _ in }
-                        )
-                            .hidden()
-                    } else if !isEncryptedMode {
+                    if !isEncryptedMode {
                         Text("No assigned calls for this pitch/location")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.top, 2)
                     }
                 }
-                // Practice-only: Codes On/Off toggle
-                if isPracticeMode {
-                    
-                    HStack(spacing: 8) {
-                        Spacer()
-                        Text("Codes:")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Toggle("", isOn: $codesEnabled)
-                            .labelsHidden()
-                        Text(codesEnabled ? "On" : "Off")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                }
-                
-                
             }
         }
         .padding(14)
@@ -10631,7 +10558,9 @@ struct CalledPitchView: View {
         .padding(.horizontal)
         .transition(.opacity)
         .accessibilityElement(children: .combine)
-        .fullScreenCover(item: $codeDisplayOverlayPayload) { payload in
+        .fullScreenCover(item: $codeDisplayOverlayPayload, onDismiss: {
+            endCodeDisplayOrientationUnlock()
+        }) { payload in
             CodeDisplayOverlayView(
                 colorName: payload.colorName,
                 code: payload.code,
@@ -10640,25 +10569,15 @@ struct CalledPitchView: View {
                     clearDisplayCode()
                 }
             )
-        }
-        .onAppear {
-            if isPracticeMode {
-                // If Codes are Off, allow choosing result without tapping a code first
-                isRecordingResult = !codesEnabled
-            }
-        }
-        .onChange(of: codesEnabled) { _, newValue in
-            if isPracticeMode {
-                // When turning Codes Off, immediately allow result selection; when On, require code tap again
-                isRecordingResult = !newValue
-                tappedCode = nil
-                pitchResultBannerPhase = .code
+            .onAppear {
+                beginCodeDisplayOrientationUnlock()
             }
         }
         .onChange(of: tappedCode) { _, newValue in
             if newValue == nil {
                 codeDisplayOverlayPayload = nil
                 clearDisplayCode()
+                endCodeDisplayOrientationUnlock()
                 pitchResultBannerPhase = .code
             }
         }
@@ -10700,6 +10619,9 @@ struct PitchResultBanner: View {
 
                 Text(text)
                     .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .allowsTightening(true)
             }
         }
         .foregroundStyle(.primary)
@@ -10976,64 +10898,118 @@ struct GameSelectionSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var authManager: AuthManager
 
+    private var activeGames: [Game] {
+        games
+            .filter { !$0.isArchived }
+            .sorted(by: { $0.date > $1.date })
+    }
+
+    private var archivedGames: [Game] {
+        games
+            .filter { $0.isArchived }
+            .sorted(by: { $0.date > $1.date })
+    }
+
+    @ViewBuilder
+    private func gameRow(for game: Game) -> some View {
+        HStack {
+            Button(action: {
+                if let gid = game.id, !gid.isEmpty {
+                    onChoose(gid)
+                    dismiss()
+                } else {
+                    // Resolve freshly created game by reloading and matching on name/date
+                    authManager.loadGames { loaded in
+                        self.games = loaded
+                        let calendar = Calendar.current
+                        if let resolved = loaded.first(where: { $0.opponent == game.opponent && calendar.isDate($0.date, inSameDayAs: game.date) }) {
+                            onChoose(resolved.id ?? "")
+                        }
+                        dismiss()
+                    }
+                }
+            }) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(game.opponent)
+                            .font(.headline)
+                        Text(Self.formatter.string(from: game.date))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        if game.isArchived {
+                            Label("Archived", systemImage: "archivebox")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                }
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 12)
+
+            Menu {
+                if game.isArchived {
+                    Button {
+                        guard let id = game.id, !id.isEmpty else { return }
+                        authManager.unarchiveGame(gameId: id)
+                        if let idx = games.firstIndex(where: { $0.id == id }) {
+                            games[idx].archivedAt = nil
+                        }
+                    } label: {
+                        Label("Unarchive Game", systemImage: "archivebox")
+                    }
+                } else {
+                    Button {
+                        guard let id = game.id, !id.isEmpty else { return }
+                        authManager.archiveGame(gameId: id)
+                        if let idx = games.firstIndex(where: { $0.id == id }) {
+                            games[idx].archivedAt = Date()
+                        }
+                    } label: {
+                        Label("Archive Game", systemImage: "archivebox")
+                    }
+                }
+
+                Button(role: .destructive) {
+                    guard let id = game.id, !id.isEmpty else { return }
+                    pendingDeleteGameId = id
+                    pendingDeleteGameName = game.opponent
+                    showDeleteGameConfirm = true
+                } label: {
+                    Label("Delete Game…", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                if games.isEmpty {
+                if activeGames.isEmpty, archivedGames.isEmpty {
                     Text("No games yet. Tap “New Game” to create one.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .padding(.vertical, 12)
                 } else {
-                    Section() {
-                        ForEach(games) { game in
-                            HStack {
-                                Button(action: {
-                                    if let gid = game.id, !gid.isEmpty {
-                                        onChoose(gid)
-                                        dismiss()
-                                    } else {
-                                        // Resolve freshly created game by reloading and matching on name/date
-                                        authManager.loadGames { loaded in
-                                            self.games = loaded
-                                            let calendar = Calendar.current
-                                            if let resolved = loaded.first(where: { $0.opponent == game.opponent && calendar.isDate($0.date, inSameDayAs: game.date) }) {
-                                                onChoose(resolved.id ?? "")
-                                            }
-                                            dismiss()
-                                        }
-                                    }
-                                }) {
-                                    HStack {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(game.opponent)
-                                                .font(.headline)
-                                            Text(Self.formatter.string(from: game.date))
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        Spacer()
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                
-                                Spacer(minLength: 12)
-                                
-                                Menu {
-                                    Button(role: .destructive) {
-                                        guard let id = game.id, !id.isEmpty else { return }
-                                        pendingDeleteGameId = id
-                                        pendingDeleteGameName = game.opponent
-                                        showDeleteGameConfirm = true
-                                    } label: {
-                                        Label("Delete Game…", systemImage: "trash")
-                                    }
-                                } label: {
-                                    Image(systemName: "ellipsis.circle")
-                                        .font(.title3)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
+                    if !activeGames.isEmpty {
+                        Section("Games") {
+                            ForEach(activeGames) { game in
+                                gameRow(for: game)
+                            }
+                        }
+                    }
+
+                    if !archivedGames.isEmpty {
+                        Section("Archived Games") {
+                            ForEach(archivedGames) { game in
+                                gameRow(for: game)
                             }
                         }
                     }

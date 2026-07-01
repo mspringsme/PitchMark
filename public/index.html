@@ -2,53 +2,855 @@
 <html lang="en">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PitchMark</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>PitchMark | Pitch Calling &amp; Tracking</title>
+    <meta
+        name="description"
+        content="PitchMark helps call pitches, track outcomes, and record game data with a simple visual workflow."
+    />
+    <link rel="canonical" href="https://pitchmark-fb9f8.web.app/" />
+    <link rel="icon" href="/favicon.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="PitchMark" />
+    <meta property="og:title" content="PitchMark | Pitch Calling &amp; Tracking" />
+    <meta
+        property="og:description"
+        content="PitchMark helps call pitches, track outcomes, and record game data with a simple visual workflow."
+    />
+    <meta property="og:url" content="https://pitchmark-fb9f8.web.app/" />
+    <meta
+        property="og:image"
+        content="https://pitchmark-fb9f8.web.app/assets/softball%20baseball%20with%20title4.png"
+    />
+    <meta property="og:image:width" content="1024" />
+    <meta property="og:image:height" content="1024" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="PitchMark | Pitch Calling &amp; Tracking" />
+    <meta
+        name="twitter:description"
+        content="PitchMark helps call pitches, track outcomes, and record game data with a simple visual workflow."
+    />
+    <meta
+        name="twitter:image"
+        content="https://pitchmark-fb9f8.web.app/assets/softball%20baseball%20with%20title4.png"
+    />
     <style>
         :root { color-scheme: light; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
             margin: 0;
             min-height: 100vh;
-            display: grid;
-            place-items: center;
             background: #f6f7fb;
             color: #1c1c1e;
         }
-        .card {
-            background: white;
-            border-radius: 16px;
-            padding: 32px 40px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.08);
-            text-align: center;
-            width: min(100% - 32px, 420px);
+        .page {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            padding: 22px 0 0;
             box-sizing: border-box;
         }
-        .brand-image {
-            display: block;
-            width: min(100%, 220px);
-            height: auto;
-            margin: 0 auto 20px;
+        .top-bar {
+            width: min(100% - 32px, 1240px);
+            margin: 0 auto;
+            padding: 12px 18px;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.78);
+            border: 1px solid rgba(255, 255, 255, 0.95);
+            box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
         }
-        h1 { margin: 0 0 8px; font-size: 24px; }
-        p { margin: 0; color: #6b7280; }
+        .top-bar-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+        .top-bar-mark {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(34, 197, 94, 0.16), rgba(59, 130, 246, 0.12));
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            overflow: hidden;
+            box-shadow: inset 0 0 0 1px rgba(17, 24, 39, 0.05);
+        }
+        .top-bar-mark img {
+            display: block;
+            width: 28px;
+            height: 28px;
+            object-fit: contain;
+        }
+        .top-bar-text {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .top-bar-title {
+            font-size: 18px;
+            line-height: 1.1;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: #111827;
+        }
+        .top-bar-subtitle {
+            font-size: 12px;
+            line-height: 1.2;
+            color: #6b7280;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .top-bar-chip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 12px;
+            border-radius: 999px;
+            border: 1px solid rgba(17, 24, 39, 0.08);
+            background: rgba(255, 255, 255, 0.76);
+            color: #4b5563;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+        .hero-shell {
+            width: 100%;
+            align-self: stretch;
+            height: 100%;
+        }
+        .hero {
+            width: min(100% - 32px, 1240px);
+            margin: 0 auto;
+            display: grid;
+            gap: 20px;
+            padding: 16px 0 16px;
+            box-sizing: border-box;
+            height: 100%;
+            align-content: stretch;
+        }
+        .hero-header {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .header-row {
+            --header-square-size: clamp(34px, 8vw, 148px);
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: nowrap;
+            overflow: hidden;
+        }
+        .logo-card {
+            width: var(--header-square-size);
+            height: var(--header-square-size);
+            margin: 0;
+            flex: 0 0 var(--header-square-size);
+        }
+        .logo-card.panel {
+            width: var(--header-square-size);
+            height: var(--header-square-size);
+            aspect-ratio: 1 / 1;
+            padding: 10px;
+        }
+        .header-row > .blank-square,
+        .header-row > .panel--logo {
+            width: var(--header-square-size);
+            height: var(--header-square-size);
+            flex: 0 0 var(--header-square-size);
+            min-width: var(--header-square-size);
+            min-height: var(--header-square-size);
+            box-sizing: border-box;
+            cursor: pointer;
+        }
+        .panel {
+            width: 100%;
+            aspect-ratio: 9 / 16;
+            border-radius: 16px;
+            background: white;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+            border: 1px solid rgba(0,0,0,0.05);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .panel--logo {
+            background: white;
+        }
+        .panel--logo img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        .blank-square {
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.85);
+            border: 1px solid rgba(0, 0, 0, 0.05);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.04);
+            overflow: hidden;
+        }
+        .blank-square img {
+            display: block;
+            width: 97%;
+            height: 97%;
+            object-fit: contain;
+            margin: 1.5% auto 0;
+        }
+        .blank-square img.third-square-image {
+            width: 82%;
+            height: 82%;
+            margin: 9% auto 0;
+        }
+        .feature-image {
+            display: block;
+            width: 110%;
+            height: auto;
+            border-radius: 18px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+            max-width: none;
+            justify-self: center;
+            margin: 0 auto;
+            transform: translateX(-4.545%);
+            cursor: pointer;
+        }
+        .footer {
+            width: min(100% - 32px, 420px);
+            margin: 0 auto 36px;
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            font-size: 12px;
+        }
+        .footer a {
+            color: #b2b7c0;
+            text-decoration: none;
+        }
+        .footer a:hover { text-decoration: underline; }
+        .store-badge-row {
+            width: min(100% - 32px, 420px);
+            margin: 8px auto 0;
+            display: flex;
+            justify-content: center;
+        }
+        .app-store-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            opacity: 0.48;
+            filter: grayscale(1) saturate(0.15);
+            pointer-events: none;
+        }
+        .app-store-badge img {
+            display: block;
+            width: 104px;
+            height: auto;
+        }
+        .popup-overlay {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(20, 20, 24, 0.82);
+            backdrop-filter: blur(10px);
+            z-index: 1000;
+            padding: 24px;
+            box-sizing: border-box;
+        }
+        .popup-overlay.is-open {
+            display: flex;
+        }
+        .popup-card {
+            width: min(92vw, 760px);
+            aspect-ratio: 1 / 1;
+            border-radius: 28px;
+            background: white;
+            box-shadow: 0 22px 80px rgba(0, 0, 0, 0.38);
+            border: 1px solid rgba(255,255,255,0.35);
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        .popup-card--feature {
+            width: min(96vw, 1200px);
+            height: min(88vh, 820px);
+            aspect-ratio: auto;
+        }
+        .popup-view {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+        .popup-card--feature .popup-view {
+            overflow-x: auto;
+            overflow-y: hidden;
+            justify-content: flex-start;
+            align-items: center;
+            scrollbar-width: none;
+        }
+        .popup-card--feature .popup-view::-webkit-scrollbar {
+            display: none;
+        }
+        .popup-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 44px;
+            height: 44px;
+            border: 0;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.92);
+            box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+            color: #222;
+            font-size: 28px;
+            line-height: 44px;
+            cursor: pointer;
+            z-index: 2;
+        }
+        .popup-nav--prev { left: 14px; }
+        .popup-nav--next { right: 14px; }
+        .popup-card img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+            position: relative;
+            z-index: 1;
+        }
+        .popup-card--feature img {
+            width: auto;
+            height: 100%;
+            max-width: none;
+            object-fit: contain;
+        }
+        .popup-card--feature .popup-close {
+            z-index: 6;
+        }
+        .popup-card.is-empty::before {
+            content: "";
+            width: 100%;
+            height: 100%;
+            display: block;
+            background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(245,247,250,0.98));
+        }
+        .popup-close {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            width: 38px;
+            height: 38px;
+            border: 0;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.92);
+            box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+            color: #222;
+            font-size: 22px;
+            line-height: 38px;
+            cursor: pointer;
+            z-index: 20;
+            pointer-events: auto;
+            touch-action: manipulation;
+        }
         @media (max-width: 480px) {
-            .card { padding: 28px 24px; }
-            .brand-image { width: min(100%, 180px); }
+            .page {
+                padding-top: 15px;
+                padding-bottom: 86px;
+                height: 100dvh;
+                overflow: hidden;
+                gap: 12px;
+            }
+            .top-bar {
+                width: min(100% - 24px, 1240px);
+                padding: 10px 14px;
+                border-radius: 18px;
+                gap: 12px;
+            }
+            .top-bar-mark {
+                width: 34px;
+                height: 34px;
+                border-radius: 10px;
+            }
+            .top-bar-mark img {
+                width: 24px;
+                height: 24px;
+            }
+            .top-bar-title {
+                font-size: 16px;
+            }
+            .top-bar-subtitle {
+                font-size: 11px;
+            }
+            .top-bar-chip {
+                padding: 7px 10px;
+                font-size: 11px;
+            }
+            .hero-shell {
+                width: 100%;
+                transform: none;
+                transform-origin: top center;
+                margin: 0 auto;
+                flex: 1 1 auto;
+                min-height: 0;
+                display: flex;
+                height: 100%;
+            }
+            .hero {
+                width: min(100% - 18px, 1240px);
+                gap: 18px;
+                padding: 2px 0 4px;
+                flex: 1 1 auto;
+                min-height: 0;
+                grid-template-rows: auto minmax(0, 1fr);
+                height: 100%;
+            }
+            .hero-header {
+                justify-content: flex-start;
+                overflow-x: auto;
+                overflow-y: hidden;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                overscroll-behavior-x: contain;
+            }
+            .hero-header::-webkit-scrollbar {
+                display: none;
+            }
+            .header-row {
+                --header-square-size: clamp(57px, 14vw, 180px);
+                gap: 3px;
+                width: max-content;
+                min-width: 100%;
+                justify-content: flex-start;
+                padding: 0 4px 18px;
+                overflow: visible;
+            }
+            .header-row > .blank-square,
+            .header-row > .panel--logo {
+                border-radius: 12px;
+            }
+            .logo-card.panel { padding: 7px; }
+            .panel { padding: 15px; }
+            .feature-image {
+                width: 100%;
+                max-width: 100%;
+                height: 62%;
+                max-height: 62%;
+                transform: none;
+                align-self: start;
+                object-fit: cover;
+                object-position: top center;
+            }
+            .footer {
+                position: fixed;
+                left: 50%;
+                bottom: 8px;
+                transform: translateX(-50%);
+                width: min(calc(100% - 24px), 420px);
+                margin: 0;
+                padding: 10px 12px;
+                border-radius: 18px;
+                background: rgba(246, 247, 251, 0.92);
+                backdrop-filter: blur(10px);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+                z-index: 10;
+                font-size: 12px;
+                line-height: 1.2;
+            }
+            .store-badge-row {
+                position: fixed;
+                left: 50%;
+                bottom: 34px;
+                transform: translateX(-50%);
+                width: min(calc(100% - 24px), 420px);
+                margin: 0;
+                z-index: 11;
+            }
+            .app-store-badge img {
+                width: 84px;
+            }
+            .popup-overlay {
+                padding: 12px;
+            }
+            .popup-card {
+                width: min(94vw, 560px);
+                border-radius: 22px;
+            }
+            .popup-card--feature {
+                width: min(96vw, 640px);
+                height: min(82vh, 760px);
+            }
+            .popup-card--feature .popup-close {
+                z-index: 8;
+            }
+            .popup-nav {
+                width: 40px;
+                height: 40px;
+                font-size: 26px;
+                line-height: 40px;
+            }
+            .popup-nav--prev { left: 10px; }
+            .popup-nav--next { right: 10px; }
+        }
+        @media (max-width: 900px) and (orientation: landscape) {
+            .page {
+                padding-top: 14px;
+                padding-bottom: 0;
+                height: 100dvh;
+                overflow: hidden;
+                gap: 10px;
+            }
+            .hero-shell {
+                width: 100%;
+                flex: 1 1 auto;
+                transform: none;
+                margin: 0;
+                min-height: 0;
+                display: flex;
+                height: 100%;
+            }
+            .hero {
+                width: min(100% - 24px, 1240px);
+                gap: 10px;
+                padding: 8px 0 8px;
+                flex: 1 1 auto;
+                min-height: 0;
+                grid-template-rows: auto 1fr;
+                height: 100%;
+            }
+            .header-row {
+                --header-square-size: clamp(30px, 6vw, 108px);
+                gap: 6px;
+            }
+            .hero-header {
+                flex: 0 0 auto;
+            }
+            .feature-image {
+                flex: 1 1 auto;
+                min-height: 0;
+                width: 100%;
+                max-width: 100%;
+                height: 100%;
+                transform: none;
+                align-self: stretch;
+                object-fit: cover;
+            }
+            .footer {
+                position: fixed;
+                left: 50%;
+                bottom: 10px;
+                transform: translateX(-50%);
+                width: min(100% - 24px, 420px);
+                margin: 0;
+                padding: 0;
+                border-radius: 0;
+                background: transparent;
+                backdrop-filter: none;
+                box-shadow: none;
+                font-size: 12px;
+                line-height: 1.2;
+                z-index: 10;
+            }
+            .store-badge-row {
+                position: fixed;
+                left: 50%;
+                bottom: 38px;
+                transform: translateX(-50%);
+                width: min(100% - 24px, 420px);
+                margin: 0;
+                z-index: 11;
+            }
+            .popup-card {
+                width: min(82vw, 560px);
+            }
+            .popup-card--feature {
+                width: min(90vw, 900px);
+                height: min(86vh, 680px);
+            }
         }
     </style>
 </head>
 <body>
-    <div class="card">
-        <img
-            class="brand-image"
-            src="assets/softball%20baseball%20with%20title4.png"
-            width="1024"
-            height="1024"
-            alt="PitchMark softball and baseball logo"
-        />
-        <h1>PitchMark</h1>
-        <p>Auth link landing page is live.</p>
+    <div class="page">
+        <header class="top-bar" aria-label="PitchMark header">
+            <div class="top-bar-brand">
+                <div class="top-bar-mark" aria-hidden="true">
+                    <img src="assets/softball%20baseball%20with%20title4.png" alt="" />
+                </div>
+                <div class="top-bar-text">
+                    <div class="top-bar-title">PitchMark</div>
+                    <div class="top-bar-subtitle">Pitch calling and tracking for softball and baseball</div>
+                </div>
+            </div>
+            <div class="top-bar-chip">Coming soon</div>
+        </header>
+        <div class="hero-shell">
+            <div class="hero" aria-label="PitchMark visual hero">
+                <div class="hero-header">
+                    <div class="header-row" aria-label="Header squares">
+                        <div class="blank-square" aria-label="Pitch key image">
+                            <img
+                                src="assets/Key%20and%20arm%20band.png"
+                                alt="Pitch key and arm band"
+                            />
+                        </div>
+                        <div class="blank-square" aria-label="Pitch selection image">
+                            <img
+                                src="assets/Group%204.png"
+                                alt="Pitch selection and tap your spot"
+                            />
+                        </div>
+                        <div class="blank-square" aria-label="Call or show code image">
+                            <img
+                                class="third-square-image"
+                                src="assets/call%20or%20show%20code.png"
+                                alt="Call or show the code"
+                            />
+                        </div>
+                        <div class="panel panel--logo logo-card" aria-label="Logo preview">
+                            <img
+                                src="assets/softball%20baseball%20with%20title4.png"
+                                width="1024"
+                                height="1024"
+                                alt="PitchMark logo preview"
+                            />
+                        </div>
+                        <div class="blank-square" aria-label="Available feature image">
+                            <img
+                                src="assets/available.png"
+                                alt="Available waterproof tear-proof pitch keys and backup call sheets"
+                            />
+                        </div>
+                        <div class="blank-square" aria-label="Developed and owned image">
+                            <img
+                                src="assets/Group%204%20(1).png"
+                                alt="Developed and owned by an old softball dad"
+                            />
+                        </div>
+                        <div class="blank-square" aria-label="Coming soon image">
+                            <img
+                                src="assets/coming%20soon.png"
+                                alt="Coming soon: video, game result trading cards, so much more"
+                            />
+                        </div>
+                    </div>
+                </div>
+                <img
+                    class="feature-image"
+                    src="assets/fixed%20main%20image%20(1).png"
+                    alt="PitchMark app feature collage"
+                />
+            </div>
+        </div>
+        <div class="store-badge-row" aria-label="App Store badge placeholder">
+            <a class="app-store-badge" href="#" aria-label="Apple App Store link placeholder">
+                <img src="assets/pre-order-app-store-badge.svg" alt="Pre-order on the App Store" />
+            </a>
+        </div>
+        <nav class="footer" aria-label="App Store links">
+            <a href="/support">Support</a>
+            <a href="/privacy">Privacy Policy</a>
+            <a href="/terms">Terms of Use</a>
+        </nav>
     </div>
+    <div class="popup-overlay" id="popupOverlay" aria-hidden="true">
+        <div class="popup-card" id="popupCard" role="dialog" aria-modal="true" aria-label="Expanded image view">
+            <button class="popup-nav popup-nav--prev" id="popupPrev" type="button" aria-label="Previous image">‹</button>
+            <button class="popup-nav popup-nav--next" id="popupNext" type="button" aria-label="Next image">›</button>
+            <button class="popup-close" id="popupClose" type="button" aria-label="Close expanded view">×</button>
+            <div class="popup-view" id="popupView">
+                <img id="popupImage" alt="" hidden />
+            </div>
+        </div>
+    </div>
+    <script>
+        (function () {
+            const overlay = document.getElementById('popupOverlay');
+            const card = document.getElementById('popupCard');
+            const view = document.getElementById('popupView');
+            const image = document.getElementById('popupImage');
+            const closeButton = document.getElementById('popupClose');
+            const prevButton = document.getElementById('popupPrev');
+            const nextButton = document.getElementById('popupNext');
+            const headerItems = Array.from(document.querySelectorAll('.header-row > .blank-square, .header-row > .panel--logo'));
+            const featureItem = document.querySelector('.feature-image');
+            const galleryItems = [...headerItems];
+            let currentIndex = 0;
+            let touchStartX = null;
+
+            function renderImage(item, featureMode) {
+                const img = item
+                    ? (item.tagName === 'IMG' ? item : item.querySelector('img'))
+                    : null;
+                const src = img ? (img.currentSrc || img.src) : '';
+                const alt = img ? (img.alt || 'Expanded view') : 'Expanded view';
+                card.classList.toggle('popup-card--feature', featureMode);
+                view.scrollLeft = 0;
+                view.scrollTop = 0;
+                if (featureMode) {
+                    prevButton.hidden = true;
+                    nextButton.hidden = true;
+                } else {
+                    prevButton.hidden = false;
+                    nextButton.hidden = false;
+                }
+                if (src) {
+                    image.src = src;
+                    image.alt = alt;
+                    image.hidden = false;
+                    card.classList.remove('is-empty');
+                } else {
+                    image.removeAttribute('src');
+                    image.alt = '';
+                    image.hidden = true;
+                    card.classList.add('is-empty');
+                }
+            }
+
+            function showIndex(nextIndex) {
+                if (!galleryItems.length) return;
+                currentIndex = (nextIndex + galleryItems.length) % galleryItems.length;
+                const item = galleryItems[currentIndex];
+                renderImage(item, false);
+                overlay.classList.add('is-open');
+                overlay.setAttribute('aria-hidden', 'false');
+                document.body.style.overflow = 'hidden';
+                closeButton.focus({ preventScroll: true });
+            }
+
+            function openPopup(item) {
+                const index = galleryItems.indexOf(item);
+                showIndex(index >= 0 ? index : 0);
+            }
+
+            function openFeaturePopup() {
+                renderImage(featureItem, true);
+                overlay.classList.add('is-open');
+                overlay.setAttribute('aria-hidden', 'false');
+                document.body.style.overflow = 'hidden';
+                closeButton.focus({ preventScroll: true });
+            }
+
+            function closePopup() {
+                overlay.classList.remove('is-open');
+                overlay.setAttribute('aria-hidden', 'true');
+                document.body.style.overflow = '';
+            }
+
+            function previousImage() {
+                showIndex(currentIndex - 1);
+            }
+
+            function nextImage() {
+                showIndex(currentIndex + 1);
+            }
+
+            galleryItems.forEach((item) => {
+                item.addEventListener('click', () => openPopup(item));
+                item.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        openPopup(item);
+                    }
+                });
+                item.setAttribute('tabindex', '0');
+                item.setAttribute('role', 'button');
+            });
+            if (featureItem) {
+                featureItem.addEventListener('click', openFeaturePopup);
+                featureItem.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        openFeaturePopup();
+                    }
+                });
+                featureItem.setAttribute('tabindex', '0');
+                featureItem.setAttribute('role', 'button');
+            }
+
+            prevButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                previousImage();
+            });
+            nextButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                nextImage();
+            });
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) closePopup();
+            });
+            closeButton.addEventListener('click', closePopup);
+            closeButton.addEventListener('pointerdown', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                closePopup();
+            });
+            closeButton.addEventListener('pointerup', (event) => {
+                event.stopPropagation();
+            });
+            closeButton.addEventListener('touchend', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                closePopup();
+            }, { passive: false });
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && overlay.classList.contains('is-open')) {
+                    closePopup();
+                } else if (event.key === 'ArrowLeft' && overlay.classList.contains('is-open') && !card.classList.contains('popup-card--feature')) {
+                    event.preventDefault();
+                    previousImage();
+                } else if (event.key === 'ArrowRight' && overlay.classList.contains('is-open') && !card.classList.contains('popup-card--feature')) {
+                    event.preventDefault();
+                    nextImage();
+                }
+            });
+            card.addEventListener('touchstart', (event) => {
+                if (card.classList.contains('popup-card--feature')) return;
+                touchStartX = event.changedTouches[0].clientX;
+            }, { passive: true });
+            card.addEventListener('touchend', (event) => {
+                if (card.classList.contains('popup-card--feature')) return;
+                if (touchStartX === null) return;
+                const deltaX = event.changedTouches[0].clientX - touchStartX;
+                if (Math.abs(deltaX) > 40) {
+                    if (deltaX < 0) {
+                        nextImage();
+                    } else {
+                        previousImage();
+                    }
+                }
+                touchStartX = null;
+            }, { passive: true });
+        })();
+    </script>
 </body>
 </html>

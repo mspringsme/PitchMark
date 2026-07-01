@@ -25,49 +25,23 @@ private struct SettingsGameSummarySheetView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showShareSheet = false
 
-    private var totalPitches: Int { events.count }
-    private var strikes: Int {
-        events.filter { inferredPitchResultType(for: $0) == .strike }.count
-    }
-    private var balls: Int {
-        events.filter { inferredPitchResultType(for: $0) == .ball }.count
-    }
-    private var hitSpots: Int {
-        events.filter { $0.supportsLocationAnalytics && isLocationMatch($0) }.count
-    }
-    private var strikeLooking: Int { events.filter { $0.strikeLooking }.count }
-    private var strikeSwinging: Int { events.filter { $0.strikeSwinging }.count }
-    private var walks: Int {
-        events.filter {
-            guard let outcome = $0.outcome, !outcome.isEmpty else { return false }
-            return outcome == "BB" || outcome == "Walk"
-        }.count
-    }
-    private var hits: Int {
-        events.filter(pitchEventCountsAsHit).count
-    }
-    private var wildPitches: Int { events.filter { $0.wildPitch }.count }
-    private var passedBalls: Int { events.filter { $0.passedBall }.count }
-    private var pitchBreakdown: [(name: String, count: Int)] {
-        Dictionary(grouping: events, by: { $0.pitch.isEmpty ? "-" : $0.pitch })
-            .map { (name: $0.key, count: $0.value.count) }
-            .sorted { lhs, rhs in
-                if lhs.count == rhs.count { return lhs.name < rhs.name }
-                return lhs.count > rhs.count
-            }
+    private var stats: PitchStatsSnapshot {
+        PitchStatsCalculator.snapshot(for: events)
     }
 
-    private var outcomeBreakdown: [(name: String, count: Int)] {
-        Dictionary(grouping: events, by: { event in
-            let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return outcome.isEmpty ? "No outcome" : outcome
-        })
-        .map { (name: $0.key, count: $0.value.count) }
-        .sorted { lhs, rhs in
-            if lhs.count == rhs.count { return lhs.name < rhs.name }
-            return lhs.count > rhs.count
-        }
-    }
+    private var totalPitches: Int { stats.totalPitches }
+    private var strikes: Int { stats.strikePitches }
+    private var balls: Int { stats.ballPitches }
+    private var hitSpots: Int { stats.hitSpotPitches }
+    private var strikeLooking: Int { stats.strikeLookingCount }
+    private var strikeSwinging: Int { stats.strikeSwingingCount }
+    private var walks: Int { stats.walkCount }
+    private var hits: Int { stats.hitCount }
+    private var wildPitches: Int { stats.wildPitchCount }
+    private var passedBalls: Int { stats.passedBallCount }
+    private var pitchBreakdown: [(name: String, count: Int)] { stats.pitchBreakdown }
+
+    private var outcomeBreakdown: [(name: String, count: Int)] { stats.outcomeBreakdown }
 
     private var heatmapsByPitch: [(pitch: String, events: [PitchEvent])] {
         Dictionary(grouping: events.filter(\.supportsLocationAnalytics), by: { $0.pitch.isEmpty ? "-" : $0.pitch })
@@ -80,17 +54,11 @@ private struct SettingsGameSummarySheetView: View {
             }
     }
 
-    private var hasLocationAnalytics: Bool {
-        events.contains(where: \.supportsLocationAnalytics)
-    }
+    private var hasLocationAnalytics: Bool { stats.hasLocationAnalytics }
 
-    private var locationAnalyticsEligibleCount: Int {
-        events.filter(\.supportsLocationAnalytics).count
-    }
+    private var locationAnalyticsEligibleCount: Int { stats.locationAnalyticsEligibleCount }
 
-    private var firstPitchStrike: (made: Int, total: Int) {
-        sharedFirstPitchStrikeMetrics(for: events)
-    }
+    private var firstPitchStrike: (made: Int, total: Int) { stats.firstPitchStrike }
 
     private func percent(_ part: Int, _ total: Int) -> String {
         guard total > 0 else { return "0%" }
@@ -833,8 +801,6 @@ struct SettingsView: View {
         let defaults = UserDefaults.standard
         defaults.set(gameId, forKey: PitchTrackerView.DefaultsKeys.activeGameId)
         defaults.set(ownerUid, forKey: PitchTrackerView.DefaultsKeys.activeGameOwnerUserId)
-        defaults.set(false, forKey: PitchTrackerView.DefaultsKeys.activeIsPractice)
-        defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activePracticeId)
         defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
 
         dismiss()
@@ -888,6 +854,48 @@ struct SettingsView: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+
+    private var activeGames: [Game] {
+        games
+            .filter { !$0.isArchived }
+            .sorted(by: { $0.date > $1.date })
+    }
+
+    private var gameStateSignature: [String] {
+        games.map { "\($0.id ?? "")|\($0.archivedAt?.timeIntervalSince1970 ?? 0)" }
+    }
+
+    @ViewBuilder
+    private var gamesOverviewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Games")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showGameChooser = true
+                } label: {
+                    Image(systemName: "arrowshape.right.circle.fill")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal)
+
+            if !activeGames.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        let sorted = activeGames.sorted(by: { $0.date > $1.date })
+                        let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
+                        ForEach(quickGames) { item in
+                            quickLaunchGameChip(item)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+        }
     }
 
     private var joinGameButtonLabel: some View {
@@ -1980,34 +1988,7 @@ struct SettingsView: View {
                         Color.clear.frame(height: 0)
 
                         sectionCard {
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Text("Games")
-                                        .font(.headline)
-                                    Spacer()
-                                    Button {
-                                        showGameChooser = true
-                                    } label: {
-                                        Image(systemName: "arrowshape.right.circle.fill")
-                                            .font(.subheadline)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                .padding(.horizontal)
-
-                                if !games.isEmpty {
-                                    ScrollView(.horizontal, showsIndicators: false) {
-                                        HStack(spacing: 12) {
-                                            let sorted = games.sorted(by: { $0.date > $1.date })
-                                            let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
-                                            ForEach(quickGames) { item in
-                                                quickLaunchGameChip(item)
-                                            }
-                                        }
-                                        .padding(.horizontal)
-                                    }
-                                }
-                            }
+                            gamesOverviewSection
                         }
 
                         sectionCard {
@@ -2593,6 +2574,10 @@ struct PitcherStatsSheetView: View {
     @State private var hitSpotPitchFilter: String = "All"
     @State private var hitSpotSuccessFilter: HitSpotSuccessFilter = .all
     @State private var hitSpotOrder: HitSpotOrder = .chronological
+    #if DEBUG
+    @State private var showStatsSimulationAlert = false
+    @State private var statsSimulationMessage = ""
+    #endif
     @State private var selectedHeatmapPitch: String = ""
     @State private var heatmapZoneFilter: HeatmapZoneFilter = .all
     @State private var selectedPitcherId: String?
@@ -2605,8 +2590,16 @@ struct PitcherStatsSheetView: View {
         var id: String { rawValue }
     }
 
+    private var activeGames: [Game] {
+        games.filter { !$0.isArchived }
+    }
+
+    private var gameStateSignature: [String] {
+        games.map { "\($0.id ?? "")|\($0.archivedAt?.timeIntervalSince1970 ?? 0)" }
+    }
+
     private var sortedGames: [Game] {
-        games.sorted { $0.date > $1.date }
+        activeGames.sorted { $0.date > $1.date }
     }
 
     private static let shortDateFormatter: DateFormatter = {
@@ -3022,8 +3015,7 @@ struct PitcherStatsSheetView: View {
                     calledPitch,
                     calledLocation,
                     event.pitcherId ?? "",
-                    event.gameId ?? "",
-                    event.practiceId ?? ""
+                    event.gameId ?? ""
                 ].joined(separator: "|")
             }
 
@@ -3450,6 +3442,13 @@ struct PitcherStatsSheetView: View {
                     .presentationDetents([.fraction(0.3)])
                 }
             }
+            #if DEBUG
+            .alert("Stats Simulations", isPresented: $showStatsSimulationAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(statsSimulationMessage)
+            }
+            #endif
             .overlay {
                 if isLoading {
                     ProgressView()
@@ -3462,6 +3461,11 @@ struct PitcherStatsSheetView: View {
                 loadCachedStats()
                 startLiveListener()
                 startSharedPitcherListener()
+            }
+            .onChange(of: gameStateSignature) { _, _ in
+                initializeSelections()
+                loadEvents()
+                loadCachedStats()
             }
             .onDisappear {
                 stopLiveListener()
@@ -3806,6 +3810,23 @@ struct PitcherStatsSheetView: View {
             }
             .padding(.horizontal)
 
+            #if DEBUG
+            Button {
+                runStatsSimulationSuite()
+            } label: {
+                Text("Run Stats Simulations")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.secondary.opacity(0.12))
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal)
+            #endif
+
             VStack(alignment: .leading, spacing: 4) {
                 Text("Metric Definitions")
                     .font(.subheadline.weight(.semibold))
@@ -3823,6 +3844,15 @@ struct PitcherStatsSheetView: View {
             .padding(.horizontal)
         }
     }
+
+    #if DEBUG
+    private func runStatsSimulationSuite() {
+        let report = PitchStatsSimulationLibrary.runCoverageSuite()
+        debugLog("📊 Stats simulation report:\n\(report.summary)")
+        statsSimulationMessage = "Passed \(report.passedCount)/\(report.results.count), failed \(report.failedCount)"
+        showStatsSimulationAlert = true
+    }
+    #endif
 
     private var pitchBreakdownSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -4205,7 +4235,6 @@ struct PitcherStatsSheetView: View {
         let ts = String(format: "%.6f", event.timestamp.timeIntervalSince1970)
         let mode = event.mode.rawValue
         let gameId = event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let practiceId = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let pitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let batterId = event.opponentBatterId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let jersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -4219,7 +4248,6 @@ struct PitcherStatsSheetView: View {
             calledPitch,
             calledLocation,
             gameId,
-            practiceId,
             pitcherId,
             batterId,
             jersey

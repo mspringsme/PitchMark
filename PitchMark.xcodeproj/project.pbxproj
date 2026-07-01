@@ -503,7 +503,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Use the camera to capture the owner's QR code for joining a live game.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to scan QR codes for joining a live game.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "PitchMark needs photo library access so you can choose a pitcher image.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -546,7 +548,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Use the camera to capture the owner's QR code for joining a live game.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to scan QR codes for joining a live game.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "PitchMark needs photo library access so you can choose a pitcher image.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -587,6 +591,7 @@
 				INFOPLIST_FILE = "Pitchmark-Display-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "PM Display";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -626,6 +631,7 @@
 				INFOPLIST_FILE = "Pitchmark-Display-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "PM Display";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

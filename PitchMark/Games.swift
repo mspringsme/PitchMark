@@ -60,6 +60,7 @@ struct Game: Identifiable, Codable {
     var opponent: String
     var date: Date
     var createdAt: Date = Date()
+    var archivedAt: Date? = nil
 
     // Lineup / participants
     var jerseyNumbers: [String] = []
@@ -84,6 +85,10 @@ struct Game: Identifiable, Codable {
     var lastTemplateId: String? = nil
     var lastPitcherId: String? = nil
     var trackingMode: TrackingMode? = .coach
+
+    var isArchived: Bool {
+        archivedAt != nil
+    }
 
     // MARK: - Nested types
 

@@ -513,20 +513,28 @@ struct PitchCardView: View {
                             .monospacedDigit()
                             .foregroundColor(.black.opacity(0.75))
                     }
-
-                    if !scoutSecondaryLines.isEmpty {
-                        VStack(alignment: .leading, spacing: 3) {
-                            ForEach(scoutSecondaryLines, id: \.self) { line in
-                                scoutSummaryLine(line, font: .system(size: 12, weight: .regular))
-                            }
-                        }
-                    }
-
-                    Spacer(minLength: 0)
                 }
             }
 
             Spacer(minLength: 0)
+
+            if let summary = outcomeSummary, !summary.isEmpty {
+                OutcomeSummaryView(
+                    lines: summary,
+                    jerseyNumber: nil,
+                    countText: nil,
+                    minHeight: isCatcherCard ? 0 : 72,
+                    maxHeight: isCatcherCard ? 72 : 90
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if !scoutSecondaryLines.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(scoutSecondaryLines, id: \.self) { line in
+                        scoutSummaryLine(line, font: .system(size: 12, weight: .regular))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             Group {
                 if let rightImage {
@@ -922,26 +930,17 @@ struct PitchResultCard: View {
 
 func pitchNumber(for event: PitchEvent, in allEvents: [PitchEvent]) -> Int {
     let eventGameId = event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    let eventPracticeId = event.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     let eventPitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
     let scopedEvents = allEvents.filter { evt in
-        guard evt.mode == event.mode else { return false }
+        guard evt.mode == .game else { return false }
 
         let evtGameId = evt.gameId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let evtPracticeId = evt.practiceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let evtPitcherId = evt.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        switch event.mode {
-        case .game:
-            // In game mode, require a strict gameId match whenever either side has one.
-            if !eventGameId.isEmpty || !evtGameId.isEmpty {
-                guard eventGameId == evtGameId else { return false }
-            }
-        case .practice:
-            if !eventPracticeId.isEmpty || !evtPracticeId.isEmpty {
-                guard eventPracticeId == evtPracticeId else { return false }
-            }
+        // In game mode, require a strict gameId match whenever either side has one.
+        if !eventGameId.isEmpty || !evtGameId.isEmpty {
+            guard eventGameId == evtGameId else { return false }
         }
 
         // Keep numbering scoped per pitcher whenever either event declares a pitcher.
@@ -1007,7 +1006,6 @@ struct PitchEventDetailPopover: View {
     let templateName: String
     let pitcherNameById: [String: String]
     let gameIdFilter: String?
-    let practiceIdFilter: String?
     let lineupBatters: [JerseyCell]
     let selectedLineupBatterId: UUID?
     let onSelectLineupBatter: (JerseyCell) -> Void
@@ -1055,17 +1053,10 @@ struct PitchEventDetailPopover: View {
                 if let evGid = evt.gameId, !evGid.isEmpty { return evGid == gid }
                 return true
             }
-            if let pid = practiceIdFilter {
-                if let evPid = evt.practiceId, !evPid.isEmpty { return evPid == pid }
-                return true
-            }
             if let gid = event.gameId {
                 return evt.gameId == gid
             }
-            if let pid = event.practiceId {
-                return evt.practiceId == pid
-            }
-            return false
+            return true
         }
 
         let idToMatch = activeBatterIdString
@@ -1935,7 +1926,7 @@ struct PitchResultSheet: View {
                                 }
                                 .offset(y: controlButtonsOffsetY)
                             }
-                            else if sessionManager.currentMode == .practice {
+                            else {
                                 Menu {
                                     // Clear pitch filter
                                     if !pitchFilter.isEmpty {
@@ -2363,8 +2354,8 @@ struct PitchResultSheet: View {
             }
         }
 
-        // Legacy/fallback path (and practice path)
-        if refs.isEmpty || event.mode == .practice {
+        // Legacy/fallback path
+        if refs.isEmpty {
             let ownerUid = event.createdByUid?.trimmingCharacters(in: .whitespacesAndNewlines)
             let resolvedUid = (ownerUid?.isEmpty == false) ? ownerUid! : currentUid
             add(db.collection("users").document(resolvedUid).collection("pitchEvents").document(eid))
@@ -2455,7 +2446,6 @@ struct PitchResultSheet: View {
             gameId: edited.gameId,
             opponentJersey: edited.opponentJersey,
             opponentBatterId: edited.opponentBatterId,
-            practiceId: edited.practiceId,
             pitcherId: edited.pitcherId,
             createdByUid: edited.createdByUid
         )
@@ -2611,7 +2601,6 @@ struct PitchEvent: Codable, Identifiable {
     var gameId: String?
     var opponentJersey: String?
     var opponentBatterId: String?
-    var practiceId: String?
     var pitcherId: String?
     
     var createdByUid: String?
@@ -2652,7 +2641,7 @@ extension PitchEvent {
 }
 
 enum PitchMode: String, Codable {
-    case game, practice
+    case game
 }
 
 struct PitchCall: Codable {
@@ -2734,10 +2723,7 @@ extension PitchEvent {
             if let raw = data["mode"] as? String, let parsed = PitchMode(rawValue: raw) {
                 return parsed
             }
-            if let gameId = data["gameId"] as? String, !gameId.isEmpty {
-                return .game
-            }
-            return .practice
+            return .game
         }()
 
         let calledPitch: PitchCall? = {
@@ -2796,7 +2782,6 @@ extension PitchEvent {
         self.gameId = data["gameId"] as? String
         self.opponentJersey = data["opponentJersey"] as? String
         self.opponentBatterId = data["opponentBatterId"] as? String
-        self.practiceId = data["practiceId"] as? String
         self.pitcherId = data["pitcherId"] as? String
         self.createdByUid = data["createdByUid"] as? String
         if let rawTrackingMode = data["trackingMode"] as? String,
@@ -2834,7 +2819,6 @@ extension PitchEvent {
             let gameId: String?
             let opponentJersey: String?
             let opponentBatterId: String?
-            let practiceId: String?
             let pitcherId: String?
             let trackingMode: TrackingMode?
         }
@@ -2864,7 +2848,6 @@ extension PitchEvent {
             gameId: self.gameId,
             opponentJersey: self.opponentJersey,
             opponentBatterId: self.opponentBatterId,
-            practiceId: self.practiceId,
             pitcherId: self.pitcherId,
             trackingMode: self.trackingMode
         )
