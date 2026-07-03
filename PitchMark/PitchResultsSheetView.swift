@@ -91,6 +91,7 @@ private struct ToggleSection: View {
     @Binding var isBall: Bool
     @Binding var isHitBatter: Bool
     @Binding var isError: Bool
+    @Binding var isFoulSelected: Bool
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
     let isSwingingDisabled: Bool
@@ -139,7 +140,7 @@ private struct ToggleSection: View {
                     if next {
                         isStrikeLooking = false
                         isBall = false
-                        if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                        if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
                             selectedOutcome = nil
                         }
                     }
@@ -151,24 +152,27 @@ private struct ToggleSection: View {
                     if next {
                         isStrikeSwinging = false
                         isBall = false
-                        if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                        if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
                             selectedOutcome = nil
                         }
                     }
                 }
 
                 Button {
-                    let next = (selectedOutcome == "Foul") ? nil : "Foul"
-                    selectedOutcome = next
-                    if next != nil {
+                    let next = !isFoulSelected
+                    isFoulSelected = next
+                    if next {
                         isBall = false
+                        if selectedOutcome != "Out" {
+                            selectedOutcome = nil
+                        }
                     }
                 } label: {
                     Text("Foul")
                         .font(.system(size: 14, weight: .semibold))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(selectedOutcome == "Foul" ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .background(isFoulSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
                         .cornerRadius(6)
                         .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
                 }
@@ -188,7 +192,7 @@ private struct ToggleSection: View {
                     if isBall {
                         isStrikeSwinging = false
                         isStrikeLooking = false
-                        if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" {
+                        if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" {
                             selectedOutcome = nil
                         }
                     }
@@ -342,6 +346,7 @@ private struct HoldActionButton: View {
 }
 
 struct PitchResultSheetView: View {
+    @Environment(\.dismiss) private var dismiss
     private enum PendingSaveIntent {
         case pitchOnly
         case pitchEvent
@@ -357,6 +362,7 @@ struct PitchResultSheetView: View {
     @Binding var isError: Bool
     @State private var isHitBatter = false
     @State private var isHitTagSelected = false
+    @State private var isFoulSelected = false
 
     @State private var battedBallRegionName: String? = nil
     @State private var battedBallSelection: OverlaySelection? = nil
@@ -368,6 +374,23 @@ struct PitchResultSheetView: View {
     @State private var pendingSaveIntent: PendingSaveIntent? = nil
     @State private var confirmedBallsCount: Int = 0
     @State private var confirmedStrikesCount: Int = 0
+    private struct SavedPlayReviewDraft: Identifiable {
+        let id = UUID()
+        let title: String
+        let summaryLines: [String]
+        let event: PitchEvent
+    }
+
+    private struct CountSeedSnapshot: Equatable {
+        let balls: Int
+        let strikes: Int
+    }
+
+    @State private var savedPlayReviewDraft: SavedPlayReviewDraft? = nil
+    @State private var savedPlayReviewTitle: String = "Saved Play"
+    @State private var savedPlayReviewSummaryLines: [String] = []
+    @State private var savedPlayReviewEvent: PitchEvent? = nil
+    @State private var selectionCountSeed: CountSeedSnapshot? = nil
     @State private var didInitializeManualCount: Bool = false
     @State private var pendingCountSyncWorkItem: DispatchWorkItem? = nil
     @State private var overrideOpponentJersey: String? = nil
@@ -467,6 +490,7 @@ struct PitchResultSheetView: View {
         isPassedBall = false
         isBall = false
         isHitBatter = false
+        isFoulSelected = false
         selectedOutcome = nil
         selectedDescriptor = nil
         isHitTagSelected = false
@@ -478,6 +502,117 @@ struct PitchResultSheetView: View {
         pendingSaveIntent = nil
         overrideOpponentJersey = nil
         overrideOpponentBatterId = nil
+    }
+
+    @ViewBuilder
+    private var reviewCountAndFieldSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                Text("Count")
+                    .font(.subheadline.weight(.semibold))
+
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Balls")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            ForEach(0..<3, id: \.self) { idx in
+                                let value = idx + 1
+                                Button {
+                                    // Tap same filled value to step down by one, else set to that value.
+                                    confirmedBallsCount = (confirmedBallsCount == value) ? max(0, value - 1) : value
+                                    selectionCountSeed = CountSeedSnapshot(
+                                        balls: confirmedBallsCount,
+                                        strikes: confirmedStrikesCount
+                                    )
+                                    onCountChanged?(confirmedBallsCount, confirmedStrikesCount)
+                                } label: {
+                                    countCircle(
+                                        isFilled: value <= confirmedBallsCount,
+                                        fillColor: .red,
+                                        strokeColor: .red
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Strikes")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            ForEach(0..<2, id: \.self) { idx in
+                                let value = idx + 1
+                                Button {
+                                    // Tap same filled value to step down by one, else set to that value.
+                                    confirmedStrikesCount = (confirmedStrikesCount == value) ? max(0, value - 1) : value
+                                    selectionCountSeed = CountSeedSnapshot(
+                                        balls: confirmedBallsCount,
+                                        strikes: confirmedStrikesCount
+                                    )
+                                    onCountChanged?(confirmedBallsCount, confirmedStrikesCount)
+                                } label: {
+                                    countCircle(
+                                        isFilled: value <= confirmedStrikesCount,
+                                        fillColor: .green,
+                                        strokeColor: .green
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Text("Count: \(confirmedBallsCount)-\(confirmedStrikesCount)")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                }
+            }
+
+            Divider()
+                .padding(.top, -6)
+
+            HStack(spacing: 8) {
+                Text("Ball in play location")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    resetSelections()
+                    confirmedBallsCount = 0
+                    confirmedStrikesCount = 0
+                    selectionCountSeed = CountSeedSnapshot(balls: 0, strikes: 0)
+                    onCountChanged?(0, 0)
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+            }
+
+            FieldOverlayView(
+                isPresented: .constant(true),
+                colorMapImage: colorMapImage,
+                colorMapping: colorMapping,
+                selectedOutcome: $selectedOutcome,
+                selectedDescriptor: $selectedDescriptor,
+                isError: $isError,
+                battedBallRegionName: $battedBallRegionName,
+                battedBallSelection: $battedBallSelection,
+                battedBallTapNormalized: $battedBallTapNormalized,
+                showsDismissControls: false
+            )
+            .frame(height: 520)
+            .padding(.horizontal, -12)
+            .padding(.top, -12)
+        }
+        .padding(10)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private enum TopToggleRule {
@@ -504,7 +639,7 @@ struct PitchResultSheetView: View {
         let walkSelected = selectedOutcome == "Walk"
         let buntSelected = selectedDescriptor == "Bunt"
         let hrSelected = selectedOutcome == "HR"
-        let foulSelected = selectedOutcome == "Foul"
+        let foulSelected = isFoulSelected
 
         switch toggle {
         case .swinging:
@@ -536,7 +671,7 @@ struct PitchResultSheetView: View {
         let strikeSelected = isStrikeSwinging || isStrikeLooking
         let hrSelected = selectedOutcome == "HR"
         let walkSelected = selectedOutcome == "Walk"
-        let foulSelected = selectedOutcome == "Foul"
+        let foulSelected = isFoulSelected
         let popSelected = selectedDescriptor == "Pop"
         let buntSelected = selectedDescriptor == "Bunt"
         let wpOrPbSelected = isWildPitch || isPassedBall
@@ -660,6 +795,7 @@ struct PitchResultSheetView: View {
         let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let isOutOutcome = normalizedOutcome.caseInsensitiveCompare("Out") == .orderedSame
         let isWalkOutcome = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame
+        let isFoulOutcome = normalizedOutcome.caseInsensitiveCompare("Foul") == .orderedSame
         let isKOutcome = normalizedOutcome == "K" || normalizedOutcome == "ꓘ"
         let isStrikeTerminal = isKOutcome || ((event.strikeLooking || event.strikeSwinging) && prior.strikes >= 2)
         let isBallTerminal = isWalkOutcome || ((event.isBall == true) && prior.balls >= 3)
@@ -668,6 +804,10 @@ struct PitchResultSheetView: View {
             event.atBatCount = "Strikeout"
             event.atBatBalls = 0
             event.atBatStrikes = 0
+        } else if isFoulOutcome {
+            event.atBatBalls = prior.balls
+            event.atBatStrikes = min(2, prior.strikes + 1)
+            event.atBatCount = "\(event.atBatBalls ?? prior.balls)-\(event.atBatStrikes ?? prior.strikes)"
         } else if isBallTerminal {
             event.outcome = "Walk"
             event.atBatCount = "Ball 4"
@@ -688,28 +828,43 @@ struct PitchResultSheetView: View {
         } else {
             event.logDebugPayload()
         }
+        pendingSaveIntent = nil
+        savedPlayReviewEvent = event
+        savedPlayReviewTitle = "Save Pitch"
+        savedPlayReviewSummaryLines = outcomeSummaryLines(for: event)
+        savedPlayReviewDraft = SavedPlayReviewDraft(
+            title: savedPlayReviewTitle,
+            summaryLines: savedPlayReviewSummaryLines,
+            event: event
+        )
+    }
+
+    private func commitReviewedSavedPlayEvent(_ event: PitchEvent) {
         onCountChanged?(event.atBatBalls ?? 0, event.atBatStrikes ?? 0)
         saveAction(event)
-        pendingSaveIntent = nil
+        finalizeSavedPlayReview()
+    }
+
+    private func finalizeSavedPlayReview() {
+        savedPlayReviewDraft = nil
+        savedPlayReviewEvent = nil
+        savedPlayReviewSummaryLines = []
         isPresented = false
         resetSelections()
+        dismiss()
     }
 
     private func initializeManualCountIfNeeded() {
         guard !didInitializeManualCount else { return }
         let source = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
-        confirmedBallsCount = max(0, min(3, source.balls))
-        confirmedStrikesCount = max(0, min(2, source.strikes))
+        let normalized = CountSeedSnapshot(
+            balls: max(0, min(3, source.balls)),
+            strikes: max(0, min(2, source.strikes))
+        )
+        confirmedBallsCount = normalized.balls
+        confirmedStrikesCount = normalized.strikes
+        selectionCountSeed = normalized
         didInitializeManualCount = true
-    }
-
-    private func syncManualCountFromCurrentSeed() {
-        guard let seed = currentCountSeed else { return }
-        let normalizedBalls = max(0, min(3, seed.balls))
-        let normalizedStrikes = max(0, min(2, seed.strikes))
-        guard normalizedBalls != confirmedBallsCount || normalizedStrikes != confirmedStrikesCount else { return }
-        confirmedBallsCount = normalizedBalls
-        confirmedStrikesCount = normalizedStrikes
     }
 
     private func scheduleSelectionDrivenCountUpdate() {
@@ -723,7 +878,11 @@ struct PitchResultSheetView: View {
     }
 
     private func refreshedCountFromCurrentSelection() -> (balls: Int, strikes: Int) {
-        let source = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
+        let source: CountSeedSnapshot = selectionCountSeed
+            ?? CountSeedSnapshot(
+                balls: currentCountSeed?.balls ?? suggestedCountSeed?.balls ?? 0,
+                strikes: currentCountSeed?.strikes ?? suggestedCountSeed?.strikes ?? 0
+            )
         var balls = source.balls
         var strikes = source.strikes
 
@@ -737,6 +896,13 @@ struct PitchResultSheetView: View {
             return (0, 0)
         }
 
+        if isFoul {
+            if strikes < 2 {
+                strikes += 1
+            }
+            return (balls, strikes)
+        }
+
         if isBall {
             balls = min(3, balls + 1)
             return (balls, strikes)
@@ -744,13 +910,6 @@ struct PitchResultSheetView: View {
 
         if isStrikeSwinging || isStrikeLooking {
             strikes = min(2, strikes + 1)
-            return (balls, strikes)
-        }
-
-        if isFoul {
-            if strikes < 2 {
-                strikes += 1
-            }
             return (balls, strikes)
         }
 
@@ -781,7 +940,8 @@ struct PitchResultSheetView: View {
             .sorted(by: { $0.timestamp < $1.timestamp })
             .last
 
-        let preferredSeed = currentCountSeed ?? suggestedCountSeed
+        let preferredSeed: CountSeedSnapshot? = selectionCountSeed
+            ?? suggestedCountSeed.map { CountSeedSnapshot(balls: $0.balls, strikes: $0.strikes) }
 
         let parsedFromText: (Int, Int)? = {
             guard let text = baseEvent?.atBatCount else { return nil }
@@ -880,7 +1040,13 @@ struct PitchResultSheetView: View {
             return nil
         }
         let resolvedIsStrike = resultIsInsideStrikeZone(label)
-        let normalizedOutcome = (isHitBatter ? "HBP" : selectedOutcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedOutcome = (
+            isHitBatter
+                ? "HBP"
+                : (selectedOutcome ?? (isFoulSelected ? "Foul" : ""))
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedIsFoul = isFoulSelected || normalizedOutcome.caseInsensitiveCompare("Foul") == .orderedSame
+        let resolvedIsBall = !resolvedIsStrike && !resolvedIsFoul
         let prior = priorCount(for: PitchEvent(
             id: nil,
             timestamp: Date(),
@@ -888,7 +1054,7 @@ struct PitchResultSheetView: View {
             location: label,
             codes: pitchCall.codes,
             isStrike: resolvedIsStrike,
-            isBall: !resolvedIsStrike,
+            isBall: resolvedIsBall,
             mode: currentMode,
             calledPitch: pitchCall,
             batterSide: batterSide,
@@ -917,7 +1083,7 @@ struct PitchResultSheetView: View {
             location: label,
             codes: pitchCall.codes,
             isStrike: resolvedIsStrike,
-            isBall: !resolvedIsStrike,
+            isBall: resolvedIsBall,
             mode: currentMode,
             calledPitch: pitchCall,
             batterSide: batterSide,
@@ -955,7 +1121,7 @@ struct PitchResultSheetView: View {
             strikeSwingingMarker: isStrikeSwinging ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
             strikeLookingMarker: isStrikeLooking ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
             ballMarker: isBall ? ballMarkerSymbol(outcome: normalizedOutcome, prior: prior) : nil,
-            foulMarker: selectedOutcome == "Foul" ? foulMarkerSymbol(prior: prior) : nil
+            foulMarker: isFoulSelected ? foulMarkerSymbol(prior: prior) : nil
         )
     }
 
@@ -967,6 +1133,7 @@ struct PitchResultSheetView: View {
         @Binding var isPassedBall: Bool
         @Binding var isBall: Bool
         @Binding var isHitBatter: Bool
+        @Binding var isFoulSelected: Bool
         @Binding var selectedOutcome: String?
         @Binding var selectedDescriptor: String?
         @Binding var isError: Bool
@@ -985,11 +1152,15 @@ struct PitchResultSheetView: View {
                 .onChange(of: isPassedBall) { _, _ in deselectIfDisabled() }
                 .onChange(of: isBall) { _, _ in deselectIfDisabled() }
                 .onChange(of: isHitBatter) { _, _ in deselectIfDisabled() }
+                .onChange(of: isFoulSelected) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedDescriptor) { _, _ in deselectIfDisabled() }
                 .onChange(of: isError) { _, _ in deselectIfDisabled() }
                 .onChange(of: selectedOutcome) { _, newValue in
                     if isHitBatter && newValue != "1B" {
                         isHitBatter = false
+                    }
+                    if newValue != "Out" && isFoulSelected {
+                        isFoulSelected = false
                     }
                     if newValue == "ꓘ" && selectedDescriptor == "Foul" {
                         selectedDescriptor = nil
@@ -1034,6 +1205,7 @@ struct PitchResultSheetView: View {
                     isBall: $isBall,
                     isHitBatter: $isHitBatter,
                     isError: $isError,
+                    isFoulSelected: $isFoulSelected,
                     selectedOutcome: $selectedOutcome,
                     selectedDescriptor: $selectedDescriptor,
                     isSwingingDisabled: isTopToggleDisabled(.swinging),
@@ -1075,6 +1247,7 @@ struct PitchResultSheetView: View {
                     (selectedDescriptor != nil) ||
                     isHitTagSelected ||
                     isError ||
+                    isFoulSelected ||
                     isStrikeSwinging ||
                     isStrikeLooking ||
                     isWildPitch ||
@@ -1104,98 +1277,7 @@ struct PitchResultSheetView: View {
                     )
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Count")
-                        .font(.subheadline.weight(.semibold))
-                    HStack(spacing: 16) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Balls")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            HStack(spacing: 8) {
-                                ForEach(0..<3, id: \.self) { idx in
-                                    let value = idx + 1
-                                    Button {
-                                        // Tap same filled value to step down by one, else set to that value.
-                                        confirmedBallsCount = (confirmedBallsCount == value) ? max(0, value - 1) : value
-                                        onCountChanged?(confirmedBallsCount, confirmedStrikesCount)
-                                    } label: {
-                                        countCircle(
-                                            isFilled: value <= confirmedBallsCount,
-                                            fillColor: .red,
-                                            strokeColor: .red
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Strikes")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            HStack(spacing: 8) {
-                                ForEach(0..<2, id: \.self) { idx in
-                                    let value = idx + 1
-                                    Button {
-                                        // Tap same filled value to step down by one, else set to that value.
-                                        confirmedStrikesCount = (confirmedStrikesCount == value) ? max(0, value - 1) : value
-                                        onCountChanged?(confirmedBallsCount, confirmedStrikesCount)
-                                    } label: {
-                                        countCircle(
-                                            isFilled: value <= confirmedStrikesCount,
-                                            fillColor: .green,
-                                            strokeColor: .green
-                                        )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-
-                    Text("Count: \(confirmedBallsCount)-\(confirmedStrikesCount)")
-                        .font(.subheadline.weight(.semibold))
-                        .monospacedDigit()
-                }
-                .padding(10)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                Divider()
-                    .padding(.top, -6)
-
-                HStack(spacing: 8) {
-                    Text("Ball in play location")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        battedBallRegionName = nil
-                        battedBallSelection = nil
-                        battedBallTapNormalized = nil
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                            .font(.caption.weight(.semibold))
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                FieldOverlayView(
-                    isPresented: .constant(true),
-                    colorMapImage: colorMapImage,
-                    colorMapping: colorMapping,
-                    selectedOutcome: $selectedOutcome,
-                    selectedDescriptor: $selectedDescriptor,
-                    isError: $isError,
-                    battedBallRegionName: $battedBallRegionName,
-                    battedBallSelection: $battedBallSelection,
-                    battedBallTapNormalized: $battedBallTapNormalized,
-                    showsDismissControls: false
-                )
-                .frame(height: 520)
-                .padding(.horizontal, -12)
-                .padding(.top, -12)
+                reviewCountAndFieldSection
 
                 }
                 .padding(12)
@@ -1209,18 +1291,13 @@ struct PitchResultSheetView: View {
                     isPassedBall: $isPassedBall,
                     isBall: $isBall,
                     isHitBatter: $isHitBatter,
+                    isFoulSelected: $isFoulSelected,
                     selectedOutcome: $selectedOutcome,
                     selectedDescriptor: $selectedDescriptor,
                     isError: $isError,
                     deselectIfDisabled: { self.deselectIfDisabled() }
                 )
             )
-            .onChange(of: currentCountSeed?.balls) { _, _ in
-                syncManualCountFromCurrentSeed()
-            }
-            .onChange(of: currentCountSeed?.strikes) { _, _ in
-                syncManualCountFromCurrentSeed()
-            }
                 .onChange(of: isStrikeSwinging) { _, _ in
                 scheduleSelectionDrivenCountUpdate()
             }
@@ -1234,21 +1311,42 @@ struct PitchResultSheetView: View {
                 scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: selectedOutcome) { _, _ in
-                if selectedOutcome == "Foul" || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                if selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
                     isBall = false
                 }
                 scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: isPresented) { _, newValue in
-                guard newValue else { return }
-                didInitializeManualCount = false
-                initializeManualCountIfNeeded()
+                if newValue {
+                    didInitializeManualCount = false
+                    initializeManualCountIfNeeded()
+                } else {
+                    pendingCountSyncWorkItem?.cancel()
+                    pendingCountSyncWorkItem = nil
+                    selectionCountSeed = nil
+                    didInitializeManualCount = false
+                    resetSelections()
+                }
             }
             .onAppear { initializeManualCountIfNeeded() }
             .alert("Result Location Required", isPresented: $showMissingLocationPrompt) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("Select a result location on the strike zone before saving.")
+            }
+            .sheet(item: $savedPlayReviewDraft) { draft in
+                SavedPlayReviewSheetView(
+                    title: draft.title,
+                    summaryLines: draft.summaryLines,
+                    initialEvent: draft.event,
+                    onBack: {
+                        savedPlayReviewDraft = nil
+                    },
+                    onSave: { reviewedEvent in
+                        commitReviewedSavedPlayEvent(reviewedEvent)
+                    }
+                )
+                .interactiveDismissDisabled(true)
             }
             .sheet(isPresented: $showMissingBatterPrompt) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -1308,6 +1406,9 @@ struct PitchResultSheetView: View {
         )
     }
     private func deselectIfDisabled() {
+        if isFoulSelected, let outcome = selectedOutcome, outcome != "Out" {
+            isFoulSelected = false
+        }
         if let outcome = selectedOutcome, isOutcomeDisabled(outcome) {
             selectedOutcome = nil
         }

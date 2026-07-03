@@ -151,10 +151,18 @@ func outcomeSummaryLines(for event: PitchEvent) -> [String] {
     // Outcome/descriptor first (sanitize these to remove labels like "field --")
     let rawOutcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines)
     let isFoulOutcome = rawOutcome?.caseInsensitiveCompare("Foul") == .orderedSame
+    let isOutOutcome = rawOutcome?.caseInsensitiveCompare("Out") == .orderedSame
     if isFoulOutcome {
         let marker = event.foulMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let marker, !marker.isEmpty {
             addUnique("\(marker) Foul", sanitizeText: false)
+        } else {
+            addUnique(event.outcome, sanitizeText: true)
+        }
+    } else if isOutOutcome {
+        let marker = event.foulMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let marker, !marker.isEmpty {
+            addUnique("\(marker) Foul Out", sanitizeText: false)
         } else {
             addUnique(event.outcome, sanitizeText: true)
         }
@@ -293,6 +301,419 @@ struct OutcomeSummaryView: View {
         .padding(.vertical, 6)
         .background(OutcomeSummaryBackground(isPositive: isPositiveOutcome))
         .padding(.trailing, 6)
+    }
+}
+
+private func buildSavedPlayReviewedEvent(
+    from base: PitchEvent,
+    balls: Int,
+    strikes: Int,
+    isStrike: Bool,
+    isBall: Bool,
+    strikeLooking: Bool,
+    strikeSwinging: Bool,
+    wildPitch: Bool,
+    passedBall: Bool,
+    countsAsWalk: Bool,
+    countsAsHit: Bool
+) -> PitchEvent {
+    let baseOutcome = (base.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let baseDescriptor = (base.descriptor ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+    let outcome: String? = {
+        if countsAsWalk { return "Walk" }
+        if countsAsHit {
+            if pitchEventCountsAsHit(base) {
+                return baseOutcome.isEmpty ? "1B" : baseOutcome
+            }
+            return "1B"
+        }
+        if baseOutcome.caseInsensitiveCompare("Walk") == .orderedSame || baseOutcome == "BB" {
+            return nil
+        }
+        if pitchEventCountsAsHit(base) {
+            return nil
+        }
+        return baseOutcome.isEmpty ? nil : baseOutcome
+    }()
+
+    let descriptor: String? = {
+        if countsAsHit {
+            if baseDescriptor.isEmpty {
+                return "Hit"
+            }
+            if baseDescriptor.lowercased().contains("hit") {
+                return baseDescriptor
+            }
+            return "\(baseDescriptor), Hit"
+        }
+        if pitchEventCountsAsHit(base) {
+            return nil
+        }
+        return baseDescriptor.isEmpty ? nil : baseDescriptor
+    }()
+
+    return PitchEvent(
+        id: base.id,
+        timestamp: base.timestamp,
+        pitch: base.pitch,
+        location: base.location,
+        codes: base.codes,
+        isStrike: isStrike,
+        isBall: isBall,
+        mode: base.mode,
+        calledPitch: base.calledPitch,
+        batterSide: base.batterSide,
+        templateId: base.templateId,
+        strikeSwinging: strikeSwinging,
+        wildPitch: wildPitch,
+        passedBall: passedBall,
+        strikeLooking: strikeLooking,
+        outcome: outcome,
+        descriptor: descriptor,
+        errorOnPlay: base.errorOnPlay,
+        battedBallRegion: base.battedBallRegion,
+        battedBallType: base.battedBallType,
+        battedBallTapX: base.battedBallTapX,
+        battedBallTapY: base.battedBallTapY,
+        gameId: base.gameId,
+        opponentJersey: base.opponentJersey,
+        opponentBatterId: base.opponentBatterId,
+        pitcherId: base.pitcherId,
+        createdByUid: base.createdByUid,
+        strikeSwingingMarker: strikeSwinging ? base.strikeSwingingMarker : nil,
+        strikeLookingMarker: strikeLooking ? base.strikeLookingMarker : nil,
+        ballMarker: isBall ? base.ballMarker : nil,
+        foulMarker: base.foulMarker,
+        atBatBalls: balls,
+        atBatStrikes: strikes,
+        atBatCount: "\(balls)-\(strikes)",
+        trackingMode: base.trackingMode
+    )
+}
+
+struct SavedPlayReviewSheetView: View {
+    let title: String
+    let summaryLines: [String]
+    let initialEvent: PitchEvent
+    let onBack: () -> Void
+    let onSave: (PitchEvent) -> Void
+
+    @State private var draftBalls: Int
+    @State private var draftStrikes: Int
+    @State private var draftIsStrike: Bool
+    @State private var draftIsBall: Bool
+    @State private var draftStrikeLooking: Bool
+    @State private var draftStrikeSwinging: Bool
+    @State private var draftWildPitch: Bool
+    @State private var draftPassedBall: Bool
+    @State private var draftWalk: Bool
+    @State private var draftHit: Bool
+
+    init(
+        title: String,
+        summaryLines: [String],
+        initialEvent: PitchEvent,
+        onBack: @escaping () -> Void,
+        onSave: @escaping (PitchEvent) -> Void
+    ) {
+        self.title = title
+        self.summaryLines = summaryLines
+        self.initialEvent = initialEvent
+        self.onBack = onBack
+        self.onSave = onSave
+
+        let balls = max(0, min(3, initialEvent.atBatBalls ?? 0))
+        let strikes = max(0, min(2, initialEvent.atBatStrikes ?? 0))
+        let normalizedOutcome = (initialEvent.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let isWalk = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame || normalizedOutcome == "BB"
+        let isHit = pitchEventCountsAsHit(initialEvent)
+
+        _draftBalls = State(initialValue: balls)
+        _draftStrikes = State(initialValue: strikes)
+        _draftIsStrike = State(initialValue: initialEvent.isStrike)
+        _draftIsBall = State(initialValue: initialEvent.isBall ?? !initialEvent.isStrike)
+        _draftStrikeLooking = State(initialValue: initialEvent.strikeLooking)
+        _draftStrikeSwinging = State(initialValue: initialEvent.strikeSwinging)
+        _draftWildPitch = State(initialValue: initialEvent.wildPitch)
+        _draftPassedBall = State(initialValue: initialEvent.passedBall)
+        _draftWalk = State(initialValue: isWalk)
+        _draftHit = State(initialValue: isHit)
+    }
+
+    private var countText: String {
+        "\(draftBalls)-\(draftStrikes)"
+    }
+
+    private func countCircle(isFilled: Bool, fillColor: Color, strokeColor: Color) -> some View {
+        ZStack {
+            Circle()
+                .fill(isFilled ? fillColor.opacity(0.9) : Color.clear)
+            Circle()
+                .stroke(strokeColor, lineWidth: 2)
+        }
+        .frame(width: 18, height: 18)
+        .frame(width: 32, height: 32)
+        .contentShape(Rectangle())
+    }
+
+    private func countStepper(
+        label: String,
+        value: Int,
+        maxValue: Int,
+        fillColor: Color,
+        strokeColor: Color,
+        setValue: @escaping (Int) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                ForEach(1...maxValue, id: \.self) { step in
+                    Button {
+                        setValue(value == step ? max(0, step - 1) : step)
+                    } label: {
+                        countCircle(isFilled: step <= value, fillColor: fillColor, strokeColor: strokeColor)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func statToggle(title: String, detail: String, isOn: Binding<Bool>, tint: Color) -> some View {
+        Toggle(isOn: isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .tint(tint)
+    }
+
+    private func summaryLineDisplay(for line: String) -> (symbolName: String?, text: String) {
+        let tokens = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard let firstToken = tokens.first.map(String.init) else {
+            return (nil, line)
+        }
+
+        let hasSymbolPrefix = firstToken.hasSuffix(".circle") || firstToken == "f.circle"
+        guard hasSymbolPrefix else {
+            return (nil, line)
+        }
+
+        let text = tokens.count > 1 ? String(tokens[1]) : line
+        return (firstToken, text)
+    }
+
+    private var reviewHeaderText: String {
+        if let jersey = initialEvent.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
+            return "\(title) • #\(jersey)"
+        }
+        return title
+    }
+
+    private func reviewedEvent() -> PitchEvent {
+        buildSavedPlayReviewedEvent(
+            from: initialEvent,
+            balls: draftBalls,
+            strikes: draftStrikes,
+            isStrike: draftIsStrike,
+            isBall: draftIsBall,
+            strikeLooking: draftStrikeLooking,
+            strikeSwinging: draftStrikeSwinging,
+            wildPitch: draftWildPitch,
+            passedBall: draftPassedBall,
+            countsAsWalk: draftWalk,
+            countsAsHit: draftHit
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(reviewHeaderText)
+                        .font(.title2.weight(.semibold))
+                        .foregroundColor(.primary)
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text("Count")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        Text(countText)
+                            .font(.system(size: 34, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                    }
+
+                    HStack(alignment: .top, spacing: 14) {
+                        countStepper(label: "Balls", value: draftBalls, maxValue: 3, fillColor: .red, strokeColor: .red) { next in
+                            draftBalls = next
+                        }
+
+                        countStepper(label: "Strikes", value: draftStrikes, maxValue: 2, fillColor: .green, strokeColor: .green) { next in
+                            draftStrikes = next
+                        }
+                    }
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                        )
+                )
+
+                VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Pitch")
+                                    .font(.subheadline.weight(.semibold))
+                                Text("Always adds one pitch.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.blue)
+                        }
+
+                        statToggle(title: "Strike", detail: "Counts as a strike for the pitcher.", isOn: $draftIsStrike, tint: .green)
+                        statToggle(title: "Ball", detail: "Counts as a ball for the pitcher.", isOn: $draftIsBall, tint: .red)
+                        statToggle(title: "Called Strike", detail: "Adds a looking strike.", isOn: $draftStrikeLooking, tint: .green)
+                        statToggle(title: "Swinging Strike", detail: "Adds a swinging strike.", isOn: $draftStrikeSwinging, tint: .green)
+                        statToggle(title: "Walk", detail: "Counts as a walk / BB.", isOn: $draftWalk, tint: .orange)
+                        statToggle(title: "Hit", detail: "Counts as a hit against the pitcher.", isOn: $draftHit, tint: .pink)
+                        statToggle(title: "Wild Pitch", detail: "Counts as a wild pitch.", isOn: $draftWildPitch, tint: .purple)
+                        statToggle(title: "Passed Ball", detail: "Counts as a passed ball.", isOn: $draftPassedBall, tint: .purple)
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.white.opacity(0.92))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                            )
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Saved play details")
+                        .font(.headline)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(summaryLines, id: \.self) { line in
+                            let display = summaryLineDisplay(for: line)
+                            HStack(alignment: .top, spacing: 8) {
+                                Circle()
+                                    .fill(Color.black.opacity(0.35))
+                                    .frame(width: 6, height: 6)
+                                    .padding(.top, 7)
+
+                                HStack(spacing: 6) {
+                                    if let symbolName = display.symbolName {
+                                        Image(systemName: symbolName)
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundColor(.primary)
+                                    }
+
+                                    Text(display.text)
+                                        .font(.system(size: 16, weight: .medium))
+                                        .foregroundColor(.primary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.white.opacity(0.9))
+                            .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 3)
+                    )
+                }
+
+                HStack(spacing: 10) {
+                    Button("Back") {
+                        onBack()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    Button("Save") {
+                        onSave(reviewedEvent())
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(20)
+        .onChange(of: draftStrikeLooking) { _, newValue in
+            if newValue {
+                draftStrikeSwinging = false
+                draftIsStrike = true
+                draftIsBall = false
+                draftWalk = false
+            }
+        }
+        .onChange(of: draftStrikeSwinging) { _, newValue in
+            if newValue {
+                draftStrikeLooking = false
+                draftIsStrike = true
+                draftIsBall = false
+                draftWalk = false
+            }
+        }
+        .onChange(of: draftIsStrike) { _, newValue in
+            if newValue {
+                draftIsBall = false
+            }
+        }
+        .onChange(of: draftIsBall) { _, newValue in
+            if newValue {
+                draftIsStrike = false
+            }
+        }
+        .onChange(of: draftWildPitch) { _, newValue in
+            if newValue {
+                draftPassedBall = false
+            }
+        }
+        .onChange(of: draftPassedBall) { _, newValue in
+            if newValue {
+                draftWildPitch = false
+            }
+        }
+        .onChange(of: draftWalk) { _, newValue in
+            if newValue {
+                draftHit = false
+                draftIsBall = true
+                draftIsStrike = false
+                draftStrikeLooking = false
+                draftStrikeSwinging = false
+            }
+        }
+        .onChange(of: draftHit) { _, newValue in
+            if newValue {
+                draftWalk = false
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
     }
 }
 
@@ -517,24 +938,6 @@ struct PitchCardView: View {
             }
 
             Spacer(minLength: 0)
-
-            if let summary = outcomeSummary, !summary.isEmpty {
-                OutcomeSummaryView(
-                    lines: summary,
-                    jerseyNumber: nil,
-                    countText: nil,
-                    minHeight: isCatcherCard ? 0 : 72,
-                    maxHeight: isCatcherCard ? 72 : 90
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else if !scoutSecondaryLines.isEmpty {
-                VStack(alignment: .leading, spacing: 3) {
-                    ForEach(scoutSecondaryLines, id: \.self) { line in
-                        scoutSummaryLine(line, font: .system(size: 12, weight: .regular))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
             Group {
                 if let rightImage {

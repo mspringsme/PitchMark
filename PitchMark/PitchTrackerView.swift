@@ -269,6 +269,18 @@ struct PitchTrackerView: View {
     @State private var showScoutFieldMap = false
     @State private var scoutBattedBallRegionName: String? = nil
     @State private var scoutBattedBallTapNormalized: CGPoint? = nil
+    private struct SavedPlayReviewDraft: Identifiable {
+        let id = UUID()
+        let title: String
+        let summaryLines: [String]
+        let event: PitchEvent
+    }
+
+    @State private var savedPlayReviewDraft: SavedPlayReviewDraft? = nil
+    @State private var savedPlayReviewTitle: String = "Saved Play"
+    @State private var savedPlayReviewSummaryLines: [String] = []
+    @State private var savedPlayReviewCountText: String = ""
+    @State private var savedPlayReviewEvent: PitchEvent? = nil
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
@@ -4625,9 +4637,9 @@ struct PitchTrackerView: View {
                     scoutZoneSelector
                 }
 
-                if scoutObservedResult == .inPlay {
+                if scoutObservedResult == .inPlay || scoutObservedResult == .foul {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("In-Play Outcome")
+                        Text(scoutObservedResult == .foul ? "Foul Outcome" : "In-Play Outcome")
                             .font(.caption)
                             .foregroundStyle(.gray)
                         scoutOptionWrap(options: scoutInPlayOptions, selection: $scoutInPlayOutcome)
@@ -4966,7 +4978,7 @@ struct PitchTrackerView: View {
 
     private func scoutSelectObservedResult(_ result: ScoutObservedResult) {
         scoutObservedResult = result
-        if result != .inPlay {
+        if result != .inPlay && result != .foul {
             scoutInPlayOutcome = nil
             scoutHitOnPlay = false
             scoutBattedBallRegionName = nil
@@ -6030,8 +6042,53 @@ struct PitchTrackerView: View {
 
     private func saveScoutEvent() {
         guard let event = buildScoutEvent() else { return }
-        persistPitchEvent(event)
-        resetScoutComposer()
+        savedPlayReviewEvent = event
+        savedPlayReviewTitle = "Save Pitch"
+        savedPlayReviewSummaryLines = outcomeSummaryLines(for: event)
+        savedPlayReviewDraft = SavedPlayReviewDraft(
+            title: savedPlayReviewTitle,
+            summaryLines: savedPlayReviewSummaryLines,
+            event: event
+        )
+    }
+
+    private func makeSavedPlayReviewCountText(for event: PitchEvent) -> String {
+        let countText = (event.atBatCount ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !countText.isEmpty {
+            return countText
+        }
+        let balls = max(0, event.atBatBalls ?? 0)
+        let strikes = max(0, event.atBatStrikes ?? 0)
+        return "\(balls)-\(strikes)"
+    }
+
+    private func refreshSavedPlayCount() {
+        guard let event = savedPlayReviewEvent else { return }
+        savedPlayReviewCountText = makeSavedPlayReviewCountText(for: event)
+        syncCountFromComposer(
+            balls: event.atBatBalls ?? 0,
+            strikes: event.atBatStrikes ?? 0
+        )
+    }
+
+    private func commitReviewedSavedPlayEvent(_ event: PitchEvent) {
+        savedPlayReviewEvent = event
+        persistPitchEvent(event, shouldFinalizeComposer: false)
+        finalizeSavedPlayReview()
+    }
+
+    private func finalizeSavedPlayReview() {
+        let event = savedPlayReviewEvent
+        savedPlayReviewDraft = nil
+        savedPlayReviewEvent = nil
+        savedPlayReviewSummaryLines = []
+        savedPlayReviewCountText = ""
+        if let event {
+            finalizePersistedPitchEvent(event)
+        } else {
+            resetScoutComposer()
+        }
+        resetCallAndResultUIState()
     }
 
     private func buildScoutEvent() -> PitchEvent? {
@@ -6080,6 +6137,7 @@ struct PitchTrackerView: View {
             opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             opponentBatterId: selectedBatterId?.uuidString,
             pitcherId: effectivePitcherIdForSave,
+            foulMarker: isFoul ? scoutFoulMarkerSymbol(prior: prior) : nil,
             trackingMode: .scout
         )
 
@@ -6088,10 +6146,10 @@ struct PitchTrackerView: View {
         }
 
         let next = nextScoutCount(for: event, prior: prior)
-        if let terminal = terminalAtBatText(for: event, prior: prior) {
-            event.atBatCount = terminal
-            event.atBatBalls = 0
-            event.atBatStrikes = 0
+        if terminalAtBatText(for: event, prior: prior) != nil {
+            event.atBatCount = "\(prior.balls)-\(prior.strikes)"
+            event.atBatBalls = prior.balls
+            event.atBatStrikes = prior.strikes
         } else {
             event.atBatBalls = next.balls
             event.atBatStrikes = next.strikes
@@ -6114,10 +6172,14 @@ struct PitchTrackerView: View {
         case .swingingStrike:
             return prior.strikes >= 2 ? "K" : nil
         case .foul:
-            return "Foul"
+            return scoutInPlayOutcome ?? "Foul"
         case .inPlay:
             return scoutInPlayOutcome ?? (scoutHitOnPlay ? "Hit" : nil)
         }
+    }
+
+    private func scoutFoulMarkerSymbol(prior: (balls: Int, strikes: Int)) -> String {
+        return "\(max(1, min(2, prior.strikes + 1))).circle"
     }
 
     private var scoutPersistedDescriptor: String? {
@@ -6176,7 +6238,7 @@ struct PitchTrackerView: View {
         return nil
     }
 
-    private func persistPitchEvent(_ event: PitchEvent) {
+    private func persistPitchEvent(_ event: PitchEvent, shouldFinalizeComposer: Bool = true) {
         var eventToPersist = event
         let fallbackBatterId = selectedBatterId?.uuidString
         let fallbackJersey = jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber ?? selectedBatterJersey
@@ -6276,8 +6338,12 @@ struct PitchTrackerView: View {
             }
         }
 
-        autoAdvanceSelectedBatterIfNeeded(after: eventToPersist)
+        guard shouldFinalizeComposer else { return }
+        finalizePersistedPitchEvent(eventToPersist)
+    }
 
+    private func finalizePersistedPitchEvent(_ event: PitchEvent) {
+        autoAdvanceSelectedBatterIfNeeded(after: event)
         resultVisualState = event.location
         activeCalledPitchId = nil
         isRecordingResult = false
@@ -7384,7 +7450,7 @@ struct PitchTrackerView: View {
             lineupBatters: jerseyCells,
             selectedPitcherId: effectivePitcherIdForSave,
             saveAction: { event in
-                persistPitchEvent(event)
+                persistPitchEvent(event, shouldFinalizeComposer: false)
             },
             template: selectedTemplate,
             pitcherName: pitchers.first(where: { $0.id == selectedPitcherId })?.name,
@@ -8426,6 +8492,20 @@ struct PitchTrackerView: View {
                 gameSummarySheetView
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
+            }
+            .sheet(item: $savedPlayReviewDraft) { draft in
+                SavedPlayReviewSheetView(
+                    title: draft.title,
+                    summaryLines: draft.summaryLines,
+                    initialEvent: draft.event,
+                    onBack: {
+                        savedPlayReviewDraft = nil
+                    },
+                    onSave: { reviewedEvent in
+                        commitReviewedSavedPlayEvent(reviewedEvent)
+                    }
+                )
+                .interactiveDismissDisabled(true)
             }
             .sheet(isPresented: calledPitchComposerBinding) {
                 calledPitchComposerSheetView

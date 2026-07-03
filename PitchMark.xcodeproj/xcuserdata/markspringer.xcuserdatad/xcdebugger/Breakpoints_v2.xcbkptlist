@@ -14,9 +14,9 @@
             filePath = "PitchMark/PitchResultsSheetView.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "794"
-            endingLineNumber = "794"
-            landmarkName = "handlePitchOnlySave()"
+            startingLineNumber = "929"
+            endingLineNumber = "929"
+            landmarkName = "priorCount(for:)"
             landmarkType = "7">
          </BreakpointContent>
       </BreakpointProxy>

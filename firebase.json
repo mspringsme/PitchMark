@@ -3,6 +3,10 @@
     "public": "public",
     "rewrites": [
       {
+        "source": "/truck",
+        "destination": "/truck.html"
+      },
+      {
         "source": "/stripe/success",
         "destination": "/stripe-success.html"
       },
