@@ -1237,10 +1237,14 @@ class AuthManager: ObservableObject {
         }
         
         let db = Firestore.firestore()
+        let resolvedDocumentId = {
+            let raw = event.id?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (raw?.isEmpty == false) ? raw! : UUID().uuidString
+        }()
         let eventRef = db.collection("users")
             .document(user.uid)
             .collection("pitchEvents")
-            .document() // auto-generated ID
+            .document(resolvedDocumentId)
         
         do {
             try eventRef.setData(from: event) { error in
@@ -1413,12 +1417,16 @@ class AuthManager: ObservableObject {
     
     func saveGamePitchEvent(ownerUserId: String, gameId: String, event: PitchEvent) {
         let db = Firestore.firestore()
+        let resolvedDocumentId = {
+            let raw = event.id?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (raw?.isEmpty == false) ? raw! : UUID().uuidString
+        }()
         let ref = db.collection("users")
             .document(ownerUserId)
             .collection("games")
             .document(gameId)
             .collection("pitchEvents")
-            .document()
+            .document(resolvedDocumentId)
         
         do {
             // Ensure required fields exist for rules

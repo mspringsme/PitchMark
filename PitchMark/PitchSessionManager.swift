@@ -22,4 +22,8 @@ class PitchSessionManager: ObservableObject {
     func incrementCount() {
         pitchCount += 1
     }
+
+    func decrementCount() {
+        pitchCount = max(0, pitchCount - 1)
+    }
 }

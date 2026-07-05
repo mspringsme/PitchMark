@@ -198,6 +198,7 @@ struct PitchTrackerView: View {
     @State private var games: [Game] = []
     @State private var showPitchResults = false
     @State private var showCardsFullScreenSheet = false
+    @State private var cardsEditTargetEventID: String? = nil
     @State private var sharedDeletedEventIDs: Set<String> = []
     @State private var sharedEditedEventOverrides: [String: PitchEvent] = [:]
     @State private var sharedPitcherOverrides: [String: String] = [:]
@@ -425,6 +426,7 @@ struct PitchTrackerView: View {
     @State private var balls: Int = 0
     @State private var strikes: Int = 0
     @State private var outs: Int = 0
+    @State private var showOutsFlash: Bool = false
     @State private var inning: Int = 1
     @State private var hits: Int = 0
     @State private var walks: Int = 0
@@ -436,6 +438,9 @@ struct PitchTrackerView: View {
     @State private var pendingLiveTemplateId: String? = nil
     @State private var pendingLiveTemplateName: String? = nil
     @State private var liveTemplateOverrideLocked: Bool = false
+    @State private var pendingOutsResetWorkItem: DispatchWorkItem? = nil
+    @State private var lastOutResetEventIdentity: String? = nil
+    @State private var lastOutResetPreviousOuts: Int? = nil
 
     private func dismissAllTopLevelSheets() {
         showSettings = false
@@ -3813,11 +3818,15 @@ struct PitchTrackerView: View {
         }
         .frame(maxWidth: .infinity, alignment: .top)
         .background(.regularMaterial)
-        .sheet(isPresented: $showCardsFullScreenSheet) {
+        .sheet(isPresented: $showCardsFullScreenSheet, onDismiss: {
+            cardsEditTargetEventID = nil
+        }) {
             pitchResultSheetBody(
                 controlButtonsOffsetY: 0,
                 controlButtonsVerticalPadding: 10,
                 initialJerseyFilter: selectedJerseyNumberDisplay ?? selectedBatterJersey,
+                initialSelectedEventID: cardsEditTargetEventID,
+                shouldAutoOpenEditOutcome: false,
                 onGearTapOverride: nil
             )
                 .ignoresSafeArea()
@@ -3828,6 +3837,7 @@ struct PitchTrackerView: View {
 
     private var overlayTabsHeader: some View {
         let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
+        let latestEditableEvent = filteredEvents.first(where: { $0.id != nil })
         return VStack(spacing: 8) {
             if sessionManager.currentMode == .game {
                 HStack {
@@ -3840,6 +3850,20 @@ struct PitchTrackerView: View {
             }
 
             HStack(spacing: 6) {
+                if showCards {
+                    Button {
+                        undoLastPitch()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward.circle.fill")
+                            .font(.title3.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(lastPersistedEventInCurrentMode == nil)
+                    .accessibilityLabel("Undo Last Pitch")
+                }
+
+                Spacer(minLength: 0)
+
                 OverlayTabButton(
                     title: "Progress",
                     systemImage: "chart.bar.xaxis",
@@ -3856,16 +3880,23 @@ struct PitchTrackerView: View {
                     overlayTab = .cards
                 }
 
+                Spacer(minLength: 0)
+
                 if showCards {
                     Button {
+                        cardsEditTargetEventID = latestEditableEvent?.id
                         showCardsFullScreenSheet = true
                     } label: {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .font(.callout)
+                        Image(systemName: "slider.horizontal.2.arrow.trianglehead.counterclockwise")
+                            .font(.title3.weight(.semibold))
                     }
                     .buttonStyle(.plain)
+                    .disabled(latestEditableEvent?.id == nil)
+                    .accessibilityLabel("Edit Last Result")
                 }
             }
+            .foregroundStyle(.black)
+            .padding(.horizontal, 6)
         }
         .padding(.horizontal, 8)
         .padding(.top, 12)
@@ -3916,6 +3947,8 @@ struct PitchTrackerView: View {
                 controlButtonsVerticalPadding: 2,
                 initialJerseyFilter: nil,
                 showTopControls: false,
+                initialSelectedEventID: cardsEditTargetEventID,
+                shouldAutoOpenEditOutcome: false,
                 onGearTapOverride: { showCardsFullScreenSheet = true }
             )
             .padding(.top, 19)
@@ -3931,6 +3964,8 @@ struct PitchTrackerView: View {
         controlButtonsVerticalPadding: CGFloat,
         initialJerseyFilter: String? = nil,
         showTopControls: Bool = true,
+        initialSelectedEventID: String? = nil,
+        shouldAutoOpenEditOutcome: Bool = false,
         onGearTapOverride: (() -> Void)? = nil
     ) -> some View {
         PitchResultSheet(
@@ -3963,6 +3998,8 @@ struct PitchTrackerView: View {
                 }
             },
             initialJerseyFilter: initialJerseyFilter,
+            initialSelectedEventID: initialSelectedEventID,
+            shouldAutoOpenEditOutcome: shouldAutoOpenEditOutcome,
             showTopControls: showTopControls,
             onGearTapOverride: onGearTapOverride,
             controlButtonsOffsetY: controlButtonsOffsetY,
@@ -4048,6 +4085,9 @@ struct PitchTrackerView: View {
                 }
             }
         }
+        .scaleEffect(showOutsFlash ? 1.08 : 1.0)
+        .shadow(color: showOutsFlash ? Color.red.opacity(0.35) : .clear, radius: showOutsFlash ? 8 : 0, x: 0, y: 0)
+        .animation(.easeInOut(duration: 0.18), value: showOutsFlash)
         .frame(minWidth: 44, alignment: .center)
     }
     private var calledPitchLayer: some View {
@@ -4340,16 +4380,18 @@ struct PitchTrackerView: View {
                         Text("Pitcher")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Menu {
-                            let pitchersForMenu = isGame
-                            ? visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
-                            : visiblePitchers
-                            ForEach(pitchersForMenu) { pitcher in
-                                Button(pitcher.name) {
-                                    applySelectedPitcher(pitcher)
-                                }
+                        let pitchersForMenu = isGame
+                        ? visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
+                        : visiblePitchers
+                        ScrollableSelectionMenuButton(
+                            title: "Select Pitcher",
+                            items: pitchersForMenu,
+                            itemTitle: { $0.name },
+                            isSelected: { $0.id == selectedPitcherId },
+                            onSelect: { pitcher in
+                                applySelectedPitcher(pitcher)
                             }
-                        } label: {
+                        ) {
                             let currentPitcher = pitchers.first(where: { $0.id == selectedPitcherId })
 
                             VStack(alignment: .center, spacing: 4) {
@@ -4387,13 +4429,15 @@ struct PitchTrackerView: View {
                         Text(currentTrackingMode == .scout ? "Pitch Key" : "Grid Key")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Menu {
-                            ForEach(visibleTemplates, id: \.id) { template in
-                                Button(template.name) {
-                                    applyTemplate(template)
-                                }
+                        ScrollableSelectionMenuButton(
+                            title: "Select Template",
+                            items: visibleTemplates,
+                            itemTitle: { $0.name },
+                            isSelected: { $0.id == selectedTemplate?.id },
+                            onSelect: { template in
+                                applyTemplate(template)
                             }
-                        } label: {
+                        ) {
                             let currentLabel = selectedTemplate?.name ?? "Select a template"
                             let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
                             
@@ -5962,14 +6006,17 @@ struct PitchTrackerView: View {
             opponentBatterId: selectedBatterId?.uuidString,
             pitcherId: selectedPitcherId
         )
+        let resolvedEventId = UUID().uuidString
+        var eventToSave = event
+        eventToSave.id = resolvedEventId
         event.logDebugPayload(prefix: "📤 Auto-saving PitchEvent")
 
         // Persist and update UI state
-        authManager.savePitchEvent(event)
-        saveSharedPitcherEventIfAllowed(event)
+        authManager.savePitchEvent(eventToSave)
+        saveSharedPitcherEventIfAllowed(eventToSave)
         sessionManager.incrementCount()
         withAnimation(.easeInOut(duration: 0.3)) {
-            pitchEvents.append(event)
+            pitchEvents.append(eventToSave)
         }
         authManager.loadPitchEvents { events in
             self.pitchEvents = events
@@ -6085,6 +6132,7 @@ struct PitchTrackerView: View {
         savedPlayReviewCountText = ""
         if let event {
             finalizePersistedPitchEvent(event)
+            applyReviewedOutAdvanceIfNeeded(for: event)
         } else {
             resetScoutComposer()
         }
@@ -6240,6 +6288,11 @@ struct PitchTrackerView: View {
 
     private func persistPitchEvent(_ event: PitchEvent, shouldFinalizeComposer: Bool = true) {
         var eventToPersist = event
+        let resolvedEventId = {
+            let raw = eventToPersist.id?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (raw?.isEmpty == false) ? raw! : UUID().uuidString
+        }()
+        eventToPersist.id = resolvedEventId
         let fallbackBatterId = selectedBatterId?.uuidString
         let fallbackJersey = jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber ?? selectedBatterJersey
         if eventToPersist.opponentBatterId == nil {
@@ -6255,6 +6308,7 @@ struct PitchTrackerView: View {
         }
 
         var sharedEvent = eventToPersist
+        sharedEvent.id = resolvedEventId
         if isGame, let liveId = activeLiveId {
             // ✅ Live: save to shared room
             let uid = authManager.user?.uid ?? ""
@@ -6273,7 +6327,7 @@ struct PitchTrackerView: View {
 
                 let liveRef = Firestore.firestore()
                     .collection("liveGames").document(liveId)
-                    .collection("pitchEvents").document()
+                    .collection("pitchEvents").document(resolvedEventId)
                 let liveEventId = liveRef.documentID
                 sharedEvent.id = liveEventId
 
@@ -6391,7 +6445,8 @@ struct PitchTrackerView: View {
 
     private func shouldAdvanceBatterSelection(after event: PitchEvent) -> Bool {
         let outcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if outcome.caseInsensitiveCompare("Foul") == .orderedSame {
+        let normalizedOutcome = outcome.lowercased()
+        if normalizedOutcome.contains("foul") {
             return false
         }
 
@@ -6409,10 +6464,26 @@ struct PitchTrackerView: View {
             }
         }
 
-        if ["Walk", "Out", "1B", "2B", "3B", "HR", "HBP", "K", "ꓘ"].contains(outcome) {
+        if normalizedOutcome.contains("walk")
+            || normalizedOutcome.contains("hbp")
+            || normalizedOutcome.contains("strikeout")
+            || normalizedOutcome.contains("strike looking")
+            || normalizedOutcome.contains("looking strike")
+            || normalizedOutcome.contains("single")
+            || normalizedOutcome.contains("double")
+            || normalizedOutcome.contains("triple")
+            || normalizedOutcome.contains("home run")
+            || normalizedOutcome.contains("homer")
+            || normalizedOutcome.contains("hr")
+            || normalizedOutcome.contains("1b")
+            || normalizedOutcome.contains("2b")
+            || normalizedOutcome.contains("3b")
+            || normalizedOutcome.contains("out")
+            || normalizedOutcome == "k"
+            || normalizedOutcome == "ꓘ".lowercased() {
             return true
         }
-        return event.atBatCount == "Strikeout"
+        return (event.atBatCount ?? "").trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("Strikeout") == .orderedSame
     }
 
     private func presentNextBatterAdjustmentAlert(currentIndex: Int, totalCount: Int) {
@@ -6428,15 +6499,15 @@ struct PitchTrackerView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
 
-        if normalizedOutcome == "walk" || normalizedOutcome == "k" || normalizedOutcome == "ꓘ".lowercased() || normalizedOutcome == "hbp" {
+        if normalizedOutcome.contains("walk") || normalizedOutcome == "k" || normalizedOutcome == "ꓘ".lowercased() || normalizedOutcome.contains("hbp") {
             syncCountFromComposer(balls: 0, strikes: 0)
         } else if event.isBall == true {
             let nextBalls = min(3, max(0, balls + 1))
             ballsBinding.wrappedValue = nextBalls
-        } else if event.strikeLooking || event.strikeSwinging {
+        } else if event.strikeLooking || event.strikeSwinging || normalizedOutcome.contains("strike") {
             let nextStrikes = min(2, max(0, strikes + 1))
             strikesBinding.wrappedValue = nextStrikes
-        } else if normalizedOutcome == "foul" {
+        } else if normalizedOutcome.contains("foul") {
             if strikes < 2 {
                 strikesBinding.wrappedValue = strikes + 1
             }
@@ -6451,7 +6522,7 @@ struct PitchTrackerView: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
 
-        if normalizedOutcome == "walk" {
+        if normalizedOutcome.contains("walk") {
             let nextWalks = max(0, walks + 1)
             walksBinding.wrappedValue = nextWalks
         }
@@ -6460,6 +6531,55 @@ struct PitchTrackerView: View {
             let nextHits = max(0, hits + 1)
             hitsBinding.wrappedValue = nextHits
         }
+    }
+
+    private func reviewedEventCountsAsOut(_ event: PitchEvent) -> Bool {
+        let normalizedOutcome = (event.outcome ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        if normalizedOutcome.contains("out")
+            || normalizedOutcome.contains("strikeout")
+            || normalizedOutcome.contains("strike looking")
+            || normalizedOutcome.contains("looking strike")
+            || normalizedOutcome == "k"
+            || normalizedOutcome == "ꓘ".lowercased() {
+            return true
+        }
+
+        let countText = (event.atBatCount ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if countText.caseInsensitiveCompare("Out") == .orderedSame || countText.caseInsensitiveCompare("Strikeout") == .orderedSame {
+            return true
+        }
+
+        return false
+    }
+
+    private func applyReviewedOutAdvanceIfNeeded(for event: PitchEvent) {
+        guard sessionManager.currentMode == .game else { return }
+        guard reviewedEventCountsAsOut(event) else { return }
+
+        pendingOutsResetWorkItem?.cancel()
+        let nextOuts = min(3, outs + 1)
+        outs = nextOuts
+
+        guard nextOuts >= 3 else { return }
+
+        lastOutResetEventIdentity = event.identity
+        lastOutResetPreviousOuts = max(0, nextOuts - 1)
+        withAnimation(.easeInOut(duration: 0.18)) {
+            showOutsFlash = true
+        }
+
+        let workItem = DispatchWorkItem {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                self.outs = 0
+                self.showOutsFlash = false
+            }
+            self.pendingOutsResetWorkItem = nil
+        }
+        pendingOutsResetWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: workItem)
     }
 
     private func syncCountFromComposer(balls: Int, strikes: Int) {
@@ -6493,6 +6613,156 @@ struct PitchTrackerView: View {
             games[idx].strikes = normalizedStrikes
         }
         markLocalProgressChange()
+    }
+
+    private var lastPersistedEventInCurrentMode: PitchEvent? {
+        let sourceEvents = isGame ? gamePitchEvents : pitchEvents
+        return sourceEvents
+            .filter { event in
+                if isGame, let gid = selectedGameId, let evGameId = event.gameId, !evGameId.isEmpty {
+                    return evGameId == gid
+                }
+                return true
+            }
+            .sorted { $0.timestamp > $1.timestamp }
+            .first
+    }
+
+    private func undoLastPitch() {
+        guard let event = lastPersistedEventInCurrentMode else { return }
+        guard let eventId = event.id?.trimmingCharacters(in: .whitespacesAndNewlines), !eventId.isEmpty else { return }
+
+        pendingOutsResetWorkItem?.cancel()
+        pendingOutsResetWorkItem = nil
+        showOutsFlash = false
+
+        deletePersistedPitchEvent(event)
+        removeLocalPitchEvent(withIdentity: event.identity)
+
+        sessionManager.decrementCount()
+
+        let remaining = remainingEvents(afterRemovingIdentity: event.identity)
+        if let priorEvent = remaining.first,
+           let priorBalls = priorEvent.atBatBalls,
+           let priorStrikes = priorEvent.atBatStrikes {
+            syncCountFromComposer(balls: priorBalls, strikes: priorStrikes)
+            if let key = atBatCountKey(batterId: priorEvent.opponentBatterId, jersey: priorEvent.opponentJersey) {
+                atBatCountCacheByBatter[key] = (balls: priorBalls, strikes: priorStrikes)
+            }
+        } else {
+            syncCountFromComposer(balls: 0, strikes: 0)
+        }
+
+        if reviewedEventCountsAsOut(event) {
+            if lastOutResetEventIdentity == event.identity {
+                outs = lastOutResetPreviousOuts ?? 2
+                lastOutResetEventIdentity = nil
+                lastOutResetPreviousOuts = nil
+            } else {
+                outs = max(0, outs - 1)
+            }
+        }
+
+        if eventCountsAsHit(event) {
+            hitsBinding.wrappedValue = max(0, hits - 1)
+        }
+
+        let normalizedOutcome = (event.outcome ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if normalizedOutcome.contains("walk") {
+            walksBinding.wrappedValue = max(0, walks - 1)
+        }
+
+        if let batterIdText = event.opponentBatterId,
+           let batterUUID = UUID(uuidString: batterIdText),
+           let batterCell = jerseyCells.first(where: { $0.id == batterUUID }) {
+            syncSelectedBatterFromDetail(batterCell)
+        } else if let jersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
+            if let batterCell = jerseyCells.first(where: { $0.jerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines) == jersey }) {
+                syncSelectedBatterFromDetail(batterCell)
+            }
+        }
+    }
+
+    private func remainingEvents(afterRemovingIdentity identity: String) -> [PitchEvent] {
+        let sourceEvents = isGame ? gamePitchEvents : pitchEvents
+        return sourceEvents
+            .filter { $0.identity != identity }
+            .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private func removeLocalPitchEvent(withIdentity identity: String) {
+        pitchEvents.removeAll { $0.identity == identity }
+        gamePitchEvents.removeAll { $0.identity == identity }
+        seededGamePitchEventsForLive.removeAll { $0.identity == identity }
+        bufferedSharedPitcherEvents.removeAll { $0.event.identity == identity }
+    }
+
+    private func deletePersistedPitchEvent(_ event: PitchEvent) {
+        guard let eventId = event.id?.trimmingCharacters(in: .whitespacesAndNewlines), !eventId.isEmpty else { return }
+
+        let db = Firestore.firestore()
+        var refs: [DocumentReference] = []
+
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            refs.append(
+                db.collection("liveGames")
+                    .document(liveId)
+                    .collection("pitchEvents")
+                    .document(eventId)
+            )
+            if let owner = effectiveGameOwnerUserId, !owner.isEmpty,
+               let gid = selectedGameId, !gid.isEmpty {
+                refs.append(
+                    db.collection("users")
+                        .document(owner)
+                        .collection("games")
+                        .document(gid)
+                        .collection("pitchEvents")
+                        .document(eventId)
+                )
+            }
+        } else if let owner = effectiveGameOwnerUserId, !owner.isEmpty,
+                  let gid = selectedGameId, !gid.isEmpty {
+            refs.append(
+                db.collection("users")
+                    .document(owner)
+                    .collection("games")
+                    .document(gid)
+                    .collection("pitchEvents")
+                    .document(eventId)
+            )
+        } else if let uid = authManager.user?.uid {
+            refs.append(
+                db.collection("users")
+                    .document(uid)
+                    .collection("pitchEvents")
+                    .document(eventId)
+            )
+        }
+
+        let pitcherId = (event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            : selectedPitcherId
+        if let pitcherId, !pitcherId.isEmpty {
+            refs.append(
+                db.collection("pitchers")
+                    .document(pitcherId)
+                    .collection("pitchEvents")
+                    .document(eventId)
+            )
+        }
+
+        guard !refs.isEmpty else { return }
+
+        let batch = db.batch()
+        refs.forEach { batch.deleteDocument($0) }
+        batch.commit { error in
+            if let error {
+                debugLog("❌ undoLastPitch delete failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private var bufferedSharedEventsURL: URL {
@@ -7450,7 +7720,7 @@ struct PitchTrackerView: View {
             lineupBatters: jerseyCells,
             selectedPitcherId: effectivePitcherIdForSave,
             saveAction: { event in
-                persistPitchEvent(event, shouldFinalizeComposer: false)
+                persistPitchEvent(event)
             },
             template: selectedTemplate,
             pitcherName: pitchers.first(where: { $0.id == selectedPitcherId })?.name,
@@ -7567,7 +7837,12 @@ struct PitchTrackerView: View {
         .sorted { $0.timestamp > $1.timestamp }
     }
 
-    private var gameSummaryPitcherOptions: [(id: String, name: String)] {
+    private struct GameSummaryPitcherOption: Identifiable {
+        let id: String
+        let name: String
+    }
+
+    private var gameSummaryPitcherOptions: [GameSummaryPitcherOption] {
         let pitcherIds = Set(
             gameSummarySourceEvents.compactMap { event -> String? in
                 guard let pitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -7578,7 +7853,7 @@ struct PitchTrackerView: View {
 
         return pitcherIds.compactMap { pitcherId in
             guard let pitcher = pitchers.first(where: { $0.id == pitcherId }) else { return nil }
-            return (id: pitcherId, name: pitcher.name)
+            return GameSummaryPitcherOption(id: pitcherId, name: pitcher.name)
         }
         .sorted { lhs, rhs in
             lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
@@ -7624,6 +7899,7 @@ struct PitchTrackerView: View {
     private var gameSummaryHasLocationAnalytics: Bool { summaryStats.hasLocationAnalytics }
     private var summaryStrikeLookingCount: Int { summaryStats.strikeLookingCount }
     private var summaryStrikeSwingingCount: Int { summaryStats.strikeSwingingCount }
+    private var foulCount: Int { summaryStats.foulCount }
     private var summaryWildPitchCount: Int { summaryStats.wildPitchCount }
     private var summaryPassedBallCount: Int { summaryStats.passedBallCount }
     private var summaryWalkCount: Int {
@@ -7694,6 +7970,7 @@ struct PitchTrackerView: View {
         let hitSpotDefinition = gameSummaryHasLocationAnalytics
             ? "- Hit Spot % = Location matches / Coach-mode pitches"
             : "- Location-based metrics hidden for Scout Mode events."
+        let foulPercentLine = "- Foul % = Foul pitches / Total pitches"
 
         return """
         PitchMark Game Summary
@@ -7707,10 +7984,12 @@ struct PitchTrackerView: View {
         - Balls: \(summaryBallPitches) of \(summaryTotalPitches) (\(summaryPercent(summaryBallPitches, total: summaryTotalPitches)))
         \(firstPitchStrikeLine)
         \(hitSpotLine)
+        - Foul %: \(summaryPercent(foulCount, total: summaryTotalPitches)) (\(foulCount)/\(summaryTotalPitches))
 
         Events
         - Strike Looking: \(summaryStrikeLookingCount)
         - Strike Swinging: \(summaryStrikeSwingingCount)
+        - Foul: \(foulCount)
         - Walks: \(summaryWalkCount)
         - Hits: \(summaryHitCount)
         - Wild Pitches: \(summaryWildPitchCount)
@@ -7721,6 +8000,7 @@ struct PitchTrackerView: View {
         - Ball % = Balls / Total Pitches
         - 1st Pitch Strike % = Qualified first-pitch strikes / New batter appearances
         \(hitSpotDefinition)
+        \(foulPercentLine)
 
         Pitch Breakdown
         \(pitchBreakdownText)
@@ -7745,13 +8025,34 @@ struct PitchTrackerView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Picker("Pitcher", selection: $selectedGameSummaryPitcherSelection) {
-                    Text("All Pitchers").tag(Self.allPitchersSummarySelection)
-                    ForEach(gameSummaryPitcherOptions, id: \.id) { option in
-                        Text(option.name).tag(option.id)
+                ScrollableSelectionMenuButton(
+                    title: "Pitcher",
+                    items: gameSummaryPitcherOptions,
+                    topActions: [
+                        SelectionSheetAction(
+                            title: "All Pitchers",
+                            systemImage: selectedGameSummaryPitcherSelection == Self.allPitchersSummarySelection ? "checkmark" : nil
+                        ) {
+                            selectedGameSummaryPitcherSelection = Self.allPitchersSummarySelection
+                        }
+                    ],
+                    itemTitle: { $0.name },
+                    isSelected: { $0.id == selectedGameSummaryPitcherSelection },
+                    onSelect: { option in
+                        selectedGameSummaryPitcherSelection = option.id
                     }
+                ) {
+                    Text(selectedGameSummaryPitcherSelection == Self.allPitchersSummarySelection ? "All Pitchers" : gameSummaryPitcherName)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
                 }
-                .pickerStyle(.menu)
             }
 
             VStack(spacing: 10) {
@@ -7775,6 +8076,10 @@ struct PitchTrackerView: View {
                         : "Coach data needed"
                 )
                 .opacity(gameSummaryHasLocationAnalytics ? 1 : 0.45)
+                summaryMetricRow(
+                    title: "Foul %",
+                    value: "\(summaryPercent(foulCount, total: summaryTotalPitches)) (\(foulCount)/\(summaryTotalPitches))"
+                )
             }
             .padding()
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -7790,6 +8095,7 @@ struct PitchTrackerView: View {
                 } else {
                     Text("Location-based metrics hidden for Scout Mode events.")
                 }
+                Text("Foul % = Foul pitches / Total pitches")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -7801,6 +8107,7 @@ struct PitchTrackerView: View {
                     .font(.headline)
                 summaryMetricRow(title: "Strike Looking", value: "\(summaryStrikeLookingCount)")
                 summaryMetricRow(title: "Strike Swinging", value: "\(summaryStrikeSwingingCount)")
+                summaryMetricRow(title: "Foul", value: "\(foulCount)")
                 summaryMetricRow(title: "Walks", value: "\(summaryWalkCount)")
                 summaryMetricRow(title: "Hits", value: "\(summaryHitCount)")
                 summaryMetricRow(title: "Wild Pitches", value: "\(summaryWildPitchCount)")
@@ -7896,13 +8203,34 @@ struct PitchTrackerView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Picker("Pitcher", selection: $selectedGameSummaryPitcherSelection) {
-                    Text("All Pitchers").tag(Self.allPitchersSummarySelection)
-                    ForEach(gameSummaryPitcherOptions, id: \.id) { option in
-                        Text(option.name).tag(option.id)
+                ScrollableSelectionMenuButton(
+                    title: "Pitcher",
+                    items: gameSummaryPitcherOptions,
+                    topActions: [
+                        SelectionSheetAction(
+                            title: "All Pitchers",
+                            systemImage: selectedGameSummaryPitcherSelection == Self.allPitchersSummarySelection ? "checkmark" : nil
+                        ) {
+                            selectedGameSummaryPitcherSelection = Self.allPitchersSummarySelection
+                        }
+                    ],
+                    itemTitle: { $0.name },
+                    isSelected: { $0.id == selectedGameSummaryPitcherSelection },
+                    onSelect: { option in
+                        selectedGameSummaryPitcherSelection = option.id
                     }
+                ) {
+                    Text(selectedGameSummaryPitcherSelection == Self.allPitchersSummarySelection ? "All Pitchers" : gameSummaryPitcherName)
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
                 }
-                .pickerStyle(.menu)
             }
 
             VStack(spacing: 10) {
@@ -7926,6 +8254,10 @@ struct PitchTrackerView: View {
                         : "Coach data needed"
                 )
                 .opacity(gameSummaryHasLocationAnalytics ? 1 : 0.45)
+                summaryMetricRow(
+                    title: "Foul %",
+                    value: "\(summaryPercent(foulCount, total: summaryTotalPitches)) (\(foulCount)/\(summaryTotalPitches))"
+                )
             }
             .padding()
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -7941,6 +8273,7 @@ struct PitchTrackerView: View {
                 } else {
                     Text("Location-based metrics hidden for Scout Mode events.")
                 }
+                Text("Foul % = Foul pitches / Total pitches")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -7952,6 +8285,7 @@ struct PitchTrackerView: View {
                     .font(.headline)
                 summaryMetricRow(title: "Strike Looking", value: "\(summaryStrikeLookingCount)")
                 summaryMetricRow(title: "Strike Swinging", value: "\(summaryStrikeSwingingCount)")
+                summaryMetricRow(title: "Foul", value: "\(foulCount)")
                 summaryMetricRow(title: "Walks", value: "\(summaryWalkCount)")
                 summaryMetricRow(title: "Hits", value: "\(summaryHitCount)")
                 summaryMetricRow(title: "Wild Pitches", value: "\(summaryWildPitchCount)")
@@ -9400,6 +9734,12 @@ private struct ProgressSummaryView: View {
     private var strikeCount: Int { summaryEvents.filter { inferredPitchResultType(for: $0) == .strike }.count }
     private var ballCount: Int { summaryEvents.filter { inferredPitchResultType(for: $0) == .ball }.count }
     private var hitSpotEligibleCount: Int { summaryEvents.filter(\.supportsLocationAnalytics).count }
+    private var foulCount: Int {
+        summaryEvents.filter { event in
+            let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return outcome.caseInsensitiveCompare("Foul") == .orderedSame || event.isFoulInferred || event.foulMarker != nil
+        }.count
+    }
     private var strikeHitSpotEligibleCount: Int {
         summaryEvents.filter { $0.supportsLocationAnalytics && inferredPitchResultType(for: $0) == .strike }.count
     }
@@ -11317,19 +11657,28 @@ private struct SessionConfirmationSheet: View {
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(.black)
 
-                    Picker("Pitcher", selection: $selectedPitcherId) {
-                        Text("Not set")
-                            .font(.body.weight(.semibold))
-                            .tag(String?.none)
-                        ForEach(pitchers) { pitcher in
-                            Text(pitcher.name)
-                                .font(.body.weight(.semibold))
-                                .tag(pitcher.id)
+                    ScrollableSelectionMenuButton(
+                        title: "Pitcher",
+                        items: pitchers,
+                        topActions: [
+                            SelectionSheetAction(
+                                title: "Not set",
+                                systemImage: selectedPitcherId == nil ? "checkmark" : nil
+                            ) {
+                                selectedPitcherId = nil
+                            }
+                        ],
+                        itemTitle: { $0.name },
+                        isSelected: { $0.id == selectedPitcherId },
+                        onSelect: { pitcher in
+                            selectedPitcherId = pitcher.id
                         }
+                    ) {
+                        Text(selectedPitcherId.flatMap { id in pitchers.first(where: { $0.id == id })?.name } ?? "Not set")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .pickerStyle(.menu)
-                    .font(.title3.weight(.semibold))
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
@@ -11340,19 +11689,28 @@ private struct SessionConfirmationSheet: View {
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(.black)
 
-                    Picker("Grid Key", selection: $selectedTemplateId) {
-                        Text("Not set")
-                            .font(.body.weight(.semibold))
-                            .tag(UUID?.none)
-                        ForEach(templates) { template in
-                            Text(template.name)
-                                .font(.body.weight(.semibold))
-                                .tag(Optional(template.id))
+                    ScrollableSelectionMenuButton(
+                        title: "Grid Key",
+                        items: templates,
+                        topActions: [
+                            SelectionSheetAction(
+                                title: "Not set",
+                                systemImage: selectedTemplateId == nil ? "checkmark" : nil
+                            ) {
+                                selectedTemplateId = nil
+                            }
+                        ],
+                        itemTitle: { $0.name },
+                        isSelected: { $0.id == selectedTemplateId },
+                        onSelect: { template in
+                            selectedTemplateId = template.id
                         }
+                    ) {
+                        Text(selectedTemplateId.flatMap { id in templates.first(where: { $0.id == id })?.name } ?? "Not set")
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .pickerStyle(.menu)
-                    .font(.title3.weight(.semibold))
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)

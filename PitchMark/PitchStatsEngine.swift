@@ -8,6 +8,7 @@ struct PitchStatsSnapshot {
     let locationAnalyticsEligibleCount: Int
     let strikeLookingCount: Int
     let strikeSwingingCount: Int
+    let foulCount: Int
     let walkCount: Int
     let hitCount: Int
     let wildPitchCount: Int
@@ -15,6 +16,40 @@ struct PitchStatsSnapshot {
     let firstPitchStrike: (made: Int, total: Int)
     let pitchBreakdown: [(name: String, count: Int)]
     let outcomeBreakdown: [(name: String, count: Int)]
+
+    init(
+        totalPitches: Int,
+        strikePitches: Int,
+        ballPitches: Int,
+        hitSpotPitches: Int,
+        locationAnalyticsEligibleCount: Int,
+        strikeLookingCount: Int,
+        strikeSwingingCount: Int,
+        foulCount: Int = 0,
+        walkCount: Int,
+        hitCount: Int,
+        wildPitchCount: Int,
+        passedBallCount: Int,
+        firstPitchStrike: (made: Int, total: Int),
+        pitchBreakdown: [(name: String, count: Int)],
+        outcomeBreakdown: [(name: String, count: Int)]
+    ) {
+        self.totalPitches = totalPitches
+        self.strikePitches = strikePitches
+        self.ballPitches = ballPitches
+        self.hitSpotPitches = hitSpotPitches
+        self.locationAnalyticsEligibleCount = locationAnalyticsEligibleCount
+        self.strikeLookingCount = strikeLookingCount
+        self.strikeSwingingCount = strikeSwingingCount
+        self.foulCount = foulCount
+        self.walkCount = walkCount
+        self.hitCount = hitCount
+        self.wildPitchCount = wildPitchCount
+        self.passedBallCount = passedBallCount
+        self.firstPitchStrike = firstPitchStrike
+        self.pitchBreakdown = pitchBreakdown
+        self.outcomeBreakdown = outcomeBreakdown
+    }
 
     var hasLocationAnalytics: Bool {
         locationAnalyticsEligibleCount > 0
@@ -53,6 +88,10 @@ enum PitchStatsCalculator {
             locationAnalyticsEligibleCount: locationAnalyticsEligibleEvents.count,
             strikeLookingCount: events.filter { $0.strikeLooking }.count,
             strikeSwingingCount: events.filter { $0.strikeSwinging }.count,
+            foulCount: events.filter { event in
+                let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return outcome.caseInsensitiveCompare("Foul") == .orderedSame || event.isFoulInferred || event.foulMarker != nil
+            }.count,
             walkCount: events.filter { event in
                 guard let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines), !outcome.isEmpty else { return false }
                 return outcome == "BB" || outcome == "Walk"
@@ -833,6 +872,7 @@ enum PitchStatsSimulationLibrary {
         appendIfDifferent("locationAnalyticsEligibleCount", "\(expected.locationAnalyticsEligibleCount)", "\(actual.locationAnalyticsEligibleCount)")
         appendIfDifferent("strikeLookingCount", "\(expected.strikeLookingCount)", "\(actual.strikeLookingCount)")
         appendIfDifferent("strikeSwingingCount", "\(expected.strikeSwingingCount)", "\(actual.strikeSwingingCount)")
+        appendIfDifferent("foulCount", "\(expected.foulCount)", "\(actual.foulCount)")
         appendIfDifferent("walkCount", "\(expected.walkCount)", "\(actual.walkCount)")
         appendIfDifferent("hitCount", "\(expected.hitCount)", "\(actual.hitCount)")
         appendIfDifferent("wildPitchCount", "\(expected.wildPitchCount)", "\(actual.wildPitchCount)")

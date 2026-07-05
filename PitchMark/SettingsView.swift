@@ -35,6 +35,7 @@ private struct SettingsGameSummarySheetView: View {
     private var hitSpots: Int { stats.hitSpotPitches }
     private var strikeLooking: Int { stats.strikeLookingCount }
     private var strikeSwinging: Int { stats.strikeSwingingCount }
+    private var foulCount: Int { stats.foulCount }
     private var walks: Int { stats.walkCount }
     private var hits: Int { stats.hitCount }
     private var wildPitches: Int { stats.wildPitchCount }
@@ -76,6 +77,7 @@ private struct SettingsGameSummarySheetView: View {
         let hitSpotDefinition = hasLocationAnalytics
             ? "Hit Spot % = Location matches / Coach-mode pitches"
             : "Location-based metrics hidden for Scout Mode events."
+        let foulPercentLine = "Foul % = Foul pitches / Total pitches"
         return """
         PitchMark Game Summary
         Pitcher: \(pitcherName)
@@ -87,9 +89,11 @@ private struct SettingsGameSummarySheetView: View {
         Balls: \(balls) of \(totalPitches) (\(percent(balls, totalPitches)))
         \(firstPitchStrikeLine)
         \(hitSpotLine)
+        Foul %: \(percent(foulCount, totalPitches)) (\(foulCount)/\(totalPitches))
 
         Strike Looking: \(strikeLooking)
         Strike Swinging: \(strikeSwinging)
+        Foul: \(foulCount)
         Walks: \(walks)
         Hits: \(hits)
         Wild Pitches: \(wildPitches)
@@ -99,6 +103,7 @@ private struct SettingsGameSummarySheetView: View {
         Strike % = Strikes / Total Pitches
         Ball % = Balls / Total Pitches
         \(hitSpotDefinition)
+        \(foulPercentLine)
 
         Pitch Breakdown: \(pitchLines)
         Outcome Breakdown: \(outcomeLines)
@@ -127,6 +132,7 @@ private struct SettingsGameSummarySheetView: View {
                 if hasLocationAnalytics {
                     summaryRow("Hit Spot %", "\(percent(hitSpots, totalPitches)) (\(hitSpots)/\(totalPitches))")
                 }
+                summaryRow("Foul %", "\(percent(foulCount, totalPitches)) (\(foulCount)/\(totalPitches))")
             }
             .padding()
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -142,6 +148,7 @@ private struct SettingsGameSummarySheetView: View {
                 } else {
                     Text("Location-based metrics hidden for Scout Mode events.")
                 }
+                Text("Foul % = Foul pitches / Total pitches")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -151,6 +158,7 @@ private struct SettingsGameSummarySheetView: View {
             Group {
                 summaryRow("Strike Looking", "\(strikeLooking)")
                 summaryRow("Strike Swinging", "\(strikeSwinging)")
+                summaryRow("Foul", "\(foulCount)")
                 summaryRow("Walks", "\(walks)")
                 summaryRow("Hits", "\(hits)")
                 summaryRow("Wild Pitches", "\(wildPitches)")
@@ -253,6 +261,7 @@ private struct SettingsGameSummarySheetView: View {
                 if hasLocationAnalytics {
                     summaryRow("Hit Spot %", "\(percent(hitSpots, totalPitches)) (\(hitSpots)/\(totalPitches))")
                 }
+                summaryRow("Foul %", "\(percent(foulCount, totalPitches)) (\(foulCount)/\(totalPitches))")
             }
             .padding()
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -268,6 +277,7 @@ private struct SettingsGameSummarySheetView: View {
                 } else {
                     Text("Location-based metrics hidden for Scout Mode events.")
                 }
+                Text("Foul % = Foul pitches / Total pitches")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -277,6 +287,7 @@ private struct SettingsGameSummarySheetView: View {
             Group {
                 summaryRow("Strike Looking", "\(strikeLooking)")
                 summaryRow("Strike Swinging", "\(strikeSwinging)")
+                summaryRow("Foul", "\(foulCount)")
                 summaryRow("Walks", "\(walks)")
                 summaryRow("Hits", "\(hits)")
                 summaryRow("Wild Pitches", "\(wildPitches)")
@@ -3366,13 +3377,22 @@ struct PitcherStatsSheetView: View {
 
                             HStack(alignment: .center, spacing: 12) {
                                 if lockToGameId != nil, selectablePitchers.count > 1 {
-                                    Picker("Pitcher", selection: $selectedPitcherId) {
-                                        ForEach(selectablePitchers, id: \.id) { pitcher in
-                                            Text(pitcher.name).tag(pitcher.id as String?)
+                                    ScrollableSelectionMenuButton(
+                                        title: "Pitcher",
+                                        items: selectablePitchers,
+                                        itemTitle: { $0.name },
+                                        isSelected: { $0.id == selectedPitcherId },
+                                        onSelect: { pitcher in
+                                            selectedPitcherId = pitcher.id
                                         }
+                                    ) {
+                                        Text(
+                                            selectedPitcherId.flatMap { id in selectablePitchers.first(where: { $0.id == id })?.name }
+                                            ?? activePitcher.name
+                                        )
+                                        .font(.title2.weight(.semibold))
+                                        .foregroundStyle(.primary)
                                     }
-                                    .pickerStyle(.menu)
-                                    .font(.title2.weight(.semibold))
                                 } else {
                                     Text(activePitcher.name)
                                         .font(.title2.weight(.semibold))
@@ -3596,22 +3616,30 @@ struct PitcherStatsSheetView: View {
     }
 
     private var scopeSelectionMenu: some View {
-        Menu {
-            switch scope {
-            case .games:
-                Button("All Games") {
+        ScrollableSelectionMenuButton(
+            title: "Games",
+            items: gamesWithPitcherEvents,
+            topActions: [
+                SelectionSheetAction(
+                    title: "All Games",
+                    systemImage: selectedGameIds.count == allGameIds.count ? "checkmark" : nil
+                ) {
                     selectedGameIds = allGameIds
                 }
-                ForEach(gamesWithPitcherEvents, id: \.id) { game in
-                    let title = "vs \(game.opponent) • \(formattedDate(game.date))"
-                    Button(title) {
-                        if let id = game.id {
-                            selectedGameIds = [id]
-                        }
-                    }
+            ],
+            itemTitle: { game in
+                "vs \(game.opponent) • \(formattedDate(game.date))"
+            },
+            isSelected: { game in
+                guard let id = game.id else { return false }
+                return selectedGameIds.count == 1 && selectedGameIds.contains(id)
+            },
+            onSelect: { game in
+                if let id = game.id {
+                    selectedGameIds = [id]
                 }
             }
-        } label: {
+        ) {
             HStack(spacing: 8) {
                 Text(scopeSelectionLabel)
                     .font(.caption.weight(.semibold))

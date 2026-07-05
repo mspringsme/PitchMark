@@ -233,31 +233,36 @@ struct OutcomeSummaryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            if let num = jerseyNumber, !num.isEmpty {
-                HStack {
-                    Text(num)
-                        .font(.system(size: 12, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                        .padding(.horizontal, num.count > 1 ? 6 : 0)
-                        .frame(width: num.count > 1 ? nil : 18, height: 18)
-                        .background(
-                            Group {
-                                if num.count > 1 {
-                                    Capsule().fill(Color.blue)
-                                } else {
-                                    Circle().fill(Color.blue)
-                                }
-                            }
-                        )
+            if (countText?.isEmpty == false) || (jerseyNumber?.isEmpty == false) {
+                HStack(spacing: 6) {
                     if let countText, !countText.isEmpty {
                         Text(countText)
                             .font(.system(size: 12, weight: .semibold))
                             .monospacedDigit()
                             .foregroundColor(.black.opacity(0.75))
                             .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    if let num = jerseyNumber, !num.isEmpty {
+                        Text(num)
+                            .font(.system(size: 15, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .padding(.horizontal, num.count > 1 ? 8 : 0)
+                            .frame(width: num.count > 1 ? nil : 22, height: 22)
+                            .background(
+                                Group {
+                                    if num.count > 1 {
+                                        Capsule().fill(Color.blue)
+                                    } else {
+                                        Circle().fill(Color.blue)
+                                    }
+                                }
+                            )
                     }
                 }
                 .padding(.bottom, 6)
@@ -905,13 +910,13 @@ struct PitchCardView: View {
                     if let num = jerseyNumber, !num.isEmpty {
                         HStack(spacing: 6) {
                             Text(num)
-                                .font(.system(size: 12, weight: .bold))
+                                .font(.system(size: 15, weight: .bold))
                                 .monospacedDigit()
                                 .foregroundColor(.white)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.6)
-                                .padding(.horizontal, num.count > 1 ? 6 : 0)
-                                .frame(width: num.count > 1 ? nil : 18, height: 18)
+                                .padding(.horizontal, num.count > 1 ? 8 : 0)
+                                .frame(width: num.count > 1 ? nil : 22, height: 22)
                                 .background(
                                     Group {
                                         if num.count > 1 {
@@ -1668,10 +1673,10 @@ struct PitchEventDetailPopover: View {
                                     Button {
                                         onSelectLineupBatter(cell)
                                     } label: {
-                                        Text(cell.jerseyNumber)
-                                            .font(.subheadline.weight(.semibold))
+                                Text(cell.jerseyNumber)
+                                            .font(.headline.weight(.semibold))
                                             .foregroundStyle(isSelected ? Color.white : Color.primary)
-                                            .frame(width: 42, height: 36)
+                                            .frame(width: 48, height: 40)
                                             .background(
                                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                                     .fill(isSelected ? Color.blue : Color(.systemGray6))
@@ -1940,6 +1945,8 @@ struct PitchResultSheet: View {
     var sharedBatterJerseyOverrides: [String: String] = [:]
     var onApplyBatterJerseyOverride: (([String], String) -> Void)? = nil
     var initialJerseyFilter: String? = nil
+    var initialSelectedEventID: String? = nil
+    var shouldAutoOpenEditOutcome: Bool = false
     var showTopControls: Bool = true
     var onGearTapOverride: (() -> Void)? = nil
     var controlButtonsOffsetY: CGFloat = -30
@@ -1975,6 +1982,7 @@ struct PitchResultSheet: View {
     @State private var editSelectedDescriptor: String? = nil
     @State private var editIsError = false
     @State private var localDeletedEventIDs: Set<String> = Set<String>()
+    @State private var didApplyInitialEditTarget: Bool = false
     
     @State private var pitcherFilter: String = ""
     @State private var jerseyFilter: String = ""
@@ -2223,7 +2231,7 @@ struct PitchResultSheet: View {
                                 }
                                 .buttonStyle(.plain)
                                 .transition(.scale.combined(with: .opacity))
-                                .offset(y: controlButtonsOffsetY)
+                                .offset(y: controlButtonsOffsetY - 12)
                             } else {
                                 Button {
                                     if let onGearTapOverride {
@@ -2239,7 +2247,7 @@ struct PitchResultSheet: View {
                                 }
                                 .buttonStyle(.plain)
                                 .transition(.scale.combined(with: .opacity))
-                                .offset(y: controlButtonsOffsetY)
+                                .offset(y: controlButtonsOffsetY - 12)
 
                                 Spacer(minLength: 0)
                             }
@@ -2327,7 +2335,7 @@ struct PitchResultSheet: View {
                                         .clipShape(Capsule())
                                         .compositingGroup()
                                 }
-                                .offset(y: controlButtonsOffsetY)
+                                .offset(y: controlButtonsOffsetY - 12)
                             }
                             else {
                                 Menu {
@@ -2409,6 +2417,9 @@ struct PitchResultSheet: View {
             }
         }
         .padding(.horizontal, 10)
+        .onAppear {
+            applyInitialEditTargetIfNeeded()
+        }
         .confirmationDialog(
             "Delete Selected Pitch Event\(selectedEventIDs.count == 1 ? "" : "s")?",
             isPresented: $showDeleteConfirm,
@@ -2817,6 +2828,21 @@ struct PitchResultSheet: View {
         editSelectedDescriptor = event.descriptor
         editIsError = event.errorOnPlay
         showEditPitchSheet = true
+    }
+
+    private func applyInitialEditTargetIfNeeded() {
+        guard !didApplyInitialEditTarget else { return }
+        didApplyInitialEditTarget = true
+        guard let targetId = initialSelectedEventID else { return }
+        guard allEvents.contains(where: { $0.id == targetId }) else { return }
+
+        selectedEventIDs = [targetId]
+        isSelecting = true
+
+        guard shouldAutoOpenEditOutcome else { return }
+        DispatchQueue.main.async {
+            prepareEditForSelectedEvent()
+        }
     }
 
     private func saveEditedEvent(_ edited: PitchEvent, original: PitchEvent) {

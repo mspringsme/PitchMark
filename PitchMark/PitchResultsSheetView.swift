@@ -70,8 +70,8 @@ private struct OutcomeButton: View {
         }) {
             Text(label)
                 .font(.system(size: 14, weight: .semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
                 .background(isSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
                 .cornerRadius(6)
                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
@@ -80,6 +80,216 @@ private struct OutcomeButton: View {
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.4 : 1.0)
         .contentShape(Rectangle())
+    }
+}
+
+private struct AssetOutcomeButton: View {
+    let assetName: String
+    let width: CGFloat
+    let height: CGFloat
+    let isSelected: Bool
+    let isDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(assetName)
+                .resizable()
+                .scaledToFit()
+                .frame(width: width, height: height)
+                .padding(4)
+                .background(isSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(isSelected ? Color.black.opacity(0.8) : Color.black.opacity(0.08), lineWidth: isSelected ? 1.6 : 1)
+                )
+                .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.4 : 1.0)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct DiamondOutcomeSelector: View {
+    @Binding var selectedOutcome: String?
+    let isDisabled: (String) -> Bool
+
+    private func selectOutcome(_ label: String) {
+        selectedOutcome = (selectedOutcome == label) ? nil : label
+    }
+
+    @ViewBuilder
+    private func diamondButton(
+        _ label: String,
+        isSelected: Bool,
+        width: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        Button {
+            selectOutcome(label)
+        } label: {
+            Text(label)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: width, height: height)
+                .background(isSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(isSelected ? Color.black.opacity(0.8) : Color.black.opacity(0.08), lineWidth: isSelected ? 1.6 : 1)
+                )
+                .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled(label))
+        .opacity(isDisabled(label) ? 0.35 : 1.0)
+    }
+
+    private func positionedDiamondButton(
+        _ label: String,
+        isSelected: Bool,
+        x: CGFloat,
+        y: CGFloat,
+        width: CGFloat,
+        height: CGFloat
+    ) -> some View {
+        diamondButton(label, isSelected: isSelected, width: width, height: height)
+        .position(x: x, y: y)
+    }
+
+    var body: some View {
+        let width: CGFloat = 126
+        let height: CGFloat = 108
+
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.clear)
+                .frame(width: width, height: height)
+
+            GeometryReader { proxy in
+                positionedDiamondButton("2B", isSelected: selectedOutcome == "2B", x: proxy.size.width * 0.50, y: proxy.size.height * 0.16, width: 42, height: 26)
+                positionedDiamondButton("3B", isSelected: selectedOutcome == "3B", x: proxy.size.width * 0.18, y: proxy.size.height * 0.48, width: 42, height: 26)
+                positionedDiamondButton("1B", isSelected: selectedOutcome == "1B", x: proxy.size.width * 0.82, y: proxy.size.height * 0.48, width: 42, height: 26)
+                positionedDiamondButton("HR", isSelected: selectedOutcome == "HR", x: proxy.size.width * 0.50, y: proxy.size.height * 0.80, width: 42, height: 26)
+            }
+            .frame(width: width, height: height)
+            .offset(y: 20)
+        }
+        .frame(width: width, height: height)
+    }
+}
+
+private struct ResultCircleButton: View {
+    let title: String
+    let isSelected: Bool
+    let selectedColor: Color
+    let isDisabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(isSelected ? selectedColor.opacity(0.9) : Color.gray.opacity(0.16))
+                Circle()
+                    .stroke(isSelected ? selectedColor : Color.black.opacity(0.28), lineWidth: isSelected ? 2 : 1.2)
+
+                Text(title)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(width: 46, height: 46)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.4 : 1.0)
+        .contentShape(Rectangle())
+    }
+}
+
+private struct SafeOutButtonsRow: View {
+    @Binding var selectedOutcome: String?
+    @Binding var selectedDescriptor: String?
+    @Binding var isStrikeSwinging: Bool
+    @Binding var isStrikeLooking: Bool
+    @Binding var isBall: Bool
+    @Binding var isHitTagSelected: Bool
+    @Binding var isHitBatter: Bool
+    @Binding var isFoulSelected: Bool
+    let isSafeDisabled: Bool
+    let isOutDisabled: Bool
+
+    private var safeCircleSelected: Bool {
+        if isHitTagSelected { return true }
+        guard let selectedOutcome else { return false }
+        return ["1B", "2B", "3B", "HR"].contains(selectedOutcome)
+    }
+
+    private var outCircleSelected: Bool {
+        guard let selectedOutcome else { return false }
+        return ["Out", "K", "ꓘ"].contains(selectedOutcome)
+    }
+
+    private func selectSafeCategory() {
+        if safeCircleSelected {
+            if isHitTagSelected {
+                isHitTagSelected = false
+            }
+            if let selectedOutcome, ["1B", "2B", "3B", "HR"].contains(selectedOutcome) {
+                self.selectedOutcome = nil
+            } else if selectedOutcome == nil {
+                self.selectedOutcome = nil
+            }
+            selectedDescriptor = nil
+            isFoulSelected = false
+            return
+        }
+
+        selectedOutcome = "1B"
+        selectedDescriptor = nil
+        isHitTagSelected = false
+        isFoulSelected = false
+    }
+
+    private func selectOutCategory() {
+        let next = selectedOutcome != "Out"
+        selectedOutcome = next ? "Out" : nil
+        if next {
+            isStrikeSwinging = false
+            isStrikeLooking = false
+            isBall = false
+            isFoulSelected = false
+            isHitTagSelected = false
+            isHitBatter = false
+            selectedDescriptor = nil
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ResultCircleButton(
+                title: "Safe",
+                isSelected: safeCircleSelected,
+                selectedColor: .red,
+                isDisabled: isSafeDisabled
+            ) {
+                selectSafeCategory()
+            }
+
+            ResultCircleButton(
+                title: "Out",
+                isSelected: outCircleSelected,
+                selectedColor: .green,
+                isDisabled: isOutDisabled
+            ) {
+                selectOutCategory()
+            }
+        }
     }
 }
 
@@ -92,6 +302,7 @@ private struct ToggleSection: View {
     @Binding var isHitBatter: Bool
     @Binding var isError: Bool
     @Binding var isFoulSelected: Bool
+    @Binding var isHitTagSelected: Bool
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
     let isSwingingDisabled: Bool
@@ -132,73 +343,72 @@ private struct ToggleSection: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                toggleButton("Swinging", leadingSystemImage: "s.circle", isOn: isStrikeSwinging, disabled: isSwingingDisabled) {
-                    let next = !isStrikeSwinging
-                    isStrikeSwinging = next
-                    if next {
-                        isStrikeLooking = false
-                        isBall = false
-                        if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
-                            selectedOutcome = nil
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    toggleButton("Swinging", leadingSystemImage: "s.circle", isOn: isStrikeSwinging, disabled: isSwingingDisabled) {
+                        let next = !isStrikeSwinging
+                        isStrikeSwinging = next
+                        if next {
+                            isStrikeLooking = false
+                            isBall = false
+                            if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                                selectedOutcome = nil
+                            }
+                        }
+                    }
+
+                    toggleButton("Looking", leadingSystemImage: "s.circle", isOn: isStrikeLooking, disabled: isLookingDisabled) {
+                        let next = !isStrikeLooking
+                        isStrikeLooking = next
+                        if next {
+                            isStrikeSwinging = false
+                            isBall = false
+                            if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                                selectedOutcome = nil
+                            }
+                        }
+                    }
+
+                    Button {
+                        let next = !isFoulSelected
+                        isFoulSelected = next
+                        if next {
+                            isBall = false
+                            if selectedOutcome != "Out" {
+                                selectedOutcome = nil
+                            }
+                        }
+                    } label: {
+                        Text("Foul")
+                            .font(.system(size: 15, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(isFoulSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                            .cornerRadius(6)
+                            .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isOutcomeDisabled("Foul"))
+                    .opacity(isOutcomeDisabled("Foul") ? 0.4 : 1)
+                }
+
+                HStack(spacing: 8) {
+                    OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
+                    OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                    OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
+                    toggleButton("Ball", isOn: isBall, disabled: isBallDisabled) {
+                        isBall.toggle()
+                        if isBall {
+                            isStrikeSwinging = false
+                            isStrikeLooking = false
+                            if isFoulSelected || selectedOutcome == "K" || selectedOutcome == "ꓘ" {
+                                selectedOutcome = nil
+                            }
                         }
                     }
                 }
-
-                toggleButton("Looking", leadingSystemImage: "s.circle", isOn: isStrikeLooking, disabled: isLookingDisabled) {
-                    let next = !isStrikeLooking
-                    isStrikeLooking = next
-                    if next {
-                        isStrikeSwinging = false
-                        isBall = false
-                        if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
-                            selectedOutcome = nil
-                        }
-                    }
-                }
-
-                Button {
-                    let next = !isFoulSelected
-                    isFoulSelected = next
-                    if next {
-                        isBall = false
-                        if selectedOutcome != "Out" {
-                            selectedOutcome = nil
-                        }
-                    }
-                } label: {
-                    Text("Foul")
-                        .font(.system(size: 14, weight: .semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(isFoulSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
-                        .cornerRadius(6)
-                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-                }
-                .buttonStyle(.plain)
-                .disabled(isOutcomeDisabled("Foul"))
-                .opacity(isOutcomeDisabled("Foul") ? 0.4 : 1)
-
             }
-
-            HStack(spacing: 8) {
-                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
-                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
-                OutcomeButton(label: "Walk", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Walk"), usesDescriptorSelection: false)
-                OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
-                toggleButton("Ball", isOn: isBall, disabled: isBallDisabled) {
-                    isBall.toggle()
-                    if isBall {
-                        isStrikeSwinging = false
-                        isStrikeLooking = false
-                        if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" {
-                            selectedOutcome = nil
-                        }
-                    }
-                }
-            }
-
         }
         .padding(.horizontal)
     }
@@ -207,18 +417,17 @@ private struct ToggleSection: View {
 private struct EventButtonsRow: View {
     @Binding var isWildPitch: Bool
     @Binding var isPassedBall: Bool
-    @Binding var isHitBatter: Bool
     @Binding var isError: Bool
     @Binding var selectedOutcome: String?
     let isWildPitchDisabled: Bool
     let isPassedBallDisabled: Bool
-    let isHitBatterDisabled: Bool
     let isErrorDisabled: Bool
 
     private func toggleButton(
         _ title: String,
         isOn: Bool,
         disabled: Bool = false,
+        width: CGFloat,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -228,6 +437,7 @@ private struct EventButtonsRow: View {
                 .minimumScaleFactor(0.85)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
+                .frame(width: width)
                 .background(isOn ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
                 .cornerRadius(6)
                 .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
@@ -238,42 +448,19 @@ private struct EventButtonsRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Button {
-                isError.toggle()
-            } label: {
-                Text("E")
-                    .font(.system(size: 14, weight: .semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(isError ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
-                    .cornerRadius(6)
-                    .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-            }
-            .buttonStyle(.plain)
-            .disabled(isErrorDisabled)
-            .opacity(isErrorDisabled ? 0.4 : 1)
+        let buttonWidth: CGFloat = 102
 
-            toggleButton("Wild Pitch", isOn: isWildPitch, disabled: isWildPitchDisabled) {
+        HStack(spacing: 8) {
+            toggleButton("Wild Pitch", isOn: isWildPitch, disabled: isWildPitchDisabled, width: buttonWidth) {
                 let next = !isWildPitch
                 isWildPitch = next
                 if next { isPassedBall = false }
             }
 
-            toggleButton("Passed Ball", isOn: isPassedBall, disabled: isPassedBallDisabled) {
+            toggleButton("Passed Ball", isOn: isPassedBall, disabled: isPassedBallDisabled, width: buttonWidth) {
                 let next = !isPassedBall
                 isPassedBall = next
                 if next { isWildPitch = false }
-            }
-
-            toggleButton("Hit Batter", isOn: isHitBatter, disabled: isHitBatterDisabled) {
-                let next = !isHitBatter
-                isHitBatter = next
-                if next {
-                    selectedOutcome = "1B"
-                } else if selectedOutcome == "1B" {
-                    selectedOutcome = nil
-                }
             }
         }
     }
@@ -287,61 +474,29 @@ private struct HoldActionButton: View {
     let isEnabled: Bool
     let action: () -> Void
 
-    @State private var holdProgress: CGFloat = 0
-    private let holdDuration: Double = 0.65
-
     var body: some View {
         let shape = Capsule()
 
-        Label(title, systemImage: systemImage)
-            .foregroundColor(isEnabled ? foregroundColor : .gray)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                shape
-                    .fill(isEnabled ? tint : Color(.systemGray5))
-            )
-            .contentShape(shape)
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .foregroundColor(isEnabled ? foregroundColor : .gray)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    shape
+                        .fill(isEnabled ? tint : Color(.systemGray5))
+                )
+                .contentShape(shape)
+        }
+        .buttonStyle(.plain)
         .fixedSize()
         .overlay {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    shape
-                        .fill(Color.clear)
-
-                    shape
-                        .fill((isEnabled ? foregroundColor : .gray).opacity(0.18))
-                        .frame(width: geo.size.width * holdProgress)
-                }
-            }
-            .clipShape(shape)
-            .allowsHitTesting(false)
-        }
-        .overlay {
             shape
-                .stroke((isEnabled ? foregroundColor : .gray).opacity(holdProgress > 0 ? 0.7 : 0.25), lineWidth: holdProgress > 0 ? 2 : 1)
+                .stroke((isEnabled ? foregroundColor : .gray).opacity(0.25), lineWidth: 1)
                 .allowsHitTesting(false)
         }
         .animation(.easeOut(duration: 0.15), value: isEnabled)
         .opacity(isEnabled ? 1 : 0.75)
-        .onLongPressGesture(
-            minimumDuration: holdDuration,
-            maximumDistance: 24,
-            pressing: { pressing in
-                guard isEnabled else {
-                    holdProgress = 0
-                    return
-                }
-                withAnimation(pressing ? .linear(duration: holdDuration) : .easeOut(duration: 0.15)) {
-                    holdProgress = pressing ? 1 : 0
-                }
-            },
-            perform: {
-                guard isEnabled else { return }
-                holdProgress = 0
-                action()
-            }
-        )
     }
 }
 
@@ -507,9 +662,10 @@ struct PitchResultSheetView: View {
     @ViewBuilder
     private var reviewCountAndFieldSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
+            HStack(alignment: .center, spacing: 10) {
                 Text("Count")
                     .font(.subheadline.weight(.semibold))
+                    .frame(width: 48, alignment: .leading)
 
                 HStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 6) {
@@ -571,6 +727,9 @@ struct PitchResultSheetView: View {
                     Text("Count: \(confirmedBallsCount)-\(confirmedStrikesCount)")
                         .font(.subheadline.weight(.semibold))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .layoutPriority(1)
                 }
             }
 
@@ -1039,14 +1198,15 @@ struct PitchResultSheetView: View {
               let pitchCall = pitchCall else {
             return nil
         }
+        let isCatcherCall = pitchCall.pitch.trimmingCharacters(in: .whitespacesAndNewlines) == "Catcher"
         let resolvedIsStrike = resultIsInsideStrikeZone(label)
-        let normalizedOutcome = (
+        let normalizedOutcomeBase = (
             isHitBatter
                 ? "HBP"
                 : (selectedOutcome ?? (isFoulSelected ? "Foul" : ""))
         ).trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedIsFoul = isFoulSelected || normalizedOutcome.caseInsensitiveCompare("Foul") == .orderedSame
-        let resolvedIsBall = !resolvedIsStrike && !resolvedIsFoul
+        let resolvedIsFoul = isFoulSelected || normalizedOutcomeBase.caseInsensitiveCompare("Foul") == .orderedSame
+        let resolvedIsBall = !isCatcherCall && !resolvedIsStrike && !resolvedIsFoul
         let prior = priorCount(for: PitchEvent(
             id: nil,
             timestamp: Date(),
@@ -1063,7 +1223,7 @@ struct PitchResultSheetView: View {
             wildPitch: isWildPitch,
             passedBall: isPassedBall,
             strikeLooking: isStrikeLooking,
-            outcome: normalizedOutcome.isEmpty ? nil : normalizedOutcome,
+            outcome: normalizedOutcomeBase.isEmpty ? nil : normalizedOutcomeBase,
             descriptor: selectedDescriptor,
             errorOnPlay: isError,
             battedBallRegion: battedBallRegionName,
@@ -1075,6 +1235,15 @@ struct PitchResultSheetView: View {
             opponentBatterId: effectiveOpponentBatterId,
             pitcherId: selectedPitcherId
         ))
+        let isTerminalStrikeLooking = isStrikeLooking && prior.strikes >= 2
+        let isTerminalStrikeSwinging = isStrikeSwinging && prior.strikes >= 2
+        let normalizedOutcome = {
+            let trimmed = normalizedOutcomeBase
+            if !trimmed.isEmpty { return trimmed }
+            if isTerminalStrikeLooking { return "ꓘ" }
+            if isTerminalStrikeSwinging { return "K" }
+            return ""
+        }()
 
         return PitchEvent(
             id: nil,
@@ -1195,51 +1364,6 @@ struct PitchResultSheetView: View {
                 } 
                 .padding(.top, 8)
 
-                Divider()
-
-                ToggleSection(
-                    isStrikeSwinging: $isStrikeSwinging,
-                    isStrikeLooking: $isStrikeLooking,
-                    isWildPitch: $isWildPitch,
-                    isPassedBall: $isPassedBall,
-                    isBall: $isBall,
-                    isHitBatter: $isHitBatter,
-                    isError: $isError,
-                    isFoulSelected: $isFoulSelected,
-                    selectedOutcome: $selectedOutcome,
-                    selectedDescriptor: $selectedDescriptor,
-                    isSwingingDisabled: isTopToggleDisabled(.swinging),
-                    isLookingDisabled: isTopToggleDisabled(.looking),
-                    isBallDisabled: isTopToggleDisabled(.ball),
-                    isWildPitchDisabled: isTopToggleDisabled(.wildPitch),
-                    isPassedBallDisabled: isTopToggleDisabled(.passedBall),
-                    isHitBatterDisabled: isTopToggleDisabled(.hitBatter),
-                    isOutcomeDisabled: isOutcomeDisabled
-                )
-
-                Divider()
-
-                OutcomeButtonsSection(
-                    selectedOutcome: $selectedOutcome,
-                    selectedDescriptor: $selectedDescriptor,
-                    isHitTagSelected: $isHitTagSelected,
-                    isOutcomeDisabled: isOutcomeDisabled
-                )
-                .padding(.horizontal)
-
-                EventButtonsRow(
-                    isWildPitch: $isWildPitch,
-                    isPassedBall: $isPassedBall,
-                    isHitBatter: $isHitBatter,
-                    isError: $isError,
-                    selectedOutcome: $selectedOutcome,
-                    isWildPitchDisabled: isTopToggleDisabled(.wildPitch),
-                    isPassedBallDisabled: isTopToggleDisabled(.passedBall),
-                    isHitBatterDisabled: isTopToggleDisabled(.hitBatter),
-                    isErrorDisabled: isOutcomeDisabled("E")
-                )
-                .padding(.horizontal)
-
                 let canSave: Bool = {
                     // Require at least one of: overlay tap, outcome/descriptor/error, or any toggle
                     (battedBallRegionName != nil) ||
@@ -1254,7 +1378,9 @@ struct PitchResultSheetView: View {
                     isPassedBall ||
                     isBall
                 }()
-                
+
+                Divider()
+
                 HStack(alignment: .center, spacing: 12) {
                     HoldActionButton(
                         title: "Pitch Only",
@@ -1265,8 +1391,23 @@ struct PitchResultSheetView: View {
                         action: handlePitchOnlySave
                     )
 
-                    Spacer()
-                    
+                    Spacer(minLength: 12)
+
+                    SafeOutButtonsRow(
+                        selectedOutcome: $selectedOutcome,
+                        selectedDescriptor: $selectedDescriptor,
+                        isStrikeSwinging: $isStrikeSwinging,
+                        isStrikeLooking: $isStrikeLooking,
+                        isBall: $isBall,
+                        isHitTagSelected: $isHitTagSelected,
+                        isHitBatter: $isHitBatter,
+                        isFoulSelected: $isFoulSelected,
+                        isSafeDisabled: isOutcomeDisabled("1B"),
+                        isOutDisabled: isOutcomeDisabled("Out")
+                    )
+
+                    Spacer(minLength: 12)
+
                     HoldActionButton(
                         title: "Pitch Event",
                         systemImage: "square.and.arrow.down.on.square.fill",
@@ -1276,6 +1417,46 @@ struct PitchResultSheetView: View {
                         action: handleSave
                     )
                 }
+
+                Divider()
+
+                ToggleSection(
+                    isStrikeSwinging: $isStrikeSwinging,
+                    isStrikeLooking: $isStrikeLooking,
+                    isWildPitch: $isWildPitch,
+                    isPassedBall: $isPassedBall,
+                    isBall: $isBall,
+                    isHitBatter: $isHitBatter,
+                isError: $isError,
+                isFoulSelected: $isFoulSelected,
+                isHitTagSelected: $isHitTagSelected,
+                selectedOutcome: $selectedOutcome,
+                selectedDescriptor: $selectedDescriptor,
+                isSwingingDisabled: isTopToggleDisabled(.swinging),
+                    isLookingDisabled: isTopToggleDisabled(.looking),
+                    isBallDisabled: isTopToggleDisabled(.ball),
+                    isWildPitchDisabled: isTopToggleDisabled(.wildPitch),
+                    isPassedBallDisabled: isTopToggleDisabled(.passedBall),
+                    isHitBatterDisabled: isTopToggleDisabled(.hitBatter),
+                    isOutcomeDisabled: isOutcomeDisabled
+                )
+
+                Divider()
+
+                OutcomeButtonsSection(
+                    selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
+                    isHitTagSelected: $isHitTagSelected,
+                    isHitBatter: $isHitBatter,
+                    isError: $isError,
+                    isFoulSelected: $isFoulSelected,
+                    isWildPitch: $isWildPitch,
+                    isPassedBall: $isPassedBall,
+                    isOutcomeDisabled: isOutcomeDisabled,
+                    isWildPitchDisabled: isTopToggleDisabled(.wildPitch),
+                    isPassedBallDisabled: isTopToggleDisabled(.passedBall)
+                )
+                .padding(.horizontal)
 
                 reviewCountAndFieldSection
 
@@ -1369,9 +1550,9 @@ struct PitchResultSheetView: View {
                                     performSave(intent)
                                 } label: {
                                     Text("#\(cell.jerseyNumber)")
-                                        .font(.subheadline.weight(.semibold))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
+                                        .font(.headline.weight(.semibold))
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 10)
                                         .background(isSelected ? Color.blue.opacity(0.2) : Color.gray.opacity(0.12))
                                         .clipShape(Capsule())
                                 }
@@ -1425,26 +1606,91 @@ private struct OutcomeButtonsSection: View {
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
     @Binding var isHitTagSelected: Bool
+    @Binding var isHitBatter: Bool
+    @Binding var isError: Bool
+    @Binding var isFoulSelected: Bool
+    @Binding var isWildPitch: Bool
+    @Binding var isPassedBall: Bool
     var isOutcomeDisabled: (String) -> Bool
-    
+    let isWildPitchDisabled: Bool
+    let isPassedBallDisabled: Bool
+
+    private var safeCircleSelected: Bool {
+        if isHitTagSelected { return true }
+        guard let selectedOutcome else { return false }
+        return ["1B", "2B", "3B", "HR"].contains(selectedOutcome)
+    }
+
+    private func selectSafeCategory() {
+        if safeCircleSelected {
+            if isHitTagSelected {
+                isHitTagSelected = false
+            }
+            if let selectedOutcome, ["1B", "2B", "3B", "HR"].contains(selectedOutcome) {
+                self.selectedOutcome = nil
+            } else if selectedOutcome == nil {
+                self.selectedOutcome = nil
+            }
+            selectedDescriptor = nil
+            isFoulSelected = false
+            return
+        }
+
+        selectedOutcome = "1B"
+        selectedDescriptor = nil
+        isHitTagSelected = false
+        isFoulSelected = false
+    }
+
+    private func setDescriptor(_ label: String) {
+        if selectedDescriptor == label {
+            selectedDescriptor = nil
+        } else {
+            selectedDescriptor = label
+        }
+        if selectedDescriptor != nil {
+            isHitTagSelected = false
+            isFoulSelected = false
+        }
+    }
+
+    private func toggleHitTag() {
+        isHitTagSelected.toggle()
+        if isHitTagSelected {
+            if selectedOutcome == "Walk" {
+                selectedOutcome = nil
+            }
+            isFoulSelected = false
+            selectedDescriptor = nil
+        }
+    }
+
+    private func toggleWalk() {
+        selectedOutcome = (selectedOutcome == "Walk") ? nil : "Walk"
+        isFoulSelected = false
+        selectedDescriptor = nil
+        if selectedOutcome == "Walk" {
+            isHitTagSelected = false
+        }
+    }
+
+    private func toggleError() {
+        isError.toggle()
+        if isError {
+            isFoulSelected = false
+            selectedDescriptor = nil
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Text("Safe:")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 48, alignment: .leading)
-                OutcomeButton(label: "1B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("1B"), usesDescriptorSelection: false)
-                OutcomeButton(label: "2B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("2B"), usesDescriptorSelection: false)
-                OutcomeButton(label: "3B", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("3B"), usesDescriptorSelection: false)
-                OutcomeButton(label: "HR", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("HR"), usesDescriptorSelection: false)
-                Button {
-                    isHitTagSelected.toggle()
-                } label: {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
+                Button { toggleHitTag() } label: {
                     Text("Hit")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
+                        .frame(width: 64, height: 50, alignment: .center)
                         .background(isHitTagSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
                         .cornerRadius(6)
                         .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
@@ -1452,15 +1698,128 @@ private struct OutcomeButtonsSection: View {
                 .buttonStyle(.plain)
                 .disabled(isOutcomeDisabled("Hit"))
                 .opacity(isOutcomeDisabled("Hit") ? 0.4 : 1.0)
+
+                Button { toggleWalk() } label: {
+                    Text("Walk")
+                        .font(.system(size: 15, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(width: 64, height: 50, alignment: .center)
+                        .background(selectedOutcome == "Walk" ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOutcomeDisabled("Walk"))
+                .opacity(isOutcomeDisabled("Walk") ? 0.4 : 1.0)
+
+                Button { toggleError() } label: {
+                    Text("Error")
+                        .font(.system(size: 15, weight: .semibold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .frame(width: 64, height: 50, alignment: .center)
+                        .background(isError ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOutcomeDisabled("E"))
+                .opacity(isOutcomeDisabled("E") ? 0.4 : 1.0)
             }
-            HStack(spacing: 8) {
-                OutcomeButton(label: "Grounder", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Grounder"), usesDescriptorSelection: true)
-                OutcomeButton(label: "Line", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Line"), usesDescriptorSelection: true)
-                OutcomeButton(label: "Pop", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Pop"), usesDescriptorSelection: true)
-                OutcomeButton(label: "Fly", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Fly"), usesDescriptorSelection: true)
-                OutcomeButton(label: "Bunt", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Bunt"), usesDescriptorSelection: true)
+
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 8) {
+                        AssetOutcomeButton(
+                            assetName: "grounder",
+                            width: 58,
+                            height: 46,
+                            isSelected: selectedDescriptor == "Grounder",
+                            isDisabled: isOutcomeDisabled("Grounder")
+                        ) {
+                            setDescriptor("Grounder")
+                        }
+
+                        AssetOutcomeButton(
+                            assetName: "fly",
+                            width: 58,
+                            height: 46,
+                            isSelected: selectedDescriptor == "Fly",
+                            isDisabled: isOutcomeDisabled("Fly")
+                        ) {
+                            setDescriptor("Fly")
+                        }
+
+                        AssetOutcomeButton(
+                            assetName: "hit batter",
+                            width: 60,
+                            height: 46,
+                            isSelected: isHitBatter,
+                            isDisabled: isOutcomeDisabled("Hit Batter")
+                        ) {
+                            isHitBatter.toggle()
+                            if isHitBatter {
+                                selectedOutcome = "1B"
+                                isHitTagSelected = false
+                                isFoulSelected = false
+                                selectedDescriptor = nil
+                            } else if selectedOutcome == "1B" {
+                                selectedOutcome = nil
+                            }
+                        }
+                    }
+
+                HStack(spacing: 8) {
+                    AssetOutcomeButton(
+                        assetName: "bunt",
+                        width: 58,
+                        height: 46,
+                            isSelected: selectedDescriptor == "Bunt",
+                            isDisabled: isOutcomeDisabled("Bunt")
+                        ) {
+                            setDescriptor("Bunt")
+                        }
+
+                        AssetOutcomeButton(
+                            assetName: "Pop",
+                            width: 58,
+                            height: 46,
+                            isSelected: selectedDescriptor == "Pop",
+                            isDisabled: isOutcomeDisabled("Pop")
+                        ) {
+                            setDescriptor("Pop")
+                        }
+
+                        AssetOutcomeButton(
+                            assetName: "Line",
+                            width: 58,
+                            height: 46,
+                            isSelected: selectedDescriptor == "Line",
+                            isDisabled: isOutcomeDisabled("Line")
+                        ) {
+                            setDescriptor("Line")
+                        }
+                    }
+
+                    EventButtonsRow(
+                        isWildPitch: $isWildPitch,
+                        isPassedBall: $isPassedBall,
+                        isError: $isError,
+                        selectedOutcome: $selectedOutcome,
+                        isWildPitchDisabled: isWildPitchDisabled,
+                        isPassedBallDisabled: isPassedBallDisabled,
+                        isErrorDisabled: isOutcomeDisabled("E")
+                    )
+                }
+
+                DiamondOutcomeSelector(selectedOutcome: $selectedOutcome, isDisabled: isOutcomeDisabled)
+                    .padding(.top, 2)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, -2)
+        .padding(.top, 2)
     }
 }
 
