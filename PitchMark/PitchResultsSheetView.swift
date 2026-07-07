@@ -318,6 +318,9 @@ private struct ToggleSection: View {
         leadingSystemImage: String? = nil,
         isOn: Bool,
         disabled: Bool = false,
+        width: CGFloat? = nil,
+        height: CGFloat? = nil,
+        alignment: Alignment = .center,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -333,6 +336,7 @@ private struct ToggleSection: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
+            .frame(width: width, height: height, alignment: alignment)
             .background(isOn ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
             .cornerRadius(6)
             .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
@@ -343,72 +347,112 @@ private struct ToggleSection: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    toggleButton("Swinging", leadingSystemImage: "s.circle", isOn: isStrikeSwinging, disabled: isSwingingDisabled) {
-                        let next = !isStrikeSwinging
-                        isStrikeSwinging = next
-                        if next {
-                            isStrikeLooking = false
-                            isBall = false
-                            if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
-                                selectedOutcome = nil
-                            }
-                        }
-                    }
+        let controlHeight: CGFloat = 36
+        let primaryWidth: CGFloat = 104
+        let kButtonSize: CGFloat = 36
+        let foulBallWidth: CGFloat = 92
+        let foulBallHeight: CGFloat = 48
+        let leftStackHeight: CGFloat = controlHeight * 2 + 8
 
-                    toggleButton("Looking", leadingSystemImage: "s.circle", isOn: isStrikeLooking, disabled: isLookingDisabled) {
-                        let next = !isStrikeLooking
-                        isStrikeLooking = next
-                        if next {
-                            isStrikeSwinging = false
-                            isBall = false
-                            if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
-                                selectedOutcome = nil
-                            }
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                toggleButton(
+                    "Swinging",
+                    leadingSystemImage: "s.circle",
+                    isOn: isStrikeSwinging,
+                    disabled: isSwingingDisabled,
+                    width: primaryWidth,
+                    height: controlHeight,
+                    alignment: .leading
+                ) {
+                    let next = !isStrikeSwinging
+                    isStrikeSwinging = next
+                    if next {
+                        isStrikeLooking = false
+                        isBall = false
+                        if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                            selectedOutcome = nil
                         }
                     }
-
-                    Button {
-                        let next = !isFoulSelected
-                        isFoulSelected = next
-                        if next {
-                            isBall = false
-                            if selectedOutcome != "Out" {
-                                selectedOutcome = nil
-                            }
-                        }
-                    } label: {
-                        Text("Foul")
-                            .font(.system(size: 15, weight: .semibold))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(isFoulSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
-                            .cornerRadius(6)
-                            .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isOutcomeDisabled("Foul"))
-                    .opacity(isOutcomeDisabled("Foul") ? 0.4 : 1)
                 }
 
-                HStack(spacing: 8) {
-                    OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
-                    OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
-                    OutcomeButton(label: "Out", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("Out"), usesDescriptorSelection: false)
-                    toggleButton("Ball", isOn: isBall, disabled: isBallDisabled) {
-                        isBall.toggle()
-                        if isBall {
-                            isStrikeSwinging = false
-                            isStrikeLooking = false
-                            if isFoulSelected || selectedOutcome == "K" || selectedOutcome == "ꓘ" {
-                                selectedOutcome = nil
-                            }
+                toggleButton(
+                    "Looking",
+                    leadingSystemImage: "s.circle",
+                    isOn: isStrikeLooking,
+                    disabled: isLookingDisabled,
+                    width: primaryWidth,
+                    height: controlHeight,
+                    alignment: .leading
+                ) {
+                    let next = !isStrikeLooking
+                    isStrikeLooking = next
+                    if next {
+                        isStrikeSwinging = false
+                        isBall = false
+                        if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
+                            selectedOutcome = nil
                         }
                     }
                 }
             }
+
+            VStack(spacing: 8) {
+                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
+                    .frame(width: kButtonSize, height: kButtonSize)
+
+                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                    .frame(width: kButtonSize, height: kButtonSize)
+            }
+
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+
+                Button {
+                    let next = !isFoulSelected
+                    isFoulSelected = next
+                    if next {
+                        isBall = false
+                        if selectedOutcome != "Out" {
+                            selectedOutcome = nil
+                        }
+                    }
+                } label: {
+                    Text("Foul")
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(width: foulBallWidth, height: foulBallHeight)
+                        .background(isFoulSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .cornerRadius(6)
+                        .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOutcomeDisabled("Foul"))
+                .opacity(isOutcomeDisabled("Foul") ? 0.4 : 1)
+
+                Spacer(minLength: 0)
+
+                toggleButton(
+                    "Ball",
+                    isOn: isBall,
+                    disabled: isBallDisabled,
+                    width: foulBallWidth,
+                    height: foulBallHeight
+                ) {
+                    isBall.toggle()
+                    if isBall {
+                        isStrikeSwinging = false
+                        isStrikeLooking = false
+                        if isFoulSelected || selectedOutcome == "K" || selectedOutcome == "ꓘ" {
+                            selectedOutcome = nil
+                        }
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(height: leftStackHeight)
         }
         .padding(.horizontal)
     }
@@ -1342,27 +1386,58 @@ struct PitchResultSheetView: View {
     var body: some View {
         AnyView(
             ScrollView(.vertical, showsIndicators: true) {
-                VStack(spacing: 10) {
-                HStack(spacing: 12) {
-                    Text(hasSelectedLocation ? "Location: \(effectiveLocationLabel ?? "")" : "Location")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(hasSelectedLocation ? .blue : .secondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                    Spacer(minLength: 0)
-                    if let calledPitch = pitchCall?.pitch, !calledPitch.isEmpty {
-                        let calledLocation = pitchCall?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                        let calledText = calledLocation.isEmpty
-                            ? "Called: \(calledPitch)"
-                            : "Called: \(calledPitch) • \(calledLocation)"
-                        Text(calledText)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 10) {
+                        Button {
+                            isPresented = false
+                            dismiss()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 22, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .accessibilityLabel("Close")
+                        }
+                        .buttonStyle(.plain)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Called Pitch")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+
+                            Text(pitchCall?.pitch ?? "")
+                                .font(.title3.weight(.bold))
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, 8)
+
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(hasSelectedLocation ? "Location: \(effectiveLocationLabel ?? "")" : "Location")
                             .font(.subheadline.weight(.semibold))
-                            .foregroundColor(.secondary)
+                            .foregroundColor(hasSelectedLocation ? .blue : .secondary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
+
+                        if let calledPitch = pitchCall?.pitch, !calledPitch.isEmpty {
+                            let calledLocation = pitchCall?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                            let calledText = calledLocation.isEmpty
+                                ? "Called: \(calledPitch)"
+                                : "Called: \(calledPitch) • \(calledLocation)"
+                            Text(calledText)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+
+                        Spacer(minLength: 0)
                     }
-                } 
-                .padding(.top, 8)
 
                 let canSave: Bool = {
                     // Require at least one of: overlay tap, outcome/descriptor/error, or any toggle
@@ -1381,42 +1456,80 @@ struct PitchResultSheetView: View {
 
                 Divider()
 
-                HStack(alignment: .center, spacing: 12) {
-                    HoldActionButton(
-                        title: "Pitch Only",
-                        systemImage: "square.and.arrow.down",
-                        foregroundColor: .blue,
-                        tint: .white,
-                        isEnabled: true,
-                        action: handlePitchOnlySave
-                    )
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 8) {
+                        HoldActionButton(
+                            title: "Pitch Only",
+                            systemImage: "square.and.arrow.down",
+                            foregroundColor: .blue,
+                            tint: .white,
+                            isEnabled: true,
+                            action: handlePitchOnlySave
+                        )
 
-                    Spacer(minLength: 12)
+                        Spacer(minLength: 8)
 
-                    SafeOutButtonsRow(
-                        selectedOutcome: $selectedOutcome,
-                        selectedDescriptor: $selectedDescriptor,
-                        isStrikeSwinging: $isStrikeSwinging,
-                        isStrikeLooking: $isStrikeLooking,
-                        isBall: $isBall,
-                        isHitTagSelected: $isHitTagSelected,
-                        isHitBatter: $isHitBatter,
-                        isFoulSelected: $isFoulSelected,
-                        isSafeDisabled: isOutcomeDisabled("1B"),
-                        isOutDisabled: isOutcomeDisabled("Out")
-                    )
+                        SafeOutButtonsRow(
+                            selectedOutcome: $selectedOutcome,
+                            selectedDescriptor: $selectedDescriptor,
+                            isStrikeSwinging: $isStrikeSwinging,
+                            isStrikeLooking: $isStrikeLooking,
+                            isBall: $isBall,
+                            isHitTagSelected: $isHitTagSelected,
+                            isHitBatter: $isHitBatter,
+                            isFoulSelected: $isFoulSelected,
+                            isSafeDisabled: isOutcomeDisabled("1B"),
+                            isOutDisabled: isOutcomeDisabled("Out")
+                        )
 
-                    Spacer(minLength: 12)
+                        Spacer(minLength: 8)
 
-                    HoldActionButton(
-                        title: "Pitch Event",
-                        systemImage: "square.and.arrow.down.on.square.fill",
-                        foregroundColor: .green,
-                        tint: .white,
-                        isEnabled: canSave,
-                        action: handleSave
-                    )
+                        HoldActionButton(
+                            title: "Pitch Event",
+                            systemImage: "square.and.arrow.down.on.square.fill",
+                            foregroundColor: .green,
+                            tint: .white,
+                            isEnabled: canSave,
+                            action: handleSave
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HoldActionButton(
+                            title: "Pitch Only",
+                            systemImage: "square.and.arrow.down",
+                            foregroundColor: .blue,
+                            tint: .white,
+                            isEnabled: true,
+                            action: handlePitchOnlySave
+                        )
+
+                        SafeOutButtonsRow(
+                            selectedOutcome: $selectedOutcome,
+                            selectedDescriptor: $selectedDescriptor,
+                            isStrikeSwinging: $isStrikeSwinging,
+                            isStrikeLooking: $isStrikeLooking,
+                            isBall: $isBall,
+                            isHitTagSelected: $isHitTagSelected,
+                            isHitBatter: $isHitBatter,
+                            isFoulSelected: $isFoulSelected,
+                            isSafeDisabled: isOutcomeDisabled("1B"),
+                            isOutDisabled: isOutcomeDisabled("Out")
+                        )
+
+                        HoldActionButton(
+                            title: "Pitch Event",
+                            systemImage: "square.and.arrow.down.on.square.fill",
+                            foregroundColor: .green,
+                            tint: .white,
+                            isEnabled: canSave,
+                            action: handleSave
+                        )
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 2)
+                .padding(.bottom, 12)
 
                 Divider()
 
@@ -1461,7 +1574,8 @@ struct PitchResultSheetView: View {
                 reviewCountAndFieldSection
 
                 }
-                .padding(12)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 12)
             }
             .modifier(
                 OutcomeChangeHandlers(

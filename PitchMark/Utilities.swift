@@ -557,6 +557,14 @@ enum PitchImageDictionary {
         if let image = imageMap[key] {
             return image
         } else {
+            // Older call paths store the bare grid label ("Up & In") while the card assets
+            // are keyed by the prefixed form ("Strike Up & In" / "Ball Up & In").
+            let prefixedLocation = "\(isStrike ? "Strike" : "Ball") \(trimmedLocation)"
+            let prefixedKey = "\(prefixedLocation)|\(batterSide.rawValue)"
+            if let image = imageMap[prefixedKey] {
+                debugLog("🔍 Fallback lookup key: \(prefixedKey)")
+                return image
+            }
             debugLog("⚠️ Missing image for key: \(key)")
             return "Bat"
         }

@@ -111,7 +111,14 @@ private struct PitchButtonView: View {
                     if canInitiateCall {
                         Button(action: {
                             guard !selectedPitch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                                onCatcherLocationTap()
+                                let catcherCall = PitchCall(
+                                    pitch: "Catcher",
+                                    location: fullLabel,
+                                    isStrike: location.isStrike,
+                                    codes: []
+                                )
+                                setLastTapped(tappedPoint)
+                                setCalledPitch(catcherCall)
                                 return
                             }
 

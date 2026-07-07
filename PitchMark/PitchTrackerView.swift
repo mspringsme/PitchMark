@@ -5847,6 +5847,18 @@ struct PitchTrackerView: View {
                 showResultConfirmation: $showResultConfirmation,
                 showConfirmSheet: confirmSheetBinding,
                 onResultLocationPicked: { pickedLabel in
+                    pendingResultLabel = pickedLabel
+                    actualLocationRecorded = pickedLabel
+                    resultVisualState = pickedLabel
+                    if calledPitch?.pitch.trimmingCharacters(in: .whitespacesAndNewlines) == "Catcher" {
+                        let isStrike = pickedLabel.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Strike ")
+                        calledPitch = PitchCall(
+                            pitch: "Catcher",
+                            location: pickedLabel,
+                            isStrike: isStrike,
+                            codes: calledPitch?.codes ?? []
+                        )
+                    }
                     pitchResultBannerPhase = .chooseAny
                     expandCalledPitchComposerToLarge()
                     if sessionManager.currentMode == .game, !isOwnerForActiveGame {
@@ -10702,6 +10714,7 @@ struct CodeOrderToggle: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 4)
+        .padding(.horizontal, 22)
     }
 }
 
@@ -10889,10 +10902,14 @@ struct CalledPitchView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    Spacer()
                 }
+                
                 // Assigned codes as chips
                 if !displayCodes.isEmpty {
-                       ScrollView(.horizontal, showsIndicators: false) {
+                    
+                    //  Show codes ======================
+                    ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(displayCodes, id: \.self) { code in
                                 let shown = displayCode(code)
@@ -10910,26 +10927,21 @@ struct CalledPitchView: View {
                                             .fill(callColor.opacity(0.85))
                                         
                                         // Highlight overlay when tapped
-                                        if tappedCode == code {
+                                        let isSelected = tappedCode == code
+
+                                        if isSelected {
                                             Capsule()
                                                 .fill(.white)
                                                 .stroke(Color.black.opacity(0.9), lineWidth: 2)
                                                 .shadow(color: Color.black.opacity(0.35), radius: 6, x: 0, y: 0)
                                                 .transition(.opacity)
                                         }
-                                        if tappedCode == code {
-                                            Text(shown)
-                                                .font(.title3.weight(.semibold))
-                                                .foregroundColor(callColor.opacity(0.85))
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 4)
-                                        } else {
-                                            Text(shown)
-                                                .font(.title3.weight(.semibold))
-                                                .foregroundColor(.white)
-                                                .padding(.horizontal, 8)
-                                                .padding(.vertical, 4)
-                                        }
+
+                                        Text(shown)
+                                            .font(.title3.weight(.semibold))
+                                            .foregroundColor(isSelected ? callColor.opacity(0.85) : .white)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
                                     }
                                     .frame(height: 32)
                                     .animation(.easeInOut(duration: 0.15), value: tappedCode)
@@ -10938,9 +10950,15 @@ struct CalledPitchView: View {
                                 .accessibilityLabel("Record for code \(shown)")
                             }
                         }
-                        .frame(height: 60)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 2)
                     }
-                    .padding(.top, 2)
+                    .frame(height: 60)
+                    .scrollClipDisabled()
+                    
+                    
+                    
+                    
                     CodeOrderToggle(
                         pitchFirst: $pitchFirst,
                         template: template,

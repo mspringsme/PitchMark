@@ -1193,11 +1193,26 @@ struct PitchResultCard: View {
         
         let rightImageName: String? = {
             let calledPitchName = event.calledPitch?.pitch.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if calledPitchName == "Catcher" && event.location.trimmingCharacters(in: .whitespacesAndNewlines) == "Catcher" {
+            let savedLocation = event.location.trimmingCharacters(in: .whitespacesAndNewlines)
+            let callLocation = event.calledPitch?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            // Catcher calls can keep a placeholder saved location while the tapped result lives on the call payload.
+            let resolvedLocation: String = {
+                if !savedLocation.isEmpty, savedLocation != "Catcher" {
+                    return savedLocation
+                }
+                if calledPitchName == "Catcher", !callLocation.isEmpty, callLocation != "Catcher" {
+                    return callLocation
+                }
+                return savedLocation
+            }()
+
+            guard !resolvedLocation.isEmpty, resolvedLocation != "Catcher" else {
                 return nil
             }
+
             return PitchImageDictionary.imageName(
-                for: event.location,
+                for: resolvedLocation,
                 isStrike: event.isStrike,
                 batterSide: event.batterSide
             )
@@ -3071,6 +3086,7 @@ extension PitchEvent {
 
 enum PitchMode: String, Codable {
     case game
+    case scout
 }
 
 struct PitchCall: Codable {
