@@ -707,12 +707,10 @@ struct PitchResultSheetView: View {
     private var reviewCountAndFieldSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 10) {
-                Text("Count")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(width: 48, alignment: .leading)
 
                 HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 6) {
+                    Spacer()
+                    VStack(alignment: .center, spacing: 6) {
                         Text("Balls")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -739,7 +737,7 @@ struct PitchResultSheetView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .center, spacing: 6) {
                         Text("Strikes")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -766,7 +764,7 @@ struct PitchResultSheetView: View {
                         }
                     }
 
-                    Spacer(minLength: 0)
+                    Spacer()
 
                     Text("Count: \(confirmedBallsCount)-\(confirmedStrikesCount)")
                         .font(.subheadline.weight(.semibold))
@@ -774,6 +772,7 @@ struct PitchResultSheetView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
                         .layoutPriority(1)
+                    Spacer()
                 }
             }
 
@@ -781,6 +780,7 @@ struct PitchResultSheetView: View {
                 .padding(.top, -6)
 
             HStack(spacing: 8) {
+                Spacer()
                 Text("Ball in play location")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -796,6 +796,7 @@ struct PitchResultSheetView: View {
                         .font(.caption.weight(.semibold))
                 }
                 .buttonStyle(.bordered)
+                Spacer()
             }
 
             FieldOverlayView(
@@ -1384,10 +1385,11 @@ struct PitchResultSheetView: View {
     }
 
     var body: some View {
-        AnyView(
-            ScrollView(.vertical, showsIndicators: true) {
+        ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .center, spacing: 10) {
+                        
+                        
                         Button {
                             isPresented = false
                             dismiss()
@@ -1398,46 +1400,39 @@ struct PitchResultSheetView: View {
                                 .accessibilityLabel("Close")
                         }
                         .buttonStyle(.plain)
+                        .padding(.leading, 16)
+
+                        Spacer()
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Called Pitch")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
+                            
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(hasSelectedLocation ? "Location: \(effectiveLocationLabel ?? "")" : "Location")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(hasSelectedLocation ? .blue : .secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                            }
 
-                            Text(pitchCall?.pitch ?? "")
-                                .font(.title3.weight(.bold))
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
+                            if let calledPitch = pitchCall?.pitch, !calledPitch.isEmpty {
+                                let calledLocation = pitchCall?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                                let calledText = calledLocation.isEmpty
+                                    ? "Called: \(calledPitch)"
+                                    : "Called: \(calledPitch) • \(calledLocation)"
+
+                                Text(calledText)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                            }
                         }
-
-                        Spacer(minLength: 0)
+                        Spacer()
                     }
-                    .padding(.top, 8)
+                }
+                .padding(.top, 8)
 
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(hasSelectedLocation ? "Location: \(effectiveLocationLabel ?? "")" : "Location")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(hasSelectedLocation ? .blue : .secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-
-                        if let calledPitch = pitchCall?.pitch, !calledPitch.isEmpty {
-                            let calledLocation = pitchCall?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                            let calledText = calledLocation.isEmpty
-                                ? "Called: \(calledPitch)"
-                                : "Called: \(calledPitch) • \(calledLocation)"
-                            Text(calledText)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                        }
-
-                        Spacer(minLength: 0)
-                    }
+                    
 
                 let canSave: Bool = {
                     // Require at least one of: overlay tap, outcome/descriptor/error, or any toggle
@@ -1457,17 +1452,18 @@ struct PitchResultSheetView: View {
                 Divider()
 
                 ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .center, spacing: 8) {
+                    HStack() {
+                        Spacer()
                         HoldActionButton(
                             title: "Pitch Only",
-                            systemImage: "square.and.arrow.down",
+                            systemImage: "",
                             foregroundColor: .blue,
                             tint: .white,
                             isEnabled: true,
                             action: handlePitchOnlySave
                         )
 
-                        Spacer(minLength: 8)
+                        Spacer()
 
                         SafeOutButtonsRow(
                             selectedOutcome: $selectedOutcome,
@@ -1482,53 +1478,21 @@ struct PitchResultSheetView: View {
                             isOutDisabled: isOutcomeDisabled("Out")
                         )
 
-                        Spacer(minLength: 8)
+                        Spacer()
 
                         HoldActionButton(
                             title: "Pitch Event",
-                            systemImage: "square.and.arrow.down.on.square.fill",
+                            systemImage: "",
                             foregroundColor: .green,
                             tint: .white,
                             isEnabled: canSave,
                             action: handleSave
                         )
-                    }
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        HoldActionButton(
-                            title: "Pitch Only",
-                            systemImage: "square.and.arrow.down",
-                            foregroundColor: .blue,
-                            tint: .white,
-                            isEnabled: true,
-                            action: handlePitchOnlySave
-                        )
-
-                        SafeOutButtonsRow(
-                            selectedOutcome: $selectedOutcome,
-                            selectedDescriptor: $selectedDescriptor,
-                            isStrikeSwinging: $isStrikeSwinging,
-                            isStrikeLooking: $isStrikeLooking,
-                            isBall: $isBall,
-                            isHitTagSelected: $isHitTagSelected,
-                            isHitBatter: $isHitBatter,
-                            isFoulSelected: $isFoulSelected,
-                            isSafeDisabled: isOutcomeDisabled("1B"),
-                            isOutDisabled: isOutcomeDisabled("Out")
-                        )
-
-                        HoldActionButton(
-                            title: "Pitch Event",
-                            systemImage: "square.and.arrow.down.on.square.fill",
-                            foregroundColor: .green,
-                            tint: .white,
-                            isEnabled: canSave,
-                            action: handleSave
-                        )
+                        Spacer()
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 2)
+                .padding(.top, 12)
                 .padding(.bottom, 12)
 
                 Divider()
@@ -1574,9 +1538,8 @@ struct PitchResultSheetView: View {
                 reviewCountAndFieldSection
 
                 }
-                .padding(.horizontal, 22)
+                .padding(.horizontal, 18)
                 .padding(.bottom, 12)
-            }
             .modifier(
                 OutcomeChangeHandlers(
                     isPresented: $isPresented,
@@ -1663,12 +1626,10 @@ struct PitchResultSheetView: View {
                                     showMissingBatterPrompt = false
                                     performSave(intent)
                                 } label: {
-                                    Text("#\(cell.jerseyNumber)")
-                                        .font(.headline.weight(.semibold))
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 10)
-                                        .background(isSelected ? Color.blue.opacity(0.2) : Color.gray.opacity(0.12))
-                                        .clipShape(Capsule())
+                                    BatterPromptChipButton(
+                                        jerseyNumber: cell.jerseyNumber,
+                                        isSelected: isSelected
+                                    )
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -1697,8 +1658,7 @@ struct PitchResultSheetView: View {
                 .padding()
                 .presentationDetents([.fraction(0.3), .medium])
                 .presentationDragIndicator(.visible)
-            }
-        )
+        }
     }
     private func deselectIfDisabled() {
         if isFoulSelected, let outcome = selectedOutcome, outcome != "Out" {
@@ -1713,6 +1673,20 @@ struct PitchResultSheetView: View {
         if isError && isOutcomeDisabled("E") {
             isError = false
         }
+    }
+}
+
+private struct BatterPromptChipButton: View {
+    let jerseyNumber: String
+    let isSelected: Bool
+
+    var body: some View {
+        Text("#\(jerseyNumber)")
+            .font(.headline.weight(.semibold))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(isSelected ? Color.blue.opacity(0.2) : Color.gray.opacity(0.12))
+            .clipShape(Capsule())
     }
 }
 
