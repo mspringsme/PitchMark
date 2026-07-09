@@ -10696,10 +10696,6 @@ struct CodeOrderToggle: View {
             Spacer()
 
             HStack(spacing: 3) {
-                Text("Order")
-                    .font(.caption)
-                    .foregroundStyle(.black)
-
                 Picker("", selection: $pitchFirst) {
                     Text("Pitch 1st")
                         .tag(true)
@@ -10950,14 +10946,11 @@ struct CalledPitchView: View {
                                 .accessibilityLabel("Record for code \(shown)")
                             }
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 28)
                         .padding(.vertical, 2)
                     }
                     .frame(height: 60)
-                    .scrollClipDisabled()
-                    
-                    
-                    
+                    .contentMargins(.horizontal, 8, for: .scrollContent)
                     
                     CodeOrderToggle(
                         pitchFirst: $pitchFirst,
