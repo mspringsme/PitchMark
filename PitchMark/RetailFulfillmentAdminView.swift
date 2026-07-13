@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import FirebaseAuth
 import FirebaseFirestore
 import UIKit
 
@@ -82,6 +83,7 @@ private final class RetailFulfillmentAdminViewModel: ObservableObject {
         defer { isLoading = false }
 
         do {
+            try await verifyRetailAdminAccess()
             let snapshot = try await Firestore.firestore()
                 .collection("retailOrders")
                 .order(by: "stripeCreatedAtMs", descending: true)
@@ -132,6 +134,7 @@ private final class RetailFulfillmentAdminViewModel: ObservableObject {
 
     func update(order: FulfillmentOrder) async {
         do {
+            try await verifyRetailAdminAccess()
             try await Firestore.firestore().collection("retailOrders").document(order.id).setData([
                 "fulfillmentStatus": order.fulfillmentStatus.rawValue,
                 "shippingCarrier": order.shippingCarrier.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -146,9 +149,10 @@ private final class RetailFulfillmentAdminViewModel: ObservableObject {
 
     func archive(order: FulfillmentOrder) async {
         do {
+            try await verifyRetailAdminAccess()
             try await Firestore.firestore().collection("retailOrders").document(order.id).setData([
                 "archivedAt": FieldValue.serverTimestamp(),
-                "archivedBy": "support@pitchmark.app",
+                "archivedBy": "retail-admin",
                 "updatedAt": FieldValue.serverTimestamp()
             ], merge: true)
             await refresh()
@@ -159,6 +163,7 @@ private final class RetailFulfillmentAdminViewModel: ObservableObject {
 
     func unarchive(order: FulfillmentOrder) async {
         do {
+            try await verifyRetailAdminAccess()
             try await Firestore.firestore().collection("retailOrders").document(order.id).setData([
                 "archivedAt": FieldValue.delete(),
                 "archivedBy": FieldValue.delete(),
@@ -167,6 +172,31 @@ private final class RetailFulfillmentAdminViewModel: ObservableObject {
             await refresh()
         } catch {
             errorMessage = "Could not unarchive order \(order.id). \(error.localizedDescription)"
+        }
+    }
+
+    private func verifyRetailAdminAccess() async throws {
+        guard let user = Auth.auth().currentUser else {
+            throw RetailFulfillmentAdminError.notSignedIn
+        }
+
+        let tokenResult = try await user.getIDTokenResult(forcingRefresh: true)
+        guard (tokenResult.claims["admin"] as? Bool) == true else {
+            throw RetailFulfillmentAdminError.missingAdminClaim
+        }
+    }
+}
+
+private enum RetailFulfillmentAdminError: LocalizedError {
+    case notSignedIn
+    case missingAdminClaim
+
+    var errorDescription: String? {
+        switch self {
+        case .notSignedIn:
+            return "Sign in with the retail admin account."
+        case .missingAdminClaim:
+            return "This account is missing the retail admin claim. Sign out and back in after the claim is set."
         }
     }
 }

@@ -25,6 +25,15 @@ If you're setting this project up on Windows to help with the website, see [`../
 2. Replace placeholder Stripe `price_*` IDs in `src/index.ts` with your real Stripe Price IDs.
 3. Deploy functions.
 
+## Admin claim helper
+If you need to mark your owner account as an admin for the app UI and Firestore rules, run:
+
+```bash
+node scripts/setAdminClaim.js --email your@email.com
+```
+
+You can also pass `--uid <firebase-uid>` instead of `--email`.
+
 ## Notes
 - Function requires authenticated Firebase user.
 - Metadata is attached to both Checkout Session and PaymentIntent.

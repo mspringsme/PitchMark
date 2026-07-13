@@ -43,7 +43,7 @@ Status key:
 • terms loads and in-app link opens that same /terms URL.|
 | [x] | App Privacy Nutrition Label | Matches actual data collection/sharing and SDK behavior |  |  
 • 2026-06-04: Privacy policy updated to explicitly cover Firebase account data, user-entered pitch/game data, StoreKit subscription status, Stripe retail checkout/order data, shipping/billing/contact details, service providers, retention, and in-app deletion. App Store Connect privacy answers must mirror these categories before submission.|
-| [x] | Support URL | Points to valid support destination (`support@pitchmark.app` path included) |  |  |
+| [x] | Support URL | Points to valid support destination (`/support` path) |  |  |
 | [x] | Export compliance answers | Encryption/export responses accurate in App Store Connect |  |  |
 | [x] | IAP metadata completeness | Subscription name, duration, pricing, screenshots, review notes complete |  |  |
 

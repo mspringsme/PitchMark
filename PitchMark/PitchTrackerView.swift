@@ -4707,10 +4707,16 @@ struct PitchTrackerView: View {
                             Button {
                                 showScoutFieldMap = true
                             } label: {
-                                Label(
-                                    scoutBattedBallRegionName == nil ? "Field Map" : "Edit Field Map",
-                                    systemImage: "map"
-                                )
+                                HStack(spacing: 8) {
+                                    Label(
+                                        scoutBattedBallRegionName == nil ? "Field Map" : "Edit Field Map",
+                                        systemImage: "map"
+                                    )
+
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .font(.subheadline.weight(.semibold))
                             }
                             .buttonStyle(.borderedProminent)
 
@@ -5672,18 +5678,28 @@ struct PitchTrackerView: View {
     private func batterSideOverlay(SZwidth: CGFloat, verticalOffset: CGFloat = -20) -> some View {
         HStack {
             let iconSize: CGFloat = 36
-            Button(action: {
-                withAnimation { batterSide = .left }
-                persistBatterSide(.left)
-                pushBatterSideToActiveGame(.left)
-            }) {
-                Image("rightBatterIcon")
-                    .resizable()
-                    .renderingMode(.template)
-                    .frame(width: iconSize, height: iconSize)
-                    .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
+            VStack(alignment: .leading, spacing: 4) {
+                Button(action: {
+                    withAnimation { batterSide = .left }
+                    persistBatterSide(.left)
+                    pushBatterSideToActiveGame(.left)
+                }) {
+                    Image("rightBatterIcon")
+                        .resizable()
+                        .renderingMode(.template)
+                        .frame(width: iconSize, height: iconSize)
+                        .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+
+                if currentTrackingMode == .scout && scoutObservedResult == .inPlay {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.green)
+                        .frame(width: iconSize, alignment: .center)
+                        .offset(y: 80)
+                }
             }
-            .buttonStyle(.plain)
 
             Spacer()
 
@@ -6144,7 +6160,6 @@ struct PitchTrackerView: View {
         savedPlayReviewCountText = ""
         if let event {
             finalizePersistedPitchEvent(event)
-            applyReviewedOutAdvanceIfNeeded(for: event)
         } else {
             resetScoutComposer()
         }
@@ -6190,7 +6205,7 @@ struct PitchTrackerView: View {
             descriptor: scoutPersistedDescriptor,
             errorOnPlay: scoutErrorOnPlay,
             battedBallRegion: observed == .inPlay ? scoutBattedBallRegionName : nil,
-            battedBallType: scoutDescriptor,
+            battedBallType: scoutPersistedDescriptor ?? scoutDescriptor,
             battedBallTapX: observed == .inPlay ? scoutBattedBallTapNormalized.map { Double($0.x) } : nil,
             battedBallTapY: observed == .inPlay ? scoutBattedBallTapNormalized.map { Double($0.y) } : nil,
             gameId: selectedGameId,
@@ -6386,6 +6401,7 @@ struct PitchTrackerView: View {
 
         sessionManager.incrementCount()
         applyProgressOutcomeAdjustments(for: eventToPersist)
+        applyReviewedOutAdvanceIfNeeded(for: eventToPersist)
         if eventToPersist.atBatBalls == nil || eventToPersist.atBatStrikes == nil {
             applyProgressCountAdjustments(for: eventToPersist)
         }

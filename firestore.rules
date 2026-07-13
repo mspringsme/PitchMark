@@ -31,8 +31,7 @@ service cloud.firestore {
 
     function isRetailAdmin() {
       return signedIn()
-        && request.auth.token.email != null
-        && request.auth.token.email == "support@pitchmark.app";
+        && request.auth.token.admin == true;
     }
 
     match /retailOrders/{orderId} {

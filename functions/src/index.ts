@@ -16,10 +16,10 @@ type RetailCatalogItem = {
 };
 
 const retailCatalog: Record<string, RetailCatalogItem> = {
-    grid_5x3: { priceId: "price_1TbQjpHGR9piiykPmnX6Lj5J", label: "Grid Key 5 x 3", unitAmountCents: 1200 },
-    grid_3_5x2_75: { priceId: "price_1TbQkPHGR9piiykPAIvImeVz", label: "Grid Key 3.5 x 2.75", unitAmountCents: 1200 },
-    grid_custom: { priceId: "price_1TbQkuHGR9piiykPFoJgsxTf", label: "Grid Key Custom", unitAmountCents: 1400 },
-    sheet_8_5x11: { priceId: "price_1TbQmqHGR9piiykPAKJpnQQP", label: "Printable Sheet 8.5 x 11", unitAmountCents: 1200 }
+    grid_5x3: { priceId: "price_1TWMl2HGR9piiykP6OCTEeNJ", label: "Grid Key 5 x 3", unitAmountCents: 1200 },
+    grid_3_5x2_75: { priceId: "price_1TWMlwHGR9piiykP0L1a4G1a", label: "Grid Key 3.5 x 2.75", unitAmountCents: 1200 },
+    grid_custom: { priceId: "price_1TWMmuHGR9piiykPW7qo1LHY", label: "Grid Key Custom", unitAmountCents: 1400 },
+    sheet_8_5x11: { priceId: "price_1TWMpLHGR9piiykPw9kDjvkm", label: "Printable Sheet 8.5 x 11", unitAmountCents: 1200 }
 };
 
 const allowedItemKinds = new Set(["gridKey", "printableSheet", ""]);
@@ -81,7 +81,7 @@ function readShippingAmountCents(name: string, fallback: number): number {
 }
 
 function normalizeShippingAmountCents(value: number): number {
-    return value <= 0 ? 1 : value;
+    return value < 0 ? 0 : value;
 }
 
 function parseRequestData(data: unknown): Record<string, unknown> {

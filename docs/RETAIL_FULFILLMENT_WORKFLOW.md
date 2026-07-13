@@ -4,7 +4,7 @@
 Standard process to receive Stripe orders, prepare print assets, print, ship, and update customer-visible status in PitchMark.
 
 ## Tools
-- PitchMark app (signed in as `support@pitchmark.app`)
+- PitchMark app (signed in with the admin/owner account)
 - Stripe Dashboard (test/live as applicable)
 - Printer workflow (PDF/template production)
 - Shipping label provider (USPS/UPS/etc.)
@@ -20,7 +20,7 @@ Standard process to receive Stripe orders, prepare print assets, print, ship, an
 ## Daily Workflow
 
 ### 1) Intake
-1. Open PitchMark as `support@pitchmark.app`.
+1. Open PitchMark as the admin/owner account.
 2. Go to `Store` → `Fulfillment Queue`.
 3. Filter to `new`.
 4. For each order, review:
@@ -75,7 +75,7 @@ Standard process to receive Stripe orders, prepare print assets, print, ship, an
 
 ### Missing shipping address
 - Hold fulfillment.
-- Contact customer via support email.
+- Contact customer via the support workflow.
 - Keep status `new` or use internal note process.
 
 ### Template ambiguity
@@ -89,5 +89,5 @@ Standard process to receive Stripe orders, prepare print assets, print, ship, an
 
 ## Production Go-Live Notes
 - Ensure live Stripe webhook is configured and healthy.
-- Ensure `support@pitchmark.app` owner account can access Fulfillment Queue.
+- Ensure the owner/admin account can access Fulfillment Queue.
 - Keep this SOP versioned with release notes.

@@ -3,7 +3,7 @@
     "apps": [],
     "details": [
       {
-        "appID": "E3TJVK4339.com.MarkSpringer.PitchMark",
+        "appID": "E3TJVK4339.com.pitchmark.app",
         "paths": [
           "/signin",
           "/signin*",

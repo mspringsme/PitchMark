@@ -30,4 +30,7 @@ extension Notification.Name {
 
     // Fired to present the display-only full-screen view
     static let displayOnlyPresentRequested = Notification.Name("displayOnlyPresentRequested")
+
+    // Fired after Stripe returns from a successful retail checkout
+    static let retailCheckoutSucceeded = Notification.Name("retailCheckoutSucceeded")
 }

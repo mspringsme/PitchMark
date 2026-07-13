@@ -16,19 +16,18 @@ struct StorefrontView: View {
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var isPurchasingPro = false
     @State private var isRestoringPurchases = false
-    @State private var openOrderHistoryAfterCheckout = false
+    @State private var navigationPath = NavigationPath()
 
     private var annualPrice: String {
         subscriptionManager.annualProduct?.displayPrice ?? "$19.99"
     }
 
     private var isOwnerFulfillmentAccessEnabled: Bool {
-        guard let email = authManager.user?.email?.lowercased() else { return false }
-        return email == "support@pitchmark.app"
+        authManager.isRetailAdmin
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             List {
                 Section(header: Text("Pitcher Grid Key Inserts")) {
                     Text("Armband grid key inserts; Master pitch call sheet")
@@ -37,7 +36,7 @@ struct StorefrontView: View {
                         .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 8, trailing: 16))
 
                     ForEach(gridKeyTemplates) { template in
-                        NavigationLink(value: template) {
+                        NavigationLink(value: StorefrontRoute.product(template)) {
                             HStack(spacing: 12) {
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(.gray.opacity(0.15))
@@ -66,7 +65,7 @@ struct StorefrontView: View {
                     }
 
                     ForEach(printableSheetTemplates) { template in
-                        NavigationLink(value: template) {
+                        NavigationLink(value: StorefrontRoute.product(template)) {
                             HStack(spacing: 12) {
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(.gray.opacity(0.15))
@@ -186,24 +185,37 @@ struct StorefrontView: View {
                 }
             }
 
-            .navigationDestination(for: StoreTemplate.self) { template in
-                switch template.kind {
-                case .gridKey:
-                    TemplateDetailView(template: template)
-                case .printableSheet:
-                    PrintableSheetDetailView(template: template)
+            .navigationDestination(for: StorefrontRoute.self) { route in
+                switch route {
+                case .product(let template):
+                    switch template.kind {
+                    case .gridKey:
+                        TemplateDetailView(template: template)
+                    case .printableSheet:
+                        PrintableSheetDetailView(template: template)
+                    }
+                case .checkoutReceipt:
+                    RetailOrderHistoryView(uid: authManager.user?.uid ?? "", showReceiptOnLoad: true)
                 }
-            }
-            .navigationDestination(isPresented: $openOrderHistoryAfterCheckout) {
-                RetailOrderHistoryView(uid: authManager.user?.uid ?? "")
             }
         }
         .task {
             await subscriptionManager.refresh()
             if UserDefaults.standard.bool(forKey: "openOrderHistoryAfterCheckout") {
                 UserDefaults.standard.set(false, forKey: "openOrderHistoryAfterCheckout")
-                openOrderHistoryAfterCheckout = true
+                openCheckoutReceipt()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .retailCheckoutSucceeded)) { _ in
+            UserDefaults.standard.set(false, forKey: "openOrderHistoryAfterCheckout")
+            openCheckoutReceipt()
+        }
+    }
+
+    private func openCheckoutReceipt() {
+        navigationPath = NavigationPath()
+        DispatchQueue.main.async {
+            navigationPath.append(StorefrontRoute.checkoutReceipt(UUID()))
         }
     }
 }
@@ -224,6 +236,11 @@ struct StorefrontView_Previews: PreviewProvider {
 private enum StoreItemKind: Hashable {
     case gridKey
     case printableSheet
+}
+
+private enum StorefrontRoute: Hashable {
+    case product(StoreTemplate)
+    case checkoutReceipt(UUID)
 }
 
 private struct StoreTemplate: Identifiable, Hashable {

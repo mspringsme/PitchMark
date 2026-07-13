@@ -24,6 +24,16 @@
 				<string>com.googleusercontent.apps.304519381835-k3ruoo9lhl4238i55s586nulbf9so8a3</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>Google Sign In</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.304519381835-sahubmh06cn3t0j6qvauq671v5embsgq</string>
+			</array>
+		</dict>
 	</array>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>

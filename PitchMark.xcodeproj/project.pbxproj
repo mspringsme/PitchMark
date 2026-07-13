@@ -12,21 +12,8 @@
 		232EB1A72F69B81100BE086E /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 232EB1A62F69B81100BE086E /* FirebaseFunctions */; };
 		23652D3B2F57705F00461063 /* firestore.rules in Resources */ = {isa = PBXBuildFile; fileRef = 23652D3A2F57705F00461063 /* firestore.rules */; };
 		23A619482F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */; };
-		23AF006C2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md in Resources */ = {isa = PBXBuildFile; fileRef = 23AF006B2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md */; };
 		23B131CE2F75A50800A70589 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 23B131CD2F75A50800A70589 /* GoogleSignInSwift */; };
 		23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 23B131D12F75A91D00A70589 /* GoogleService-Info.plist */; };
-		23D614A32FBF67E0007643CA /* SUPPORT_WORKFLOW.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614A12FBF67E0007643CA /* SUPPORT_WORKFLOW.md */; };
-		23D614A42FBF67E0007643CA /* settings-minigame.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614A02FBF67E0007643CA /* settings-minigame.md */; };
-		23D614A52FBF67E0007643CA /* SUPPORT_WORKFLOW.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614A12FBF67E0007643CA /* SUPPORT_WORKFLOW.md */; };
-		23D614A62FBF67E0007643CA /* settings-minigame.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614A02FBF67E0007643CA /* settings-minigame.md */; };
-		23D614A82FBF68A5007643CA /* INCIDENT_PLAYBOOK 2.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614A72FBF68A5007643CA /* INCIDENT_PLAYBOOK 2.md */; };
-		23D614A92FBF68A5007643CA /* INCIDENT_PLAYBOOK 2.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614A72FBF68A5007643CA /* INCIDENT_PLAYBOOK 2.md */; };
-		23D614AD2FBF694A007643CA /* RELEASE_ROLLBACK_PLAN 2.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614AC2FBF694A007643CA /* RELEASE_ROLLBACK_PLAN 2.md */; };
-		23D614AE2FBF694A007643CA /* INCIDENT_PLAYBOOK 3.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614AA2FBF694A007643CA /* INCIDENT_PLAYBOOK 3.md */; };
-		23D614AF2FBF694A007643CA /* RELEASE_NOTES_v1.0.0-rc1 2.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614AB2FBF694A007643CA /* RELEASE_NOTES_v1.0.0-rc1 2.md */; };
-		23D614B02FBF694A007643CA /* RELEASE_ROLLBACK_PLAN 2.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614AC2FBF694A007643CA /* RELEASE_ROLLBACK_PLAN 2.md */; };
-		23D614B12FBF694A007643CA /* INCIDENT_PLAYBOOK 3.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614AA2FBF694A007643CA /* INCIDENT_PLAYBOOK 3.md */; };
-		23D614B22FBF694A007643CA /* RELEASE_NOTES_v1.0.0-rc1 2.md in Resources */ = {isa = PBXBuildFile; fileRef = 23D614AB2FBF694A007643CA /* RELEASE_NOTES_v1.0.0-rc1 2.md */; };
 		23F1A88B2F12C6EF0094E7BC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88A2F12C6EF0094E7BC /* FirebaseAuth */; };
 		23F1A88D2F12C7030094E7BC /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88C2F12C7030094E7BC /* FirebaseFirestore */; };
 		23F1A88F2F12C70B0094E7BC /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88E2F12C70B0094E7BC /* FirebaseAnalytics */; };
@@ -53,14 +40,7 @@
 		239F0B7C2F12B238004E32DD /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrikeZoneHeatmapView.swift; sourceTree = "<group>"; };
 		23AF006A2FAFD1C70046D670 /* index.ts */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.typescript; path = index.ts; sourceTree = "<group>"; };
-		23AF006B2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SUBMISSION_READINESS_CHECKLIST.md; sourceTree = "<group>"; };
 		23B131D12F75A91D00A70589 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
-		23D614A02FBF67E0007643CA /* settings-minigame.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "settings-minigame.md"; sourceTree = "<group>"; };
-		23D614A12FBF67E0007643CA /* SUPPORT_WORKFLOW.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SUPPORT_WORKFLOW.md; sourceTree = "<group>"; };
-		23D614A72FBF68A5007643CA /* INCIDENT_PLAYBOOK 2.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "INCIDENT_PLAYBOOK 2.md"; sourceTree = "<group>"; };
-		23D614AA2FBF694A007643CA /* INCIDENT_PLAYBOOK 3.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "INCIDENT_PLAYBOOK 3.md"; sourceTree = "<group>"; };
-		23D614AB2FBF694A007643CA /* RELEASE_NOTES_v1.0.0-rc1 2.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "RELEASE_NOTES_v1.0.0-rc1 2.md"; sourceTree = "<group>"; };
-		23D614AC2FBF694A007643CA /* RELEASE_ROLLBACK_PLAN 2.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "RELEASE_ROLLBACK_PLAN 2.md"; sourceTree = "<group>"; };
 		23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyWindowView.swift; sourceTree = "<group>"; };
 		23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeDisplayOverlayView.swift; sourceTree = "<group>"; };
 		23F7D2C52F758F710010D7BF /* Pitchmark Display.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Pitchmark Display.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -151,7 +131,6 @@
 		239F0B732F12B238004E32DD = {
 			isa = PBXGroup;
 			children = (
-				23D614A22FBF67E0007643CA /* docs */,
 				239F0B7E2F12B238004E32DD /* PitchMark */,
 				23F7D2C62F758F710010D7BF /* Pitchmark Display */,
 				23F1A8892F12C6EF0094E7BC /* Frameworks */,
@@ -173,20 +152,6 @@
 				23F7D2C52F758F710010D7BF /* Pitchmark Display.app */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		23D614A22FBF67E0007643CA /* docs */ = {
-			isa = PBXGroup;
-			children = (
-				23D614A02FBF67E0007643CA /* settings-minigame.md */,
-				23D614AA2FBF694A007643CA /* INCIDENT_PLAYBOOK 3.md */,
-				23D614AB2FBF694A007643CA /* RELEASE_NOTES_v1.0.0-rc1 2.md */,
-				23D614AC2FBF694A007643CA /* RELEASE_ROLLBACK_PLAN 2.md */,
-				23D614A12FBF67E0007643CA /* SUPPORT_WORKFLOW.md */,
-				23D614A72FBF68A5007643CA /* INCIDENT_PLAYBOOK 2.md */,
-				23AF006B2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md */,
-			);
-			path = docs;
 			sourceTree = "<group>";
 		};
 		23F1A8892F12C6EF0094E7BC /* Frameworks */ = {
@@ -315,13 +280,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				23652D3B2F57705F00461063 /* firestore.rules in Resources */,
-				23D614A92FBF68A5007643CA /* INCIDENT_PLAYBOOK 2.md in Resources */,
-				23D614B02FBF694A007643CA /* RELEASE_ROLLBACK_PLAN 2.md in Resources */,
-				23D614B12FBF694A007643CA /* INCIDENT_PLAYBOOK 3.md in Resources */,
-				23D614B22FBF694A007643CA /* RELEASE_NOTES_v1.0.0-rc1 2.md in Resources */,
-				23AF006C2FB7D99D0046D670 /* SUBMISSION_READINESS_CHECKLIST.md in Resources */,
-				23D614A52FBF67E0007643CA /* SUPPORT_WORKFLOW.md in Resources */,
-				23D614A62FBF67E0007643CA /* settings-minigame.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -330,12 +288,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */,
-				23D614AD2FBF694A007643CA /* RELEASE_ROLLBACK_PLAN 2.md in Resources */,
-				23D614AE2FBF694A007643CA /* INCIDENT_PLAYBOOK 3.md in Resources */,
-				23D614AF2FBF694A007643CA /* RELEASE_NOTES_v1.0.0-rc1 2.md in Resources */,
-				23D614A82FBF68A5007643CA /* INCIDENT_PLAYBOOK 2.md in Resources */,
-				23D614A32FBF67E0007643CA /* SUPPORT_WORKFLOW.md in Resources */,
-				23D614A42FBF67E0007643CA /* settings-minigame.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -517,7 +469,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.MarkSpringer.PitchMark;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -562,7 +514,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.MarkSpringer.PitchMark;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

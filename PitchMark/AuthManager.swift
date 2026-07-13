@@ -63,6 +63,7 @@ class AuthManager: ObservableObject {
     @Published var user: FirebaseAuth.User? = nil
     @Published var isSignedIn: Bool = false
     @Published var isCheckingAuth: Bool = true
+    @Published private(set) var isRetailAdmin: Bool = false
 
     private var authStateHandle: AuthStateDidChangeListenerHandle?
     private var currentAppleNonce: String? = nil
@@ -75,6 +76,7 @@ class AuthManager: ObservableObject {
         let current = Auth.auth().currentUser
         self.user = current
         self.isSignedIn = (current != nil)
+        refreshRetailAdminStatus(for: current)
 
         if let current {
             debugLog("✅ currentUser on launch uid=\(current.uid) email=\(current.email ?? "")")
@@ -92,10 +94,12 @@ class AuthManager: ObservableObject {
 
                 if let user {
                     debugLog("🔐 Auth -> SIGNED IN uid=\(user.uid) email=\(user.email ?? "")")
+                    self.refreshRetailAdminStatus(for: user)
                     self.probeUserPrivateCollections(tag: "authStateDidChangeListener")
 
                 } else {
                     debugLog("🔐 Auth -> SIGNED OUT")
+                    self.isRetailAdmin = false
                 }
             }
         }
@@ -109,6 +113,29 @@ class AuthManager: ObservableObject {
     
     var userEmail: String {
         user?.email ?? "Unknown"
+    }
+
+    private func refreshRetailAdminStatus(for user: FirebaseAuth.User?) {
+        guard let user else {
+            isRetailAdmin = false
+            return
+        }
+
+        user.getIDTokenResult(forcingRefresh: true) { [weak self] result, error in
+            guard let self else { return }
+            if let error {
+                debugLog("Retail admin claim check failed: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.isRetailAdmin = false
+                }
+                return
+            }
+
+            let isAdmin = (result?.claims["admin"] as? Bool) == true
+            DispatchQueue.main.async {
+                self.isRetailAdmin = isAdmin
+            }
+        }
     }
     
     func signInWithGoogle(presenting viewController: UIViewController) {
@@ -139,6 +166,7 @@ class AuthManager: ObservableObject {
 
                 self.user = firebaseUser
                 self.isSignedIn = true
+                self.refreshRetailAdminStatus(for: firebaseUser)
                 self.upsertUserDocument(for: firebaseUser)
             }
         }
@@ -181,6 +209,7 @@ class AuthManager: ObservableObject {
                 guard let firebaseUser = authResult?.user else { return }
                 self.user = firebaseUser
                 self.isSignedIn = true
+                self.refreshRetailAdminStatus(for: firebaseUser)
                 self.upsertUserDocument(for: firebaseUser)
             }
         }
@@ -196,7 +225,7 @@ class AuthManager: ObservableObject {
         let actionCodeSettings = ActionCodeSettings()
         actionCodeSettings.url = URL(string: "https://pitchmark-fb9f8.web.app/signin")
         actionCodeSettings.handleCodeInApp = true
-        actionCodeSettings.setIOSBundleID(Bundle.main.bundleIdentifier ?? "com.MarkSpringer.PitchMark")
+        actionCodeSettings.setIOSBundleID(Bundle.main.bundleIdentifier ?? "com.pitchmark.app")
 
         Auth.auth().sendSignInLink(toEmail: trimmed, actionCodeSettings: actionCodeSettings) { error in
             if let error {
@@ -228,6 +257,7 @@ class AuthManager: ObservableObject {
             guard let firebaseUser = authResult?.user else { return }
             self.user = firebaseUser
             self.isSignedIn = true
+            self.refreshRetailAdminStatus(for: firebaseUser)
             UserDefaults.standard.removeObject(forKey: self.pendingEmailLinkKey)
             self.upsertUserDocument(for: firebaseUser)
         }
@@ -256,6 +286,7 @@ class AuthManager: ObservableObject {
                     self.user = firebaseUser
                     self.isSignedIn = true
                     self.isCheckingAuth = false
+                    self.refreshRetailAdminStatus(for: firebaseUser)
                     debugLog("Restored Firebase session for: \(firebaseUser.email ?? "Unknown")")
                 }
             }

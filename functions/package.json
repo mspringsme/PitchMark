@@ -8,6 +8,7 @@
     "scripts": {
       "build": "tsc",
       "verify:account-deletion": "node scripts/verifyAccountDeletion.js",
+      "set:admin-claim": "node scripts/setAdminClaim.js",
       "serve": "firebase emulators:start --only functions",
       "deploy": "firebase deploy --only functions",
       "lint": "echo 'No lint configured'"

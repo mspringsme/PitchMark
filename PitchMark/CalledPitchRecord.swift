@@ -433,10 +433,14 @@ struct SavedPlayReviewSheetView: View {
         let normalizedOutcome = (initialEvent.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let isWalk = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame || normalizedOutcome == "BB"
         let isHit = pitchEventCountsAsHit(initialEvent)
+        let scoutDefaultStrike = initialEvent.trackingMode == .scout && (
+            (initialEvent.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ||
+            (initialEvent.descriptor?.localizedCaseInsensitiveContains("hit") == true)
+        )
 
         _draftBalls = State(initialValue: balls)
         _draftStrikes = State(initialValue: strikes)
-        _draftIsStrike = State(initialValue: initialEvent.isStrike)
+        _draftIsStrike = State(initialValue: initialEvent.isStrike || scoutDefaultStrike)
         _draftIsBall = State(initialValue: initialEvent.isBall ?? !initialEvent.isStrike)
         _draftStrikeLooking = State(initialValue: initialEvent.strikeLooking)
         _draftStrikeSwinging = State(initialValue: initialEvent.strikeSwinging)
@@ -898,12 +902,18 @@ struct PitchCardView: View {
     private var scoutCompactContent: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                if let primaryLine = scoutPrimaryLine {
-                    scoutSummaryLine(primaryLine, font: .system(size: 20, weight: .medium))
-                } else {
-                    Text("Scout")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.black)
+                VStack(alignment: .leading, spacing: 2) {
+                    if let primaryLine = scoutPrimaryLine {
+                        scoutSummaryLine(primaryLine, font: .system(size: 20, weight: .medium))
+                    } else {
+                        Text("Scout")
+                            .font(.system(size: 20, weight: .medium))
+                            .foregroundColor(.black)
+                    }
+
+                    ForEach(Array(scoutSecondaryLines.prefix(2).enumerated()), id: \.offset) { item in
+                        scoutSummaryLine(item.element, font: .system(size: 14, weight: .regular))
+                    }
                 }
 
                 HStack(alignment: .top, spacing: 8) {

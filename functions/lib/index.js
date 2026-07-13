@@ -47,10 +47,10 @@ const stripe_1 = __importDefault(require("stripe"));
 const db = (0, firestore_1.getFirestore)();
 const auth = (0, auth_1.getAuth)();
 const retailCatalog = {
-    grid_5x3: { priceId: "price_1TbQjpHGR9piiykPmnX6Lj5J", label: "Grid Key 5 x 3", unitAmountCents: 1200 },
-    grid_3_5x2_75: { priceId: "price_1TbQkPHGR9piiykPAIvImeVz", label: "Grid Key 3.5 x 2.75", unitAmountCents: 1200 },
-    grid_custom: { priceId: "price_1TbQkuHGR9piiykPFoJgsxTf", label: "Grid Key Custom", unitAmountCents: 1400 },
-    sheet_8_5x11: { priceId: "price_1TbQmqHGR9piiykPAKJpnQQP", label: "Printable Sheet 8.5 x 11", unitAmountCents: 1200 }
+    grid_5x3: { priceId: "price_1TWMl2HGR9piiykP6OCTEeNJ", label: "Grid Key 5 x 3", unitAmountCents: 1200 },
+    grid_3_5x2_75: { priceId: "price_1TWMlwHGR9piiykP0L1a4G1a", label: "Grid Key 3.5 x 2.75", unitAmountCents: 1200 },
+    grid_custom: { priceId: "price_1TWMmuHGR9piiykPW7qo1LHY", label: "Grid Key Custom", unitAmountCents: 1400 },
+    sheet_8_5x11: { priceId: "price_1TWMpLHGR9piiykPw9kDjvkm", label: "Printable Sheet 8.5 x 11", unitAmountCents: 1200 }
 };
 const allowedItemKinds = new Set(["gridKey", "printableSheet", ""]);
 const idempotencyKeyPattern = /^[a-zA-Z0-9._-]{8,80}$/;
@@ -104,7 +104,7 @@ function readShippingAmountCents(name, fallback) {
     return parsed;
 }
 function normalizeShippingAmountCents(value) {
-    return value <= 0 ? 1 : value;
+    return value < 0 ? 0 : value;
 }
 function parseRequestData(data) {
     if (!data || typeof data !== "object" || Array.isArray(data)) {

@@ -1,7 +1,7 @@
 # PitchMark Support Workflow
 
 ## Intake
-- Primary intake channel: `support@pitchmark.app`
+- Primary intake channel: `https://pitchmark.app/support`
 - Support URL: `https://pitchmark.app/support`
 - User should include:
   - account email
