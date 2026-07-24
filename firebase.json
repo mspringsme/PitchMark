@@ -1,11 +1,8 @@
 {
   "hosting": {
+    "site": "pitchmark-fb9f8",
     "public": "public",
     "rewrites": [
-      {
-        "source": "/truck",
-        "destination": "/truck.html"
-      },
       {
         "source": "/stripe/success",
         "destination": "/stripe-success.html"

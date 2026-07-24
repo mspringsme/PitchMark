@@ -4,16 +4,17 @@
   "engines": {
     "node": "20"
   },
-    "main": "lib/index.js",
-    "scripts": {
-      "build": "tsc",
-      "verify:account-deletion": "node scripts/verifyAccountDeletion.js",
-      "set:admin-claim": "node scripts/setAdminClaim.js",
-      "serve": "firebase emulators:start --only functions",
-      "deploy": "firebase deploy --only functions",
-      "lint": "echo 'No lint configured'"
-    },
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "verify:account-deletion": "node scripts/verifyAccountDeletion.js",
+    "set:admin-claim": "node scripts/setAdminClaim.js",
+    "serve": "firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions",
+    "lint": "echo 'No lint configured'"
+  },
   "dependencies": {
+    "@apple/app-store-server-library": "^3.1.0",
     "firebase-admin": "^12.7.0",
     "firebase-functions": "^5.1.1",
     "stripe": "^16.9.0"

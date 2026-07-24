@@ -3,7 +3,13 @@ import * as logger from "firebase-functions/logger";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue, type Query } from "firebase-admin/firestore";
+import {
+    Environment,
+    SignedDataVerifier,
+    type JWSTransactionDecodedPayload
+} from "@apple/app-store-server-library";
 import Stripe from "stripe";
+import { appleRootCertificates } from "./appleRootCertificates";
 
 initializeApp();
 const db = getFirestore();
@@ -28,6 +34,81 @@ const checkoutThrottleWindowMs = 60_000;
 const checkoutThrottleMaxAttempts = 5;
 const checkoutConfigVersion = "shipping_v1";
 const accountDeletionBatchSize = 400;
+
+type PitchMarkStoreConfig = {
+    bundleId: string;
+    appAppleId: number;
+    productIds: Set<string>;
+};
+
+const pitchMarkStoreConfigs: PitchMarkStoreConfig[] = [
+    {
+        bundleId: "com.pitchmark.app",
+        appAppleId: 6791446420,
+        productIds: new Set(["com.pitchmark.app.pro.annual"])
+    },
+    {
+        bundleId: "app.Pitchmark-Display",
+        appAppleId: 6785099266,
+        productIds: new Set(["com.pitchmark.display.pro.annual"])
+    }
+];
+
+const pitchMarkTransactionVerifiers = pitchMarkStoreConfigs.flatMap((config) => [
+    {
+        config,
+        environment: Environment.PRODUCTION,
+        verifier: new SignedDataVerifier(
+            appleRootCertificates,
+            true,
+            Environment.PRODUCTION,
+            config.bundleId,
+            config.appAppleId
+        )
+    },
+    {
+        config,
+        environment: Environment.SANDBOX,
+        verifier: new SignedDataVerifier(
+            appleRootCertificates,
+            true,
+            Environment.SANDBOX,
+            config.bundleId
+        )
+    }
+]);
+
+async function verifyPitchMarkTransaction(
+    signedTransaction: string
+): Promise<{ transaction: JWSTransactionDecodedPayload; config: PitchMarkStoreConfig }> {
+    for (const candidate of pitchMarkTransactionVerifiers) {
+        try {
+            const transaction = await candidate.verifier.verifyAndDecodeTransaction(signedTransaction);
+            if (!transaction.productId || !candidate.config.productIds.has(transaction.productId)) {
+                throw new HttpsError("invalid-argument", "The App Store product is not a PitchMark Pro subscription.");
+            }
+            return { transaction, config: candidate.config };
+        } catch (error) {
+            if (error instanceof HttpsError) {
+                throw error;
+            }
+        }
+    }
+    throw new HttpsError("invalid-argument", "The App Store transaction could not be verified.");
+}
+
+function entitlementResponse(data: Record<string, unknown> | undefined): {
+    active: boolean;
+    expiresAtMs: number | null;
+} {
+    const expiresAtMs = typeof data?.expiresAtMs === "number" ? data.expiresAtMs : null;
+    const revoked = typeof data?.revocationDateMs === "number";
+    const upgraded = data?.isUpgraded === true;
+    return {
+        active: expiresAtMs !== null && expiresAtMs > Date.now() && !revoked && !upgraded,
+        expiresAtMs
+    };
+}
 
 function getStripeClient(): Stripe {
     const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
@@ -331,6 +412,113 @@ async function deletePitchEventsByScanningOwnerCollections(uid: string): Promise
     return updated;
 }
 
+export const syncSubscriptionEntitlement = onCall(
+    { region: "us-central1", timeoutSeconds: 30 },
+    async (request) => {
+        const uid = request.auth?.uid;
+        if (!uid) {
+            throw new HttpsError("unauthenticated", "Sign in to verify your PitchMark Pro subscription.");
+        }
+
+        const data = parseRequestData(request.data);
+        const signedTransaction = readOptionalString(data, "signedTransaction", 30_000);
+        if (!signedTransaction) {
+            throw new HttpsError("invalid-argument", "Missing signed App Store transaction.");
+        }
+
+        const { transaction, config } = await verifyPitchMarkTransaction(signedTransaction);
+        const originalTransactionId = transaction.originalTransactionId?.trim() ?? "";
+        const transactionId = transaction.transactionId?.trim() ?? "";
+        const productId = transaction.productId?.trim() ?? "";
+        const expiresAtMs = transaction.expiresDate;
+        const signedDateMs = transaction.signedDate ?? Date.now();
+
+        if (!originalTransactionId || !transactionId || !productId || typeof expiresAtMs !== "number") {
+            throw new HttpsError("invalid-argument", "The App Store transaction is missing subscription details.");
+        }
+
+        const bindingRef = db.collection("subscriptionTransactionBindings").doc(originalTransactionId);
+        const entitlementRef = db.collection("subscriptionEntitlements").doc(uid);
+
+        const response = await db.runTransaction(async (firestoreTransaction) => {
+            const [bindingSnapshot, entitlementSnapshot] = await Promise.all([
+                firestoreTransaction.get(bindingRef),
+                firestoreTransaction.get(entitlementRef)
+            ]);
+
+            const boundUid = bindingSnapshot.exists ? String(bindingSnapshot.data()?.uid ?? "") : "";
+            if (boundUid && boundUid !== uid) {
+                throw new HttpsError(
+                    "permission-denied",
+                    "This App Store subscription is already connected to another PitchMark account."
+                );
+            }
+
+            const existing = entitlementSnapshot.data() as Record<string, unknown> | undefined;
+            const existingSignedDateMs = typeof existing?.signedDateMs === "number"
+                ? existing.signedDateMs
+                : 0;
+            const existingExpiresAtMs = typeof existing?.expiresAtMs === "number"
+                ? existing.expiresAtMs
+                : 0;
+            const incomingIsActive = expiresAtMs > Date.now()
+                && typeof transaction.revocationDate !== "number"
+                && transaction.isUpgraded !== true;
+            const existingIsActive = entitlementResponse(existing).active;
+            const shouldReplace = !entitlementSnapshot.exists
+                || signedDateMs >= existingSignedDateMs
+                || (incomingIsActive && (!existingIsActive || expiresAtMs > existingExpiresAtMs));
+
+            firestoreTransaction.set(bindingRef, {
+                uid,
+                originalTransactionId,
+                updatedAt: FieldValue.serverTimestamp(),
+                ...(!bindingSnapshot.exists ? { createdAt: FieldValue.serverTimestamp() } : {})
+            }, { merge: true });
+
+            if (shouldReplace) {
+                firestoreTransaction.set(entitlementRef, {
+                    uid,
+                    active: incomingIsActive,
+                    bundleId: config.bundleId,
+                    environment: transaction.environment ?? "",
+                    expiresAtMs,
+                    isUpgraded: transaction.isUpgraded === true,
+                    originalTransactionId,
+                    productId,
+                    purchaseDateMs: transaction.purchaseDate ?? null,
+                    revocationDateMs: transaction.revocationDate ?? null,
+                    signedDateMs,
+                    transactionId,
+                    syncedAt: FieldValue.serverTimestamp()
+                }, { merge: true });
+                return { active: incomingIsActive, expiresAtMs };
+            }
+
+            return entitlementResponse(existing);
+        });
+
+        logger.info("PitchMark Pro entitlement synced", {
+            uid,
+            productId,
+            bundleId: config.bundleId,
+            active: response.active,
+            expiresAtMs: response.expiresAtMs
+        });
+        return response;
+    }
+);
+
+export const getSubscriptionEntitlement = onCall({ region: "us-central1" }, async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+        throw new HttpsError("unauthenticated", "Sign in to check your PitchMark Pro subscription.");
+    }
+
+    const snapshot = await db.collection("subscriptionEntitlements").doc(uid).get();
+    return entitlementResponse(snapshot.data() as Record<string, unknown> | undefined);
+});
+
 export const deleteAccount = onCall({ region: "us-central1", timeoutSeconds: 540 }, async (request) => {
     const uid = request.auth?.uid;
     if (!uid) {
@@ -386,8 +574,13 @@ export const deleteAccount = onCall({ region: "us-central1", timeoutSeconds: 540
         accountDeleted: true,
         accountDeletedAt: deletedAt
     });
+    summary.subscriptionTransactionBindings = await deleteDocumentsByScanningCollection(
+        "subscriptionTransactionBindings",
+        (data) => data.uid === uid
+    );
 
     await db.recursiveDelete(db.collection("checkoutRequests").doc(uid));
+    await db.recursiveDelete(db.collection("subscriptionEntitlements").doc(uid));
     await db.recursiveDelete(db.collection("users").doc(uid));
 
     try {
