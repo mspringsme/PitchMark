@@ -49,7 +49,9 @@
           "familyShareable" : false,
           "groupNumber" : 1,
           "internalID" : "74F60D2B",
-          "introductoryOffer" : null,
+          "introductoryOffers" : [
+
+          ],
           "localizations" : [
             {
               "description" : "",
@@ -57,9 +59,39 @@
               "locale" : "en_US"
             }
           ],
-          "productID" : "com.pitchmark.pro.annual",
+          "productID" : "com.pitchmark.app.pro.annual",
           "recurringSubscriptionPeriod" : "P1Y",
           "referenceName" : "PitchMark Pro Annual",
+          "subscriptionGroupID" : "22ABC099",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "19.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "BCA0BE57",
+          "introductoryOffers" : [
+
+          ],
+          "localizations" : [
+            {
+              "description" : "",
+              "displayName" : "",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.pitchmark.display.pro.annual",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "PitchMark Pro Annual Display",
           "subscriptionGroupID" : "22ABC099",
           "type" : "RecurringSubscription",
           "winbackOffers" : [
@@ -70,7 +102,7 @@
     }
   ],
   "version" : {
-    "major" : 4,
+    "major" : 5,
     "minor" : 0
   }
 }

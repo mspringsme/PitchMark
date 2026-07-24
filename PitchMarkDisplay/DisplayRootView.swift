@@ -33,6 +33,11 @@ struct DisplayRootView: View {
         .onAppear {
             authManager.restoreSignIn()
         }
+        .onChange(of: authManager.isSignedIn) { _, isSignedIn in
+            Task {
+                await subscriptionManager.refreshForAuthStateChange(isSignedIn: isSignedIn)
+            }
+        }
     }
 }
 

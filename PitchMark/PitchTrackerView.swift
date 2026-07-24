@@ -5241,11 +5241,11 @@ struct PitchTrackerView: View {
         }
     }
     
-    @ViewBuilder
-    private var atBatSidebar: some View {
-        if isGame {
-            let needsBatterSelection = selectedBatterId == nil
+    private var atBatSidebar: AnyView {
+        guard isGame else { return AnyView(EmptyView()) }
+        let needsBatterSelection = selectedBatterId == nil
 
+        return AnyView(
             VStack(spacing: 0) {
                 Text("At Bat")
                     .font(.caption)
@@ -5273,8 +5273,10 @@ struct PitchTrackerView: View {
                     }
 
                 ZStack(alignment: .top) {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(spacing: 6) {
+                    AnyView(
+                        ScrollView(.vertical, showsIndicators: false) {
+                            AnyView(
+                                VStack(spacing: 6) {
                             ForEach(jerseyCells) { cell in
                                 JerseyRow(
                                     cell: cell,
@@ -5549,10 +5551,12 @@ struct PitchTrackerView: View {
                             } message: {
                                 Text("Enter how many batters to generate, starting at 1.")
                             }
+                                }
+                                .padding(.vertical,12)
+                                .padding(.horizontal, 0)
+                            )
                         }
-                        .padding(.vertical,12)
-                        .padding(.horizontal, 0)
-                    }
+                    )
                 }
 
                 if needsBatterSelection {
@@ -5607,7 +5611,7 @@ struct PitchTrackerView: View {
                     )
             )
             .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 4)
-        }
+        )
     }
     
     private var resetOverlay: some View {
@@ -5674,52 +5678,73 @@ struct PitchTrackerView: View {
         }
     }
     
-    @ViewBuilder
-    private func batterSideOverlay(SZwidth: CGFloat, verticalOffset: CGFloat = -20) -> some View {
-        HStack {
-            let iconSize: CGFloat = 36
-            VStack(alignment: .leading, spacing: 4) {
-                Button(action: {
-                    withAnimation { batterSide = .left }
-                    persistBatterSide(.left)
-                    pushBatterSideToActiveGame(.left)
-                }) {
+    private func batterSideOverlay(SZwidth: CGFloat, verticalOffset: CGFloat = -20) -> AnyView {
+        let iconSize: CGFloat = 36
+        let leftButton = AnyView(
+            Button(action: {
+                withAnimation { batterSide = .left }
+                persistBatterSide(.left)
+                pushBatterSideToActiveGame(.left)
+            }) {
+                AnyView(
                     Image("rightBatterIcon")
                         .resizable()
                         .renderingMode(.template)
                         .frame(width: iconSize, height: iconSize)
                         .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
-                }
-                .buttonStyle(.plain)
-
-                if currentTrackingMode == .scout && scoutObservedResult == .inPlay {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.green)
-                        .frame(width: iconSize, alignment: .center)
-                        .offset(y: 80)
-                }
+                )
             }
+            .buttonStyle(.plain)
+        )
 
-            Spacer()
+        let scoutIndicator: AnyView
+        if currentTrackingMode == .scout && scoutObservedResult == .inPlay {
+            scoutIndicator = AnyView(
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.green)
+                    .frame(width: iconSize, alignment: .center)
+                    .offset(y: 80)
+            )
+        } else {
+            scoutIndicator = AnyView(EmptyView())
+        }
 
+        let leftControls = AnyView(
+            VStack(alignment: .leading, spacing: 4) {
+                leftButton
+                scoutIndicator
+            }
+        )
+
+        let rightButton = AnyView(
             Button(action: {
                 withAnimation { batterSide = .right }
                 persistBatterSide(.right)
                 pushBatterSideToActiveGame(.right)
             }) {
-                Image("leftBatterIcon")
-                    .resizable()
-                    .renderingMode(.template)
-                    .frame(width: iconSize, height: iconSize)
-                    .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
+                AnyView(
+                    Image("leftBatterIcon")
+                        .resizable()
+                        .renderingMode(.template)
+                        .frame(width: iconSize, height: iconSize)
+                        .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
+                )
             }
             .buttonStyle(.plain)
-        }
-        .frame(width: SZwidth)
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .offset(y: verticalOffset)
+        )
+
+        return AnyView(
+            HStack {
+                leftControls
+                Spacer()
+                rightButton
+            }
+            .frame(width: SZwidth)
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .offset(y: verticalOffset)
+        )
     }
     
     private struct StrikeZoneCard: View {
@@ -5836,9 +5861,8 @@ struct PitchTrackerView: View {
         }
     }
     
-    @ViewBuilder
-    private func strikeZoneArea(width SZwidth: CGFloat) -> some View {
-        ZStack(alignment: .top) {
+    private func strikeZoneArea(width SZwidth: CGFloat) -> AnyView {
+        let card = AnyView(
             StrikeZoneCard(
                 SZwidth: SZwidth,
                 strikeZoneHeight: strikeZoneHeight,
@@ -5895,12 +5919,20 @@ struct PitchTrackerView: View {
                 template: selectedTemplate,
                 canInitiateCall: canInitiateCall
             )
-            .overlay(resetOverlay, alignment: .bottomLeading)
-            .overlay(gameStatsOverlay, alignment: .bottomTrailing)
+        )
 
-            batterSideOverlay(SZwidth: SZwidth)
+        let decoratedCard = AnyView(
+            card
+                .overlay(AnyView(resetOverlay), alignment: .bottomLeading)
+                .overlay(AnyView(gameStatsOverlay), alignment: .bottomTrailing)
+        )
+        let batterOverlay = AnyView(batterSideOverlay(SZwidth: SZwidth))
+
+        return AnyView(ZStack(alignment: .top) {
+            decoratedCard
+            batterOverlay
         }
-        .frame(width: SZwidth, height: strikeZoneHeight)
+        .frame(width: SZwidth, height: strikeZoneHeight))
     }
     private var codeLinkButton: some View {
         Menu {

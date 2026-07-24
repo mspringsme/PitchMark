@@ -1,10 +1,24 @@
 import SwiftUI
 import StoreKit
 import Combine
+import FirebaseAuth
+import FirebaseFunctions
+
+private enum SubscriptionEntitlementError: Error {
+    case invalidServerResponse
+}
 
 @MainActor
 final class SubscriptionManager: ObservableObject {
-    static let annualProductId = "com.pitchmark.pro.annual"
+    static let mainAnnualProductId = "com.pitchmark.app.pro.annual"
+    static let displayAnnualProductId = "com.pitchmark.display.pro.annual"
+    static let proProductIds: Set<String> = [mainAnnualProductId, displayAnnualProductId]
+
+    static var annualProductId: String {
+        Bundle.main.bundleIdentifier == "app.Pitchmark-Display"
+            ? displayAnnualProductId
+            : mainAnnualProductId
+    }
 
     enum Status {
         case loading
@@ -38,6 +52,8 @@ final class SubscriptionManager: ObservableObject {
     private var transactionUpdatesTask: Task<Void, Never>? = nil
     private var isRefreshingEntitlements = false
     private var pendingEntitlementRefresh = false
+    private var storeKitHasActiveEntitlement = false
+    private var accountHasActiveEntitlement = false
     private static let forcePaywallTestingKey = "forcePaywallForSandboxSubscriptionTesting"
     private static let debugSubscriptionOverrideKey = "debugSubscriptionOverride"
 
@@ -96,7 +112,10 @@ final class SubscriptionManager: ObservableObject {
         isRefreshingEntitlements = true
         log("refreshEntitlements start reason=\(reason)")
         var hasActive = false
+        var signedTransactions: [String] = []
+        var entitlementCount = 0
         for await result in Transaction.currentEntitlements {
+            entitlementCount += 1
             switch result {
             case .verified(let transaction):
                 log(
@@ -104,17 +123,30 @@ final class SubscriptionManager: ObservableObject {
                     "revoked=\(transaction.revocationDate != nil) " +
                     "expires=\(transaction.expirationDate?.description ?? "nil")"
                 )
-                guard transaction.productID == Self.annualProductId else { continue }
+                guard Self.proProductIds.contains(transaction.productID) else { continue }
                 if transaction.revocationDate == nil {
                     hasActive = true
+                    signedTransactions.append(result.jwsRepresentation)
                 }
             case .unverified(_, let error):
                 log("entitlement unverified error=\(error.localizedDescription)")
             }
         }
+        storeKitHasActiveEntitlement = hasActive
+        if Auth.auth().currentUser != nil {
+            for signedTransaction in signedTransactions {
+                await syncAccountEntitlement(signedTransaction: signedTransaction)
+            }
+            await refreshAccountEntitlement()
+        } else {
+            accountHasActiveEntitlement = false
+        }
         let previous = isPro
-        applyEntitlementState(hasActive, reason: reason)
-        log("refreshEntitlements complete reason=\(reason) isPro \(previous) -> \(isPro) status=\(statusLabel)")
+        applyEntitlementState(
+            storeKitHasActiveEntitlement || accountHasActiveEntitlement,
+            reason: reason
+        )
+        log("refreshEntitlements complete reason=\(reason) entitlements=\(entitlementCount) isPro \(previous) -> \(isPro) status=\(statusLabel)")
         isRefreshingEntitlements = false
 
         if pendingEntitlementRefresh {
@@ -152,6 +184,7 @@ final class SubscriptionManager: ObservableObject {
                         }
                         applyEntitlementState(true, reason: "purchase-verified")
                     }
+                    await syncAccountEntitlement(signedTransaction: verification.jwsRepresentation)
                     await transaction.finish()
                     log("purchase transaction finished txnId=\(transaction.id)")
                     await refreshEntitlements(reason: "purchase-success")
@@ -237,7 +270,8 @@ final class SubscriptionManager: ObservableObject {
             switch result {
             case .verified(let transaction):
                 log("transaction update verified product=\(transaction.productID) txnId=\(transaction.id)")
-                if transaction.productID == Self.annualProductId {
+                if Self.proProductIds.contains(transaction.productID) {
+                    await syncAccountEntitlement(signedTransaction: result.jwsRepresentation)
                     await refreshEntitlements(reason: "transaction-update")
                 }
                 await transaction.finish()
@@ -251,7 +285,48 @@ final class SubscriptionManager: ObservableObject {
 
     func refreshForAuthStateChange(isSignedIn: Bool) async {
         log("auth state changed isSignedIn=\(isSignedIn)")
+        if !isSignedIn {
+            accountHasActiveEntitlement = false
+        }
         await refreshEntitlements(reason: isSignedIn ? "auth-sign-in" : "auth-sign-out")
+    }
+
+    private func syncAccountEntitlement(signedTransaction: String) async {
+        guard Auth.auth().currentUser != nil else { return }
+        do {
+            let result = try await Functions.functions()
+                .httpsCallable("syncSubscriptionEntitlement")
+                .call(["signedTransaction": signedTransaction])
+            if let data = result.data as? [String: Any],
+               let active = data["active"] as? Bool {
+                accountHasActiveEntitlement = active
+                log("server entitlement sync active=\(active)")
+            }
+        } catch {
+            lastErrorMessage = "We couldn't verify PitchMark Pro for this account. Please try again."
+            log("server entitlement sync failed error=\(error.localizedDescription)")
+        }
+    }
+
+    private func refreshAccountEntitlement() async {
+        guard Auth.auth().currentUser != nil else {
+            accountHasActiveEntitlement = false
+            return
+        }
+        do {
+            let result = try await Functions.functions()
+                .httpsCallable("getSubscriptionEntitlement")
+                .call()
+            guard let data = result.data as? [String: Any],
+                  let active = data["active"] as? Bool else {
+                throw SubscriptionEntitlementError.invalidServerResponse
+            }
+            accountHasActiveEntitlement = active
+            log("server entitlement refresh active=\(active)")
+        } catch {
+            lastErrorMessage = "We couldn't check PitchMark Pro for this account. Please try again."
+            log("server entitlement refresh failed error=\(error.localizedDescription)")
+        }
     }
 
     func setForcePaywallForSandboxTesting(_ isEnabled: Bool) {

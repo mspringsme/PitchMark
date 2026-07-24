@@ -14,6 +14,7 @@
 		23A619482F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */; };
 		23B131CE2F75A50800A70589 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 23B131CD2F75A50800A70589 /* GoogleSignInSwift */; };
 		23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 23B131D12F75A91D00A70589 /* GoogleService-Info.plist */; };
+		23D15A022FA1000100D15A02 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 23D15A012FA1000100D15A01 /* Assets.xcassets */; };
 		23F1A88B2F12C6EF0094E7BC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88A2F12C6EF0094E7BC /* FirebaseAuth */; };
 		23F1A88D2F12C7030094E7BC /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88C2F12C7030094E7BC /* FirebaseFirestore */; };
 		23F1A88F2F12C70B0094E7BC /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88E2F12C70B0094E7BC /* FirebaseAnalytics */; };
@@ -41,6 +42,7 @@
 		23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrikeZoneHeatmapView.swift; sourceTree = "<group>"; };
 		23AF006A2FAFD1C70046D670 /* index.ts */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.typescript; path = index.ts; sourceTree = "<group>"; };
 		23B131D12F75A91D00A70589 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		23D15A012FA1000100D15A01 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyWindowView.swift; sourceTree = "<group>"; };
 		23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeDisplayOverlayView.swift; sourceTree = "<group>"; };
 		23F7D2C52F758F710010D7BF /* Pitchmark Display.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Pitchmark Display.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -133,6 +135,7 @@
 			children = (
 				239F0B7E2F12B238004E32DD /* PitchMark */,
 				23F7D2C62F758F710010D7BF /* Pitchmark Display */,
+				23D15A032FA1000100D15A03 /* Pitchmark Display */,
 				23F1A8892F12C6EF0094E7BC /* Frameworks */,
 				239F0B7D2F12B238004E32DD /* Products */,
 				23652D3A2F57705F00461063 /* firestore.rules */,
@@ -152,6 +155,14 @@
 				23F7D2C52F758F710010D7BF /* Pitchmark Display.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		23D15A032FA1000100D15A03 /* Pitchmark Display */ = {
+			isa = PBXGroup;
+			children = (
+				23D15A012FA1000100D15A01 /* Assets.xcassets */,
+			);
+			path = "Pitchmark Display";
 			sourceTree = "<group>";
 		};
 		23F1A8892F12C6EF0094E7BC /* Frameworks */ = {
@@ -244,6 +255,11 @@
 				TargetAttributes = {
 					239F0B7B2F12B238004E32DD = {
 						CreatedOnToolsVersion = 26.2;
+						SystemCapabilities = {
+							com.apple.InAppPurchase = {
+								enabled = 1;
+							};
+						};
 					};
 					23F7D2C42F758F710010D7BF = {
 						CreatedOnToolsVersion = 26.3;
@@ -287,6 +303,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				23D15A022FA1000100D15A02 /* Assets.xcassets in Resources */,
 				23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -447,7 +464,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = PitchMark/PitchMark.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = E3TJVK4339;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -468,7 +485,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -492,7 +509,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = PitchMark/PitchMark.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = E3TJVK4339;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -513,7 +530,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -542,6 +559,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Pitchmark-Display-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "PM Display";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -582,6 +600,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Pitchmark-Display-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = "PM Display";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

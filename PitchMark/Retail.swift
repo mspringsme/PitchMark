@@ -14,9 +14,17 @@ import FirebaseAuth
 struct StorefrontView: View {
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
+    @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @State private var isPurchasingPro = false
     @State private var isRestoringPurchases = false
     @State private var navigationPath = NavigationPath()
+    @State private var showDisplaySetupSheet = false
+    @State private var isDisplayAppInstalled = false
+    @State private var didCopyDisplayLink = false
+
+    private let displayAppSearchURL = URL(string: "https://apps.apple.com/us/search?term=Pitchmark%20Display")!
+    private let displayAppURL = URL(string: "pitchmarkdisplay://")!
 
     private var annualPrice: String {
         subscriptionManager.annualProduct?.displayPrice ?? "$19.99"
@@ -26,9 +34,31 @@ struct StorefrontView: View {
         authManager.isRetailAdmin
     }
 
+    private func refreshDisplayAppInstallState() {
+        isDisplayAppInstalled = UIApplication.shared.canOpenURL(displayAppURL)
+    }
+
+    private func openDisplayAppOrStoreOnThisDevice() {
+        refreshDisplayAppInstallState()
+        if isDisplayAppInstalled {
+            UIApplication.shared.open(displayAppURL)
+        } else {
+            openURL(displayAppSearchURL)
+        }
+    }
+
+    private func copyDisplayAppLink() {
+        UIPasteboard.general.url = displayAppSearchURL
+        didCopyDisplayLink = true
+    }
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
             List {
+                StorefrontHeaderView()
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 12, trailing: 16))
+                    .listRowBackground(Color.clear)
+
                 Section(header: Text("Pitcher Grid Key Inserts")) {
                     Text("Armband grid key inserts; Master pitch call sheet")
                         .font(.subheadline)
@@ -127,6 +157,25 @@ struct StorefrontView: View {
                             .accessibilityHint("Starts the annual PitchMark Pro subscription purchase flow.")
                         }
 
+                        Button {
+                            didCopyDisplayLink = false
+                            refreshDisplayAppInstallState()
+                            showDisplaySetupSheet = true
+                        } label: {
+                            Label(
+                                subscriptionManager.isPro ? "Set Up Display App" : "Subscribe to Set Up Display",
+                                systemImage: "rectangle.on.rectangle"
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .frame(minHeight: 44)
+                        .disabled(!subscriptionManager.isPro)
+                        .opacity(subscriptionManager.isPro ? 1 : 0.45)
+                        .accessibilityHint(subscriptionManager.isPro
+                                           ? "Shows options to install, open, or share the Display app link."
+                                           : "PitchMark Pro is required for the Display app.")
+
                         Button("Restore Purchases") {
                             guard !isRestoringPurchases else { return }
                             isRestoringPurchases = true
@@ -201,10 +250,25 @@ struct StorefrontView: View {
         }
         .task {
             await subscriptionManager.refresh()
+            refreshDisplayAppInstallState()
             if UserDefaults.standard.bool(forKey: "openOrderHistoryAfterCheckout") {
                 UserDefaults.standard.set(false, forKey: "openOrderHistoryAfterCheckout")
                 openCheckoutReceipt()
             }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                refreshDisplayAppInstallState()
+            }
+        }
+        .sheet(isPresented: $showDisplaySetupSheet) {
+            DisplayAppSetupSheet(
+                appStoreURL: displayAppSearchURL,
+                isInstalledOnThisDevice: isDisplayAppInstalled,
+                didCopyLink: didCopyDisplayLink,
+                openOnThisDevice: openDisplayAppOrStoreOnThisDevice,
+                copyLink: copyDisplayAppLink
+            )
         }
         .onReceive(NotificationCenter.default.publisher(for: .retailCheckoutSucceeded)) { _ in
             UserDefaults.standard.set(false, forKey: "openOrderHistoryAfterCheckout")
@@ -217,6 +281,170 @@ struct StorefrontView: View {
         DispatchQueue.main.async {
             navigationPath.append(StorefrontRoute.checkoutReceipt(UUID()))
         }
+    }
+}
+
+private struct DisplayAppSetupSheet: View {
+    let appStoreURL: URL
+    let isInstalledOnThisDevice: Bool
+    let didCopyLink: Bool
+    let openOnThisDevice: () -> Void
+    let copyLink: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Set Up Pitchmark Display")
+                        .font(.title3.weight(.semibold))
+                    Text("Install Pitchmark Display on the iPad or other device you will use as the live display. You can also install or open it on this device.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(spacing: 12) {
+                    Button {
+                        openOnThisDevice()
+                    } label: {
+                        Label(
+                            isInstalledOnThisDevice ? "Open on This Device" : "Get on This Device",
+                            systemImage: isInstalledOnThisDevice ? "app.badge" : "arrow.down.circle.fill"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    ShareLink(item: appStoreURL) {
+                        Label("Share Link to Display Device", systemImage: "square.and.arrow.up")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button {
+                        copyLink()
+                    } label: {
+                        Label(didCopyLink ? "Link Copied" : "Copy App Store Link", systemImage: didCopyLink ? "checkmark" : "doc.on.doc")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Text("After installing on the display device, sign in with the same PitchMark account and open Display when you are ready for a live session.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("Display App")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+private struct StorefrontHeaderView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 16) {
+                StorefrontProductGraphic()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("PitchMark Store")
+                        .font(.title2.weight(.bold))
+                    Text("Physical play-calling tools, printed and shipped.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Label("Virtually indestructible; color laser printed", systemImage: "shield.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.green)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(14)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color.blue.opacity(0.16),
+                    Color.green.opacity(0.12),
+                    Color(.secondarySystemGroupedBackground)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct StorefrontProductGraphic: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.white)
+                .frame(width: 82, height: 62)
+                .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 5)
+
+            VStack(spacing: 5) {
+                HStack(spacing: 4) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.blue.opacity(0.75))
+                            .frame(width: 10, height: 8)
+                    }
+                }
+                HStack(spacing: 4) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.green.opacity(0.75))
+                            .frame(width: 10, height: 8)
+                    }
+                }
+                HStack(spacing: 4) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.orange.opacity(0.75))
+                            .frame(width: 10, height: 8)
+                    }
+                }
+            }
+            .padding(.top, 2)
+
+            Image(systemName: "shippingbox.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.brown)
+                .padding(8)
+                .background(Color.white, in: Circle())
+                .offset(x: 30, y: 25)
+
+            Image(systemName: "printer.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(6)
+                .background(Color.white, in: Circle())
+                .offset(x: -31, y: -25)
+        }
+        .frame(width: 100, height: 86)
     }
 }
 
@@ -260,7 +488,7 @@ private let gridKeyTemplates: [StoreTemplate] = [
 ]
 
 private let printableSheetTemplates: [StoreTemplate] = [
-    .init(name: "Printable Sheet (8.5 x 11)", subtitle: "Strikes on one side, Balls on the other (2 copies)", icon: "doc.plaintext", price: 12, kind: .printableSheet, retailProductId: "sheet_8_5x11")
+    .init(name: "Printed Sheet — 2 Shipped Copies", subtitle: "Physical 8.5 x 11 sheets: Strikes on one side, Balls on the other", icon: "doc.plaintext", price: 12, kind: .printableSheet, retailProductId: "sheet_8_5x11")
 ]
 
 // MARK: - Detail View
@@ -560,7 +788,7 @@ private struct TemplateDetailView: View {
                         showShareSheet = true
                     }
                 } label: {
-                    Label("Download PDF (Preview)", systemImage: "arrow.down.doc")
+                    Label("Download Free Preview PDF", systemImage: "arrow.down.doc")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -579,7 +807,7 @@ private struct TemplateDetailView: View {
                         }
                     }
                 } label: {
-                    Label("Buy for \(template.price, format: .currency(code: "USD"))", systemImage: "cart")
+                    Label("Order Shipped Product for \(template.price, format: .currency(code: "USD"))", systemImage: "shippingbox")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -1035,7 +1263,7 @@ private struct PrintableSheetDetailView: View {
                         showShareSheet = true
                     }
                 } label: {
-                    Label("Download PDF (Preview)", systemImage: "arrow.down.doc")
+                    Label("Download Free Preview PDF", systemImage: "arrow.down.doc")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
@@ -1054,7 +1282,7 @@ private struct PrintableSheetDetailView: View {
                         }
                     }
                 } label: {
-                    Label("Buy for \(template.price, format: .currency(code: "USD"))", systemImage: "cart")
+                    Label("Order Shipped Product for \(template.price, format: .currency(code: "USD"))", systemImage: "shippingbox")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)

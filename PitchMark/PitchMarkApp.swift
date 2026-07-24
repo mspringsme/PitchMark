@@ -56,8 +56,12 @@ struct RootView: View {
             DisplayOnboardingView(
                 displayAppSearchURL: displayAppSearchURL,
                 openDisplayApp: {
-                    guard let url = URL(string: "pitchmarkdisplay://") else { return }
+                    guard let url = URL(string: "pitchmarkdisplay://"),
+                          UIApplication.shared.canOpenURL(url) else {
+                        return false
+                    }
                     UIApplication.shared.open(url)
+                    return true
                 },
                 dismissAction: {
                     didShowDisplayOnboarding = true
@@ -113,8 +117,9 @@ struct RootView: View {
                 showDisplayOnboarding = false
             }
         }
-        .onChange(of: subscriptionManager.isPro) { _, isPro in
-            guard isPro, !didShowDisplayOnboarding else { return }
+        .onChange(of: subscriptionManager.lastStatusMessage) { _, statusMessage in
+            guard statusMessage == "Purchase successful. PitchMark Pro is now active.",
+                  !didShowDisplayOnboarding else { return }
             DispatchQueue.main.async {
                 showDisplayOnboarding = true
             }
@@ -223,10 +228,12 @@ struct RootView: View {
 
 private struct DisplayOnboardingView: View {
     let displayAppSearchURL: URL
-    let openDisplayApp: () -> Void
+    let openDisplayApp: () -> Bool
     let dismissAction: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @State private var showDisplayAppMissingAlert = false
 
     var body: some View {
         NavigationStack {
@@ -247,16 +254,18 @@ private struct DisplayOnboardingView: View {
                     .font(.subheadline)
 
                     VStack(spacing: 12) {
-                        Button {
-                            openDisplayApp()
-                        } label: {
-                            Label("Open Display App", systemImage: "app.badge")
+                        Link(destination: displayAppSearchURL) {
+                            Label("Get Pitchmark Display", systemImage: "square.and.arrow.up")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
 
-                        Link(destination: displayAppSearchURL) {
-                            Label("Get Pitchmark Display", systemImage: "square.and.arrow.up")
+                        Button {
+                            if !openDisplayApp() {
+                                showDisplayAppMissingAlert = true
+                            }
+                        } label: {
+                            Label("Open Display App", systemImage: "app.badge")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
@@ -273,6 +282,14 @@ private struct DisplayOnboardingView: View {
             }
             .navigationTitle("Display Setup")
             .navigationBarTitleDisplayMode(.inline)
+            .alert("Display App Not Installed", isPresented: $showDisplayAppMissingAlert) {
+                Button("Get Display") {
+                    openURL(displayAppSearchURL)
+                }
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Install Pitchmark Display from the App Store, then open it when you are ready to run a live session.")
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
