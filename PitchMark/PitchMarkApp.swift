@@ -28,6 +28,7 @@ struct RootView: View {
     @State private var showDisplayOnboarding = false
     @State private var showProPaywall = false
     @State private var checkoutAlert: CheckoutAlert? = nil
+    @State private var isDemoMode = false
     @AppStorage(PitchTrackerView.DefaultsKeys.didShowDisplayOnboarding) private var didShowDisplayOnboarding = false
     private let displayAppSearchURL = URL(string: "https://apps.apple.com/us/search?term=Pitchmark%20Display")!
 
@@ -37,8 +38,17 @@ struct RootView: View {
                 SplashView()
             } else if authManager.isSignedIn {
                 PitchTrackerView()
+            } else if isDemoMode {
+                PitchTrackerView(
+                    isDemoMode: true,
+                    onRequireSignIn: {
+                        isDemoMode = false
+                    }
+                )
             } else {
-                SignInView()
+                SignInView {
+                    isDemoMode = true
+                }
             }
         }
         .fullScreenCover(isPresented: $showDisplayCover) {
@@ -103,6 +113,7 @@ struct RootView: View {
                 await subscriptionManager.refreshForAuthStateChange(isSignedIn: isSignedIn)
             }
             if isSignedIn {
+                isDemoMode = false
                 LiveGameService.shared.cleanupExpiredJoinArtifacts()
                 if let token = UserDefaults.standard.string(forKey: "pendingInviteToken"), !token.isEmpty {
                     UserDefaults.standard.removeObject(forKey: "pendingInviteToken")

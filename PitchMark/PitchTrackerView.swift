@@ -132,6 +132,13 @@ private extension View {
 
 struct PitchTrackerView: View {
     private static let allPitchersSummarySelection = "__ALL_PITCHERS__"
+    private static let demoUserId = "pitchmark-demo-user"
+    private static let demoGameId = "pitchmark-demo-game"
+    private static let demoPitcherId = "pitchmark-demo-pitcher"
+    private static let demoTemplateId = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+
+    var isDemoMode: Bool = false
+    var onRequireSignIn: () -> Void = {}
 
     enum PitchResultBannerPhase {
         case code
@@ -175,6 +182,8 @@ struct PitchTrackerView: View {
     @State private var showProPaywall = false
     @State private var showProGateAlert = false
     @State private var proGateMessage: String = ""
+    @State private var showDemoLoginWall = false
+    @State private var demoLoginWallMessage = "Sign in to save your own teams, pitchers, and grid keys."
     @State private var showCameraPicker = false
     @State private var showCameraUnavailableAlert = false
     @State private var showCameraPermissionAlert = false
@@ -557,6 +566,7 @@ struct PitchTrackerView: View {
     }
 
     private var effectiveGameOwnerUserId: String? {
+        if isDemoMode { return Self.demoUserId }
         if let host = activeGameOwnerUserId, !host.isEmpty { return host }
         // In game mode, unknown owner must not fall back to self; that can
         // incorrectly flip participant UI/permissions into owner behavior.
@@ -565,6 +575,7 @@ struct PitchTrackerView: View {
     }
 
     private var isOwnerForActiveGame: Bool {
+        if isDemoMode { return true }
         guard let me = authManager.user?.uid,
               let owner = effectiveGameOwnerUserId else { return false }
         return me == owner
@@ -886,7 +897,9 @@ struct PitchTrackerView: View {
             "callId": activeCalledPitchId ?? ""
         ]
 
-        if let liveId = activeLiveId {
+        if isDemoMode {
+            debugLog("Demo mode: pitch event kept local only.")
+        } else if let liveId = activeLiveId {
             LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
                 "resultSelection": payload
             ])
@@ -1998,6 +2011,51 @@ struct PitchTrackerView: View {
         }
     }
 
+    private var demoTemplate: PitchTemplate {
+        PitchTemplate(
+            id: Self.demoTemplateId,
+            name: "Demo Grid Key",
+            pitches: ["4 Seam"],
+            codeAssignments: allLocationsFromGrid().enumerated().map { index, location in
+                PitchCodeAssignment(
+                    code: String(format: "D%02d", index + 1),
+                    pitch: "4 Seam",
+                    location: location
+                )
+            },
+            isEncrypted: false,
+            ownerUid: Self.demoUserId
+        )
+    }
+
+    private var demoPitcher: Pitcher {
+        Pitcher(
+            id: Self.demoPitcherId,
+            name: "Demo Pitcher",
+            templateId: Self.demoTemplateId.uuidString,
+            ownerUid: Self.demoUserId,
+            sharedWith: [],
+            claimedByUid: nil,
+            createdAt: Date()
+        )
+    }
+
+    private var demoGame: Game {
+        Game(
+            id: Self.demoGameId,
+            opponent: "Demo Game",
+            date: Date(),
+            jerseyNumbers: ["1"],
+            batterIds: [UUID().uuidString],
+            trackingMode: .coach
+        )
+    }
+
+    private func requireSignInForDemo(_ message: String = "Sign in to save your own teams, pitchers, and grid keys.") {
+        demoLoginWallMessage = message
+        showDemoLoginWall = true
+    }
+
     // MARK: - Template Version Indicator
     private var currentTemplateVersionLabel: String {
         // Encrypted mode has been retired; keep label empty.
@@ -2348,7 +2406,7 @@ struct PitchTrackerView: View {
     }
 
     private func applySelectedPitcher(_ pitcher: Pitcher, allowTemplateOverride: Bool = true) {
-        if isGame && !pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
+        if !isDemoMode && isGame && !pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
             return
         }
         selectedPitcherId = pitcher.id
@@ -2370,10 +2428,14 @@ struct PitchTrackerView: View {
     // MARK: - Preview-friendly initializer
     // Allows previews to seed internal @State with dummy data without affecting app code
     init(
+        isDemoMode: Bool = false,
+        onRequireSignIn: @escaping () -> Void = {},
         previewTemplate: PitchTemplate? = nil,
         previewTemplates: [PitchTemplate] = [],
         previewIsGame: Bool = false
     ) {
+        self.isDemoMode = isDemoMode
+        self.onRequireSignIn = onRequireSignIn
         if let t = previewTemplate {
             _selectedTemplate = State(initialValue: t)
             _selectedPitches = State(initialValue: Set(t.pitches))
@@ -2676,7 +2738,9 @@ struct PitchTrackerView: View {
                 games[index].lastTemplateId = selectedTemplateId?.uuidString
                 games[index].lastPitcherId = selectedPitcherId
                 games[index].trackingMode = effectiveTrackingMode
-                authManager.saveGame(games[index])
+                if !isDemoMode {
+                    authManager.saveGame(games[index])
+                }
             }
         }
 
@@ -4614,6 +4678,10 @@ struct PitchTrackerView: View {
 
     private var settingsButton: some View {
         Button {
+            if isDemoMode {
+                requireSignInForDemo("Sign in to add pitchers, games, and grid keys.")
+                return
+            }
             showSettings = true
         } label: {
             Image(systemName: "gearshape")
@@ -4939,6 +5007,10 @@ struct PitchTrackerView: View {
     }
 
     private func triggerAssistantCodeLink() {
+        if isDemoMode {
+            requireSignInForDemo("Sign in to invite another device or use live sharing.")
+            return
+        }
         if !subscriptionManager.isPro {
             proGateMessage = "Coach + Assistant mode is available in PitchMark Pro."
             showProGateAlert = true
@@ -5937,6 +6009,10 @@ struct PitchTrackerView: View {
     private var codeLinkButton: some View {
         Menu {
             Button {
+                if isDemoMode {
+                    requireSignInForDemo("Sign in to add pitchers, games, and grid keys.")
+                    return
+                }
                 showSettings = true
             } label: {
                 Label("Settings", systemImage: "gearshape")
@@ -5944,6 +6020,10 @@ struct PitchTrackerView: View {
             
             
             Button {
+                if isDemoMode {
+                    requireSignInForDemo("Sign in to invite another device or use live sharing.")
+                    return
+                }
                 if !subscriptionManager.isPro {
                     proGateMessage = "Coach + Assistant mode is available in PitchMark Pro."
                     showProGateAlert = true
@@ -6427,9 +6507,10 @@ struct PitchTrackerView: View {
             authManager.savePitchEvent(eventToPersist)
         }
 
-        saveSharedPitcherEventIfAllowed(sharedEvent)
-
-        writeResultSelection(label: eventToPersist.location)
+        if !isDemoMode {
+            saveSharedPitcherEventIfAllowed(sharedEvent)
+            writeResultSelection(label: eventToPersist.location)
+        }
 
         sessionManager.incrementCount()
         applyProgressOutcomeAdjustments(for: eventToPersist)
@@ -6443,9 +6524,14 @@ struct PitchTrackerView: View {
         if activeLiveId == nil {
             withAnimation(.easeInOut(duration: 0.3)) {
                 pitchEvents.append(eventToPersist)
+                if isDemoMode {
+                    gamePitchEvents.append(eventToPersist)
+                }
             }
-            authManager.loadPitchEvents { events in
-                self.pitchEvents = events
+            if !isDemoMode {
+                authManager.loadPitchEvents { events in
+                    self.pitchEvents = events
+                }
             }
             if overlayTab == .progress {
                 progressRefreshToken = UUID()
@@ -7382,6 +7468,11 @@ struct PitchTrackerView: View {
     }
     
     private func handleInitialAppear() {
+        if isDemoMode {
+            configureDemoMode()
+            return
+        }
+
         // If we aren't signed in yet, do NOT mark anything as presented.
         // We'll be called again when sign-in completes.
         guard authManager.isSignedIn else {
@@ -7607,6 +7698,36 @@ struct PitchTrackerView: View {
 
     }
 
+    private func configureDemoMode() {
+        guard !hasPresentedInitialSettings else { return }
+
+        let template = demoTemplate
+        let pitcher = demoPitcher
+        let game = demoGame
+        let batterId = UUID()
+
+        templates = [template]
+        pitchers = [pitcher]
+        games = [game]
+        selectedTemplate = template
+        selectedPitches = Set(template.pitches)
+        pitchCodeAssignments = template.codeAssignments
+        selectedPitch = template.pitches.first ?? ""
+        selectedPitcherId = pitcher.id
+        selectedGameId = game.id
+        opponentName = game.opponent
+        activeGameOwnerUserId = Self.demoUserId
+        ownerTemplateName = template.name
+        isGame = true
+        currentTrackingMode = .coach
+        sessionManager.switchMode(to: .game)
+        jerseyCells = [JerseyCell(id: batterId, jerseyNumber: "1")]
+        selectedBatterId = batterId
+        selectedBatterJersey = "1"
+        startupPhase = .ready
+        hasPresentedInitialSettings = true
+    }
+
     private func resetStateForAuthenticatedUserChange(oldUserId: String?, newUserId: String?) {
         guard let oldUserId else { return }
         guard oldUserId != newUserId else { return }
@@ -7655,6 +7776,10 @@ struct PitchTrackerView: View {
     @ViewBuilder private var gameSheetView: some View {
         GameSelectionSheet(
             onCreate: { name, date, trackingMode in
+                if isDemoMode {
+                    requireSignInForDemo("Sign in to create your own games.")
+                    return
+                }
                 let newGame = Game(
                     id: nil,
                     opponent: name,
@@ -7666,7 +7791,7 @@ struct PitchTrackerView: View {
                 authManager.saveGame(newGame)
             },
             onChoose: { gameId in
-                let ownerUid = authManager.user?.uid ?? ""
+                let ownerUid = isDemoMode ? Self.demoUserId : (authManager.user?.uid ?? "")
 
                 requestGameConfirmation(gameId: gameId, ownerUid: ownerUid)
                 showGameSheet = false
@@ -7680,6 +7805,10 @@ struct PitchTrackerView: View {
             shareCode: $shareCode,
             codeShareSheetID: $codeShareSheetID,
             showCodeShareModePicker: $showCodeShareModePicker,
+            isDemoMode: isDemoMode,
+            onRequireSignIn: {
+                requireSignInForDemo("Sign in to create and manage your own games.")
+            },
             // ✅ these must be last because your init expects it
             games: $games,
         )
@@ -8695,6 +8824,7 @@ struct PitchTrackerView: View {
 
         let synced = baseBody.withGameSync(
             start: {
+                guard !isDemoMode else { return }
                 startListeningToActiveGame()
                 if let liveId = activeLiveId, !liveId.isEmpty {
                     startListeningToLivePitchEvents(liveId: liveId)
@@ -8719,7 +8849,9 @@ struct PitchTrackerView: View {
 
         let v1 = v0
             .onChange(of: scenePhase) { _, newValue in
-                handleScenePhaseChange(newValue)
+                if !isDemoMode {
+                    handleScenePhaseChange(newValue)
+                }
             }
             .onChange(of: pendingResultLabel) { _, newValue in
                 handlePendingResultChange(newValue)
@@ -8921,6 +9053,14 @@ struct PitchTrackerView: View {
             } message: {
                 Text(proGateMessage)
             }
+            .alert("Sign In Required", isPresented: $showDemoLoginWall) {
+                Button("Not Now", role: .cancel) { }
+                Button("Sign In") {
+                    onRequireSignIn()
+                }
+            } message: {
+                Text(demoLoginWallMessage)
+            }
             .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -9038,7 +9178,9 @@ struct PitchTrackerView: View {
             }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .background || newPhase == .inactive {
-                    flushProgressToGameIfOwner()
+                    if !isDemoMode {
+                        flushProgressToGameIfOwner()
+                    }
                 }
             }
             .onChange(of: authManager.isSignedIn) { _, newValue in
@@ -11363,6 +11505,8 @@ struct GameSelectionSheet: View {
     @Binding var shareCode: String
     @Binding var codeShareSheetID: UUID
     @Binding var showCodeShareModePicker: Bool
+    var isDemoMode: Bool = false
+    var onRequireSignIn: () -> Void = {}
     @Binding var games: [Game]
     @State private var showAddGamePopover: Bool = false
     @State private var newOpponentName: String = ""
@@ -11431,6 +11575,10 @@ struct GameSelectionSheet: View {
             Menu {
                 if game.isArchived {
                     Button {
+                        if isDemoMode {
+                            onRequireSignIn()
+                            return
+                        }
                         guard let id = game.id, !id.isEmpty else { return }
                         authManager.unarchiveGame(gameId: id)
                         if let idx = games.firstIndex(where: { $0.id == id }) {
@@ -11441,6 +11589,10 @@ struct GameSelectionSheet: View {
                     }
                 } else {
                     Button {
+                        if isDemoMode {
+                            onRequireSignIn()
+                            return
+                        }
                         guard let id = game.id, !id.isEmpty else { return }
                         authManager.archiveGame(gameId: id)
                         if let idx = games.firstIndex(where: { $0.id == id }) {
@@ -11452,6 +11604,10 @@ struct GameSelectionSheet: View {
                 }
 
                 Button(role: .destructive) {
+                    if isDemoMode {
+                        onRequireSignIn()
+                        return
+                    }
                     guard let id = game.id, !id.isEmpty else { return }
                     pendingDeleteGameId = id
                     pendingDeleteGameName = game.opponent
@@ -11511,6 +11667,10 @@ struct GameSelectionSheet: View {
                     HStack(spacing: 14) {
                         Spacer()
                         Button {
+                            if isDemoMode {
+                                onRequireSignIn()
+                                return
+                            }
                             showAddGamePopover = true
                         } label: {
                             HStack(spacing: 4) {
