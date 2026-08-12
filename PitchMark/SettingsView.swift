@@ -460,8 +460,10 @@ private struct SettingsGameSummarySheetView: View {
             }
             .sheet(isPresented: $showShareSheet) {
                 ShareSheet(items: [shareText])
+                    .fixedAppDynamicType()
             }
         }
+        .fixedAppDynamicType()
     }
 
     @ViewBuilder
@@ -538,6 +540,9 @@ struct SettingsView: View {
     @State private var isDeletingAccount = false
     @State private var requiresDeleteRecentLogin = false
     @State private var showAccountActionsSheet = false
+    @State private var showLearnPitchMark = false
+    @State private var showMoreAccountActionsSheet = false
+    @State private var showFinalDeleteAccountConfirmation = false
     @State private var templatePendingDeletion: PitchTemplate?
     @State private var showDeleteAlert = false
     @Environment(\.dismiss) private var dismiss
@@ -1762,6 +1767,23 @@ struct SettingsView: View {
             }
 
             Button {
+                showAccountActionsSheet = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    showLearnPitchMark = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "play.rectangle")
+                        .foregroundStyle(.blue)
+                    Text("Learn PitchMark")
+                        .font(.headline)
+                    Spacer()
+                }
+                .padding(.horizontal)
+            }
+            .accessibilityHint("Opens PitchMark tutorial videos.")
+
+            Button {
                 let current = authManager.userEmail
                 changeEmailText = (current == "Unknown") ? "" : current
                 changeEmailError = nil
@@ -1794,31 +1816,29 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal)
             }
-            .confirmationDialog(
-                "Are you sure you want to sign out of \(authManager.userEmail)?",
+            .appConfirmationDialog(
                 isPresented: $showSignOutConfirmation,
-                titleVisibility: .visible
-            ) {
-                Button("Sign Out", role: .destructive) {
+                title: "Sign Out?",
+                message: "Are you sure you want to sign out of \(authManager.userEmail)?",
+                primaryTitle: "Sign Out",
+                primaryRole: .destructive,
+                primaryAction: {
                     showAccountActionsSheet = false
                     authManager.signOut()
-                }
-                Button("Cancel", role: .cancel) { }
-            }
+                },
+                secondaryTitle: "Cancel"
+            )
 
-            Button(role: .destructive) {
-                deleteAccountText = ""
-                deleteAccountError = nil
-                requiresDeleteRecentLogin = false
+            Button {
                 showAccountActionsSheet = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    showDeleteAccountSheet = true
+                    showMoreAccountActionsSheet = true
                 }
             } label: {
                 HStack {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.red)
-                    Text("Delete Account")
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(.secondary)
+                    Text("More")
                         .font(.headline)
                     Spacer()
                 }
@@ -1827,7 +1847,40 @@ struct SettingsView: View {
 
         }
         .padding()
-        .presentationDetents([.fraction(0.4)])
+        .presentationDetents([.fraction(0.42)])
+        .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder
+    private var moreAccountActionsSheetView: some View {
+        VStack(spacing: 16) {
+            Text("More")
+                .font(.headline)
+
+            Button(role: .destructive) {
+                deleteAccountText = ""
+                deleteAccountError = nil
+                requiresDeleteRecentLogin = false
+                showMoreAccountActionsSheet = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    showDeleteAccountSheet = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "trash")
+                    Text("Delete Account")
+                        .font(.headline)
+                    Spacer()
+                }
+                .padding(.horizontal)
+            }
+
+            Button("Cancel", role: .cancel) {
+                showMoreAccountActionsSheet = false
+            }
+        }
+        .padding()
+        .presentationDetents([.fraction(0.24)])
         .presentationDragIndicator(.visible)
     }
 
@@ -1951,36 +2004,22 @@ struct SettingsView: View {
             }
 
             Button(isDeletingAccount ? "Deleting..." : "Delete Account") {
-                isDeletingAccount = true
-                deleteAccountError = nil
-                requiresDeleteRecentLogin = false
-                authManager.deleteAccount { result in
-                    DispatchQueue.main.async {
-                        isDeletingAccount = false
-                        switch result {
-                        case .success:
-                            deleteAccountText = ""
-                            deleteAccountError = nil
-                            requiresDeleteRecentLogin = false
-                            showDeleteAccountSheet = false
-                        case .failure(let error):
-                            deleteAccountError = error.localizedDescription
-                            if let deleteError = error as? DeleteAccountError {
-                                if case .requiresRecentLogin = deleteError {
-                                    requiresDeleteRecentLogin = true
-                                } else {
-                                    requiresDeleteRecentLogin = false
-                                }
-                            } else {
-                                requiresDeleteRecentLogin = false
-                            }
-                        }
-                    }
-                }
+                showFinalDeleteAccountConfirmation = true
             }
             .buttonStyle(.borderedProminent)
             .tint(.red)
             .disabled(isDeletingAccount || deleteAccountText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "DELETE")
+            .appConfirmationDialog(
+                isPresented: $showFinalDeleteAccountConfirmation,
+                title: "Permanently delete this account?",
+                message: "This cannot be undone.",
+                primaryTitle: "Delete Account Permanently",
+                primaryRole: .destructive,
+                primaryAction: {
+                    deleteAccount()
+                },
+                secondaryTitle: "Cancel"
+            )
 
             Button("Cancel", role: .cancel) {
                 showDeleteAccountSheet = false
@@ -1989,6 +2028,35 @@ struct SettingsView: View {
         .padding()
         .presentationDetents([.fraction(0.5)])
         .presentationDragIndicator(.visible)
+    }
+
+    private func deleteAccount() {
+        isDeletingAccount = true
+        deleteAccountError = nil
+        requiresDeleteRecentLogin = false
+        authManager.deleteAccount { result in
+            DispatchQueue.main.async {
+                isDeletingAccount = false
+                switch result {
+                case .success:
+                    deleteAccountText = ""
+                    deleteAccountError = nil
+                    requiresDeleteRecentLogin = false
+                    showDeleteAccountSheet = false
+                case .failure(let error):
+                    deleteAccountError = error.localizedDescription
+                    if let deleteError = error as? DeleteAccountError {
+                        if case .requiresRecentLogin = deleteError {
+                            requiresDeleteRecentLogin = true
+                        } else {
+                            requiresDeleteRecentLogin = false
+                        }
+                    } else {
+                        requiresDeleteRecentLogin = false
+                    }
+                }
+            }
+        }
     }
 
     var body: some View {
@@ -2014,13 +2082,12 @@ struct SettingsView: View {
                             storeSection
                         }
 
-                        Spacer()
+                        Color.clear.frame(height: 8)
                         Image("SoftballBaseballWtitle4")
                             .resizable()
                             .scaledToFit()
-                            .frame(maxWidth: 120)
+                            .frame(maxWidth: 90)
                             .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 4)
                     }
                     .padding(.top, 4)
                 }
@@ -2038,7 +2105,10 @@ struct SettingsView: View {
                     .background(.ultraThinMaterial)
                 }
             }
-            .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
+            .sheet(isPresented: $showInviteJoinSheet) {
+                inviteJoinSheetView
+                    .fixedAppDynamicType()
+            }
             .fullScreenCover(isPresented: $showQRScanner) {
                 ZStack(alignment: .bottom) {
                     QRScannerView { scanned in
@@ -2057,6 +2127,7 @@ struct SettingsView: View {
                     .buttonStyle(.bordered)
                     .padding(.bottom, 24)
                 }
+                .fixedAppDynamicType()
             }
             .alert("Camera Unavailable", isPresented: $showCameraUnavailableAlert) {
                 Button("OK", role: .cancel) { }
@@ -2072,24 +2143,44 @@ struct SettingsView: View {
             } message: {
                 Text("Enable Camera access in Settings to scan the owner’s QR code.")
             }
-            .sheet(isPresented: $showAccountActionsSheet) { accountActionsSheetView }
-            .sheet(isPresented: $showChangeEmailSheet) { changeEmailSheetView }
-            .sheet(isPresented: $showDeleteAccountSheet) { deleteAccountSheetView }
+            .sheet(isPresented: $showAccountActionsSheet) {
+                accountActionsSheetView
+                    .fixedAppDynamicType()
+            }
+            .fullScreenCover(isPresented: $showLearnPitchMark) {
+                LearnPitchMarkView()
+                    .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showChangeEmailSheet) {
+                changeEmailSheetView
+                    .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showMoreAccountActionsSheet) {
+                moreAccountActionsSheetView
+                    .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showDeleteAccountSheet) {
+                deleteAccountSheetView
+                    .fixedAppDynamicType()
+            }
             .sheet(isPresented: $showProPaywall) {
                 ProPaywallView(
                     title: "PitchMark Pro",
                     message: "Invite links and participant connections require PitchMark Pro.",
                     allowsClose: true
                 )
+                .fixedAppDynamicType()
             }
-            .alert("Upgrade to Pro", isPresented: $showProGateAlert) {
-                Button("Not Now", role: .cancel) { }
-                Button("Upgrade") {
+            .appConfirmationDialog(
+                isPresented: $showProGateAlert,
+                title: "Upgrade to Pro",
+                message: proGateMessage,
+                primaryTitle: "Upgrade",
+                primaryAction: {
                     showProPaywall = true
-                }
-            } message: {
-                Text(proGateMessage)
-            }
+                },
+                secondaryTitle: "Not Now"
+            )
             .onAppear {
                 loadHiddenIds()
                 startPitchersListenerIfNeeded()
@@ -2155,41 +2246,49 @@ struct SettingsView: View {
                 }
                 .padding()
                 .presentationDetents([.medium])
+                .fixedAppDynamicType()
             }
             .sheet(isPresented: $showPitcherShareSheet) {
                 pitcherShareSheetView
+                    .fixedAppDynamicType()
             }
             .sheet(isPresented: $showPitcherShareActivity) {
                 ShareSheet(items: pitcherShareSheetItems)
+                    .fixedAppDynamicType()
             }
-            .alert("Are you sure you want to delete this template?", isPresented: $showDeleteAlert) {
-                Button("Cancel", role: .cancel) {}
-                Button("Delete", role: .destructive) {
+            .appConfirmationDialog(
+                isPresented: $showDeleteAlert,
+                title: "Delete Template?",
+                message: "Are you sure you want to delete this template?",
+                primaryTitle: "Delete",
+                primaryRole: .destructive,
+                primaryAction: {
                     deletePendingTemplate()
-                }
-            }
+                },
+                secondaryTitle: "Cancel"
+            )
             .alert("Pitcher Share", isPresented: $showPitcherShareError) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(pitcherShareError ?? "Something went wrong.")
             }
-            .confirmationDialog(
-                "Copy pitcher?",
+            .appConfirmationDialog(
                 isPresented: $showCopyPitcherConfirm,
-                titleVisibility: .visible
-            ) {
-                Button("Copy", role: .destructive) {
+                title: "Copy pitcher?",
+                message: "This creates a new pitcher profile you own, with the same stats. It won’t affect the shared pitcher.",
+                primaryTitle: "Copy",
+                primaryRole: .destructive,
+                primaryAction: {
                     if let pitcher = copyPitcherTarget {
                         copyPitcher(pitcher)
                     }
                     copyPitcherTarget = nil
-                }
-                Button("Cancel", role: .cancel) {
+                },
+                secondaryTitle: "Cancel",
+                secondaryAction: {
                     copyPitcherTarget = nil
                 }
-            } message: {
-                Text("This creates a new pitcher profile you own, with the same stats. It won’t affect the shared pitcher.")
-            }
+            )
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -2259,26 +2358,32 @@ struct SettingsView: View {
                         handleSavedTemplate(updatedTemplate)
                     }
                 )
+                .fixedAppDynamicType()
             }
-            .alert("Edit Purchased Template?", isPresented: $showPurchasedTemplateEditAlert) {
-                Button("Cancel", role: .cancel) {
-                    purchasedTemplateEditTarget = nil
-                }
-                Button("Continue Editing") {
+            .appConfirmationDialog(
+                isPresented: $showPurchasedTemplateEditAlert,
+                title: "Edit Purchased Template?",
+                message: "This grid key has already been used in a store purchase. Changes you make now will only affect future use and future orders. Existing purchased orders will not change.",
+                primaryTitle: "Continue Editing",
+                primaryAction: {
                     editorTemplate = purchasedTemplateEditTarget
                     purchasedTemplateEditTarget = nil
+                },
+                secondaryTitle: "Cancel",
+                secondaryAction: {
+                    purchasedTemplateEditTarget = nil
                 }
-            } message: {
-                Text("This grid key has already been used in a store purchase. Changes you make now will only affect future use and future orders. Existing purchased orders will not change.")
-            }
+            )
             .sheet(isPresented: $showAddPitcher) {
                 addPitcherSheetView
+                    .fixedAppDynamicType()
             }
             .sheet(isPresented: $showPitcherPhotoPicker) {
                 PitcherImagePicker { image in
                     showPitcherPhotoPicker = false
                     handlePickedPitcherPortrait(image)
                 }
+                .fixedAppDynamicType()
             }
             .sheet(isPresented: $showPitcherPortraitEditor) {
                 if let sourceImage = pitcherPortraitSourceImage, let target = pitcherPortraitTarget {
@@ -2292,6 +2397,7 @@ struct SettingsView: View {
                             savePitcherPortrait(croppedImage)
                         }
                     )
+                    .fixedAppDynamicType()
                 }
             }
             .alert("Pitcher Image", isPresented: $showPitcherImageError) {
@@ -2307,6 +2413,7 @@ struct SettingsView: View {
                     games: games
                 )
                 .environmentObject(authManager)
+                .fixedAppDynamicType()
             }
             .sheet(isPresented: $showGameChooser) {
                 GameSelectionSheet(
@@ -2337,8 +2444,10 @@ struct SettingsView: View {
                     showCodeShareModePicker: $showCodeShareModePicker,
                     games: $games,
                 )
+                .fixedAppDynamicType()
             }
         }
+        .fixedAppDynamicType()
     }
 }
 
@@ -2585,10 +2694,6 @@ struct PitcherStatsSheetView: View {
     @State private var hitSpotPitchFilter: String = "All"
     @State private var hitSpotSuccessFilter: HitSpotSuccessFilter = .all
     @State private var hitSpotOrder: HitSpotOrder = .chronological
-    #if DEBUG
-    @State private var showStatsSimulationAlert = false
-    @State private var statsSimulationMessage = ""
-    #endif
     @State private var selectedHeatmapPitch: String = ""
     @State private var heatmapZoneFilter: HeatmapZoneFilter = .all
     @State private var selectedPitcherId: String?
@@ -3441,6 +3546,7 @@ struct PitcherStatsSheetView: View {
             }
             .sheet(item: $summaryDetail) { _ in
                 summaryDetailContent
+                    .fixedAppDynamicType()
             }
             .sheet(isPresented: $showGameSummarySheet) {
                 if let game = selectedSingleGameForSummary {
@@ -3449,6 +3555,7 @@ struct PitcherStatsSheetView: View {
                         game: game,
                         events: selectedGameSummaryEvents
                     )
+                    .fixedAppDynamicType()
                 } else {
                     VStack(spacing: 10) {
                         Image(systemName: "exclamationmark.triangle")
@@ -3460,15 +3567,9 @@ struct PitcherStatsSheetView: View {
                     }
                     .padding()
                     .presentationDetents([.fraction(0.3)])
+                    .fixedAppDynamicType()
                 }
             }
-            #if DEBUG
-            .alert("Stats Simulations", isPresented: $showStatsSimulationAlert) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(statsSimulationMessage)
-            }
-            #endif
             .overlay {
                 if isLoading {
                     ProgressView()
@@ -3838,23 +3939,6 @@ struct PitcherStatsSheetView: View {
             }
             .padding(.horizontal)
 
-            #if DEBUG
-            Button {
-                runStatsSimulationSuite()
-            } label: {
-                Text("Run Stats Simulations")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.secondary.opacity(0.12))
-                    )
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal)
-            #endif
-
             VStack(alignment: .leading, spacing: 4) {
                 Text("Metric Definitions")
                     .font(.subheadline.weight(.semibold))
@@ -3872,15 +3956,6 @@ struct PitcherStatsSheetView: View {
             .padding(.horizontal)
         }
     }
-
-    #if DEBUG
-    private func runStatsSimulationSuite() {
-        let report = PitchStatsSimulationLibrary.runCoverageSuite()
-        debugLog("📊 Stats simulation report:\n\(report.summary)")
-        statsSimulationMessage = "Passed \(report.passedCount)/\(report.results.count), failed \(report.failedCount)"
-        showStatsSimulationAlert = true
-    }
-    #endif
 
     private var pitchBreakdownSection: some View {
         VStack(alignment: .leading, spacing: 8) {

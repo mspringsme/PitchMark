@@ -1060,22 +1060,24 @@ struct TemplateEditorView: View {
                             .tint(.white)
                             .foregroundColor(.black)
                             .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
-                            .confirmationDialog("Randomize grid values?", isPresented: $showRandomConfirm, titleVisibility: .visible) {
-                                Button("Randomize", role: .destructive) {
+                            .appConfirmationDialog(
+                                isPresented: $showRandomConfirm,
+                                title: "Randomize grid values?",
+                                message: "This will randomize the values in your grids. This action cannot be undone.",
+                                primaryTitle: "Randomize",
+                                primaryRole: .destructive,
+                                primaryAction: {
                                     if !hasAnyPitchInTopRow {
                                         showNoPitchAlert = true
                                         return
                                     }
-                                    // Randomize first column with unique two-digit sequential numbers
                                     randomizeFirstColumnAction?()
                                     topRowCoordinator.randomizeTopRowsWithSequentialPairs()
                                     topRowCoordinator.randomizeBodyRowsWithSequentialPairs()
                                     randomizePaletteSelections()
-                                }
-                                Button("Cancel", role: .cancel) { }
-                            } message: {
-                                Text("This will randomize the values in your grids. This action cannot be undone.")
-                            }
+                                },
+                                secondaryTitle: "Cancel"
+                            )
                             .alert("Add a pitch first", isPresented: $showNoPitchAlert) {
                                 Button("OK", role: .cancel) { }
                             } message: {
@@ -1093,17 +1095,20 @@ struct TemplateEditorView: View {
                             .tint(.white)
                             .foregroundColor(.black)
                             .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
-                            .confirmationDialog("Clear all grid values?", isPresented: $showClearConfirm, titleVisibility: .visible) {
-                                Button("Clear", role: .destructive) {
+                            .appConfirmationDialog(
+                                isPresented: $showClearConfirm,
+                                title: "Clear all grid values?",
+                                message: "This will remove all values from your grids. This action cannot be undone.",
+                                primaryTitle: "Clear",
+                                primaryRole: .destructive,
+                                primaryAction: {
                                     topRowCoordinator.clearAll()
                                     clearPitchGridAction?()
                                     gridPaletteSelections = Array(repeating: nil, count: 5)
                                     hasAnyPitchInTopRow = false
-                                }
-                                Button("Cancel", role: .cancel) { }
-                            } message: {
-                                Text("This will remove all values from your grids. This action cannot be undone.")
-                            }
+                                },
+                                secondaryTitle: "Cancel"
+                            )
                         }
                         .padding(.horizontal)
                         Spacer()
@@ -1114,13 +1119,18 @@ struct TemplateEditorView: View {
                             message: "Add more than two pitches to grid keys with PitchMark Pro.",
                             allowsClose: true
                         )
+                        .fixedAppDynamicType()
                     }
-                    .alert("Upgrade to Pro", isPresented: $showProPitchLimitAlert) {
-                        Button("Not Now", role: .cancel) { }
-                        Button("Upgrade") { showProPaywall = true }
-                    } message: {
-                        Text("Adding more than two pitches to a grid key is available with PitchMark Pro.")
-                    }
+                    .appConfirmationDialog(
+                        isPresented: $showProPitchLimitAlert,
+                        title: "Upgrade to Pro",
+                        message: "Adding more than two pitches to a grid key is available with PitchMark Pro.",
+                        primaryTitle: "Upgrade",
+                        primaryAction: {
+                            showProPaywall = true
+                        },
+                        secondaryTitle: "Not Now"
+                    )
                     Spacer()
                     
                     
@@ -1128,6 +1138,8 @@ struct TemplateEditorView: View {
                     
                 }
                 .padding(.horizontal)
+                .padding(.top, nameFieldFocused ? 118 : 0)
+                .animation(.easeInOut(duration: 0.2), value: nameFieldFocused)
                 .onAppear {
                     if initialStrikeTopRow.count == 3 {
                         topRowCoordinator.strikeTopRow = initialStrikeTopRow
@@ -1144,6 +1156,7 @@ struct TemplateEditorView: View {
                 }
 
             }
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .interactiveDismissDisabled(true)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1167,14 +1180,17 @@ struct TemplateEditorView: View {
                 }
             }
         }
-        .alert("Unsaved Changes", isPresented: $showSaveAlert) {
-            Button("Keep Editing", role: .cancel) { }
-            Button("Close Without Saving", role: .destructive) {
+        .appConfirmationDialog(
+            isPresented: $showSaveAlert,
+            title: "Unsaved Changes",
+            message: "You have not saved this grid key. Are you sure you want to close?",
+            primaryTitle: "Close Without Saving",
+            primaryRole: .destructive,
+            primaryAction: {
                 dismiss()
-            }
-        } message: {
-            Text("You have not saved this grid key. Are you sure you want to close?")
-        }
+            },
+            secondaryTitle: "Keep Editing"
+        )
     }
 }
 
@@ -1329,6 +1345,7 @@ struct CodeAssignmentPanel: View {
                         }
                         .presentationDetents([.fraction(0.8), .large])
                         .presentationDragIndicator(.visible)
+                        .fixedAppDynamicType()
                     }
                     
                     // Action buttons shown after a location is selected
@@ -1655,6 +1672,7 @@ struct CodeAssignmentPanelWithPrint: View {
         .sheet(isPresented: $showShare) {
             if let pngImage {
                 ShareSheet(items: [pngImage])
+                    .fixedAppDynamicType()
             }
         }
     }
@@ -2151,7 +2169,9 @@ struct PitchGridView2: View {
     
     func clearAll() {
         abbreviations.removeAll()
-        syncGridColumns(to: orderedSelectedPitches)
+        selectedPitches.removeAll()
+        grid = Array(repeating: ["", ""], count: 4)
+        hasAnyPitchInTopRow = false
     }
     
     private func buildHeadersFromTopRow() -> [PitchHeader] {

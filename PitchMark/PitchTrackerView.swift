@@ -108,6 +108,7 @@ struct ToggleChip: View {
                 }
                 .padding()
                 .presentationDetents([.fraction(0.25), .medium])
+                .fixedAppDynamicType()
             }
     }
 }
@@ -163,10 +164,6 @@ struct PitchTrackerView: View {
     @State private var selectedLocation: String = ""
     @State private var gameIsActive: Bool = false
     @State private var showSettings = false
-    #if DEBUG
-    @State private var showStatsSimulationAlert = false
-    @State private var statsSimulationMessage: String = ""
-    #endif
     @State private var showProfile = false
     @State private var templates: [PitchTemplate] = []
     @EnvironmentObject var authManager: AuthManager
@@ -2012,19 +2009,33 @@ struct PitchTrackerView: View {
     }
 
     private var demoTemplate: PitchTemplate {
-        PitchTemplate(
+        let demoPitches = ["4 Seam", "Change"]
+        let demoLocations = strikeGrid.map { "Strike \($0.label)" } + [
+            "Ball Up & Out", "Ball Up", "Ball Up & In",
+            "Ball Out", "Ball In",
+            "Ball ↓ & Out", "Ball ↓", "Ball ↓ & In"
+        ]
+        let demoCodeAssignments = demoPitches.enumerated().flatMap { pitchIndex, pitch in
+            demoLocations.enumerated().flatMap { locationIndex, location in
+                (1...3).map { optionIndex in
+                    PitchCodeAssignment(
+                        code: String(format: "%@%02d%d", pitchIndex == 0 ? "F" : "C", locationIndex + 1, optionIndex),
+                        pitch: pitch,
+                        location: location
+                    )
+                }
+            }
+        }
+
+        return PitchTemplate(
             id: Self.demoTemplateId,
             name: "Demo Grid Key",
-            pitches: ["4 Seam"],
-            codeAssignments: allLocationsFromGrid().enumerated().map { index, location in
-                PitchCodeAssignment(
-                    code: String(format: "D%02d", index + 1),
-                    pitch: "4 Seam",
-                    location: location
-                )
-            },
+            pitches: demoPitches,
+            codeAssignments: demoCodeAssignments,
             isEncrypted: false,
-            ownerUid: Self.demoUserId
+            ownerUid: Self.demoUserId,
+            pitchFirstColors: ["blue", "green"],
+            locationFirstColors: ["red", "white", "black"]
         )
     }
 
@@ -3875,8 +3886,6 @@ struct PitchTrackerView: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 170, alignment: .top)
             }
-            .blur(radius: shouldBlurBackground ? 6 : 0)
-            .animation(.easeInOut(duration: 0.2), value: shouldBlurBackground)
             .transition(.opacity)
 
         }
@@ -3896,6 +3905,7 @@ struct PitchTrackerView: View {
                 .ignoresSafeArea()
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+                .fixedAppDynamicType()
         }
     }
 
@@ -4182,8 +4192,7 @@ struct PitchTrackerView: View {
                         .onDisappear { handleCalledPitchDisappear() }
 
                         if showConfirmSheet {
-                            pitchResultSheetView
-                                .padding(.horizontal, 12)
+                            gatedPitchResultSheetView
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
@@ -4335,6 +4344,15 @@ struct PitchTrackerView: View {
             .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
     }
 
+    private var shouldBlurForPitchResultSelection: Bool {
+        let calledPitchName = calledPitch?.pitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return currentTrackingMode == .coach &&
+        calledPitch != nil &&
+        calledPitchName != "Catcher" &&
+        isRecordingResult &&
+        pendingResultLabel == nil
+    }
+
     private var confirmSheetBinding: Binding<Bool> {
         Binding<Bool>(
             get: { sessionManager.currentMode == .game && showConfirmSheet },
@@ -4388,8 +4406,7 @@ struct PitchTrackerView: View {
                     )
                     .padding(.top, 4)
 
-                    pitchResultSheetView
-                        .padding(.horizontal, 12)
+                    gatedPitchResultSheetView
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 8)
@@ -4397,6 +4414,26 @@ struct PitchTrackerView: View {
         } else {
             Color.clear.frame(height: 1)
         }
+    }
+
+    private var gatedPitchResultSheetView: some View {
+        ZStack {
+            pitchResultSheetView
+                .padding(.horizontal, 12)
+                .blur(radius: shouldBlurForPitchResultSelection ? 10 : 0)
+                .opacity(shouldBlurForPitchResultSelection ? 0.72 : 1)
+                .allowsHitTesting(!shouldBlurForPitchResultSelection)
+
+            if shouldBlurForPitchResultSelection {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.regularMaterial)
+                    .opacity(0.54)
+                    .padding(.horizontal, 12)
+                    .allowsHitTesting(true)
+                    .accessibilityLabel("Select a pitch result location on the strike zone before entering result details.")
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: shouldBlurForPitchResultSelection)
     }
     
     // MARK: - Extracted subviews to help type-checker
@@ -4830,8 +4867,10 @@ struct PitchTrackerView: View {
             ScoutFieldMapSheet(
                 selectedOutcome: $scoutInPlayOutcome,
                 battedBallRegionName: $scoutBattedBallRegionName,
-                battedBallTapNormalized: $scoutBattedBallTapNormalized
+                battedBallTapNormalized: $scoutBattedBallTapNormalized,
+                isDemoMode: isDemoMode
             )
+            .fixedAppDynamicType()
         }
     }
 
@@ -5848,6 +5887,7 @@ struct PitchTrackerView: View {
         let colorRefreshToken: UUID
         let template: PitchTemplate?
         let canInitiateCall: Bool
+        let forceOutlineButtons: Bool
         @State private var resultGlowAngle: Double = 0
         @State private var resultGlowPulse: Bool = false
 
@@ -5884,7 +5924,8 @@ struct PitchTrackerView: View {
                     onCatcherLocationTap: onCatcherLocationTap,
                     isEncryptedMode: isEncryptedMode,
                     template: template,
-                    canInitiateCall: canInitiateCall
+                    canInitiateCall: canInitiateCall,
+                    forceOutlineButtons: forceOutlineButtons
                 )
                 .id(colorRefreshToken)
             }
@@ -5989,7 +6030,8 @@ struct PitchTrackerView: View {
                 }(),
                 colorRefreshToken: colorRefreshToken,
                 template: selectedTemplate,
-                canInitiateCall: canInitiateCall
+                canInitiateCall: canInitiateCall,
+                forceOutlineButtons: isDemoMode
             )
         )
 
@@ -6390,9 +6432,7 @@ struct PitchTrackerView: View {
         var nextBalls = prior.balls
         var nextStrikes = prior.strikes
 
-        if event.isBall == true {
-            nextBalls = min(3, nextBalls + 1)
-        } else if event.strikeLooking || event.strikeSwinging {
+        if event.strikeLooking || event.strikeSwinging {
             nextStrikes = min(2, nextStrikes + 1)
         } else if normalizedOutcome == "foul" {
             if nextStrikes < 2 {
@@ -6400,6 +6440,8 @@ struct PitchTrackerView: View {
             }
         } else if event.isStrike {
             nextStrikes = min(2, nextStrikes + 1)
+        } else if event.isBall == true {
+            nextBalls = min(3, nextBalls + 1)
         }
 
         return (nextBalls, nextStrikes)
@@ -7892,6 +7934,7 @@ struct PitchTrackerView: View {
             selectedOutcome: $selectedOutcome,
             selectedDescriptor: $selectedDescriptor,
             isError: $isError,
+            isDemoMode: isDemoMode,
             pendingResultLabel: pendingResultLabel,
             pitchCall: calledPitch,
             batterSide: batterSide,
@@ -7931,50 +7974,22 @@ struct PitchTrackerView: View {
     }
 
     @ViewBuilder private var settingsSheetView: some View {
-        VStack(spacing: 0) {
-            #if DEBUG
-            Button {
-                let report = PitchStatsSimulationLibrary.runCoverageSuite()
-                debugLog("📊 Stats simulation report:\n\(report.summary)")
-                statsSimulationMessage = "Passed \(report.passedCount)/\(report.results.count), failed \(report.failedCount)"
-                showStatsSimulationAlert = true
-            } label: {
-                HStack {
-                    Image(systemName: "ladybug")
-                    Text("Run Stats Simulations")
-                    Spacer()
-                }
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-            }
-            .buttonStyle(.plain)
-            .background(.thinMaterial)
-            #endif
-
-            SettingsView(
-                templates: $templates,
-                games: $games,
-                pitchers: $pitchers,
-                allPitches: allPitches,
-                selectedTemplate: $selectedTemplate,
-                codeShareInitialTab: $codeShareInitialTab,
-                showCodeShareSheet: $showCodeShareSheet,
-                shareCode: $shareCode,
-                codeShareSheetID: $codeShareSheetID,
-                showCodeShareModePicker: $showCodeShareModePicker,
-                hasActiveSessionSelection: (selectedGameId != nil)
-            )
-            .environmentObject(authManager)
-            .environmentObject(subscriptionManager)
-        }
-        #if DEBUG
-        .alert("Stats Simulations", isPresented: $showStatsSimulationAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(statsSimulationMessage)
-        }
-        #endif
+        SettingsView(
+            templates: $templates,
+            games: $games,
+            pitchers: $pitchers,
+            allPitches: allPitches,
+            selectedTemplate: $selectedTemplate,
+            codeShareInitialTab: $codeShareInitialTab,
+            showCodeShareSheet: $showCodeShareSheet,
+            shareCode: $shareCode,
+            codeShareSheetID: $codeShareSheetID,
+            showCodeShareModePicker: $showCodeShareModePicker,
+            hasActiveSessionSelection: (selectedGameId != nil)
+        )
+        .environmentObject(authManager)
+        .environmentObject(subscriptionManager)
+        .dynamicTypeSize(.medium)
     }
 
     @ViewBuilder private var gameStatsSheetView: some View {
@@ -8644,6 +8659,7 @@ struct PitchTrackerView: View {
             }
             .sheet(isPresented: $showGameSummaryShareSheet) {
                 ShareSheet(items: [summaryShareText])
+                    .fixedAppDynamicType()
             }
             .onAppear {
                 initializeGameSummaryPitcherSelection()
@@ -8935,22 +8951,32 @@ struct PitchTrackerView: View {
                     sessionManager.switchMode(to: .game)
                     isGame = false
                 }
-            }) { gameSheetView }
+            }) {
+                gameSheetView
+                    .fixedAppDynamicType()
+            }
             .eraseToAnyView()
 
 
         let v3 = v2
-            .sheet(isPresented: $showCodeShareSheet) { codeShareSheetView }
+            .sheet(isPresented: $showCodeShareSheet) {
+                codeShareSheetView
+                    .fixedAppDynamicType()
+            }
             .eraseToAnyView()
 
         let v4 = v3
-            .sheet(isPresented: $showInviteJoinSheet) { inviteJoinSheetView }
+            .sheet(isPresented: $showInviteJoinSheet) {
+                inviteJoinSheetView
+                    .fixedAppDynamicType()
+            }
             .sheet(isPresented: $showProPaywall) {
                 ProPaywallView(
                     title: "PitchMark Pro",
                     message: "Connect participants, unlock full grid keys, and use the display app with PitchMark Pro.",
                     allowsClose: true
                 )
+                .fixedAppDynamicType()
             }
             .fullScreenCover(isPresented: $showQRScanner) {
                 ZStack(alignment: .bottom) {
@@ -8970,6 +8996,7 @@ struct PitchTrackerView: View {
                     .buttonStyle(.bordered)
                     .padding(.bottom, 24)
                 }
+                .fixedAppDynamicType()
             }
             .alert("Camera Unavailable", isPresented: $showCameraUnavailableAlert) {
                 Button("OK", role: .cancel) { }
@@ -8994,7 +9021,10 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v7 = v6
-            .sheet(isPresented: $showCodeAssignmentSheet) { codeAssignmentSheetView }
+            .sheet(isPresented: $showCodeAssignmentSheet) {
+                codeAssignmentSheetView
+                    .fixedAppDynamicType()
+            }
             .eraseToAnyView()
 
         let v8 = v7
@@ -9006,11 +9036,15 @@ struct PitchTrackerView: View {
                         guard let ownerUid = activeGameOwnerUserId else { return false }
                         return ownerUid != currentUid
                     }())
+                    .fixedAppDynamicType()
             }
             .eraseToAnyView()
 
         let v9 = v8
-            .sheet(isPresented: $showGameStatsSheet) { gameStatsSheetView }
+            .sheet(isPresented: $showGameStatsSheet) {
+                gameStatsSheetView
+                    .fixedAppDynamicType()
+            }
             .eraseToAnyView()
 
         let v9b = v9
@@ -9018,6 +9052,7 @@ struct PitchTrackerView: View {
                 gameSummarySheetView
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
+                    .fixedAppDynamicType()
             }
             .sheet(item: $savedPlayReviewDraft) { draft in
                 SavedPlayReviewSheetView(
@@ -9032,12 +9067,14 @@ struct PitchTrackerView: View {
                     }
                 )
                 .interactiveDismissDisabled(true)
+                .fixedAppDynamicType()
             }
             .sheet(isPresented: calledPitchComposerBinding) {
                 calledPitchComposerSheetView
                     .presentationDetents(calledPitchComposerDetents, selection: $calledPitchComposerDetent)
                     .presentationDragIndicator(.visible)
                     .presentationBackgroundInteraction(.enabled)
+                    .fixedAppDynamicType()
             }
             .eraseToAnyView()
 
@@ -9045,14 +9082,16 @@ struct PitchTrackerView: View {
         return AnyView(v9b
             .blur(radius: pendingGameConfirmation != nil ? 5 : 0)
             .allowsHitTesting(!showSessionConflictAlert)
-            .alert("Upgrade to Pro", isPresented: $showProGateAlert) {
-                Button("Not Now", role: .cancel) { }
-                Button("Upgrade") {
+            .appConfirmationDialog(
+                isPresented: $showProGateAlert,
+                title: "Upgrade to Pro",
+                message: proGateMessage,
+                primaryTitle: "Upgrade",
+                primaryAction: {
                     showProPaywall = true
-                }
-            } message: {
-                Text(proGateMessage)
-            }
+                },
+                secondaryTitle: "Not Now"
+            )
             .alert("Sign In Required", isPresented: $showDemoLoginWall) {
                 Button("Not Now", role: .cancel) { }
                 Button("Sign In") {
@@ -9134,6 +9173,7 @@ struct PitchTrackerView: View {
                 .ignoresSafeArea(.keyboard, edges: .bottom)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+                .fixedAppDynamicType()
             }
             .sheet(isPresented: $showAtBatHeatmapSheet, onDismiss: {
                 executePendingHeatmapCallIfNeeded()
@@ -9141,34 +9181,32 @@ struct PitchTrackerView: View {
                 atBatBatterHeatmapSheetView
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
+                    .fixedAppDynamicType()
             }
             .fullScreenCover(isPresented: displayCoverBinding) {
                 displayCoverView
+                    .fixedAppDynamicType()
             }
             .sheet(item: $pendingGameConfirmation) { item in
                 sessionConfirmationSheet(pending: item)
+                    .fixedAppDynamicType()
             }
-            .confirmationDialog(
-                "Activate New Batter?",
+            .appConfirmationDialog(
                 isPresented: $showActivateNewBatterPrompt,
-                titleVisibility: .visible
-            ) {
-                Button("Activate Batter") {
+                title: "Activate New Batter?",
+                message: pendingNewBatterActivation.map { "Would you like to activate #\($0.jerseyNumber) now?" } ?? "Would you like to activate the new batter now?",
+                primaryTitle: "Activate Batter",
+                primaryAction: {
                     if let cell = pendingNewBatterActivation {
                         syncSelectedBatterFromDetail(cell)
                     }
                     pendingNewBatterActivation = nil
-                }
-                Button("Keep Current Batter", role: .cancel) {
+                },
+                secondaryTitle: "Keep Current Batter",
+                secondaryAction: {
                     pendingNewBatterActivation = nil
                 }
-            } message: {
-                if let cell = pendingNewBatterActivation {
-                    Text("Would you like to activate #\(cell.jerseyNumber) now?")
-                } else {
-                    Text("Would you like to activate the new batter now?")
-                }
-            }
+            )
             .overlay { accountInUseOverlay }
             .onAppear {
                 if lastAuthenticatedUserId == nil {
@@ -10428,18 +10466,19 @@ struct JerseyRow: View {
                 }
                 .padding()
                 .presentationDetents([.fraction(0.35), .medium])
-                .confirmationDialog(
-                    "Delete Batter?",
+                .fixedAppDynamicType()
+                .appConfirmationDialog(
                     isPresented: $showDeleteConfirm,
-                    titleVisibility: .visible
-                ) {
-                    Button("Delete", role: .destructive) {
+                    title: "Delete Batter?",
+                    message: "This will remove this batter from the lineup.",
+                    primaryTitle: "Delete",
+                    primaryRole: .destructive,
+                    primaryAction: {
                         guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else {
                             showActionsSheet = false
                             return
                         }
 
-                        // 1) Update local UI immediately
                         let removedId = jerseyCells[idx].id
                         jerseyCells.remove(at: idx)
 
@@ -10447,12 +10486,10 @@ struct JerseyRow: View {
                             selectedBatterId = nil
                         }
 
-                        // 2) Persist lineup so BOTH devices update
                         let jerseys = jerseyCells.map { $0.jerseyNumber }
                         let batterIds = jerseyCells.map { $0.id.uuidString }
 
                         if let liveId = activeLiveId, !liveId.isEmpty {
-                            // LIVE: write to liveGames (two-way)
                             LiveGameService.shared.updateLiveFields(
                                 liveId: liveId,
                                 fields: [
@@ -10472,17 +10509,9 @@ struct JerseyRow: View {
                                     batterIds: batterIds
                                 )
                             }
-
-                            // Optional: if you also want to clear live selected batter when deleted
-                            // (only needed if you store selectedBatterId on live doc)
-                            // LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
-                            //     "selectedBatterId": FieldValue.delete(),
-                            //     "selectedBatterJersey": FieldValue.delete()
-                            // ])
                         } else if let gameId = selectedGameId,
                                   let owner = effectiveGameOwnerUserId,
                                   !owner.isEmpty {
-                            // NON-LIVE: update owner's game doc
                             authManager.updateGameLineup(
                                 ownerUserId: owner,
                                 gameId: gameId,
@@ -10494,12 +10523,9 @@ struct JerseyRow: View {
                         }
 
                         showActionsSheet = false
-                    }
-
-                    Button("Cancel", role: .cancel) { }
-                } message: {
-                    Text("This will remove this batter from the lineup.")
-                }
+                    },
+                    secondaryTitle: "Cancel"
+                )
             }
     }
     private func syncSelection(_ nextSelection: UUID?) {
@@ -10667,8 +10693,12 @@ private struct ScoutFieldMapSheet: View {
     @Binding var selectedOutcome: String?
     @Binding var battedBallRegionName: String?
     @Binding var battedBallTapNormalized: CGPoint?
+    let isDemoMode: Bool
 
     private let colorMapImage: UIImage? = UIImage(named: "colorMap")
+    private var displayImageName: String {
+        "FieldImage2"
+    }
     private let colorMapping: [ScoutColorKey: (label: String, outcome: String?)] = [
         ScoutColorKey(r: 0xE6, g: 0x19, b: 0x4B, a: 0xFF): ("Left Field HR", "HR"),
         ScoutColorKey(r: 0x91, g: 0x1E, b: 0xB4, a: 0xFF): ("Foul Left", nil),
@@ -10725,8 +10755,9 @@ private struct ScoutFieldMapSheet: View {
             GeometryReader { proxy in
                 let availableWidth = proxy.size.width
                 let availableHeight = proxy.size.height
+                let displayImage = UIImage(named: displayImageName) ?? UIImage(named: "FieldImage")
                 let aspect: CGFloat = {
-                    if let img = colorMapImage ?? UIImage(named: "FieldImage") {
+                    if let img = colorMapImage ?? displayImage {
                         return img.size.width / max(img.size.height, 1)
                     }
                     return 1
@@ -10746,13 +10777,15 @@ private struct ScoutFieldMapSheet: View {
                 )
 
                 ZStack {
-                    Image("FieldImage")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: imageRect.width, height: imageRect.height)
-                        .position(x: imageRect.midX, y: imageRect.midY)
-                        .shadow(radius: 10)
-                        .allowsHitTesting(false)
+                    if let displayImage {
+                        Image(uiImage: displayImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: imageRect.width, height: imageRect.height)
+                            .position(x: imageRect.midX, y: imageRect.midY)
+                            .shadow(radius: 10)
+                            .allowsHitTesting(false)
+                    }
 
                     Rectangle()
                         .fill(Color.clear)
@@ -10849,6 +10882,10 @@ struct CodeOrderToggle: View {
         return !selectedCode.isEmpty
     }
 
+    private var canChangeCodeOrder: Bool {
+        template != nil
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             if !activeColorNames.isEmpty {
@@ -10896,6 +10933,9 @@ struct CodeOrderToggle: View {
                 .controlSize(.mini)
                 .pickerStyle(.segmented)
                 .fixedSize(horizontal: true, vertical: false)
+                .disabled(!canChangeCodeOrder)
+                .opacity(canChangeCodeOrder ? 1 : 0.55)
+                .accessibilityHint(canChangeCodeOrder ? "Changes how pitch and location code pairs are ordered." : "Code order selection is unavailable until a grid key is selected.")
             }
         }
         .frame(maxWidth: .infinity)
@@ -11009,15 +11049,18 @@ struct CalledPitchView: View {
 
     var body: some View {
         let displayLocation = call.location.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixedDisplayLocation = "\(call.type) \(displayLocation)"
         let assignments = pitchCodeAssignments.filter {
               $0.pitch == call.pitch &&
-              $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == displayLocation
+              [displayLocation, prefixedDisplayLocation].contains($0.location.trimmingCharacters(in: .whitespacesAndNewlines))
           }
 
           // In encrypted mode, prefer the generated codes already carried on the call.
           // In classic mode, show assigned codes (deciphered via template when present).
           let displayCodes: [String] = {
               if isEncryptedMode {
+                  return call.codes
+              } else if !call.codes.isEmpty {
                   return call.codes
               } else {
                   if let template = template {
@@ -11049,46 +11092,26 @@ struct CalledPitchView: View {
         }()
         
         return HStack(spacing: 12) {
-            // Left: Details
             VStack(alignment: .leading, spacing: 8) {
-                HStack(){
-                    Spacer()
-                    VStack(){
-                        // Header row: title + call badge
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text("Called Pitch")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            
-                        }
-                        // Big pitch name
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Called Pitch")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
                         Text(call.pitch)
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(.primary)
+                            .lineLimit(1)
                     }
-                    Spacer()
-                    
+
+                    Spacer(minLength: 8)
+
                     PitchResultBanner(
                         isRecording: bannerShowsTapResult,
                         text: bannerText,
                         callColor: callColor
                     )
-                    Spacer()
-
-                    Button {
-                        autoPitchOnlyEnabled.toggle()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text("Pitch only")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Image(systemName: autoPitchOnlyEnabled ? "checkmark.circle.fill" : "circle")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
                 }
                 
                 // Assigned codes as chips
@@ -11136,10 +11159,10 @@ struct CalledPitchView: View {
                                 .accessibilityLabel("Record for code \(shown)")
                             }
                         }
-                        .padding(.horizontal, 28)
+                        .padding(.horizontal, 12)
                         .padding(.vertical, 2)
                     }
-                    .frame(height: 60)
+                    .frame(height: 42)
                     .contentMargins(.horizontal, 8, for: .scrollContent)
                     
                     CodeOrderToggle(
@@ -11193,6 +11216,7 @@ struct CalledPitchView: View {
             .onAppear {
                 beginCodeDisplayOrientationUnlock()
             }
+            .fixedAppDynamicType()
         }
         .onChange(of: tappedCode) { _, newValue in
             if newValue == nil {
@@ -11386,6 +11410,7 @@ private struct CodeShareSheet: View {
                 message: "Invite links require PitchMark Pro.",
                 allowsClose: true
             )
+            .fixedAppDynamicType()
         }
     }
     
@@ -11684,31 +11709,32 @@ struct GameSelectionSheet: View {
             }
 
         }
-        .confirmationDialog(
-            "Delete Game?",
+        .appConfirmationDialog(
             isPresented: $showDeleteGameConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Continue", role: .destructive) {
+            title: "Delete Game?",
+            message: pendingDeleteGameName.isEmpty
+                ? "This will remove the game and its lineup."
+                : "This will remove \"\(pendingDeleteGameName)\" and its lineup.",
+            primaryTitle: "Continue",
+            primaryRole: .destructive,
+            primaryAction: {
                 showFinalDeleteGameConfirm = true
-            }
-            Button("Cancel", role: .cancel) {
+            },
+            secondaryTitle: "Cancel",
+            secondaryAction: {
                 pendingDeleteGameId = nil
                 pendingDeleteGameName = ""
             }
-        } message: {
-            if pendingDeleteGameName.isEmpty {
-                Text("This will remove the game and its lineup.")
-            } else {
-                Text("This will remove “\(pendingDeleteGameName)” and its lineup.")
-            }
-        }
-        .confirmationDialog(
-            "Delete Game and Stats?",
+        )
+        .appConfirmationDialog(
             isPresented: $showFinalDeleteGameConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Everything", role: .destructive) {
+            title: "Delete Game and Stats?",
+            message: pendingDeleteGameName.isEmpty
+                ? "This will permanently delete the game, all pitch events for that game, and pitcher stats linked to it. This cannot be undone."
+                : "This will permanently delete \"\(pendingDeleteGameName)\", all pitch events for that game, and pitcher stats linked to it. This cannot be undone.",
+            primaryTitle: "Delete Everything",
+            primaryRole: .destructive,
+            primaryAction: {
                 if let id = pendingDeleteGameId {
                     if let idx = games.firstIndex(where: { $0.id == id }) {
                         games.remove(at: idx)
@@ -11722,18 +11748,13 @@ struct GameSelectionSheet: View {
                 }
                 pendingDeleteGameId = nil
                 pendingDeleteGameName = ""
-            }
-            Button("Cancel", role: .cancel) {
+            },
+            secondaryTitle: "Cancel",
+            secondaryAction: {
                 pendingDeleteGameId = nil
                 pendingDeleteGameName = ""
             }
-        } message: {
-            if pendingDeleteGameName.isEmpty {
-                Text("This will permanently delete the game, all pitch events for that game, and pitcher stats linked to it. This cannot be undone.")
-            } else {
-                Text("This will permanently delete “\(pendingDeleteGameName)”, all pitch events for that game, and pitcher stats linked to it. This cannot be undone.")
-            }
-        }
+        )
         .overlay(
             Group {
                 if showAddGamePopover {

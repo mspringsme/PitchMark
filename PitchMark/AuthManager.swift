@@ -63,6 +63,8 @@ class AuthManager: ObservableObject {
     @Published var user: FirebaseAuth.User? = nil
     @Published var isSignedIn: Bool = false
     @Published var isCheckingAuth: Bool = true
+    @Published private(set) var isSigningInWithApple: Bool = false
+    @Published private(set) var authenticationErrorMessage: String? = nil
     @Published private(set) var isRetailAdmin: Bool = false
 
     private var authStateHandle: AuthStateDidChangeListenerHandle?
@@ -174,6 +176,8 @@ class AuthManager: ObservableObject {
 
 
     func prepareAppleSignIn(_ request: ASAuthorizationAppleIDRequest) {
+        authenticationErrorMessage = nil
+        isSigningInWithApple = true
         let nonce = randomNonceString()
         currentAppleNonce = nonce
         request.requestedScopes = [.fullName, .email]
@@ -181,21 +185,32 @@ class AuthManager: ObservableObject {
     }
 
     func handleAppleSignIn(result: Result<ASAuthorization, Error>) {
+        isSigningInWithApple = false
         switch result {
         case .failure(let error):
             debugLog("Apple Sign-In failed: \(error.localizedDescription)")
+            let nsError = error as NSError
+            if nsError.domain == ASAuthorizationError.errorDomain,
+               nsError.code == ASAuthorizationError.canceled.rawValue {
+                authenticationErrorMessage = nil
+            } else {
+                authenticationErrorMessage = "Sign in with Apple could not be completed. Please try again."
+            }
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
                 debugLog("Apple Sign-In failed: missing credential")
+                authenticationErrorMessage = "Apple did not return a valid sign-in credential. Please try again."
                 return
             }
             guard let nonce = currentAppleNonce else {
                 debugLog("Apple Sign-In failed: missing nonce")
+                authenticationErrorMessage = "The sign-in request expired. Please try again."
                 return
             }
             guard let tokenData = credential.identityToken,
                   let tokenString = String(data: tokenData, encoding: .utf8) else {
                 debugLog("Apple Sign-In failed: invalid identity token")
+                authenticationErrorMessage = "Apple did not return a valid identity token. Please try again."
                 return
             }
 
@@ -203,12 +218,16 @@ class AuthManager: ObservableObject {
             Auth.auth().signIn(with: oauth) { authResult, error in
                 if let error = error {
                     debugLog("Firebase Apple Sign-In failed: \(error.localizedDescription)")
+                    DispatchQueue.main.async {
+                        self.authenticationErrorMessage = "Unable to finish signing in. Check your connection and try again."
+                    }
                     return
                 }
 
                 guard let firebaseUser = authResult?.user else { return }
                 self.user = firebaseUser
                 self.isSignedIn = true
+                self.authenticationErrorMessage = nil
                 self.refreshRetailAdminStatus(for: firebaseUser)
                 self.upsertUserDocument(for: firebaseUser)
             }

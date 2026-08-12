@@ -269,6 +269,7 @@ struct StorefrontView: View {
                 openOnThisDevice: openDisplayAppOrStoreOnThisDevice,
                 copyLink: copyDisplayAppLink
             )
+            .fixedAppDynamicType()
         }
         .onReceive(NotificationCenter.default.publisher(for: .retailCheckoutSucceeded)) { _ in
             UserDefaults.standard.set(false, forKey: "openOrderHistoryAfterCheckout")
@@ -854,6 +855,7 @@ private struct TemplateDetailView: View {
         .sheet(isPresented: $showShareSheet) {
             if let url = pdfURL {
                 ShareSheet(items: [url])
+                    .fixedAppDynamicType()
             }
         }
         .sheet(isPresented: $showTemplatePicker) {
@@ -865,6 +867,7 @@ private struct TemplateDetailView: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showTemplatePicker = false } } }
             }
             .presentationDetents([.medium])
+            .fixedAppDynamicType()
         }
         .onChange(of: customWidthInches) { _, _ in
             guard template.name.lowercased().contains("custom"),
@@ -1322,6 +1325,7 @@ private struct PrintableSheetDetailView: View {
         .sheet(isPresented: $showShareSheet) {
             if let url = pdfURL {
                 ShareSheet(items: [url])
+                    .fixedAppDynamicType()
             }
         }
         .sheet(isPresented: $showTemplatePicker) {
@@ -1341,6 +1345,7 @@ private struct PrintableSheetDetailView: View {
                 }
             }
             .presentationDetents([.medium])
+            .fixedAppDynamicType()
         }
     }
 }

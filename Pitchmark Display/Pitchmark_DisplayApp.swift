@@ -12,6 +12,7 @@ struct Pitchmark_DisplayApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .dynamicTypeSize(.medium)
         }
     }
 }

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import FirebaseCore
+import FirebaseAuth
 import FirebaseAppCheck
 
 private final class PitchMarkAppCheckProviderFactory: NSObject, AppCheckProviderFactory {
@@ -38,6 +39,7 @@ struct RootView: View {
                 SplashView()
             } else if authManager.isSignedIn {
                 PitchTrackerView()
+                    .id("signed-in-\(authManager.user?.uid ?? "unknown")")
             } else if isDemoMode {
                 PitchTrackerView(
                     isDemoMode: true,
@@ -45,6 +47,7 @@ struct RootView: View {
                         isDemoMode = false
                     }
                 )
+                .id("demo")
             } else {
                 SignInView {
                     isDemoMode = true
@@ -54,6 +57,7 @@ struct RootView: View {
         .fullScreenCover(isPresented: $showDisplayCover) {
             DisplayOnlyWindowView()
                 .environmentObject(authManager)
+                .fixedAppDynamicType()
         }
         .sheet(isPresented: $showProPaywall) {
             ProPaywallView(
@@ -61,6 +65,7 @@ struct RootView: View {
                 message: "PitchMark Pro unlocks the main app features and gives you access to the separate Pitchmark Display companion app. You can install Display from the App Store after purchase.",
                 allowsClose: true
             )
+            .fixedAppDynamicType()
         }
         .sheet(isPresented: $showDisplayOnboarding) {
             DisplayOnboardingView(
@@ -78,6 +83,7 @@ struct RootView: View {
                     showDisplayOnboarding = false
                 }
             )
+            .fixedAppDynamicType()
         }
         .alert(item: $checkoutAlert) { alert in
             Alert(
@@ -398,6 +404,7 @@ struct PitchMarkApp: App {
             RootView()
                 .environmentObject(authManager)
                 .environmentObject(subscriptionManager)
+                .fixedAppDynamicType()
         }
     }
 }

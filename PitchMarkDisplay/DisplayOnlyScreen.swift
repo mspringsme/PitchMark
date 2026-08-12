@@ -62,14 +62,17 @@ struct DisplayOnlyScreen: View {
                 .padding(.top, 100)
             }
         }
-        .alert("Sign Out?", isPresented: $showSignOutConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("Sign Out", role: .destructive) {
+        .appConfirmationDialog(
+            isPresented: $showSignOutConfirm,
+            title: "Sign Out?",
+            message: "You will need to sign in again to use display mode.",
+            primaryTitle: "Sign Out",
+            primaryRole: .destructive,
+            primaryAction: {
                 signOut()
-            }
-        } message: {
-            Text("You will need to sign in again to use display mode.")
-        }
+            },
+            secondaryTitle: "Cancel"
+        )
         .onAppear {
             forceOrientation(.landscapeRight)
             startListeningToDisplayState()

@@ -417,6 +417,9 @@ struct ProPaywallView: View {
     @State private var isPurchasing = false
     @State private var isRestoring = false
 
+    private let privacyPolicyURL = URL(string: "https://pitchmark.app/privacy")!
+    private let termsOfUseURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
+
     private var priceLabel: String {
         subscriptionManager.annualProduct?.displayPrice ?? "$19.99"
     }
@@ -491,6 +494,14 @@ struct ProPaywallView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 8)
                 }
+
+                HStack(spacing: 20) {
+                    Link("Privacy Policy", destination: privacyPolicyURL)
+                    Link("Terms of Use (EULA)", destination: termsOfUseURL)
+                }
+                .font(.footnote)
+                .multilineTextAlignment(.center)
+                .accessibilityElement(children: .contain)
 
                 if allowsClose {
                     Button("Not Now") {
