@@ -14,7 +14,7 @@ const retailCatalog: Record<string, RetailCatalogItem> = {
     grid_5x3: { priceId: "price_1TbQjpHGR9piiykPmnX6Lj5J", label: "Grid Key 5 x 3" },
     grid_3_5x2_75: { priceId: "price_1TbQkPHGR9piiykPAIvImeVz", label: "Grid Key 3.5 x 2.75" },
     grid_custom: { priceId: "price_1TbQkuHGR9piiykPFoJgsxTf", label: "Grid Key Custom" },
-    sheet_8_5x11: { priceId: "price_1TbQmqHGR9piiykPAKJpnQQP", label: "Printable Sheet 8.5 x 11" }
+    sheet_8_5x11: { priceId: "price_1TbQmqHGR9piiykPAKJpnQQP", label: "Printed Sheet — 2 Shipped Copies" }
 };
 
 function getStripeClient(): Stripe {

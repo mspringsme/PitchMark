@@ -358,14 +358,26 @@ private func buildSavedPlayReviewedEvent(
         return baseDescriptor.isEmpty ? nil : baseDescriptor
     }()
 
+    let inPlayRegion = base.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    let normalizedOutcome = outcome?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    let inPlayOutcomes: Set<String> = ["1b", "2b", "3b", "hr", "hit", "out"]
+    let resultForcesStrike = strikeLooking
+        || strikeSwinging
+        || base.isFoulInferred
+        || countsAsHit
+        || inPlayRegion
+        || inPlayOutcomes.contains(normalizedOutcome)
+    let resolvedIsStrike = isStrike || resultForcesStrike
+    let resolvedIsBall = resultForcesStrike ? false : isBall
+
     return PitchEvent(
         id: base.id,
         timestamp: base.timestamp,
         pitch: base.pitch,
         location: base.location,
         codes: base.codes,
-        isStrike: isStrike,
-        isBall: isBall,
+        isStrike: resolvedIsStrike,
+        isBall: resolvedIsBall,
         mode: base.mode,
         calledPitch: base.calledPitch,
         batterSide: base.batterSide,
@@ -388,7 +400,7 @@ private func buildSavedPlayReviewedEvent(
         createdByUid: base.createdByUid,
         strikeSwingingMarker: strikeSwinging ? base.strikeSwingingMarker : nil,
         strikeLookingMarker: strikeLooking ? base.strikeLookingMarker : nil,
-        ballMarker: isBall ? base.ballMarker : nil,
+        ballMarker: resolvedIsBall ? base.ballMarker : nil,
         foulMarker: base.foulMarker,
         atBatBalls: balls,
         atBatStrikes: strikes,
@@ -438,10 +450,12 @@ struct SavedPlayReviewSheetView: View {
             (initialEvent.descriptor?.localizedCaseInsensitiveContains("hit") == true)
         )
 
+        let initialForcesStrike = pitchEventForcesStrikeResult(initialEvent) || scoutDefaultStrike
+
         _draftBalls = State(initialValue: balls)
         _draftStrikes = State(initialValue: strikes)
-        _draftIsStrike = State(initialValue: initialEvent.isStrike || scoutDefaultStrike)
-        _draftIsBall = State(initialValue: initialEvent.isBall ?? !initialEvent.isStrike)
+        _draftIsStrike = State(initialValue: initialEvent.isStrike || initialForcesStrike)
+        _draftIsBall = State(initialValue: initialForcesStrike ? false : (initialEvent.isBall ?? !initialEvent.isStrike))
         _draftStrikeLooking = State(initialValue: initialEvent.strikeLooking)
         _draftStrikeSwinging = State(initialValue: initialEvent.strikeSwinging)
         _draftWildPitch = State(initialValue: initialEvent.wildPitch)
@@ -719,6 +733,8 @@ struct SavedPlayReviewSheetView: View {
         .onChange(of: draftHit) { _, newValue in
             if newValue {
                 draftWalk = false
+                draftIsStrike = true
+                draftIsBall = false
             }
         }
         .presentationDetents([.large])
@@ -1602,7 +1618,7 @@ struct PitchEventDetailPopover: View {
 
                         // Centered, size-aware spray overlay
                         FieldSprayOverlay(
-                            fieldImageName: "FieldImage",
+                            fieldImageName: "FieldImage2",
                             events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
                             homePlateNormalized: CGPoint(x: 0.5, y: 0.69),
                             focalNormalized: CGPoint(x: 0.5, y: 0.45),
@@ -1805,7 +1821,7 @@ struct FieldSprayOverlay: View {
     var body: some View {
         GeometryReader { geo in
             let availableSize = geo.size
-            let uiImage = UIImage(named: fieldImageName)
+            let uiImage = UIImage(named: fieldImageName) ?? UIImage(named: "FieldImage")
             let aspect: CGFloat = {
                 if let img = uiImage, img.size.height > 0 { return img.size.width / img.size.height }
                 return 1
@@ -1862,11 +1878,13 @@ struct FieldSprayOverlay: View {
             }
 
             ZStack {
-                Image(fieldImageName)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: imageRect.width, height: imageRect.height)
-                    .position(x: imageRect.midX + focalShift.x, y: imageRect.midY + focalShift.y)
+                if let uiImage {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: imageRect.width, height: imageRect.height)
+                        .position(x: imageRect.midX + focalShift.x, y: imageRect.midY + focalShift.y)
+                }
 
                 // Home plate reference marker
                 Circle()
@@ -2445,18 +2463,17 @@ struct PitchResultSheet: View {
         .onAppear {
             applyInitialEditTargetIfNeeded()
         }
-        .confirmationDialog(
-            "Delete Selected Pitch Event\(selectedEventIDs.count == 1 ? "" : "s")?",
+        .appConfirmationDialog(
             isPresented: $showDeleteConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Delete", role: .destructive) {
+            title: "Delete Selected Pitch Event\(selectedEventIDs.count == 1 ? "" : "s")?",
+            message: "This removes the selected pitch event\(selectedEventIDs.count == 1 ? "" : "s") from the cards list.",
+            primaryTitle: "Delete",
+            primaryRole: .destructive,
+            primaryAction: {
                 deleteSelectedEvents()
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This removes the selected pitch event\(selectedEventIDs.count == 1 ? "" : "s") from the cards list.")
-        }
+            },
+            secondaryTitle: "Cancel"
+        )
         .sheet(isPresented: $showPitcherPicker) {
             NavigationView {
                 List(pitchers) { pitcher in
@@ -2476,6 +2493,7 @@ struct PitchResultSheet: View {
                 }
             }
             .presentationDetents([.medium])
+            .fixedAppDynamicType()
         }
         .sheet(isPresented: $showBatterPicker) {
             NavigationView {
@@ -2496,6 +2514,7 @@ struct PitchResultSheet: View {
                 }
             }
             .presentationDetents([.medium])
+            .fixedAppDynamicType()
         }
         .sheet(isPresented: $showEditPitchSheet) {
             if let target = editTargetEvent {
@@ -2538,6 +2557,7 @@ struct PitchResultSheet: View {
                 )
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+                .fixedAppDynamicType()
             }
         }
         .onAppear {

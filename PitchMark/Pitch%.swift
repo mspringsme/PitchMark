@@ -27,18 +27,22 @@ private func normalizedEventText(_ event: PitchEvent) -> String {
         .joined(separator: " ")
 }
 
+func pitchEventHasInPlayOutcome(_ event: PitchEvent) -> Bool {
+    let text = normalizedEventText(event)
+    return inPlayStrikeKeywords.contains(where: { text.contains($0) })
+}
+
+func pitchEventForcesStrikeResult(_ event: PitchEvent) -> Bool {
+    event.strikeLooking || event.strikeSwinging || event.isFoulInferred || pitchEventHasInPlayOutcome(event)
+}
+
 func inferredPitchResultType(for event: PitchEvent) -> PitchEventResultType? {
-    if event.strikeLooking || event.strikeSwinging || event.isFoulInferred {
+    if pitchEventForcesStrikeResult(event) {
         return .strike
     }
 
     if let isBall = event.isBall, isBall {
         return .ball
-    }
-
-    let text = normalizedEventText(event)
-    if inPlayStrikeKeywords.contains(where: { text.contains($0) }) {
-        return .strike
     }
 
     if event.isStrike {

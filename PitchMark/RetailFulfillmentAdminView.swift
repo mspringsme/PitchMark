@@ -253,6 +253,7 @@ struct RetailFulfillmentAdminView: View {
         .task { await viewModel.refresh() }
         .sheet(item: $exportPayload) { payload in
             ShareSheet(items: [payload.url])
+                .fixedAppDynamicType()
         }
     }
 

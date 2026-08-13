@@ -36,6 +36,7 @@ struct PitchMarkDisplayApp: App {
             DisplayRootView()
                 .environmentObject(authManager)
                 .environmentObject(subscriptionManager)
+                .dynamicTypeSize(.medium)
         }
     }
 }

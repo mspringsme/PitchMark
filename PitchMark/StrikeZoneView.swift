@@ -34,6 +34,7 @@ struct StrikeZoneView: View {
     let isEncryptedMode: Bool
     let template: PitchTemplate?
     let canInitiateCall: Bool
+    let forceOutlineButtons: Bool
 
     
     var body: some View {
@@ -91,7 +92,8 @@ struct StrikeZoneView: View {
                             onCatcherLocationTap: onCatcherLocationTap,
                             isEncryptedMode: isEncryptedMode,
                             template: template,
-                            canInitiateCall: canInitiateCall
+                            canInitiateCall: canInitiateCall,
+                            forceOutlineButtons: forceOutlineButtons
                         )
                     }
                     
@@ -137,7 +139,8 @@ struct StrikeZoneView: View {
                             onCatcherLocationTap: onCatcherLocationTap,
                             isEncryptedMode: isEncryptedMode,
                             template: template,
-                            canInitiateCall: canInitiateCall
+                            canInitiateCall: canInitiateCall,
+                            forceOutlineButtons: forceOutlineButtons
                         )
                     }
                 }

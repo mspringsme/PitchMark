@@ -62,11 +62,12 @@ struct ScrollableSelectionMenuButton<Item: Identifiable, Label: View>: View {
                 items: items,
                 topActions: topActions,
                 itemTitle: itemTitle,
-                isSelected: isSelected,
-                onSelect: onSelect
-            )
-        }
+            isSelected: isSelected,
+            onSelect: onSelect
+        )
+        .fixedAppDynamicType()
     }
+}
 }
 
 private struct ScrollableSelectionSheet<Item: Identifiable>: View {

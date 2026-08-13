@@ -18,6 +18,26 @@ private struct ColorKey: Hashable {
     let a: UInt8
 }
 
+private let pitchResultSelectedGradient = LinearGradient(
+    colors: [
+        Color(red: 0.08, green: 0.44, blue: 0.32),
+        Color(red: 0.73, green: 0.23, blue: 0.18)
+    ],
+    startPoint: .topLeading,
+    endPoint: .bottomTrailing
+)
+
+private extension View {
+    @ViewBuilder
+    func pitchResultSelectionBackground(isSelected: Bool, inactiveOpacity: Double = 0.1) -> some View {
+        if isSelected {
+            background(pitchResultSelectedGradient)
+        } else {
+            background(Color.gray.opacity(inactiveOpacity))
+        }
+    }
+}
+
 private func colorKey(from color: UIColor) -> ColorKey {
     var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
     color.getRed(&r, green: &g, blue: &b, alpha: &a)
@@ -70,9 +90,10 @@ private struct OutcomeButton: View {
         }) {
             Text(label)
                 .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isSelected ? .white : .primary)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .background(isSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                .pitchResultSelectionBackground(isSelected: isSelected)
                 .cornerRadius(6)
                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
         }
@@ -98,7 +119,7 @@ private struct AssetOutcomeButton: View {
                 .scaledToFit()
                 .frame(width: width, height: height)
                 .padding(4)
-                .background(isSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.08))
+                .pitchResultSelectionBackground(isSelected: isSelected, inactiveOpacity: 0.08)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -133,8 +154,9 @@ private struct DiamondOutcomeSelector: View {
         } label: {
             Text(label)
                 .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isSelected ? .white : .primary)
                 .frame(width: width, height: height)
-                .background(isSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                .pitchResultSelectionBackground(isSelected: isSelected)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -331,13 +353,14 @@ private struct ToggleSection: View {
                 }
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isOn ? .white : .primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(width: width, height: height, alignment: alignment)
-            .background(isOn ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+            .pitchResultSelectionBackground(isSelected: isOn)
             .cornerRadius(6)
             .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
         }
@@ -363,8 +386,13 @@ private struct ToggleSection: View {
                     if next {
                         isStrikeLooking = false
                         isBall = false
+                        isHitTagSelected = false
+                        isHitBatter = false
+                        selectedDescriptor = nil
                         if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
                             selectedOutcome = nil
+                        } else if let selectedOutcome, ["1B", "2B", "3B", "HR"].contains(selectedOutcome) {
+                            self.selectedOutcome = nil
                         }
                     }
                 }
@@ -383,18 +411,23 @@ private struct ToggleSection: View {
                     if next {
                         isStrikeSwinging = false
                         isBall = false
+                        isHitTagSelected = false
+                        isHitBatter = false
+                        selectedDescriptor = nil
                         if isFoulSelected || selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
                             selectedOutcome = nil
+                        } else if let selectedOutcome, ["1B", "2B", "3B", "HR"].contains(selectedOutcome) {
+                            self.selectedOutcome = nil
                         }
                     }
                 }
             }
 
             VStack(spacing: 8) {
-                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
+                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
                     .frame(width: 36, height: 36)
 
-                OutcomeButton(label: "K", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("K"), usesDescriptorSelection: false)
+                OutcomeButton(label: "ꓘ", selectedOutcome: $selectedOutcome, selectedDescriptor: $selectedDescriptor, isDisabled: isOutcomeDisabled("ꓘ"), usesDescriptorSelection: false)
                     .frame(width: 36, height: 36)
             }
 
@@ -413,10 +446,11 @@ private struct ToggleSection: View {
                 } label: {
                     Text("Foul")
                         .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(isFoulSelected ? .white : .primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                         .frame(width: 80, height: 48)
-                        .background(isFoulSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                        .pitchResultSelectionBackground(isSelected: isFoulSelected)
                         .cornerRadius(6)
                         .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
                 }
@@ -470,12 +504,13 @@ private struct EventButtonsRow: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isOn ? .white : .primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .frame(width: width)
-                .background(isOn ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                .pitchResultSelectionBackground(isSelected: isOn)
                 .cornerRadius(6)
                 .shadow(color: .black.opacity(0.15), radius: 3, x: 0, y: 1)
         }
@@ -509,6 +544,7 @@ private struct HoldActionButton: View {
     let foregroundColor: Color
     let tint: Color
     let isEnabled: Bool
+    var horizontalPadding: CGFloat = 12
     let action: () -> Void
 
     var body: some View {
@@ -523,23 +559,25 @@ private struct HoldActionButton: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .foregroundColor(isEnabled ? foregroundColor : .gray)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .font(.subheadline.weight(.bold))
+            .foregroundColor(isEnabled ? .white : .gray)
+            .padding(.horizontal, horizontalPadding + 6)
+            .padding(.vertical, 12)
             .background(
                 shape
-                    .fill(isEnabled ? tint : Color(.systemGray5))
+                    .fill(isEnabled ? foregroundColor : Color(.systemGray5))
             )
             .contentShape(shape)
         }
         .buttonStyle(.plain)
         .overlay {
             shape
-                .stroke((isEnabled ? foregroundColor : .gray).opacity(0.25), lineWidth: 1)
+                .stroke((isEnabled ? foregroundColor.opacity(0.95) : .gray.opacity(0.25)), lineWidth: 1.5)
                 .allowsHitTesting(false)
         }
+        .shadow(color: isEnabled ? foregroundColor.opacity(0.28) : .clear, radius: 8, x: 0, y: 4)
         .animation(.easeOut(duration: 0.15), value: isEnabled)
-        .opacity(isEnabled ? 1 : 0.75)
+        .opacity(isEnabled ? 1 : 0.72)
     }
 }
 
@@ -558,6 +596,7 @@ struct PitchResultSheetView: View {
     @Binding var selectedOutcome: String?
     @Binding var selectedDescriptor: String?
     @Binding var isError: Bool
+    var isDemoMode: Bool = false
     @State private var isHitBatter = false
     @State private var isHitTagSelected = false
     @State private var isFoulSelected = false
@@ -903,6 +942,7 @@ struct PitchResultSheetView: View {
                 battedBallRegionName: $battedBallRegionName,
                 battedBallSelection: $battedBallSelection,
                 battedBallTapNormalized: $battedBallTapNormalized,
+                displayImageName: "FieldImage2",
                 showsDismissControls: false
             )
             .frame(height: 520)
@@ -985,7 +1025,7 @@ struct PitchResultSheetView: View {
         if label == "K" { return !isStrikeSwinging }
         if label == "ꓘ" { return !isStrikeLooking }
 
-        if strikeSelected && ["Ball", "Foul", "E", "HR"].contains(label) {
+        if strikeSelected && ["Ball", "Foul", "E", "Hit", "Hit Batter", "1B", "2B", "3B", "HR"].contains(label) {
             return true
         }
 
@@ -1283,10 +1323,6 @@ struct PitchResultSheetView: View {
             return (balls, strikes)
         }
 
-        if event.isBall == true {
-            balls = min(3, balls + 1)
-            return (balls, strikes)
-        }
         if event.strikeLooking || event.strikeSwinging {
             strikes = min(2, strikes + 1)
             return (balls, strikes)
@@ -1299,6 +1335,10 @@ struct PitchResultSheetView: View {
         }
         if event.isStrike {
             strikes = min(2, strikes + 1)
+            return (balls, strikes)
+        }
+        if event.isBall == true {
+            balls = min(3, balls + 1)
         }
 
         return (balls, strikes)
@@ -1345,14 +1385,23 @@ struct PitchResultSheetView: View {
             return nil
         }
         let isCatcherCall = pitchCall.pitch.trimmingCharacters(in: .whitespacesAndNewlines) == "Catcher"
-        let resolvedIsStrike = resultIsInsideStrikeZone(label)
+        let locationIsInsideStrikeZone = resultIsInsideStrikeZone(label)
         let normalizedOutcomeBase = (
             isHitBatter
                 ? "HBP"
                 : (selectedOutcome ?? (isFoulSelected ? "Foul" : ""))
         ).trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedIsFoul = isFoulSelected || normalizedOutcomeBase.caseInsensitiveCompare("Foul") == .orderedSame
-        let resolvedIsBall = isBall || (!isCatcherCall && !resolvedIsStrike && !resolvedIsFoul)
+        let normalizedOutcomeLower = normalizedOutcomeBase.lowercased()
+        let inPlayOutcomes: Set<String> = ["1b", "2b", "3b", "hr", "hit", "out"]
+        let resultForcesStrike = isStrikeLooking
+            || isStrikeSwinging
+            || resolvedIsFoul
+            || battedBallRegionName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            || isHitTagSelected
+            || inPlayOutcomes.contains(normalizedOutcomeLower)
+        let resolvedIsStrike = locationIsInsideStrikeZone || resultForcesStrike
+        let resolvedIsBall = !resultForcesStrike && (isBall || (!isCatcherCall && !locationIsInsideStrikeZone))
         let prior = priorCount(for: PitchEvent(
             id: nil,
             timestamp: Date(),
@@ -1489,7 +1538,7 @@ struct PitchResultSheetView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .center, spacing: 10) {
+                    HStack(alignment: .center, spacing: 12) {
                         Button {
                             isPresented = false
                             dismiss()
@@ -1501,43 +1550,15 @@ struct PitchResultSheetView: View {
                         }
                         .buttonStyle(.plain)
 
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Called Pitch")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-
-                            Text(pitchCall?.pitch ?? "")
-                                .font(.title3.weight(.bold))
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
-                        }
+                        Text("Pitch result: \(hasSelectedLocation ? (effectiveLocationLabel ?? "") : "Select a location")")
+                            .font(.title3.weight(.semibold))
+                            .foregroundColor(hasSelectedLocation ? .blue : .secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
 
                         Spacer(minLength: 0)
                     }
                     .padding(.top, 8)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(hasSelectedLocation ? "Location: \(effectiveLocationLabel ?? "")" : "Location")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(hasSelectedLocation ? .blue : .secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-
-                        if let calledPitch = pitchCall?.pitch, !calledPitch.isEmpty {
-                            let calledLocation = pitchCall?.location.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                            let calledText = calledLocation.isEmpty
-                                ? "Called: \(calledPitch)"
-                                : "Called: \(calledPitch) • \(calledLocation)"
-                            Text(calledText)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                        }
-                    }
 
                     let canSave: Bool = {
                         // Require at least one of: overlay tap, outcome/descriptor/error, or any toggle
@@ -1556,78 +1577,42 @@ struct PitchResultSheetView: View {
 
                     Divider()
 
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .center, spacing: 8) {
-                            HoldActionButton(
-                                title: "Pitch Only",
-                                systemImage: "",
-                                foregroundColor: .blue,
-                                tint: .white,
-                                isEnabled: true,
-                                action: handlePitchOnlySave
-                            )
+                    HStack(alignment: .center, spacing: 8) {
+                        HoldActionButton(
+                            title: "Save Pitch",
+                            systemImage: "",
+                            foregroundColor: .blue,
+                            tint: .white,
+                            isEnabled: true,
+                            horizontalPadding: 10,
+                            action: handlePitchOnlySave
+                        )
 
-                            Spacer(minLength: 8)
+                        SafeOutButtonsRow(
+                            selectedOutcome: $selectedOutcome,
+                            selectedDescriptor: $selectedDescriptor,
+                            isStrikeSwinging: $isStrikeSwinging,
+                            isStrikeLooking: $isStrikeLooking,
+                            isBall: $isBall,
+                            isHitTagSelected: $isHitTagSelected,
+                            isHitBatter: $isHitBatter,
+                            isFoulSelected: $isFoulSelected,
+                            isSafeDisabled: isOutcomeDisabled("1B"),
+                            isOutDisabled: isOutcomeDisabled("Out")
+                        )
 
-                            SafeOutButtonsRow(
-                                selectedOutcome: $selectedOutcome,
-                                selectedDescriptor: $selectedDescriptor,
-                                isStrikeSwinging: $isStrikeSwinging,
-                                isStrikeLooking: $isStrikeLooking,
-                                isBall: $isBall,
-                                isHitTagSelected: $isHitTagSelected,
-                                isHitBatter: $isHitBatter,
-                                isFoulSelected: $isFoulSelected,
-                                isSafeDisabled: isOutcomeDisabled("1B"),
-                                isOutDisabled: isOutcomeDisabled("Out")
-                            )
-
-                            Spacer(minLength: 8)
-
-                            HoldActionButton(
-                                title: "Pitch Event",
-                                systemImage: "",
-                                foregroundColor: .green,
-                                tint: .white,
-                                isEnabled: canSave,
-                                action: handleSave
-                            )
-                        }
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            HoldActionButton(
-                                title: "Pitch Only",
-                                systemImage: "",
-                                foregroundColor: .blue,
-                                tint: .white,
-                                isEnabled: true,
-                                action: handlePitchOnlySave
-                            )
-
-                            SafeOutButtonsRow(
-                                selectedOutcome: $selectedOutcome,
-                                selectedDescriptor: $selectedDescriptor,
-                                isStrikeSwinging: $isStrikeSwinging,
-                                isStrikeLooking: $isStrikeLooking,
-                                isBall: $isBall,
-                                isHitTagSelected: $isHitTagSelected,
-                                isHitBatter: $isHitBatter,
-                                isFoulSelected: $isFoulSelected,
-                                isSafeDisabled: isOutcomeDisabled("1B"),
-                                isOutDisabled: isOutcomeDisabled("Out")
-                            )
-
-                            HoldActionButton(
-                                title: "Pitch Event",
-                                systemImage: "",
-                                foregroundColor: .green,
-                                tint: .white,
-                                isEnabled: canSave,
-                                action: handleSave
-                            )
-                        }
+                        HoldActionButton(
+                            title: "Save Result",
+                            systemImage: "",
+                            foregroundColor: .green,
+                            tint: .white,
+                            isEnabled: canSave,
+                            horizontalPadding: 10,
+                            action: handleSave
+                        )
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.top, 2)
                     .padding(.bottom, 12)
 
@@ -1716,6 +1701,7 @@ struct PitchResultSheetView: View {
                     }
                 )
                 .interactiveDismissDisabled(true)
+                .fixedAppDynamicType()
             }
             .sheet(isPresented: $showMissingBatterPrompt) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -1769,6 +1755,7 @@ struct PitchResultSheetView: View {
                 .padding()
                 .presentationDetents([.fraction(0.3), .medium])
                 .presentationDragIndicator(.visible)
+                .fixedAppDynamicType()
         }
     }
     }
@@ -1890,10 +1877,11 @@ private struct OutcomeButtonsSection: View {
                         Button { toggleHitTag() } label: {
                             Text("Hit")
                                 .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(isHitTagSelected ? .white : .primary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
                                 .frame(width: 64, height: 50, alignment: .center)
-                                .background(isHitTagSelected ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                                .pitchResultSelectionBackground(isSelected: isHitTagSelected)
                                 .cornerRadius(6)
                                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
                         }
@@ -1904,10 +1892,11 @@ private struct OutcomeButtonsSection: View {
                         Button { toggleWalk() } label: {
                             Text("Walk")
                                 .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(selectedOutcome == "Walk" ? .white : .primary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
                                 .frame(width: 64, height: 50, alignment: .center)
-                                .background(selectedOutcome == "Walk" ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                                .pitchResultSelectionBackground(isSelected: selectedOutcome == "Walk")
                                 .cornerRadius(6)
                                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
                         }
@@ -1918,10 +1907,11 @@ private struct OutcomeButtonsSection: View {
                         Button { toggleError() } label: {
                             Text("Error")
                                 .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(isError ? .white : .primary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
                                 .frame(width: 64, height: 50, alignment: .center)
-                                .background(isError ? Color(red: 0.75, green: 0.85, blue: 1.0) : Color.gray.opacity(0.1))
+                                .pitchResultSelectionBackground(isSelected: isError)
                                 .cornerRadius(6)
                                 .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
                         }
@@ -2057,6 +2047,7 @@ private struct FieldOverlayView: View {
     @Binding var battedBallRegionName: String?
     @Binding var battedBallSelection: OverlaySelection?
     @Binding var battedBallTapNormalized: CGPoint?
+    var displayImageName: String = "FieldImage2"
     var showsDismissControls: Bool = true
 
     private func handleTap(at location: CGPoint, in imageRect: CGRect) {
@@ -2111,8 +2102,9 @@ private struct FieldOverlayView: View {
             let availableWidth = proxy.size.width
             let availableHeight = proxy.size.height
             let baseCenterX = availableWidth / 2
+            let displayImage = UIImage(named: displayImageName) ?? UIImage(named: "FieldImage")
             // Prefer the color map's aspect to ensure tap sampling aligns with the displayed image
-            let drivingImage: UIImage? = colorMapImage ?? UIImage(named: "FieldImage")
+            let drivingImage: UIImage? = colorMapImage ?? displayImage
             let aspect: CGFloat = {
                 if let img = drivingImage { return img.size.width / max(img.size.height, 1) }
                 return 1
@@ -2169,13 +2161,15 @@ private struct FieldOverlayView: View {
                 .padding()
                 .allowsHitTesting(false)
 
-                Image("FieldImage")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: imageRect.width, height: imageRect.height)
-                    .position(x: imageRect.midX, y: imageRect.midY)
-                    .shadow(radius: 10)
-                    .allowsHitTesting(false)
+                if let displayImage {
+                    Image(uiImage: displayImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: imageRect.width, height: imageRect.height)
+                        .position(x: imageRect.midX, y: imageRect.midY)
+                        .shadow(radius: 10)
+                        .allowsHitTesting(false)
+                }
 
                 Rectangle()
                     .fill(Color.clear)

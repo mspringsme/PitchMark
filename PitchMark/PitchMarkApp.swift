@@ -7,6 +7,7 @@
 
 import SwiftUI
 import FirebaseCore
+import FirebaseAuth
 import FirebaseAppCheck
 
 private final class PitchMarkAppCheckProviderFactory: NSObject, AppCheckProviderFactory {
@@ -28,6 +29,7 @@ struct RootView: View {
     @State private var showDisplayOnboarding = false
     @State private var showProPaywall = false
     @State private var checkoutAlert: CheckoutAlert? = nil
+    @State private var isDemoMode = false
     @AppStorage(PitchTrackerView.DefaultsKeys.didShowDisplayOnboarding) private var didShowDisplayOnboarding = false
     private let displayAppSearchURL = URL(string: "https://apps.apple.com/us/search?term=Pitchmark%20Display")!
 
@@ -37,13 +39,25 @@ struct RootView: View {
                 SplashView()
             } else if authManager.isSignedIn {
                 PitchTrackerView()
+                    .id("signed-in-\(authManager.user?.uid ?? "unknown")")
+            } else if isDemoMode {
+                PitchTrackerView(
+                    isDemoMode: true,
+                    onRequireSignIn: {
+                        isDemoMode = false
+                    }
+                )
+                .id("demo")
             } else {
-                SignInView()
+                SignInView {
+                    isDemoMode = true
+                }
             }
         }
         .fullScreenCover(isPresented: $showDisplayCover) {
             DisplayOnlyWindowView()
                 .environmentObject(authManager)
+                .fixedAppDynamicType()
         }
         .sheet(isPresented: $showProPaywall) {
             ProPaywallView(
@@ -51,6 +65,7 @@ struct RootView: View {
                 message: "PitchMark Pro unlocks the main app features and gives you access to the separate Pitchmark Display companion app. You can install Display from the App Store after purchase.",
                 allowsClose: true
             )
+            .fixedAppDynamicType()
         }
         .sheet(isPresented: $showDisplayOnboarding) {
             DisplayOnboardingView(
@@ -68,6 +83,7 @@ struct RootView: View {
                     showDisplayOnboarding = false
                 }
             )
+            .fixedAppDynamicType()
         }
         .alert(item: $checkoutAlert) { alert in
             Alert(
@@ -103,6 +119,7 @@ struct RootView: View {
                 await subscriptionManager.refreshForAuthStateChange(isSignedIn: isSignedIn)
             }
             if isSignedIn {
+                isDemoMode = false
                 LiveGameService.shared.cleanupExpiredJoinArtifacts()
                 if let token = UserDefaults.standard.string(forKey: "pendingInviteToken"), !token.isEmpty {
                     UserDefaults.standard.removeObject(forKey: "pendingInviteToken")
@@ -387,6 +404,7 @@ struct PitchMarkApp: App {
             RootView()
                 .environmentObject(authManager)
                 .environmentObject(subscriptionManager)
+                .fixedAppDynamicType()
         }
     }
 }

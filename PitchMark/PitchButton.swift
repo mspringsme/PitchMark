@@ -36,17 +36,18 @@ private struct PitchButtonView: View {
     let isEncryptedMode: Bool
     let template: PitchTemplate?
     let canInitiateCall: Bool
+    let forceOutlineButtons: Bool
 
     var body: some View {
         let tappedPoint = CGPoint(x: x, y: y)
         let isSelected = lastTappedPosition == tappedPoint
         let adjustedLabel = labelManager.adjustedLabel(from: location.label)
         let fullLabel = "\(location.isStrike ? "Strike" : "Ball") \(adjustedLabel)"
-        let assignedCode = pitchCodeAssignments.first {
-            $0.pitch == selectedPitch && $0.location == fullLabel
-        }
-
-        let isDisabled = gameIsActive && assignedCode == nil
+        let isLocationUnavailable = shouldGreyOutLocation(
+            adjustedLabel: adjustedLabel,
+            fullLabel: fullLabel,
+            isStrike: location.isStrike
+        )
 
         let assignedPitches = Set(
             pitchCodeAssignments
@@ -54,11 +55,11 @@ private struct PitchButtonView: View {
                 .map(\.pitch)
         )
         // In encrypted mode, always render outline-only (no filled segments)
-        let shouldOutline = isEncryptedMode ? true : (assignedPitches.isEmpty && !isRecordingResult)
+        let shouldOutline = forceOutlineButtons || isEncryptedMode || (assignedPitches.isEmpty && !isRecordingResult)
 
         let segmentColors: [Color] = {
             // In encrypted mode, suppress filled segments entirely to show outline-only
-            if isEncryptedMode {
+            if forceOutlineButtons || isEncryptedMode {
                 return []
             }
             if let resultLabel = resultVisualState {
@@ -81,9 +82,8 @@ private struct PitchButtonView: View {
         }()
 
         return Group {
-            if isDisabled {
-                disabledView(isStrike: location.isStrike)
-                    .frame(width: buttonSize, height: buttonSize)
+            if isLocationUnavailable {
+                disabledLocationView(isStrike: location.isStrike, fullLabel: fullLabel)
             } else if isRecordingResult {
                 Button(action: {
                     debugLog("🔆 fullLabel=", fullLabel)
@@ -199,6 +199,95 @@ private struct PitchButtonView: View {
         .zIndex(1)
     }
 
+    private func disabledLocationView(isStrike: Bool, fullLabel: String) -> some View {
+        ZStack {
+            disabledView(isStrike: isStrike)
+
+            Text(fullLabel)
+                .font(.system(size: buttonSize * 0.24, weight: .semibold))
+                .foregroundColor(Color.primary.opacity(0.38))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.5)
+                .padding(4)
+        }
+        .frame(width: buttonSize, height: buttonSize)
+        .contentShape(Rectangle())
+        .accessibilityLabel("\(fullLabel), no code assigned")
+    }
+
+    private func shouldGreyOutLocation(adjustedLabel: String, fullLabel: String, isStrike: Bool) -> Bool {
+        let trimmedPitch = selectedPitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isRecordingResult else { return false }
+        guard canInitiateCall else { return false }
+        guard template != nil else { return false }
+        guard !trimmedPitch.isEmpty, trimmedPitch != "Catcher" else { return false }
+
+        if isEncryptedMode {
+            return !hasEncryptedCodeSource(adjustedLabel: adjustedLabel, isStrike: isStrike, selectedPitch: trimmedPitch)
+        }
+
+        return !pitchCodeAssignments.contains {
+            $0.pitch == trimmedPitch &&
+            $0.location.trimmingCharacters(in: .whitespacesAndNewlines) == fullLabel
+        }
+    }
+
+    private func hasEncryptedCodeSource(adjustedLabel: String, isStrike: Bool, selectedPitch: String) -> Bool {
+        guard let template else { return false }
+        guard let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(label: adjustedLabel, isStrike: isStrike) else {
+            return false
+        }
+
+        let headerPitches = template.pitchGridHeaders.map(\.pitch)
+        let pitchCol: Int
+        if let headerIndex = headerPitches.firstIndex(of: selectedPitch) {
+            pitchCol = headerIndex + 1
+        } else if let pitchIndex = template.pitches.firstIndex(of: selectedPitch) {
+            pitchCol = pitchIndex + 1
+        } else {
+            return false
+        }
+
+        let bottomHeaders: [String]
+        let bottomRowsRaw: [[String]]
+        switch gridKind {
+        case .strikes:
+            bottomHeaders = template.strikeTopRow
+            bottomRowsRaw = template.strikeRows
+        case .balls:
+            bottomHeaders = template.ballsTopRow
+            bottomRowsRaw = template.ballsRows
+        }
+
+        let bottomRows: [[String]] = {
+            if bottomRowsRaw.count == 4,
+               bottomRowsRaw.first?.allSatisfy({ sanitizeGridCodeCell($0).isEmpty }) == true {
+                return Array(bottomRowsRaw.dropFirst())
+            }
+            return bottomRowsRaw
+        }()
+
+        guard bottomHeaders.indices.contains(columnIndex),
+              bottomRows.indices.contains(rowIndex),
+              bottomRows[rowIndex].indices.contains(columnIndex) else {
+            return false
+        }
+
+        let hasBottomColumnHeader = !sanitizeGridCodeCell(bottomHeaders[columnIndex]).isEmpty
+        let hasBottomCell = !sanitizeGridCodeCell(bottomRows[rowIndex][columnIndex]).isEmpty
+        guard hasBottomColumnHeader, hasBottomCell else { return false }
+
+        return template.pitchGridValues.contains { row in
+            guard row.indices.contains(0), row.indices.contains(pitchCol) else { return false }
+            return !sanitizeGridCodeCell(row[0]).isEmpty && !sanitizeGridCodeCell(row[pitchCol]).isEmpty
+        }
+    }
+
+    private func sanitizeGridCodeCell(_ value: String) -> String {
+        value.uppercased().filter { $0.isNumber || ($0.isLetter && $0.isASCII) }
+    }
+
     private func mapLabelToGridInfo(label: String, isStrike: Bool) -> (gridKind: EncryptedGridKind, columnIndex: Int, rowIndex: Int)? {
         let cleaned = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let strikeRows = [
@@ -254,7 +343,8 @@ func pitchButton(
     onCatcherLocationTap: @escaping () -> Void,
     isEncryptedMode: Bool,
     template: PitchTemplate?,
-    canInitiateCall: Bool
+    canInitiateCall: Bool,
+    forceOutlineButtons: Bool = false
 ) -> some View {
     PitchButtonView(
         x: x,
@@ -285,6 +375,7 @@ func pitchButton(
         onCatcherLocationTap: onCatcherLocationTap,
         isEncryptedMode: isEncryptedMode,
         template: template,
-        canInitiateCall: canInitiateCall
+        canInitiateCall: canInitiateCall,
+        forceOutlineButtons: forceOutlineButtons
     )
 }
