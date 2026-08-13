@@ -219,16 +219,18 @@ struct SignInView: View {
                         .accessibilityHint("Opens a local demo with one game, one pitcher, and one grid key.")
                     }
 
-                    Button {
-                        showLearnPitchMark = true
-                    } label: {
-                        Text("Learn PitchMark")
-                            .font(.footnote.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.64))
-                            .padding(.vertical, 4)
+                    if !isDisplayApp {
+                        Button {
+                            showLearnPitchMark = true
+                        } label: {
+                            Text("Learn PitchMark")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.64))
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens PitchMark tutorial videos.")
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("Opens PitchMark tutorial videos.")
 
                     Spacer(minLength: 0)
                 }
@@ -239,10 +241,7 @@ struct SignInView: View {
             .onAppear {
                 animateGradient = true
             }
-            .fullScreenCover(isPresented: $showLearnPitchMark) {
-                LearnPitchMarkView()
-                    .fixedAppDynamicType()
-            }
+            .modifier(LearnPitchMarkPresentation(isPresented: $showLearnPitchMark))
         }
     }
 
@@ -277,6 +276,27 @@ struct SignInView: View {
     }
 
 }
+
+#if DISPLAY_APP
+private struct LearnPitchMarkPresentation: ViewModifier {
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content
+    }
+}
+#else
+private struct LearnPitchMarkPresentation: ViewModifier {
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content.fullScreenCover(isPresented: $isPresented) {
+            LearnPitchMarkView()
+                .fixedAppDynamicType()
+        }
+    }
+}
+#endif
 
 //#Preview {
 //    SignInView()

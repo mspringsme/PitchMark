@@ -9308,6 +9308,24 @@ struct PitchTrackerView: View {
                         ]) { err in
                             if let err { debugLog("❌ deferred displayCode update error:", err.localizedDescription) }
                         }
+                        if let uid = self.authManager.user?.uid, !uid.isEmpty {
+                            Firestore.firestore()
+                                .collection("users")
+                                .document(uid)
+                                .collection("displayState")
+                                .document("current")
+                                .setData([
+                                    "colorName": deferred.colorName,
+                                    "code": deferred.code,
+                                    "updatedAt": FieldValue.serverTimestamp()
+                                ], merge: true) { err in
+                                    if let err {
+                                        debugLog("❌ deferred displayState mirror failed:", err.localizedDescription)
+                                    } else {
+                                        debugLog("✅ deferred displayState mirror wrote code=\(deferred.code)")
+                                    }
+                                }
+                        }
                         self.deferredDisplayCode = nil
                     }
 
@@ -11010,7 +11028,13 @@ struct CalledPitchView: View {
                 "colorName": colorName,
                 "code": code,
                 "updatedAt": FieldValue.serverTimestamp()
-            ], merge: true)
+            ], merge: true) { err in
+                if let err {
+                    debugLog("❌ broadcastDisplayCode displayState write failed:", err.localizedDescription)
+                } else {
+                    debugLog("✅ broadcastDisplayCode displayState wrote code=\(code)")
+                }
+            }
     }
 
     private func clearDisplayCode() {
