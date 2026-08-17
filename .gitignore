@@ -76,3 +76,6 @@ _moved_out/
 # Large local production/marketing material - not shipped in app, kept out of git history
 /AppStoreScreenshots/
 /video-production/
+
+# Staged for manual deletion - safe to remove this whole folder
+/_to_delete/

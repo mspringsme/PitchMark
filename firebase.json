@@ -29,16 +29,6 @@
           "source": "/support",
           "destination": "/support.html",
           "type": 301
-        },
-        {
-          "source": "/truck",
-          "destination": "https://truck-sale-landing.web.app/truck",
-          "type": 301
-        },
-        {
-          "source": "/truck-marketplace",
-          "destination": "https://truck-sale-landing.web.app/truck-marketplace",
-          "type": 301
         }
       ],
       "headers": [
@@ -64,29 +54,6 @@
       "ignore": [
         "firebase.json",
         "**/.DS_Store",
-        "**/node_modules/**"
-      ]
-    },
-    {
-      "site": "truck-sale-landing",
-      "public": "_moved_out/TruckSaleSite/public",
-      "rewrites": [
-        {
-          "source": "/",
-          "destination": "/truck.html"
-        },
-        {
-          "source": "/truck",
-          "destination": "/truck.html"
-        },
-        {
-          "source": "/truck-marketplace",
-          "destination": "/truck-marketplace.html"
-        }
-      ],
-      "ignore": [
-        "firebase.json",
-        "**/.*",
         "**/node_modules/**"
       ]
     }
