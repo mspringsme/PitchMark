@@ -13,6 +13,8 @@ struct DisplayRootView: View {
             } else if authManager.isSignedIn {
                 if subscriptionManager.isPro {
                     DisplayOnlyScreen()
+                } else if subscriptionManager.status == .loading {
+                    DisplaySplashView()
                 } else {
                     VStack(spacing: 16) {
                         ProPaywallView(
