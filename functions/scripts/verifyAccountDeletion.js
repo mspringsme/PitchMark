@@ -93,6 +93,16 @@ async function verifyPrivateTreeDeleted(label, docRef) {
     record(!snap.exists && descendantCount === 0, label, `doc exists=${snap.exists}, descendant docs=${descendantCount}`);
 }
 
+async function verifyDocumentAbsent(label, docRef) {
+    const snap = await docRef.get();
+    record(!snap.exists, label, `doc exists=${snap.exists}`);
+}
+
+async function verifyDocumentExists(label, docRef) {
+    const snap = await docRef.get();
+    record(snap.exists, label, `doc exists=${snap.exists}`);
+}
+
 async function verifyRetailOrder() {
     await countQuery(
         "No retailOrders still linked by firebaseUid",
@@ -136,8 +146,19 @@ async function main() {
     console.log(`Verifying deletion for uid=${uid}${email ? ` email=${email}` : ""}${orderId ? ` order=${orderId}` : ""}`);
 
     await verifyAuthUserDeleted();
+    await verifyDocumentExists("Account deletion tombstone retained", db.collection("accountDeletionTombstones").doc(uid));
     await verifyPrivateTreeDeleted("Private user tree deleted", db.collection("users").doc(uid));
     await verifyPrivateTreeDeleted("Checkout request tree deleted", db.collection("checkoutRequests").doc(uid));
+    await verifyDocumentAbsent("Subscription entitlement deleted", db.collection("subscriptionEntitlements").doc(uid));
+    await countQuery(
+        "No subscription transaction bindings",
+        db.collection("subscriptionTransactionBindings").where("uid", "==", uid)
+    );
+    if (email) {
+        await verifyPrivateTreeDeleted("Legacy OTP request deleted", db.collection("otpRequests").doc(email));
+    } else {
+        warn("Legacy OTP request deleted", "provide --email to verify the email-keyed OTP request");
+    }
 
     await countQuery("No owned top-level templates", db.collection("templates").where("ownerUid", "==", uid));
     await countQuery("No shared template UID references", db.collection("templates").where("sharedWith", "array-contains", uid));
@@ -160,6 +181,12 @@ async function main() {
     await countQuery("No live participant docs", db.collectionGroup("participants").where("uid", "==", uid));
     await countQuery("No live display participant docs", db.collectionGroup("displayParticipants").where("uid", "==", uid));
     await countQuery("No pitch events still attributed to deleted uid", db.collectionGroup("pitchEvents").where("createdByUid", "==", uid));
+    await countQuery("No original pitch attribution to deleted uid", db.collectionGroup("pitchEvents").where("originalCreatedByUid", "==", uid));
+    await countQuery("No live pending selections attributed to deleted uid", db.collection("liveGames").where("pending.createdByUid", "==", uid));
+    await countQuery("No live result selections attributed to deleted uid", db.collection("liveGames").where("resultSelection.createdByUid", "==", uid));
+    await countQuery("No live batter-side attribution to deleted uid", db.collection("liveGames").where("batterSideUpdatedBy", "==", uid));
+    await countQuery("No legacy game result selections attributed to deleted uid", db.collectionGroup("games").where("resultSelection.createdByUid", "==", uid));
+    await countQuery("No legacy game batter-side attribution to deleted uid", db.collectionGroup("games").where("batterSideUpdatedBy", "==", uid));
     await countQuery("No checkout rate-limit docs", db.collection("rateLimits").doc("checkout").collection("users").where("uid", "==", uid));
 
     await verifyRetailOrder();

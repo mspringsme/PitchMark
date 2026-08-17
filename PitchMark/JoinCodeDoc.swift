@@ -610,7 +610,13 @@ final class LiveGameService {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let presenceRef = db.collection(Col.liveGames).document(liveId)
             .collection(Col.participants).document(uid)
-        presenceRef.setData([Key.lastSeenAt: FieldValue.serverTimestamp()], merge: true)
+        // Keep the UID on every heartbeat. If a presence document is recreated
+        // while account deletion is running, the server can still find and
+        // remove it with the collection-group UID query.
+        presenceRef.setData([
+            Key.uid: uid,
+            Key.lastSeenAt: FieldValue.serverTimestamp()
+        ], merge: true)
     }
 
     // MARK: - Shared writes

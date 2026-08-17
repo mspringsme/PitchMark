@@ -539,6 +539,7 @@ struct SettingsView: View {
     @State private var deleteAccountError: String? = nil
     @State private var isDeletingAccount = false
     @State private var requiresDeleteRecentLogin = false
+    @FocusState private var isDeleteConfirmationFocused: Bool
     @State private var showAccountActionsSheet = false
     @State private var showLearnPitchMark = false
     @State private var showMoreAccountActionsSheet = false
@@ -1974,66 +1975,123 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var deleteAccountSheetView: some View {
-        VStack(spacing: 16) {
-            Text("Delete Account")
-                .font(.headline)
+        ZStack {
+            VStack(spacing: 16) {
+                Text("Delete Account")
+                    .font(.headline)
 
-            Text("This permanently deletes your account and all data. Type DELETE to confirm.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                Text("This permanently deletes your PitchMark account and removes or unlinks account-associated app data. Some transaction records may be retained when legally required, without an active account link. Type DELETE to confirm.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
 
-            TextField("Type DELETE", text: $deleteAccountText)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
+                TextField("Type DELETE", text: $deleteAccountText)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isDeleteConfirmationFocused)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        isDeleteConfirmationFocused = false
+                    }
 
-            if let error = deleteAccountError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if requiresDeleteRecentLogin {
-                Button("Sign Out to Re-Authenticate", role: .destructive) {
-                    showDeleteAccountSheet = false
-                    authManager.signOut()
+                if let error = deleteAccountError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Account deletion failed. \(error)")
                 }
-                .buttonStyle(.bordered)
-            }
 
-            Button(isDeletingAccount ? "Deleting..." : "Delete Account") {
-                showFinalDeleteAccountConfirmation = true
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .disabled(isDeletingAccount || deleteAccountText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "DELETE")
-            .appConfirmationDialog(
-                isPresented: $showFinalDeleteAccountConfirmation,
-                title: "Permanently delete this account?",
-                message: "This cannot be undone.",
-                primaryTitle: "Delete Account Permanently",
-                primaryRole: .destructive,
-                primaryAction: {
-                    deleteAccount()
-                },
-                secondaryTitle: "Cancel"
-            )
+                if requiresDeleteRecentLogin {
+                    Button("Sign Out to Re-Authenticate", role: .destructive) {
+                        showDeleteAccountSheet = false
+                        authManager.signOut()
+                    }
+                    .buttonStyle(.bordered)
+                }
 
-            Button("Cancel", role: .cancel) {
-                showDeleteAccountSheet = false
+                Button("Delete Account") {
+                    isDeleteConfirmationFocused = false
+                    showFinalDeleteAccountConfirmation = true
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(deleteAccountText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "DELETE")
+                .accessibilityHint("Opens the final permanent deletion confirmation.")
+                .appConfirmationDialog(
+                    isPresented: $showFinalDeleteAccountConfirmation,
+                    title: "Permanently delete this account?",
+                    message: "This cannot be undone.",
+                    primaryTitle: "Delete Account Permanently",
+                    primaryRole: .destructive,
+                    primaryAction: {
+                        deleteAccount()
+                    },
+                    secondaryTitle: "Cancel"
+                )
+
+                Button("Cancel", role: .cancel) {
+                    showDeleteAccountSheet = false
+                }
+            }
+            .padding()
+            .disabled(accountDeletionIsBlocking)
+            .accessibilityHidden(accountDeletionIsBlocking)
+
+            if accountDeletionIsBlocking {
+                accountDeletionStatusView
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
-        .padding()
         .presentationDetents([.fraction(0.5)])
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(accountDeletionIsBlocking ? .hidden : .visible)
+        .interactiveDismissDisabled(accountDeletionIsBlocking)
+        .animation(.easeInOut(duration: 0.2), value: accountDeletionIsBlocking)
+        .onAppear {
+            isDeleteConfirmationFocused = true
+        }
+    }
+
+    private var accountDeletionIsBlocking: Bool {
+        isDeletingAccount
+    }
+
+    @ViewBuilder
+    private var accountDeletionStatusView: some View {
+        ZStack {
+            Color.black.opacity(0.32)
+                .ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Deleting Account…")
+                    .font(.headline)
+                Text("Securely removing your account data. Keep PitchMark open until this finishes.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .frame(maxWidth: 330)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(radius: 18)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Deleting account. Keep PitchMark open until this finishes.")
+        }
     }
 
     private func deleteAccount() {
+        isDeleteConfirmationFocused = false
+        showFinalDeleteAccountConfirmation = false
         isDeletingAccount = true
         deleteAccountError = nil
         requiresDeleteRecentLogin = false
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: "Deleting account. Keep PitchMark open until this finishes."
+        )
         authManager.deleteAccount { result in
             DispatchQueue.main.async {
                 isDeletingAccount = false
@@ -2042,9 +2100,16 @@ struct SettingsView: View {
                     deleteAccountText = ""
                     deleteAccountError = nil
                     requiresDeleteRecentLogin = false
-                    showDeleteAccountSheet = false
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Account deleted. Returning to sign in."
+                    )
                 case .failure(let error):
                     deleteAccountError = error.localizedDescription
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Account deletion failed. \(error.localizedDescription)"
+                    )
                     if let deleteError = error as? DeleteAccountError {
                         if case .requiresRecentLogin = deleteError {
                             requiresDeleteRecentLogin = true

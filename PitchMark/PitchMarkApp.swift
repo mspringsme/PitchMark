@@ -54,6 +54,17 @@ struct RootView: View {
                 }
             }
         }
+        .overlay {
+            if authManager.accountDeletionAcknowledgementID != nil {
+                PitchMarkAccountDeletionAcknowledgementOverlay()
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .zIndex(100)
+            }
+        }
+        .animation(
+            .easeInOut(duration: 0.2),
+            value: authManager.accountDeletionAcknowledgementID
+        )
         .fullScreenCover(isPresented: $showDisplayCover) {
             DisplayOnlyWindowView()
                 .environmentObject(authManager)
@@ -240,6 +251,33 @@ struct RootView: View {
         guard host == "pitcher" || path == "/pitcher" else { return nil }
         let token = components?.queryItems?.first(where: { $0.name == "token" })?.value
         return token
+    }
+}
+
+private struct PitchMarkAccountDeletionAcknowledgementOverlay: View {
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.32)
+                .ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.green)
+                Text("Account Deleted")
+                    .font(.headline)
+                Text("Your account-associated app data was deleted or unlinked. Returning to sign in…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .frame(maxWidth: 330)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(radius: 18)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Account deleted. Returning to sign in.")
+        }
     }
 }
 

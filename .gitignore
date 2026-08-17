@@ -72,3 +72,7 @@ node_modules/
 DerivedData/
 DerivedDataDisplay/
 _moved_out/
+
+# Large local production/marketing material - not shipped in app, kept out of git history
+/AppStoreScreenshots/
+/video-production/

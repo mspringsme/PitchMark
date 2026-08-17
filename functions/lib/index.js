@@ -60,6 +60,11 @@ const checkoutThrottleWindowMs = 60_000;
 const checkoutThrottleMaxAttempts = 5;
 const checkoutConfigVersion = "shipping_v1";
 const accountDeletionBatchSize = 400;
+const accountDeletionRecursiveBatchSize = 5;
+const accountDeletionTaskConcurrency = 4;
+// Destructive account deletion requires reauthentication within the last 10 minutes.
+const accountDeletionRecentAuthWindowSeconds = 10 * 60;
+const accountDeletionTombstonesCollection = "accountDeletionTombstones";
 const pitchMarkStoreConfigs = [
     {
         bundleId: "com.pitchmark.app",
@@ -202,8 +207,15 @@ async function enforceCheckoutRateLimit(uid) {
     const bucket = Math.floor(Date.now() / checkoutThrottleWindowMs);
     const key = `${uid}_${bucket}`;
     const ref = db.collection("rateLimits").doc("checkout").collection("users").doc(key);
+    const tombstoneRef = accountDeletionTombstoneRef(uid);
     await db.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
+        const [tombstoneSnapshot, snap] = await Promise.all([
+            tx.get(tombstoneRef),
+            tx.get(ref)
+        ]);
+        if (tombstoneSnapshot.exists) {
+            throw new https_1.HttpsError("failed-precondition", "This account is being deleted.");
+        }
         const count = snap.exists ? Number(snap.data()?.count ?? 0) : 0;
         if (count >= checkoutThrottleMaxAttempts) {
             throw new https_1.HttpsError("resource-exhausted", "Too many checkout attempts. Please wait a minute and try again.");
@@ -252,7 +264,7 @@ async function deleteQueryDocuments(query) {
 async function recursiveDeleteQueryDocuments(query) {
     let deleted = 0;
     while (true) {
-        const snap = await query.limit(25).get();
+        const snap = await query.limit(accountDeletionRecursiveBatchSize).get();
         if (snap.empty) {
             return deleted;
         }
@@ -275,88 +287,86 @@ async function updateQueryDocuments(query, updates) {
         await batch.commit();
     }
 }
-async function deleteUserPresenceDocs(collectionName, uid) {
-    const liveGamesSnap = await db.collection("liveGames").get();
-    let deleted = 0;
-    for (const liveGameDoc of liveGamesSnap.docs) {
-        const presenceRef = liveGameDoc.ref.collection(collectionName).doc(uid);
-        const presenceSnap = await presenceRef.get();
-        if (!presenceSnap.exists) {
-            continue;
+async function runAccountDeletionTasks(summary, tasks) {
+    let nextTaskIndex = 0;
+    const workerCount = Math.min(accountDeletionTaskConcurrency, tasks.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+        while (nextTaskIndex < tasks.length) {
+            const taskIndex = nextTaskIndex;
+            nextTaskIndex += 1;
+            const [name, operation] = tasks[taskIndex];
+            summary[name] = await operation();
         }
-        await presenceRef.delete();
-        deleted += 1;
-    }
-    return deleted;
+    }));
 }
-async function deleteDocumentsByScanningCollection(collectionName, predicate) {
-    const snap = await db.collection(collectionName).get();
-    let deleted = 0;
-    for (const doc of snap.docs) {
-        const data = doc.data();
-        if (!predicate(data)) {
-            continue;
-        }
-        await db.recursiveDelete(doc.ref);
-        deleted += 1;
-    }
-    return deleted;
+async function preflightAccountDeletionCollectionGroupIndexes(uid) {
+    await Promise.all([
+        db.collectionGroup("participants").where("uid", "==", uid).limit(1).get(),
+        db.collectionGroup("displayParticipants").where("uid", "==", uid).limit(1).get(),
+        db.collectionGroup("pitchEvents").where("createdByUid", "==", uid).limit(1).get(),
+        db.collectionGroup("pitchEvents").where("originalCreatedByUid", "==", uid).limit(1).get(),
+        db.collectionGroup("games").where("resultSelection.createdByUid", "==", uid).limit(1).get(),
+        db.collectionGroup("games").where("batterSideUpdatedBy", "==", uid).limit(1).get()
+    ]);
 }
-async function updateDocumentsByScanningCollection(collectionName, predicate, updates) {
-    const snap = await db.collection(collectionName).get();
-    let updated = 0;
-    for (const doc of snap.docs) {
-        const data = doc.data();
-        if (!predicate(data)) {
-            continue;
-        }
-        await doc.ref.set(updates, { merge: true });
-        updated += 1;
-    }
-    return updated;
+function firebaseErrorCode(error) {
+    return typeof error === "object" && error !== null && "code" in error
+        ? String(error.code)
+        : "";
 }
-async function deletePitchEventsByScanningOwnerCollections(uid) {
-    const liveGamesSnap = await db.collection("liveGames").get();
-    const pitchersSnap = await db.collection("pitchers").get();
-    const usersSnap = await db.collection("users").get();
-    let updated = 0;
-    for (const liveGameDoc of liveGamesSnap.docs) {
-        const pitchEventsSnap = await liveGameDoc.ref.collection("pitchEvents").get();
-        for (const eventDoc of pitchEventsSnap.docs) {
-            const data = eventDoc.data();
-            if (data.createdByUid !== uid) {
-                continue;
-            }
-            await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
-            updated += 1;
-        }
+function requireRecentAuthentication(authTimeClaim) {
+    const authTimeSeconds = typeof authTimeClaim === "number"
+        ? authTimeClaim
+        : Number(authTimeClaim);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const ageSeconds = nowSeconds - authTimeSeconds;
+    if (!Number.isFinite(authTimeSeconds)
+        || authTimeSeconds <= 0
+        || ageSeconds < -60
+        || ageSeconds > accountDeletionRecentAuthWindowSeconds) {
+        throw new https_1.HttpsError("unauthenticated", "For your security, sign in again before deleting your account.");
     }
-    for (const pitcherDoc of pitchersSnap.docs) {
-        const pitchEventsSnap = await pitcherDoc.ref.collection("pitchEvents").get();
-        for (const eventDoc of pitchEventsSnap.docs) {
-            const data = eventDoc.data();
-            if (data.createdByUid !== uid) {
-                continue;
-            }
-            await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
-            updated += 1;
-        }
+}
+function accountDeletionTombstoneRef(uid) {
+    return db.collection(accountDeletionTombstonesCollection).doc(uid);
+}
+async function assertAccountNotTombstoned(uid) {
+    const snapshot = await accountDeletionTombstoneRef(uid).get();
+    if (snapshot.exists) {
+        throw new https_1.HttpsError("failed-precondition", "This account is being deleted.");
     }
-    for (const userDoc of usersSnap.docs) {
-        const gamesSnap = await userDoc.ref.collection("games").get();
-        for (const gameDoc of gamesSnap.docs) {
-            const eventsSnap = await gameDoc.ref.collection("pitchEvents").get();
-            for (const eventDoc of eventsSnap.docs) {
-                const data = eventDoc.data();
-                if (data.createdByUid !== uid) {
-                    continue;
-                }
-                await eventDoc.ref.set({ createdByUid: "", creatorAccountDeletedAt: firestore_1.FieldValue.serverTimestamp() }, { merge: true });
-                updated += 1;
-            }
-        }
+}
+async function writeAccountDeletionTombstone(uid) {
+    const ref = accountDeletionTombstoneRef(uid);
+    await db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref);
+        transaction.set(ref, {
+            status: "blocked",
+            lastAttemptAt: firestore_1.FieldValue.serverTimestamp(),
+            ...(!snapshot.exists ? {
+                blockedAt: firestore_1.FieldValue.serverTimestamp(),
+                schemaVersion: 1
+            } : {})
+        }, { merge: true });
+    });
+}
+async function accountEmail(uid, tokenEmail) {
+    try {
+        const userRecord = await auth.getUser(uid);
+        return userRecord.email?.trim().toLowerCase() || tokenEmail;
     }
-    return updated;
+    catch (error) {
+        if (firebaseErrorCode(error) === "auth/user-not-found") {
+            return tokenEmail;
+        }
+        throw error;
+    }
+}
+async function deleteLegacyOtpRequest(email) {
+    const ref = db.collection("otpRequests").doc(email);
+    const snapshot = await ref.get();
+    await db.recursiveDelete(ref);
+    return snapshot.exists ? 1 : 0;
 }
 exports.syncSubscriptionEntitlement = (0, https_1.onCall)({ region: "us-central1", timeoutSeconds: 30 }, async (request) => {
     const uid = request.auth?.uid;
@@ -379,11 +389,16 @@ exports.syncSubscriptionEntitlement = (0, https_1.onCall)({ region: "us-central1
     }
     const bindingRef = db.collection("subscriptionTransactionBindings").doc(originalTransactionId);
     const entitlementRef = db.collection("subscriptionEntitlements").doc(uid);
+    const tombstoneRef = accountDeletionTombstoneRef(uid);
     const response = await db.runTransaction(async (firestoreTransaction) => {
-        const [bindingSnapshot, entitlementSnapshot] = await Promise.all([
+        const [tombstoneSnapshot, bindingSnapshot, entitlementSnapshot] = await Promise.all([
+            firestoreTransaction.get(tombstoneRef),
             firestoreTransaction.get(bindingRef),
             firestoreTransaction.get(entitlementRef)
         ]);
+        if (tombstoneSnapshot.exists) {
+            throw new https_1.HttpsError("failed-precondition", "This account is being deleted.");
+        }
         const boundUid = bindingSnapshot.exists ? String(bindingSnapshot.data()?.uid ?? "") : "";
         if (boundUid && boundUid !== uid) {
             throw new https_1.HttpsError("permission-denied", "This App Store subscription is already connected to another PitchMark account.");
@@ -442,83 +457,115 @@ exports.getSubscriptionEntitlement = (0, https_1.onCall)({ region: "us-central1"
     if (!uid) {
         throw new https_1.HttpsError("unauthenticated", "Sign in to check your PitchMark Pro subscription.");
     }
-    const snapshot = await db.collection("subscriptionEntitlements").doc(uid).get();
-    return entitlementResponse(snapshot.data());
+    return db.runTransaction(async (transaction) => {
+        const [tombstoneSnapshot, entitlementSnapshot] = await Promise.all([
+            transaction.get(accountDeletionTombstoneRef(uid)),
+            transaction.get(db.collection("subscriptionEntitlements").doc(uid))
+        ]);
+        if (tombstoneSnapshot.exists) {
+            throw new https_1.HttpsError("failed-precondition", "This account is being deleted.");
+        }
+        return entitlementResponse(entitlementSnapshot.data());
+    });
 });
 exports.deleteAccount = (0, https_1.onCall)({ region: "us-central1", timeoutSeconds: 540 }, async (request) => {
     const uid = request.auth?.uid;
     if (!uid) {
         throw new https_1.HttpsError("unauthenticated", "Please sign in again to delete your account.");
     }
-    const email = typeof request.auth?.token.email === "string"
+    requireRecentAuthentication(request.auth?.token.auth_time);
+    const startedAtMs = Date.now();
+    const tokenEmail = typeof request.auth?.token.email === "string"
         ? request.auth.token.email.trim().toLowerCase()
         : "";
+    const email = await accountEmail(uid, tokenEmail);
     const deletedAt = firestore_1.FieldValue.serverTimestamp();
     const summary = {};
-    summary.ownedTemplates = await deleteDocumentsByScanningCollection("templates", (data) => data.ownerUid === uid);
-    summary.sharedTemplateUidRefs = await updateDocumentsByScanningCollection("templates", (data) => Array.isArray(data.sharedWith) && data.sharedWith.includes(uid), {
-        sharedWith: firestore_1.FieldValue.arrayRemove(uid),
-        updatedAt: deletedAt
-    });
-    if (email) {
-        summary.sharedTemplateEmailRefs = await updateDocumentsByScanningCollection("templates", (data) => Array.isArray(data.sharedWithEmails) && data.sharedWithEmails.includes(email), {
-            sharedWithEmails: firestore_1.FieldValue.arrayRemove(email),
-            updatedAt: deletedAt
-        });
+    logger.info("Account deletion started", { uid });
+    try {
+        await preflightAccountDeletionCollectionGroupIndexes(uid);
     }
-    summary.ownedPitchers = await deleteDocumentsByScanningCollection("pitchers", (data) => data.ownerUid === uid);
-    summary.claimedPitchers = await updateDocumentsByScanningCollection("pitchers", (data) => data.claimedByUid === uid, {
-        claimedByUid: firestore_1.FieldValue.delete(),
-        updatedAt: deletedAt
-    });
-    summary.sharedPitcherRefs = await updateDocumentsByScanningCollection("pitchers", (data) => Array.isArray(data.sharedWith) && data.sharedWith.includes(uid), {
-        sharedWith: firestore_1.FieldValue.arrayRemove(uid),
-        updatedAt: deletedAt
-    });
-    summary.inviteTokens = await deleteDocumentsByScanningCollection("inviteTokens", (data) => data.ownerUid === uid);
-    summary.displayInviteTokens = await deleteDocumentsByScanningCollection("displayInviteTokens", (data) => data.ownerUid === uid);
-    summary.pitcherInviteTokens = await deleteDocumentsByScanningCollection("pitcherInviteTokens", (data) => data.ownerUid === uid);
-    summary.joinCodes = await deleteDocumentsByScanningCollection("joinCodes", (data) => data.ownerUid === uid);
-    summary.liveGames = await deleteDocumentsByScanningCollection("liveGames", (data) => data.ownerUid === uid);
-    summary.liveConnections = await updateDocumentsByScanningCollection("liveGames", (data) => {
-        const connection = data.connection;
-        return (connection?.participantUid ?? "") === uid;
-    }, {
-        connection: firestore_1.FieldValue.delete(),
-        updatedAt: deletedAt
-    });
-    summary.liveParticipants = await deleteUserPresenceDocs("participants", uid);
-    summary.liveDisplayParticipants = await deleteUserPresenceDocs("displayParticipants", uid);
-    summary.createdPitchEvents = await deletePitchEventsByScanningOwnerCollections(uid);
-    summary.checkoutRateLimits = await deleteDocumentsByScanningCollection("rateLimits", () => false);
-    summary.retailOrdersUnlinked = await updateDocumentsByScanningCollection("retailOrders", (data) => data.firebaseUid === uid, {
-        firebaseUid: "",
-        accountDeleted: true,
-        accountDeletedAt: deletedAt
-    });
-    summary.subscriptionTransactionBindings = await deleteDocumentsByScanningCollection("subscriptionTransactionBindings", (data) => data.uid === uid);
-    await db.recursiveDelete(db.collection("checkoutRequests").doc(uid));
-    await db.recursiveDelete(db.collection("subscriptionEntitlements").doc(uid));
-    await db.recursiveDelete(db.collection("users").doc(uid));
+    catch (error) {
+        logger.error("Account deletion preflight failed before data mutation", { uid, error });
+        throw new https_1.HttpsError("unavailable", "Account deletion could not start. Please try again shortly.");
+    }
+    // This is the first mutation. Firestore rules use this retained document
+    // as a durable barrier while Admin SDK cleanup continues and after Auth deletion.
+    await writeAccountDeletionTombstone(uid);
+    // Remove user-owned trees first. The follow-up reference cleanup then only
+    // touches surviving documents, avoiding conflicting writes to trees that
+    // are being recursively deleted.
+    const ownedDataDeletionTasks = [
+        ["ownedTemplates", () => recursiveDeleteQueryDocuments(db.collection("templates").where("ownerUid", "==", uid))],
+        ["ownedPitchers", () => recursiveDeleteQueryDocuments(db.collection("pitchers").where("ownerUid", "==", uid))],
+        ["inviteTokens", () => recursiveDeleteQueryDocuments(db.collection("inviteTokens").where("ownerUid", "==", uid))],
+        ["displayInviteTokens", () => recursiveDeleteQueryDocuments(db.collection("displayInviteTokens").where("ownerUid", "==", uid))],
+        ["pitcherInviteTokens", () => recursiveDeleteQueryDocuments(db.collection("pitcherInviteTokens").where("ownerUid", "==", uid))],
+        ["joinCodes", () => recursiveDeleteQueryDocuments(db.collection("joinCodes").where("ownerUid", "==", uid))],
+        ["liveGames", () => recursiveDeleteQueryDocuments(db.collection("liveGames").where("ownerUid", "==", uid))],
+        ["checkoutRateLimits", () => deleteQueryDocuments(db.collection("rateLimits").doc("checkout").collection("users").where("uid", "==", uid))],
+        ["subscriptionTransactionBindings", () => recursiveDeleteQueryDocuments(db.collection("subscriptionTransactionBindings").where("uid", "==", uid))]
+    ];
+    if (email) {
+        ownedDataDeletionTasks.push(["otpRequest", () => deleteLegacyOtpRequest(email)]);
+    }
+    else {
+        summary.otpRequest = 0;
+    }
+    await Promise.all([
+        runAccountDeletionTasks(summary, ownedDataDeletionTasks),
+        db.recursiveDelete(db.collection("checkoutRequests").doc(uid)),
+        db.recursiveDelete(db.collection("subscriptionEntitlements").doc(uid)),
+        db.recursiveDelete(db.collection("users").doc(uid))
+    ]);
+    const referenceCleanupTasks = [
+        ["sharedTemplateUidRefs", () => updateQueryDocuments(db.collection("templates").where("sharedWith", "array-contains", uid), { sharedWith: firestore_1.FieldValue.arrayRemove(uid), updatedAt: deletedAt })],
+        ["claimedPitchers", () => updateQueryDocuments(db.collection("pitchers").where("claimedByUid", "==", uid), { claimedByUid: firestore_1.FieldValue.delete(), updatedAt: deletedAt })],
+        ["sharedPitcherRefs", () => updateQueryDocuments(db.collection("pitchers").where("sharedWith", "array-contains", uid), { sharedWith: firestore_1.FieldValue.arrayRemove(uid), updatedAt: deletedAt })],
+        ["liveConnections", () => updateQueryDocuments(db.collection("liveGames").where("connection.participantUid", "==", uid), { connection: firestore_1.FieldValue.delete(), updatedAt: deletedAt })],
+        ["livePendingSelections", () => updateQueryDocuments(db.collection("liveGames").where("pending.createdByUid", "==", uid), { pending: firestore_1.FieldValue.delete(), updatedAt: deletedAt })],
+        ["liveResultSelections", () => updateQueryDocuments(db.collection("liveGames").where("resultSelection.createdByUid", "==", uid), { resultSelection: firestore_1.FieldValue.delete(), updatedAt: deletedAt })],
+        ["liveBatterSideAttribution", () => updateQueryDocuments(db.collection("liveGames").where("batterSideUpdatedBy", "==", uid), { batterSideUpdatedBy: firestore_1.FieldValue.delete(), batterSideAccountDeletedAt: deletedAt })],
+        ["legacyGameResultSelections", () => updateQueryDocuments(db.collectionGroup("games").where("resultSelection.createdByUid", "==", uid), { resultSelection: firestore_1.FieldValue.delete(), updatedAt: deletedAt })],
+        ["legacyGameBatterSideAttribution", () => updateQueryDocuments(db.collectionGroup("games").where("batterSideUpdatedBy", "==", uid), { batterSideUpdatedBy: firestore_1.FieldValue.delete(), batterSideAccountDeletedAt: deletedAt })],
+        ["createdPitchEvents", () => updateQueryDocuments(db.collectionGroup("pitchEvents").where("createdByUid", "==", uid), { createdByUid: "", creatorAccountDeletedAt: deletedAt })],
+        ["originalCreatedPitchEvents", () => updateQueryDocuments(db.collectionGroup("pitchEvents").where("originalCreatedByUid", "==", uid), { originalCreatedByUid: "", creatorAccountDeletedAt: deletedAt })],
+        ["retailOrdersUnlinked", () => updateQueryDocuments(db.collection("retailOrders").where("firebaseUid", "==", uid), { firebaseUid: "", accountDeleted: true, accountDeletedAt: deletedAt })]
+    ];
+    if (email) {
+        referenceCleanupTasks.push(["sharedTemplateEmailRefs", () => updateQueryDocuments(db.collection("templates").where("sharedWithEmails", "array-contains", email), { sharedWithEmails: firestore_1.FieldValue.arrayRemove(email), updatedAt: deletedAt })]);
+    }
+    else {
+        summary.sharedTemplateEmailRefs = 0;
+    }
+    await runAccountDeletionTasks(summary, referenceCleanupTasks);
+    // Presence is deleted last so an active heartbeat has the smallest
+    // possible window to recreate a document before the Auth account goes away.
+    await runAccountDeletionTasks(summary, [
+        ["liveParticipants", () => deleteQueryDocuments(db.collectionGroup("participants").where("uid", "==", uid))],
+        ["liveDisplayParticipants", () => deleteQueryDocuments(db.collectionGroup("displayParticipants").where("uid", "==", uid))]
+    ]);
     try {
         await auth.deleteUser(uid);
     }
     catch (error) {
-        const code = typeof error === "object" && error !== null && "code" in error
-            ? String(error.code)
-            : "";
-        if (code !== "auth/user-not-found") {
+        if (firebaseErrorCode(error) !== "auth/user-not-found") {
             logger.error("Firebase Auth user deletion failed", { uid, error });
             throw new https_1.HttpsError("internal", "Account data was removed, but sign-in deletion failed. Contact support.");
         }
     }
-    logger.info("Account deleted", { uid, summary });
+    logger.info("Account deleted", {
+        uid,
+        durationMs: Date.now() - startedAtMs,
+        summary
+    });
     return { success: true };
 });
 exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1" }, async (request) => {
     if (!request.auth?.uid) {
         throw new https_1.HttpsError("unauthenticated", "You must be signed in to purchase.");
     }
+    await assertAccountNotTombstoned(request.auth.uid);
     const stripeTestMode = isStripeTestMode();
     const data = parseRequestData(request.data);
     const retailProductId = readOptionalString(data, "retailProductId", 64);
@@ -648,6 +695,9 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
         logger.error("Stripe checkout session created without URL", { retailProductId, uid: request.auth.uid });
         throw new https_1.HttpsError("internal", "Failed to create checkout URL.");
     }
+    // Avoid recreating the user's checkout-request tree if deletion began
+    // while Stripe was creating the session.
+    await assertAccountNotTombstoned(request.auth.uid);
     logger.info("Checkout session created", {
         uid: request.auth.uid,
         sessionId: session.id,
@@ -659,21 +709,29 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
     });
     if (idempotencyKey) {
         const idemRef = db.collection("checkoutRequests").doc(request.auth.uid).collection("keys").doc(idempotencyKey);
-        await idemRef.set({
-            checkoutUrl: session.url,
-            sessionId: session.id,
-            displayName: catalogItem.label,
-            retailProductId,
-            itemKind,
-            templateId,
-            templateName,
-            storeTemplateName,
-            templateSnapshotJson,
-            checkoutConfigVersion,
-            stripeTestMode,
-            createdAt: firestore_1.FieldValue.serverTimestamp()
-        }, { merge: true });
+        await db.runTransaction(async (transaction) => {
+            const tombstoneSnapshot = await transaction.get(accountDeletionTombstoneRef(request.auth.uid));
+            if (tombstoneSnapshot.exists) {
+                throw new https_1.HttpsError("failed-precondition", "This account is being deleted.");
+            }
+            transaction.set(idemRef, {
+                checkoutUrl: session.url,
+                sessionId: session.id,
+                displayName: catalogItem.label,
+                retailProductId,
+                itemKind,
+                templateId,
+                templateName,
+                storeTemplateName,
+                templateSnapshotJson,
+                checkoutConfigVersion,
+                stripeTestMode,
+                createdAt: firestore_1.FieldValue.serverTimestamp()
+            }, { merge: true });
+        });
     }
+    // A final check also covers checkouts without an idempotency document.
+    await assertAccountNotTombstoned(request.auth.uid);
     return {
         checkoutUrl: session.url,
         sessionId: session.id,
@@ -703,8 +761,11 @@ async function persistRetailOrder(session, fulfillmentState) {
         logger.error("Stripe webhook missing session id", { fulfillmentState });
         return;
     }
+    const initiallyTombstoned = uid
+        ? (await accountDeletionTombstoneRef(uid).get()).exists
+        : false;
     let templateSnapshotJson = "";
-    if (uid && checkoutRequestKey) {
+    if (uid && checkoutRequestKey && !initiallyTombstoned) {
         try {
             const checkoutRequestSnap = await db
                 .collection("checkoutRequests")
@@ -725,8 +786,12 @@ async function persistRetailOrder(session, fulfillmentState) {
     }
     const orderRef = db.collection("retailOrders").doc(sessionId);
     await db.runTransaction(async (tx) => {
-        const existingSnap = await tx.get(orderRef);
+        const [existingSnap, tombstoneSnapshot] = await Promise.all([
+            tx.get(orderRef),
+            uid ? tx.get(accountDeletionTombstoneRef(uid)) : Promise.resolve(null)
+        ]);
         const existing = existingSnap.exists ? existingSnap.data() ?? {} : {};
+        const accountDeleted = tombstoneSnapshot?.exists === true || existing.accountDeleted === true;
         const defaultFulfillmentStatus = fulfillmentState === "async_payment_failed" ? "payment_failed" : "new";
         const shippingName = session.shipping_details?.name
             ?? session.customer_details?.name
@@ -749,7 +814,11 @@ async function persistRetailOrder(session, fulfillmentState) {
             shippingAddress,
             stripeCustomerId: typeof session.customer === "string" ? session.customer : "",
             paymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : "",
-            firebaseUid: uid,
+            firebaseUid: accountDeleted ? "" : uid,
+            ...(accountDeleted ? {
+                accountDeleted: true,
+                accountDeletedAt: existing.accountDeletedAt ?? firestore_1.FieldValue.serverTimestamp()
+            } : {}),
             retailProductId: metadata.retailProductId ?? "",
             itemKind: metadata.itemKind ?? "",
             templateId: metadata.templateId ?? "",

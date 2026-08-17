@@ -2,7 +2,17 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function signedIn() { return request.auth != null; }
+    // Account-deletion tombstones are written by the Admin SDK and retained.
+    // Referencing the dedicated collection here avoids depending on rules for
+    // a document within the user's private tree while that tree is deleted.
+    function hasAccountDeletionTombstone() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/accountDeletionTombstones/$(request.auth.uid));
+    }
+
+    function signedIn() {
+      return request.auth != null && !hasAccountDeletionTombstone();
+    }
     function uid() { return request.auth.uid; }
 
     function notExpired(data) {
@@ -32,6 +42,12 @@ service cloud.firestore {
     function isRetailAdmin() {
       return signedIn()
         && request.auth.token.admin == true;
+    }
+
+    // Tombstones are server-owned barriers. Clients may not inspect, create,
+    // change, or remove them, including the user identified by the document ID.
+    match /accountDeletionTombstones/{tombstonedUid} {
+      allow read, write: if false;
     }
 
     match /retailOrders/{orderId} {
@@ -135,7 +151,7 @@ service cloud.firestore {
           );
 
         // Only server (Cloud Functions) should write stats
-        allow create, update, delete: if request.auth.token.admin == true;
+        allow create, update, delete: if isRetailAdmin();
       }
     }
 

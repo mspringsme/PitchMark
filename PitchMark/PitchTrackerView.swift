@@ -9244,6 +9244,12 @@ struct PitchTrackerView: View {
                     self.pitchers = loaded
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .permanentAccountLocalDataWillPurge)) { _ in
+                // Never flush these events after their owning account has been
+                // permanently deleted. The deletion-only disk purge removes the
+                // corresponding JSON file immediately after this notification.
+                bufferedSharedPitcherEvents.removeAll()
+            }
             .onReceive(NotificationCenter.default.publisher(for: .displayOnlyExitRequested)) { _ in
                 if isDisplayOnlyMode {
                     exitDisplayOnlyMode()
