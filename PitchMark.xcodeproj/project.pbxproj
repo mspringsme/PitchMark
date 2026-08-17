@@ -40,7 +40,6 @@
 		23652D3A2F57705F00461063 /* firestore.rules */ = {isa = PBXFileReference; lastKnownFileType = text; path = firestore.rules; sourceTree = "<group>"; };
 		239F0B7C2F12B238004E32DD /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrikeZoneHeatmapView.swift; sourceTree = "<group>"; };
-		23AF006A2FAFD1C70046D670 /* index.ts */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.typescript; path = index.ts; sourceTree = "<group>"; };
 		23B131D12F75A91D00A70589 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
 		23D15A012FA1000100D15A01 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyWindowView.swift; sourceTree = "<group>"; };
@@ -90,11 +89,6 @@
 			path = PitchMark;
 			sourceTree = "<group>";
 		};
-		23F7D2C62F758F710010D7BF /* Pitchmark Display */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Pitchmark Display";
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -135,8 +129,6 @@
 			isa = PBXGroup;
 			children = (
 				239F0B7E2F12B238004E32DD /* PitchMark */,
-				23F7D2C62F758F710010D7BF /* Pitchmark Display */,
-				23D15A032FA1000100D15A03 /* Pitchmark Display */,
 				23F1A8892F12C6EF0094E7BC /* Frameworks */,
 				239F0B7D2F12B238004E32DD /* Products */,
 				23652D3A2F57705F00461063 /* firestore.rules */,
@@ -145,7 +137,6 @@
 				23F7D2DA2F75979E0010D7BF /* PitchMarkDisplay */,
 				23F7D2F62F759DE90010D7BF /* StrikeZoneButtonLabel.swift */,
 				23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */,
-				23AF006A2FAFD1C70046D670 /* index.ts */,
 			);
 			sourceTree = "<group>";
 		};
@@ -156,14 +147,6 @@
 				23F7D2C52F758F710010D7BF /* Pitchmark Display.app */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		23D15A032FA1000100D15A03 /* Pitchmark Display */ = {
-			isa = PBXGroup;
-			children = (
-				23D15A012FA1000100D15A01 /* Assets.xcassets */,
-			);
-			path = "Pitchmark Display";
 			sourceTree = "<group>";
 		};
 		23F1A8892F12C6EF0094E7BC /* Frameworks */ = {
@@ -180,6 +163,7 @@
 				23F7D2D82F75979E0010D7BF /* DisplayRootView.swift */,
 				23F7D2D92F75979E0010D7BF /* DisplayOnlyScreen.swift */,
 				23B131D12F75A91D00A70589 /* GoogleService-Info.plist */,
+				23D15A012FA1000100D15A01 /* Assets.xcassets */,
 			);
 			path = PitchMarkDisplay;
 			sourceTree = "<group>";
