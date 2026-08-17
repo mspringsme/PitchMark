@@ -9,6 +9,8 @@ struct DisplayOnlyScreen: View {
     @State private var displayCodePayload: DisplayOnlyPayload?
     @State private var displayStateListener: ListenerRegistration?
     @State private var activeSessionListener: ListenerRegistration?
+    @State private var liveGameListener: ListenerRegistration?
+    @State private var activeLiveId: String?
     @State private var statusMessage: String = "Waiting for primary…"
     @State private var showSignOutConfirm = false
 
@@ -133,19 +135,59 @@ struct DisplayOnlyScreen: View {
             }
             let data = snap?.data() ?? [:]
             let mode = (data["mode"] as? String ?? "").lowercased()
+            let liveId = (data["liveId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.main.async {
                 if mode == "primary" {
                     self.statusMessage = "Waiting for code…"
                 } else {
                     self.statusMessage = "Waiting for primary…"
                 }
+                self.updateLiveGameListener(liveId: liveId)
             }
         }
+    }
+
+    private func updateLiveGameListener(liveId: String?) {
+        let normalizedLiveId = liveId?.isEmpty == false ? liveId : nil
+        guard activeLiveId != normalizedLiveId else { return }
+
+        liveGameListener?.remove()
+        liveGameListener = nil
+        activeLiveId = normalizedLiveId
+
+        guard let normalizedLiveId else { return }
+
+        liveGameListener = Firestore.firestore()
+            .collection("liveGames")
+            .document(normalizedLiveId)
+            .addSnapshotListener { snap, err in
+                if let err {
+                    debugLog("❌ Live display code listener error:", err.localizedDescription)
+                    return
+                }
+
+                let data = snap?.data() ?? [:]
+                guard let displayCode = data["displayCode"] as? [String: Any],
+                      let colorName = displayCode["colorName"] as? String,
+                      let code = displayCode["code"] as? String,
+                      !colorName.isEmpty,
+                      !code.isEmpty else {
+                    DispatchQueue.main.async { self.displayCodePayload = nil }
+                    return
+                }
+
+                DispatchQueue.main.async {
+                    self.displayCodePayload = DisplayOnlyPayload(colorName: colorName, code: code)
+                }
+            }
     }
 
     private func stopListening() {
         stopDisplayStateListener()
         stopActiveSessionListener()
+        liveGameListener?.remove()
+        liveGameListener = nil
+        activeLiveId = nil
     }
 
     private func clearDisplayCode() {
@@ -160,6 +202,15 @@ struct DisplayOnlyScreen: View {
                 "code": FieldValue.delete(),
                 "updatedAt": FieldValue.serverTimestamp()
             ], merge: true)
+
+        if let activeLiveId {
+            Firestore.firestore()
+                .collection("liveGames")
+                .document(activeLiveId)
+                .setData([
+                    "displayCode": FieldValue.delete()
+                ], merge: true)
+        }
     }
 
     private func signOut() {

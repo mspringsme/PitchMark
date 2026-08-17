@@ -1817,18 +1817,15 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal)
             }
-            .appConfirmationDialog(
-                isPresented: $showSignOutConfirmation,
-                title: "Sign Out?",
-                message: "Are you sure you want to sign out of \(authManager.userEmail)?",
-                primaryTitle: "Sign Out",
-                primaryRole: .destructive,
-                primaryAction: {
+            .alert("Sign Out?", isPresented: $showSignOutConfirmation) {
+                Button("Sign Out", role: .destructive) {
                     showAccountActionsSheet = false
                     authManager.signOut()
-                },
-                secondaryTitle: "Cancel"
-            )
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Are you sure you want to sign out of \(authManager.userEmail)?")
+            }
 
             Button {
                 showAccountActionsSheet = false
@@ -2208,7 +2205,9 @@ struct SettingsView: View {
             } message: {
                 Text("Enable Camera access in Settings to scan the owner’s QR code.")
             }
-            .sheet(isPresented: $showAccountActionsSheet) {
+            .sheet(isPresented: $showAccountActionsSheet, onDismiss: {
+                showSignOutConfirmation = false
+            }) {
                 accountActionsSheetView
                     .fixedAppDynamicType()
             }

@@ -14,6 +14,7 @@
 		23A619482F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */; };
 		23B131CE2F75A50800A70589 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 23B131CD2F75A50800A70589 /* GoogleSignInSwift */; };
 		23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 23B131D12F75A91D00A70589 /* GoogleService-Info.plist */; };
+		23C89CE9302D65DD008D7412 /* LearnPitchMarkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23C89CE8302D65DD008D7412 /* LearnPitchMarkView.swift */; };
 		23D15A022FA1000100D15A02 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 23D15A012FA1000100D15A01 /* Assets.xcassets */; };
 		23F1A88B2F12C6EF0094E7BC /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88A2F12C6EF0094E7BC /* FirebaseAuth */; };
 		23F1A88D2F12C7030094E7BC /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 23F1A88C2F12C7030094E7BC /* FirebaseFirestore */; };
@@ -41,6 +42,7 @@
 		239F0B7C2F12B238004E32DD /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		23A619472F9CEDC100E7AB36 /* StrikeZoneHeatmapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrikeZoneHeatmapView.swift; sourceTree = "<group>"; };
 		23B131D12F75A91D00A70589 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		23C89CE8302D65DD008D7412 /* LearnPitchMarkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearnPitchMarkView.swift; sourceTree = "<group>"; };
 		23D15A012FA1000100D15A01 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		23F7D2BD2F7586280010D7BF /* DisplayOnlyWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyWindowView.swift; sourceTree = "<group>"; };
 		23F7D2BF2F758DE70010D7BF /* CodeDisplayOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeDisplayOverlayView.swift; sourceTree = "<group>"; };
@@ -65,7 +67,6 @@
 				AuthManager.swift,
 				CalledPitchRecord.swift,
 				Games.swift,
-				LearnPitchMarkView.swift,
 				Notifications.swift,
 				"Pitch%.swift",
 				PitchResultsSheetView.swift,
@@ -164,6 +165,7 @@
 				23F7D2D92F75979E0010D7BF /* DisplayOnlyScreen.swift */,
 				23B131D12F75A91D00A70589 /* GoogleService-Info.plist */,
 				23D15A012FA1000100D15A01 /* Assets.xcassets */,
+				23C89CE8302D65DD008D7412 /* LearnPitchMarkView.swift */,
 			);
 			path = PitchMarkDisplay;
 			sourceTree = "<group>";
@@ -320,6 +322,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				23F7D2E02F7597E80010D7BF /* DisplayOnlyScreen.swift in Sources */,
+				23C89CE9302D65DD008D7412 /* LearnPitchMarkView.swift in Sources */,
 				23F7D2DE2F7597D80010D7BF /* PitchMarkDisplayApp.swift in Sources */,
 				23F7D2DF2F7597E10010D7BF /* DisplayRootView.swift in Sources */,
 				23F7D2E52F7599F20010D7BF /* CodeDisplayOverlayView.swift in Sources */,
@@ -478,7 +481,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -523,7 +526,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.1;
+				MARKETING_VERSION = 1.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
