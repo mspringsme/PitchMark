@@ -99,15 +99,6 @@ private enum PitchMarkAppVariant: Equatable {
         }
     }
 
-    var emailSignInLinkDomain: String? {
-        switch self {
-        case .live:
-            return "pitchmark-fb9f8.firebaseapp.com"
-        case .display:
-            return "pitchmark.app"
-        }
-    }
-
     var displayName: String {
         switch self {
         case .live: return "PitchMark Live"
@@ -492,7 +483,6 @@ class AuthManager: ObservableObject {
         actionCodeSettings.url = appVariant.emailSignInContinuationURL
         actionCodeSettings.handleCodeInApp = true
         actionCodeSettings.setIOSBundleID(appVariant.bundleIdentifier)
-        actionCodeSettings.linkDomain = appVariant.emailSignInLinkDomain
 
         Auth.auth().sendSignInLink(toEmail: trimmed, actionCodeSettings: actionCodeSettings) { error in
             if let error {
@@ -672,48 +662,86 @@ class AuthManager: ObservableObject {
             return
         }
 
+        // The callable request or the server-side job can each occasionally hang
+        // with no response at all (observed directly in server logs: a request
+        // that was verified but never logged any further progress). The SDK-level
+        // timeoutInterval below is intentionally generous for the rare legitimate
+        // slow run, so it cannot be relied on to free the UI in a reasonable time.
+        // This watchdog does that instead - it only ever reports failure to the
+        // UI, once; if the real call succeeds afterward, local cleanup below still
+        // runs so this device doesn't stay signed in to a now-deleted account.
+        var didReportToUI = false
+        func reportToUI(_ result: Result<Void, Error>) {
+            DispatchQueue.main.async {
+                guard !didReportToUI else { return }
+                didReportToUI = true
+                completion(result)
+            }
+        }
+
+        let watchdog = DispatchWorkItem {
+            debugLog("⏱️ deleteAccount watchdog fired - no server response within 20s")
+            reportToUI(.failure(DeleteAccountError.timedOut))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: watchdog)
+
         let callable = Functions.functions().httpsCallable("deleteAccount")
         // The server allows this cleanup job to run for up to nine minutes. Keep the
-        // client deadline above that limit so a valid deletion is not abandoned early.
+        // client deadline above that limit so a valid deletion is not abandoned early
+        // purely by the SDK's own timeout; the watchdog above is what keeps the UI
+        // responsive well before that.
         callable.timeoutInterval = 600
         callable.call { _, error in
+            watchdog.cancel()
+
             if let error {
                 let nsError = error as NSError
                 if nsError.domain == FunctionsErrorDomain,
                    let code = FunctionsErrorCode(rawValue: nsError.code) {
                     switch code {
                     case .unauthenticated:
-                        completion(.failure(DeleteAccountError.requiresRecentLogin))
+                        reportToUI(.failure(DeleteAccountError.requiresRecentLogin))
                         return
                     case .deadlineExceeded:
-                        completion(.failure(DeleteAccountError.timedOut))
+                        reportToUI(.failure(DeleteAccountError.timedOut))
                         return
                     case .unavailable:
-                        completion(.failure(DeleteAccountError.serviceUnavailable))
+                        reportToUI(.failure(DeleteAccountError.serviceUnavailable))
                         return
                     default:
                         break
                     }
                 }
-                completion(.failure(DeleteAccountError.unknown(error.localizedDescription)))
+                reportToUI(.failure(DeleteAccountError.unknown(error.localizedDescription)))
                 return
             }
 
             DispatchQueue.main.async {
-                // The server has finished permanent deletion. Remove credentials
-                // immediately, then purge account-owned device data before reporting
-                // success to the calling screen.
+                // The server has finished permanent deletion - the account and its
+                // data are already gone. Remove credentials, purge account-owned
+                // device data, and report success to the calling screen right away.
+                // Firestore's local cache teardown below is best-effort tidiness for
+                // the next sign-in; it must never block the user-facing completion,
+                // since Firestore.terminate()'s completion handler is not guaranteed
+                // to fire (e.g. if the SDK still considers the instance busy), which
+                // previously left the "Deleting Account…" screen stuck indefinitely.
                 NotificationCenter.default.post(name: .permanentAccountLocalDataWillPurge, object: nil)
                 self.clearLocalAuthenticationState()
                 DeletedAccountLocalDataPurger.purge()
                 self.showAccountDeletionAcknowledgement()
-                self.clearFirestorePersistenceAfterDeletion {
-                    // Keep the acknowledgement visible for a full interval after
-                    // the last local cleanup finishes, even if cache teardown took
-                    // longer than expected.
-                    self.showAccountDeletionAcknowledgement()
-                    completion(.success(()))
-                }
+                reportToUI(.success(()))
+                // Deliberately not calling Firestore's terminate()/clearPersistence()
+                // here. Confirmed via two separate live thread dumps that its
+                // disposal work is rescheduled by the SDK onto the main queue no
+                // matter which thread calls terminate() (it uses the "user executor"
+                // queue captured when the Firestore instance was first created, not
+                // the calling thread), where it can block indefinitely inside
+                // FirestoreClient::Dispose - freezing the entire app, not just this
+                // screen. It is not needed for correctness: the account and its data
+                // are already gone server-side by this point (confirmed via Cloud
+                // Function logs completing in ~1-3s). Leftover local Firestore cache
+                // for the deleted account is a minor privacy nit, not worth an
+                // app-wide freeze to avoid.
             }
         }
     }
@@ -787,28 +815,6 @@ class AuthManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: workItem)
     }
 
-    private func clearFirestorePersistenceAfterDeletion(completion: @escaping () -> Void) {
-        let firestore = Firestore.firestore()
-        firestore.terminate { terminationError in
-            if let terminationError {
-                debugLog("Firestore account-cache teardown failed: \(terminationError.localizedDescription)")
-                DispatchQueue.main.async(execute: completion)
-                return
-            }
-
-            // Firebase requires clearPersistence to run only after termination.
-            // A later Firestore.firestore() call restarts the client for the next
-            // sign-in, while this removes cached documents and pending writes that
-            // belonged to the deleted account.
-            firestore.clearPersistence { persistenceError in
-                if let persistenceError {
-                    debugLog("Firestore account cache could not be cleared: \(persistenceError.localizedDescription)")
-                }
-                DispatchQueue.main.async(execute: completion)
-            }
-        }
-    }
-    
     func saveTemplate(_ template: PitchTemplate) {
         guard let user = user else {
             debugLog("No signed-in user to save template for.")

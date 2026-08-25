@@ -337,14 +337,16 @@ private struct DisplayOnboardingView: View {
             }
             .navigationTitle("Display Setup")
             .navigationBarTitleDisplayMode(.inline)
-            .alert("Display App Not Installed", isPresented: $showDisplayAppMissingAlert) {
-                Button("Get Display") {
+            .appConfirmationDialog(
+                isPresented: $showDisplayAppMissingAlert,
+                title: "Display App Not Installed",
+                message: "Install Pitchmark Display from the App Store, then open it when you are ready to run a live session.",
+                primaryTitle: "Get Display",
+                primaryAction: {
                     openURL(displayAppSearchURL)
-                }
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text("Install Pitchmark Display from the App Store, then open it when you are ready to run a live session.")
-            }
+                },
+                secondaryTitle: "OK"
+            )
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {

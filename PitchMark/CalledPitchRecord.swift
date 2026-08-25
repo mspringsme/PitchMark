@@ -2031,6 +2031,7 @@ struct PitchResultSheet: View {
     @State private var jerseyFilter: String = ""
     @State private var pitchFilter: String = ""
     @State private var didApplyInitialJerseyFilter = false
+    @State private var showFilterSheet = false
 
     private var pitcherNameById: [String: String] {
         var map: [String: String] = [:]
@@ -2295,128 +2296,27 @@ struct PitchResultSheet: View {
                                 Spacer(minLength: 0)
                             }
 
-                            if sessionManager.currentMode == .game {
-                                Menu {
-                                    if !pitcherFilter.isEmpty {
-                                        Button(role: .destructive) {
-                                            pitcherFilter = ""
-                                        } label: {
-                                            Label("Clear Pitcher Filter", systemImage: "xmark.circle")
-                                        }
-                                    }
-
-                                    ForEach(availablePitchers, id: \.id) { pitcher in
-                                        Button {
-                                            pitcherFilter = pitcher.id
-                                        } label: {
-                                            HStack {
-                                                Text(pitcher.name)
-                                                if pitcherFilter == pitcher.id {
-                                                    Image(systemName: "checkmark")
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    Divider()
-
-                                    // Clear option
-                                    if !jerseyFilter.isEmpty {
-                                        Button(role: .destructive) {
-                                            jerseyFilter = ""
-                                        } label: {
-                                            Label("Clear Jersey Filter", systemImage: "xmark.circle")
-                                        }
-                                        Divider()
-                                    }
-                                    // Jersey options
-                                    ForEach(availableJerseyNumbers, id: \.self) { num in
-                                        Button {
-                                            jerseyFilter = num
-                                        } label: {
-                                            HStack {
-                                                Text("#\(num)")
-                                                if jerseyFilter == num {
-                                                    Image(systemName: "checkmark")
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    Divider()
-
-                                    // Clear pitch filter
-                                    if !pitchFilter.isEmpty {
-                                        Button(role: .destructive) {
-                                            pitchFilter = ""
-                                        } label: {
-                                            Label("Clear Pitch Filter", systemImage: "xmark.circle")
-                                        }
-                                        Divider()
-                                    }
-
-                                    // Pitch options
-                                    ForEach(availablePitchTypes, id: \.self) { type in
-                                        Button {
-                                            pitchFilter = type
-                                        } label: {
-                                            HStack {
-                                                let pct = pitchTypeSuccessPercent[type]
-                                                Text(type == "Catcher" ? type : (pct != nil ? "\(type) (\(pct!)%)" : type))
-                                                if pitchFilter == type {
-                                                    Image(systemName: "checkmark")
-                                                }
-                                            }
-                                        }
-                                    }
-                                } label: {
-                                    let hasActiveFilters = !pitcherFilter.isEmpty || !jerseyFilter.isEmpty || !pitchFilter.isEmpty
-                                    Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                                        .foregroundStyle(hasActiveFilters ? Color.blue : .primary)
-                                        .shadow(color: hasActiveFilters ? Color.blue.opacity(0.35) : .clear, radius: hasActiveFilters ? 6 : 0)
-                                        .imageScale(.medium)
-                                        .clipShape(Capsule())
-                                        .compositingGroup()
-                                }
-                                .offset(y: controlButtonsOffsetY - 12)
+                            // One button that opens a real, scrollable filter sheet.
+                            //
+                            // This used to be a SwiftUI `Menu`. A Menu renders as a transient UIMenu
+                            // whose contents are regenerated whenever the parent view re-renders, and
+                            // this sheet re-renders constantly (Firestore listeners, animations). That
+                            // reset the menu's internal scroll offset mid-drag, so a long pitcher or
+                            // jersey list was effectively impossible to scroll.
+                            Button {
+                                showFilterSheet = true
+                            } label: {
+                                let hasActiveFilters = !pitcherFilter.isEmpty || !jerseyFilter.isEmpty || !pitchFilter.isEmpty
+                                Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                                    .foregroundStyle(hasActiveFilters ? Color.blue : .primary)
+                                    .shadow(color: hasActiveFilters ? Color.blue.opacity(0.35) : .clear, radius: hasActiveFilters ? 6 : 0)
+                                    .imageScale(.medium)
+                                    .clipShape(Capsule())
+                                    .compositingGroup()
                             }
-                            else {
-                                Menu {
-                                    // Clear pitch filter
-                                    if !pitchFilter.isEmpty {
-                                        Button(role: .destructive) {
-                                            pitchFilter = ""
-                                        } label: {
-                                            Label("Clear Pitch Filter", systemImage: "xmark.circle")
-                                        }
-                                        Divider()
-                                    }
-
-                                    // Pitch options with success percentages
-                                    ForEach(availablePitchTypes, id: \.self) { type in
-                                        Button {
-                                            pitchFilter = type
-                                        } label: {
-                                            HStack {
-                                                let pct = pitchTypeSuccessPercent[type]
-                                                Text(type == "Catcher" ? type : (pct != nil ? "\(type) (\(pct!)%)" : type))
-                                                if pitchFilter == type {
-                                                    Image(systemName: "checkmark")
-                                                }
-                                            }
-                                        }
-                                    }
-                                } label: {
-                                    let hasActiveFilters = !pitchFilter.isEmpty
-                                    Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                                        .foregroundStyle(hasActiveFilters ? Color.blue : .primary)
-                                        .shadow(color: hasActiveFilters ? Color.blue.opacity(0.35) : .clear, radius: hasActiveFilters ? 6 : 0)
-                                        .imageScale(.medium)
-                                        .clipShape(Capsule())
-                                        .compositingGroup()
-                                }
-                                .offset(y: controlButtonsOffsetY)
-                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Filter pitches")
+                            .offset(y: controlButtonsOffsetY - 12)
                         }
                     }
                     .padding(.horizontal, 20)
@@ -2462,6 +2362,9 @@ struct PitchResultSheet: View {
         .padding(.horizontal, 10)
         .onAppear {
             applyInitialEditTargetIfNeeded()
+        }
+        .sheet(isPresented: $showFilterSheet) {
+            filterSheetView
         }
         .appConfirmationDialog(
             isPresented: $showDeleteConfirm,
@@ -2873,6 +2776,95 @@ struct PitchResultSheet: View {
         editSelectedDescriptor = event.descriptor
         editIsError = event.errorOnPlay
         showEditPitchSheet = true
+    }
+
+    /// Filter picker, presented as a sheet with a real `List`.
+    ///
+    /// A `List` keeps its scroll offset across body updates, unlike the `Menu`
+    /// this replaced, whose contents were rebuilt from scratch every time the
+    /// parent re-rendered.
+    @ViewBuilder
+    private var filterSheetView: some View {
+        NavigationStack {
+            List {
+                if sessionManager.currentMode == .game {
+                    Section("Pitcher") {
+                        filterRow(title: "All Pitchers", isSelected: pitcherFilter.isEmpty) {
+                            pitcherFilter = ""
+                        }
+                        ForEach(availablePitchers, id: \.id) { pitcher in
+                            filterRow(title: pitcher.name, isSelected: pitcherFilter == pitcher.id) {
+                                pitcherFilter = (pitcherFilter == pitcher.id) ? "" : pitcher.id
+                            }
+                        }
+                    }
+
+                    Section("Batter") {
+                        filterRow(title: "All Batters", isSelected: jerseyFilter.isEmpty) {
+                            jerseyFilter = ""
+                        }
+                        ForEach(availableJerseyNumbers, id: \.self) { num in
+                            filterRow(title: "#\(num)", isSelected: jerseyFilter == num) {
+                                jerseyFilter = (jerseyFilter == num) ? "" : num
+                            }
+                        }
+                    }
+                }
+
+                Section("Pitch Type") {
+                    filterRow(title: "All Pitches", isSelected: pitchFilter.isEmpty) {
+                        pitchFilter = ""
+                    }
+                    ForEach(availablePitchTypes, id: \.self) { type in
+                        let pct = pitchTypeSuccessPercent[type]
+                        let label = (type == "Catcher")
+                            ? type
+                            : (pct != nil ? "\(type) (\(pct!)%)" : type)
+                        filterRow(title: label, isSelected: pitchFilter == type) {
+                            pitchFilter = (pitchFilter == type) ? "" : type
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Filter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Clear All") {
+                        pitcherFilter = ""
+                        jerseyFilter = ""
+                        pitchFilter = ""
+                    }
+                    .disabled(pitcherFilter.isEmpty && jerseyFilter.isEmpty && pitchFilter.isEmpty)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showFilterSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .fixedAppDynamicType()
+    }
+
+    private func filterRow(
+        title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Color.blue)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func applyInitialEditTargetIfNeeded() {

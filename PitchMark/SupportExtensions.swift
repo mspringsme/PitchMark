@@ -105,6 +105,11 @@ private struct AppConfirmationDialogModifier: ViewModifier {
                         .shadow(color: .black.opacity(0.18), radius: 24, y: 12)
                         .padding(.horizontal, 24)
                     }
+                    // Fill the full screen regardless of the view this overlay is attached to,
+                    // so the dialog isn't squeezed when hosted on a small view (e.g. a Button)
+                    // or when the keyboard is visible and reduces the sheet's available height.
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
                     .fixedAppDynamicType()
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
                     .zIndex(1000)

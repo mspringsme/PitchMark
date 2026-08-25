@@ -71,8 +71,23 @@ struct DisplayRootView: View {
             authManager.restoreSignIn()
         }
         .onChange(of: authManager.isSignedIn) { _, isSignedIn in
+            // Both places that actually sign this device out (the Sign Out button
+            // and the delete-account flow, in DisplayAccountSheet) already call
+            // dismiss() themselves, in the right order relative to their own
+            // nested sheets. This handler used to also force showAccount = false
+            // immediately, independently and on its own timing - racing against
+            // those explicit dismissals and corrupting the sheet-dismiss
+            // transition, which is what left the "Deleting Account…" screen
+            // visually stuck despite every underlying state change having already
+            // completed correctly. Keep a delayed fallback only, for sign-outs
+            // that happen through some other path (e.g. a remotely invalidated
+            // session) with nothing else to close this sheet; by the time this
+            // fires, the explicit paths have long since finished, so it's a no-op
+            // for the common cases.
             if !isSignedIn {
-                showAccount = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    showAccount = false
+                }
             }
             Task {
                 await subscriptionManager.refreshForAuthStateChange(isSignedIn: isSignedIn)
@@ -197,14 +212,17 @@ private struct DisplayAccountSheet: View {
                     }
                 }
             }
-            .alert("Permanently delete this account?", isPresented: $showFinalDeleteConfirmation) {
-                Button("Cancel", role: .cancel) { }
-                Button("Delete Account Permanently", role: .destructive) {
+            .appConfirmationDialog(
+                isPresented: $showFinalDeleteConfirmation,
+                title: "Permanently delete this account?",
+                message: "This cannot be undone.",
+                primaryTitle: "Delete Account Permanently",
+                primaryRole: .destructive,
+                primaryAction: {
                     deleteAccount()
-                }
-            } message: {
-                Text("This cannot be undone.")
-            }
+                },
+                secondaryTitle: "Cancel"
+            )
             .interactiveDismissDisabled(accountDeletionIsBlocking)
             .animation(.easeInOut(duration: 0.2), value: accountDeletionIsBlocking)
             .onAppear {
@@ -267,6 +285,15 @@ private struct DisplayAccountSheet: View {
                         notification: .announcement,
                         argument: "Account deleted. Returning to sign in."
                     )
+                    // Close this nested sheet, then the Account sheet it's presented
+                    // from, explicitly rather than relying on the isSignedIn change
+                    // elsewhere to cascade-dismiss them - sequenced with a short
+                    // delay so the inner sheet's dismiss animation has finished
+                    // before the outer one starts.
+                    showDeleteAccount = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        dismiss()
+                    }
                 case .failure(let error):
                     deleteError = error.localizedDescription
                     if let deleteError = error as? DeleteAccountError,

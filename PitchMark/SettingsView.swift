@@ -887,7 +887,7 @@ struct SettingsView: View {
     private var gamesOverviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Games")
+                Text("My Games")
                     .font(.headline)
                 Spacer()
                 Button {
@@ -919,7 +919,7 @@ struct SettingsView: View {
         HStack(spacing: 6) {
             Image(systemName: "person.2")
                 .font(.subheadline.weight(.semibold))
-            Text("Join a Game")
+            Text("Join Someone's Game")
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -1817,15 +1817,6 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal)
             }
-            .alert("Sign Out?", isPresented: $showSignOutConfirmation) {
-                Button("Sign Out", role: .destructive) {
-                    showAccountActionsSheet = false
-                    authManager.signOut()
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Are you sure you want to sign out of \(authManager.userEmail)?")
-            }
 
             Button {
                 showAccountActionsSheet = false
@@ -1845,6 +1836,23 @@ struct SettingsView: View {
 
         }
         .padding()
+        // Attached to the whole sheet, not to the Sign Out row. appConfirmationDialog
+        // draws as an .overlay, and SwiftUI clips an overlay's *hit testing* to its
+        // parent's frame even though it draws outside it. Hung off the small button
+        // the dialog was visible but untappable, so taps fell through to the "More"
+        // button underneath and opened the Delete Account sheet.
+        .appConfirmationDialog(
+            isPresented: $showSignOutConfirmation,
+            title: "Sign Out?",
+            message: "Are you sure you want to sign out of \(authManager.userEmail)?",
+            primaryTitle: "Sign Out",
+            primaryRole: .destructive,
+            primaryAction: {
+                showAccountActionsSheet = false
+                authManager.signOut()
+            },
+            secondaryTitle: "Cancel"
+        )
         .presentationDetents([.fraction(0.42)])
         .presentationDragIndicator(.visible)
     }
@@ -2016,17 +2024,6 @@ struct SettingsView: View {
                 .tint(.red)
                 .disabled(deleteAccountText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "DELETE")
                 .accessibilityHint("Opens the final permanent deletion confirmation.")
-                .appConfirmationDialog(
-                    isPresented: $showFinalDeleteAccountConfirmation,
-                    title: "Permanently delete this account?",
-                    message: "This cannot be undone.",
-                    primaryTitle: "Delete Account Permanently",
-                    primaryRole: .destructive,
-                    primaryAction: {
-                        deleteAccount()
-                    },
-                    secondaryTitle: "Cancel"
-                )
 
                 Button("Cancel", role: .cancel) {
                     showDeleteAccountSheet = false
@@ -2041,6 +2038,17 @@ struct SettingsView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
+        .appConfirmationDialog(
+            isPresented: $showFinalDeleteAccountConfirmation,
+            title: "Permanently delete this account?",
+            message: "This cannot be undone.",
+            primaryTitle: "Delete Account Permanently",
+            primaryRole: .destructive,
+            primaryAction: {
+                deleteAccount()
+            },
+            secondaryTitle: "Cancel"
+        )
         .presentationDetents([.fraction(0.5)])
         .presentationDragIndicator(accountDeletionIsBlocking ? .hidden : .visible)
         .interactiveDismissDisabled(accountDeletionIsBlocking)
@@ -2196,15 +2204,17 @@ struct SettingsView: View {
             } message: {
                 Text("This device doesn’t have a camera available.")
             }
-            .alert("Camera Access Needed", isPresented: $showCameraPermissionAlert) {
-                Button("Open Settings") {
+            .appConfirmationDialog(
+                isPresented: $showCameraPermissionAlert,
+                title: "Camera Access Needed",
+                message: "Enable Camera access in Settings to scan the owner’s QR code.",
+                primaryTitle: "Open Settings",
+                primaryAction: {
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                     UIApplication.shared.open(url)
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Enable Camera access in Settings to scan the owner’s QR code.")
-            }
+                },
+                secondaryTitle: "Cancel"
+            )
             .sheet(isPresented: $showAccountActionsSheet, onDismiss: {
                 showSignOutConfirmation = false
             }) {
@@ -2367,7 +2377,7 @@ struct SettingsView: View {
                     } label: {
                         joinGameButtonLabel
                     }
-                    .accessibilityLabel("Join a Game")
+                    .accessibilityLabel("Join Someone's Game")
                     .accessibilityHint("Open join flow for invite link or QR code.")
                     .transaction { transaction in
                         transaction.animation = nil
@@ -3905,7 +3915,7 @@ struct PitcherStatsSheetView: View {
                             guard !gid.isEmpty else { return }
                             if isSelected {
                                 selectedGameIds.remove(gid)
-                            } else {
+                            } else {#imageLiteral(resourceName: "simulator_screenshot_B02F9BF3-0AE2-4CFF-8739-8DA9109E9856.png")
                                 selectedGameIds.insert(gid)
                             }
                         }

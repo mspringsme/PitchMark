@@ -210,6 +210,7 @@ struct PitchTrackerView: View {
     @State private var sharedPitcherOverrides: [String: String] = [:]
     @State private var sharedBatterJerseyOverrides: [String: String] = [:]
     @State private var showConfirmSheet = false
+    @State private var showUndoConfirm = false
     @State private var calledPitchComposerDetent: PresentationDetent = .fraction(0.28)
     @State private var isStrikeSwinging = false
     @State private var isStrikeLooking = false
@@ -414,6 +415,12 @@ struct PitchTrackerView: View {
     @State private var gamePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEvents: [PitchEvent] = []
     @State private var lastLocalProgressUpdate: Date? = nil
+    /// Monotonic counter used to decide whether an incoming progress snapshot is
+    /// newer than what this device has. It replaces comparing a Firestore server
+    /// timestamp against a local `Date()` - two different clocks, so any skew made
+    /// the comparison wrong in one direction and let stale echoes overwrite live
+    /// edits (or the reverse).
+    @State private var progressRevision: Int = 0
     @State private var bufferedSharedPitcherEvents: [BufferedPitcherEvent] = []
     @State private var lastObservedResultSelectionId: String? = nil
     @State private var codeShareSheetID = UUID()
@@ -1379,8 +1386,21 @@ struct PitchTrackerView: View {
 
             DispatchQueue.main.async {
                 let liveStamp = (data["progressUpdatedAt"] as? Timestamp)?.dateValue()
-                let shouldApplyLiveProgress = self.shouldApplyProgressFromSnapshot(liveStamp)
-                    || self.lastLocalProgressUpdate == nil
+                let remoteRevision = data["progressRevision"] as? Int
+                let shouldApplyLiveProgress: Bool
+                if let remoteRevision {
+                    // Only accept a snapshot that is strictly newer than what this
+                    // device has already applied or written.
+                    shouldApplyLiveProgress = remoteRevision > self.progressRevision
+                    if shouldApplyLiveProgress {
+                        self.progressRevision = max(self.progressRevision, remoteRevision)
+                    }
+                } else {
+                    // Rooms written by an older build carry no revision, so fall
+                    // back to the previous timestamp comparison for them.
+                    shouldApplyLiveProgress = self.shouldApplyProgressFromSnapshot(liveStamp)
+                        || self.lastLocalProgressUpdate == nil
+                }
                 if shouldApplyLiveProgress {
                     self.balls   = data["balls"]   as? Int ?? self.balls
                     self.strikes = data["strikes"] as? Int ?? self.strikes
@@ -1849,6 +1869,7 @@ struct PitchTrackerView: View {
 
     private func markLocalProgressChange() {
         lastLocalProgressUpdate = Date()
+        progressRevision += 1
         persistLocalProgressSnapshot()
         debugLog("🧭[PROG] markLocalProgressChange gid=\(selectedGameId ?? "<nil>") stamp=\(String(describing: lastLocalProgressUpdate)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
         persistProgressSnapshotToOwnerGameAndLive()
@@ -1864,7 +1885,8 @@ struct PitchTrackerView: View {
                 "walks": walks,
                 "us": us,
                 "them": them,
-                "progressUpdatedAt": FieldValue.serverTimestamp()
+                "progressUpdatedAt": FieldValue.serverTimestamp(),
+                "progressRevision": progressRevision
             ])
         }
 
@@ -2953,23 +2975,7 @@ struct PitchTrackerView: View {
         intBinding(
             get: { balls },
             set: { newValue in
-                // Always reflect immediately in local UI, even if persistence targets are unavailable.
-                balls = newValue
-                if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["balls": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    mirrorLiveProgressToGame(field: "balls", value: newValue)
-                    return
-                }
-
-                guard let gid = selectedGameId else { return }
-                guard let owner = effectiveGameOwnerUserId else { return }
-                authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: newValue)
-
-                if let idx = games.firstIndex(where: { $0.id == gid }) {
-                    games[idx].balls = newValue
-                }
-                debugLog("🧭[PROG] set balls=\(newValue) gid=\(gid)")
-                markLocalProgressChange()
+                updateCount(AtBatCount(balls: newValue, strikes: strikes))
             }
         )
     }
@@ -2978,25 +2984,24 @@ struct PitchTrackerView: View {
         intBinding(
             get: { strikes },
             set: { newValue in
-                // Always reflect immediately in local UI, even if persistence targets are unavailable.
-                strikes = newValue
-                if let liveId = activeLiveId {
-                    LiveGameService.shared.updateLiveFields(liveId: liveId, fields: ["strikes": newValue, "progressUpdatedAt": FieldValue.serverTimestamp()])
-                    mirrorLiveProgressToGame(field: "strikes", value: newValue)
-                    return
-                }
-
-                guard let gid = selectedGameId else { return }
-                guard let owner = effectiveGameOwnerUserId else { return }
-                authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: newValue)
-
-                if let idx = games.firstIndex(where: { $0.id == gid }) {
-                    games[idx].strikes = newValue
-                }
-                debugLog("🧭[PROG] set strikes=\(newValue) gid=\(gid)")
-                markLocalProgressChange()
+                updateCount(AtBatCount(balls: balls, strikes: newValue))
             }
         )
+    }
+
+    /// The single entry point for changing the count.
+    ///
+    /// Every caller used to persist balls/strikes itself and then *conditionally*
+    /// call markLocalProgressChange() - the live-game branches returned early and
+    /// skipped it, so `lastLocalProgressUpdate` went stale and the next incoming
+    /// snapshot was free to overwrite a change this device had just made. Routing
+    /// everything through here means the local stamp and revision can never be
+    /// skipped, and the redundant per-field writes are gone.
+    private func updateCount(_ next: AtBatCount) {
+        guard balls != next.balls || strikes != next.strikes else { return }
+        balls = next.balls
+        strikes = next.strikes
+        markLocalProgressChange()
     }
 
     private var usBinding: Binding<Int> {
@@ -3926,7 +3931,7 @@ struct PitchTrackerView: View {
             HStack(spacing: 6) {
                 if showCards {
                     Button {
-                        undoLastPitch()
+                        showUndoConfirm = true
                     } label: {
                         Image(systemName: "arrow.uturn.backward.circle.fill")
                             .font(.title3.weight(.semibold))
@@ -3934,6 +3939,14 @@ struct PitchTrackerView: View {
                     .buttonStyle(.plain)
                     .disabled(lastPersistedEventInCurrentMode == nil)
                     .accessibilityLabel("Undo Last Pitch")
+                    .confirmationDialog("Undo Last Pitch?", isPresented: $showUndoConfirm, titleVisibility: .visible) {
+                        Button("Undo", role: .destructive) {
+                            undoLastPitch()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This will remove the last recorded pitch.")
+                    }
                 }
 
                 Spacer(minLength: 0)
@@ -4025,7 +4038,7 @@ struct PitchTrackerView: View {
                 shouldAutoOpenEditOutcome: false,
                 onGearTapOverride: { showCardsFullScreenSheet = true }
             )
-            .padding(.top, 19)
+            .padding(.top, 6)
             .frame(maxWidth: .infinity, minHeight: 170)
         } else {
             EmptyView()
@@ -4235,14 +4248,14 @@ struct PitchTrackerView: View {
 
     private var headerContainer: some View {
         let screen = effectiveScreenSize
-        
+
         return VStack(spacing: 4) {
             topBar
         }
         .frame(
-            width: screen.width * 0.94,   // 94% of screen width
-            height: headerHeight
+            width: screen.width * 0.94   // 94% of screen width
         )
+        .fixedSize(horizontal: false, vertical: true)
         .background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.thickMaterial)
@@ -4254,7 +4267,7 @@ struct PitchTrackerView: View {
         )
         .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         .padding(.horizontal)
-        .padding(.top, 24)
+        .padding(.top, 6)
     }
 
     private var isCompactHeight: Bool {
@@ -4271,7 +4284,7 @@ struct PitchTrackerView: View {
 
     private var sidebarColumnWidth: CGFloat { 60 }
 
-    private var topControlRowHeight: CGFloat { 76 }
+    private var topControlRowHeight: CGFloat { 92 }
     private var sidebarControlPanelHeight: CGFloat { 90 }
     
     private var participantHeaderOverlay: some View {
@@ -4438,174 +4451,30 @@ struct PitchTrackerView: View {
     
     // MARK: - Extracted subviews to help type-checker
     private var topBar: some View {
-        HStack {
-            HStack(spacing: 12) {
-                VStack(alignment: .center, spacing: 4) {
-                Text("Game")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(opponentName ?? "Game")
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        Capsule()
-                            .fill(Color.black.opacity(0.8))
-                    )
+        HStack(spacing: 6) {
+            if isGame && !isOwnerForActiveGame && activeLiveId != nil {
+                Text("Pitch Events: Assistant")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(
-                        Capsule()
-                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.25), radius: 2, x: 0, y: 2)
-                }
-                if isGame && !isOwnerForActiveGame && activeLiveId != nil {
-                    Text("Pitch Events: Assistant")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.primary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                }
-
-                if !(isGame && !isOwnerForActiveGame) {
-                    VStack(alignment: .center, spacing: 4) {
-                        Text("Pitcher")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        let pitchersForMenu = isGame
-                        ? visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
-                        : visiblePitchers
-                        ScrollableSelectionMenuButton(
-                            title: "Select Pitcher",
-                            items: pitchersForMenu,
-                            itemTitle: { $0.name },
-                            isSelected: { $0.id == selectedPitcherId },
-                            onSelect: { pitcher in
-                                applySelectedPitcher(pitcher)
-                            }
-                        ) {
-                            let currentPitcher = pitchers.first(where: { $0.id == selectedPitcherId })
-
-                            VStack(alignment: .center, spacing: 4) {
-                                ZStack(alignment: .bottomTrailing) {
-                                    PitcherAvatarView(pitcher: currentPitcher, size: 52)
-
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(.primary)
-                                        .padding(4)
-                                        .background(Color.white.opacity(0.78))
-                                        .clipShape(Circle())
-                                        .offset(x: 2, y: 2)
-                                }
-
-                                Text(currentPitcher?.name ?? "Select a pitcher")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.75)
-                                    .allowsTightening(true)
-                                    .frame(width: 86)
-                            }
-                            .opacity((visiblePitchers.isEmpty || !canSelectPitcherInGame) ? 0.6 : 1.0)
-                            .contentShape(Rectangle())
-                            .transaction { transaction in
-                                transaction.animation = nil
-                            }
-                            .animation(nil, value: atBatPulse)
-                        }
-                        .disabled(visiblePitchers.isEmpty || !canSelectPitcherInGame)
-                    }
-
-                    VStack(alignment: .center, spacing: 4) {
-                        Text(currentTrackingMode == .scout ? "Pitch Key" : "Grid Key")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        ScrollableSelectionMenuButton(
-                            title: "Select Template",
-                            items: visibleTemplates,
-                            itemTitle: { $0.name },
-                            isSelected: { $0.id == selectedTemplate?.id },
-                            onSelect: { template in
-                                applyTemplate(template)
-                            }
-                        ) {
-                            let currentLabel = selectedTemplate?.name ?? "Select a template"
-                            let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
-                            
-                            ZStack {
-                                // Invisible widest label to reserve width and prevent size jumps
-                                HStack(spacing: 8) {
-                                    Text(widestLabel)
-                                        .font(.subheadline)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.7)
-                                        .allowsTightening(true)
-                                        .opacity(0)
-                                    if !currentTemplateVersionLabel.isEmpty {
-                                        Text(currentTemplateVersionLabel)
-                                            .font(.caption2.weight(.semibold))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 3)
-                                            .background(Color.clear)
-                                            .opacity(0)
-                                    }
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                        .opacity(0)
-                                }
-                                
-                                // Visible current label
-                                HStack(spacing: 8) {
-                                    Text(currentLabel)
-                                        .font(.subheadline)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.7)
-                                        .allowsTightening(true)
-                                    if currentTrackingMode != .scout && !currentTemplateVersionLabel.isEmpty {
-                                        Text(currentTemplateVersionLabel)
-                                            .font(.caption2.weight(.semibold))
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 3)
-                                            .foregroundStyle(Color.gray)
-                                            .clipShape(Capsule())
-                                            .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
-                                    }
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption.weight(.semibold))
-                                }
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .foregroundColor(.primary)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule()
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                            .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
-                            .contentShape(Capsule())
-                            .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
-                        }
-                        .disabled(visibleTemplates.isEmpty)
-                    }
-                }
+                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(spacing: 8) {
-                settingsButton
+            if !(isGame && !isOwnerForActiveGame) {
+                gridKeyPickerButton
+                    .layoutPriority(1)
+            }
+
+            Spacer(minLength: 4)
+
+            if !(isGame && !isOwnerForActiveGame) {
                 topInviteButton(isConnected: uiConnected) {
                     triggerAssistantCodeLink()
                 }
@@ -4643,10 +4512,125 @@ struct PitchTrackerView: View {
                     Button("Cancel", role: .cancel) { }
                 }
             }
+
+            settingsButton
         }
-        .padding(.horizontal)
-        .padding(.top, 6)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+    }
+
+    private var gridKeyPickerButton: some View {
+        ScrollableSelectionMenuButton(
+            title: "Select Template",
+            items: visibleTemplates,
+            itemTitle: { $0.name },
+            isSelected: { $0.id == selectedTemplate?.id },
+            onSelect: { template in
+                applyTemplate(template)
+            }
+        ) {
+            let currentLabel = selectedTemplate?.name ?? "Select a template"
+            let keyPrefix = currentTrackingMode == .scout ? "Pitch Key: " : "Key: "
+            let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+
+            ZStack {
+                // Invisible widest label to reserve width and prevent size jumps
+                HStack(spacing: 6) {
+                    Text(keyPrefix + widestLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .allowsTightening(true)
+                    if !currentTemplateVersionLabel.isEmpty {
+                        Text(currentTemplateVersionLabel)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                    }
+                }
+                .opacity(0)
+
+                // Visible current label
+                HStack(spacing: 6) {
+                    Text(keyPrefix + currentLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .allowsTightening(true)
+                        .foregroundStyle(Color.accentColor)
+                    if currentTrackingMode != .scout && !currentTemplateVersionLabel.isEmpty {
+                        Text(currentTemplateVersionLabel)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .foregroundStyle(Color.gray)
+                            .background(Color.gray.opacity(0.15))
+                            .clipShape(Capsule())
+                            .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
+                    }
+                }
+            }
+            .frame(maxWidth: 150, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+            .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
+            .contentShape(Capsule())
+            .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
+        }
+        .disabled(visibleTemplates.isEmpty)
+    }
+
+    private var pitcherPickerButton: some View {
+        let pitchersForMenu = isGame
+            ? visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
+            : visiblePitchers
+        return ScrollableSelectionMenuButton(
+            title: "Select Pitcher",
+            items: pitchersForMenu,
+            itemTitle: { $0.name },
+            isSelected: { $0.id == selectedPitcherId },
+            onSelect: { pitcher in
+                applySelectedPitcher(pitcher)
+            }
+        ) {
+            let currentPitcher = pitchers.first(where: { $0.id == selectedPitcherId })
+
+            VStack(alignment: .center, spacing: 4) {
+                ZStack(alignment: .bottomTrailing) {
+                    PitcherAvatarView(pitcher: currentPitcher, size: 44)
+
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.primary)
+                        .padding(3)
+                        .background(Color.white.opacity(0.78))
+                        .clipShape(Circle())
+                        .offset(x: 2, y: 2)
+                }
+
+                Text(currentPitcher?.name ?? "Select a pitcher")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .allowsTightening(true)
+                    .frame(width: 66)
+            }
+            .opacity((visiblePitchers.isEmpty || !canSelectPitcherInGame) ? 0.6 : 1.0)
+            .contentShape(Rectangle())
+            .transaction { transaction in
+                transaction.animation = nil
+            }
+            .animation(nil, value: atBatPulse)
+        }
+        .disabled(visiblePitchers.isEmpty || !canSelectPitcherInGame)
     }
 
     private func sessionConfirmationSheet(
@@ -5020,26 +5004,23 @@ struct PitchTrackerView: View {
             Group {
                 if isConnected {
                     Image(systemName: "link.icloud.fill")
-                        .font(.system(size: 18, weight: .regular))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.green)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
                 } else {
-                    Text("Invite")
-                        .font(.caption)
-                        .foregroundStyle(Color.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
+                    Text("Invite Assistant")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
                 }
             }
-            .frame(width: 56, height: 24)
-            .background(
-                Capsule()
-                    .fill(Color(.systemGray6))
-            )
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
             .overlay(
                 Capsule()
-                    .stroke(Color.white.opacity(0.25), lineWidth: 1)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -5267,14 +5248,24 @@ struct PitchTrackerView: View {
             GridItem(.flexible(minimum: 20), spacing: 6),
             GridItem(.flexible(minimum: 20), spacing: 6)
         ]
-        ScrollView(.horizontal, showsIndicators: false) {
-            LazyHGrid(rows: rows, spacing: 8) {
-                ForEach(chipOptions, id: \.self) { pitch in
-                    pitchChip(pitch)
-                        .fixedSize(horizontal: true, vertical: false)
+        let pitcherColumnWidth: CGFloat = 74
+        let chipsMinWidth = max(0, width - 16 - pitcherColumnWidth - 8)
+
+        return HStack(spacing: 8) {
+            pitcherPickerButton
+                .frame(width: pitcherColumnWidth)
+
+            Divider()
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHGrid(rows: rows, spacing: 8) {
+                    ForEach(chipOptions, id: \.self) { pitch in
+                        pitchChip(pitch)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
+                .frame(minWidth: chipsMinWidth, alignment: .center)
             }
-            .frame(minWidth: max(0, width - 16), alignment: .center)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -5726,7 +5717,7 @@ struct PitchTrackerView: View {
     }
     
     private var resetOverlay: some View {
-        Group {
+        HStack(spacing: 8) {
             ResetPitchButton {
                 // ✅ 1) Reset local call/result UI
                 resetCallAndResultUIState()
@@ -5752,6 +5743,17 @@ struct PitchTrackerView: View {
                 }
             }
 
+            Text("vs. \(opponentName ?? "Game")")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .foregroundStyle(.primary)
+                .frame(maxWidth: 130, alignment: .center)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial)
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         }
     }
     
@@ -6374,16 +6376,15 @@ struct PitchTrackerView: View {
             event.outcome = "HBP"
         }
 
-        let next = nextScoutCount(for: event, prior: prior)
-        if terminalAtBatText(for: event, prior: prior) != nil {
-            event.atBatCount = "\(prior.balls)-\(prior.strikes)"
-            event.atBatBalls = prior.balls
-            event.atBatStrikes = prior.strikes
-        } else {
-            event.atBatBalls = next.balls
-            event.atBatStrikes = next.strikes
-            event.atBatCount = "\(next.balls)-\(next.strikes)"
-        }
+        // Scout mode now shares the one rule set with the pitch result sheet.
+        // It previously kept the *prior* count on a terminal pitch while the sheet
+        // reset to 0-0, so the same at-bat could read differently depending on
+        // which screen recorded it.
+        let scoutResult = AtBatCountRules.apply(
+            AtBatCountRules.PitchFacts(event: event),
+            to: AtBatCount(balls: prior.balls, strikes: prior.strikes)
+        )
+        event.applyCount(scoutResult.count, terminal: scoutResult.terminal)
 
         return event
     }
@@ -6421,50 +6422,6 @@ struct PitchTrackerView: View {
 
     private func eventCountsAsHit(_ event: PitchEvent) -> Bool {
         pitchEventCountsAsHit(event)
-    }
-
-    private func nextScoutCount(for event: PitchEvent, prior: (balls: Int, strikes: Int)) -> (balls: Int, strikes: Int) {
-        let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalizedOutcome == "walk" || normalizedOutcome == "k" || normalizedOutcome == "ꓘ".lowercased() || normalizedOutcome == "hbp" {
-            return (0, 0)
-        }
-
-        var nextBalls = prior.balls
-        var nextStrikes = prior.strikes
-
-        if event.strikeLooking || event.strikeSwinging {
-            nextStrikes = min(2, nextStrikes + 1)
-        } else if normalizedOutcome == "foul" {
-            if nextStrikes < 2 {
-                nextStrikes += 1
-            }
-        } else if event.isStrike {
-            nextStrikes = min(2, nextStrikes + 1)
-        } else if event.isBall == true {
-            nextBalls = min(3, nextBalls + 1)
-        }
-
-        return (nextBalls, nextStrikes)
-    }
-
-    private func terminalAtBatText(for event: PitchEvent, prior: (balls: Int, strikes: Int)) -> String? {
-        let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalizedOutcome == "walk" {
-            return "Ball 4"
-        }
-        if normalizedOutcome == "k" || normalizedOutcome == "ꓘ".lowercased() {
-            return "Strikeout"
-        }
-        if normalizedOutcome == "hbp" {
-            return "HBP"
-        }
-        if event.isBall == true, prior.balls >= 3 {
-            return "Ball 4"
-        }
-        if (event.strikeLooking || event.strikeSwinging) && prior.strikes >= 2 {
-            return "Strikeout"
-        }
-        return nil
     }
 
     private func persistPitchEvent(_ event: PitchEvent, shouldFinalizeComposer: Bool = true) {
@@ -6682,27 +6639,15 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// Fallback for events that arrive without count fields (older records, or a
+    /// participant's event). Uses the same rules as everything else rather than
+    /// its own copy of them.
     private func applyProgressCountAdjustments(for event: PitchEvent) {
-        let normalizedOutcome = (event.outcome ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-
-        if normalizedOutcome.contains("walk") || normalizedOutcome == "k" || normalizedOutcome == "ꓘ".lowercased() || normalizedOutcome.contains("hbp") {
-            syncCountFromComposer(balls: 0, strikes: 0)
-        } else if event.isBall == true {
-            let nextBalls = min(3, max(0, balls + 1))
-            ballsBinding.wrappedValue = nextBalls
-        } else if event.strikeLooking || event.strikeSwinging || normalizedOutcome.contains("strike") {
-            let nextStrikes = min(2, max(0, strikes + 1))
-            strikesBinding.wrappedValue = nextStrikes
-        } else if normalizedOutcome.contains("foul") {
-            if strikes < 2 {
-                strikesBinding.wrappedValue = strikes + 1
-            }
-        } else if event.isStrike {
-            let nextStrikes = min(2, max(0, strikes + 1))
-            strikesBinding.wrappedValue = nextStrikes
-        }
+        let result = AtBatCountRules.apply(
+            AtBatCountRules.PitchFacts(event: event),
+            to: AtBatCount(balls: balls, strikes: strikes)
+        )
+        updateCount(result.count)
     }
 
     private func applyProgressOutcomeAdjustments(for event: PitchEvent) {
@@ -6770,37 +6715,10 @@ struct PitchTrackerView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: workItem)
     }
 
+    /// Count changes coming from the pitch composer / result sheet.
+    /// Shares the one write path so live games get the same stamping as local ones.
     private func syncCountFromComposer(balls: Int, strikes: Int) {
-        let normalizedBalls = max(0, min(3, balls))
-        let normalizedStrikes = max(0, min(2, strikes))
-        // Always update local state immediately for responsive UI.
-        self.balls = normalizedBalls
-        self.strikes = normalizedStrikes
-
-        guard sessionManager.currentMode == .game else { return }
-
-        if let liveId = activeLiveId {
-            LiveGameService.shared.updateLiveFields(
-                liveId: liveId,
-                fields: [
-                    "balls": normalizedBalls,
-                    "strikes": normalizedStrikes,
-                    "progressUpdatedAt": FieldValue.serverTimestamp()
-                ]
-            )
-            mirrorLiveProgressToGame(field: "balls", value: normalizedBalls)
-            mirrorLiveProgressToGame(field: "strikes", value: normalizedStrikes)
-            return
-        }
-
-        guard let gid = selectedGameId, let owner = effectiveGameOwnerUserId else { return }
-        authManager.updateGameBalls(ownerUserId: owner, gameId: gid, balls: normalizedBalls)
-        authManager.updateGameStrikes(ownerUserId: owner, gameId: gid, strikes: normalizedStrikes)
-        if let idx = games.firstIndex(where: { $0.id == gid }) {
-            games[idx].balls = normalizedBalls
-            games[idx].strikes = normalizedStrikes
-        }
-        markLocalProgressChange()
+        updateCount(AtBatCount(balls: balls, strikes: strikes))
     }
 
     private var lastPersistedEventInCurrentMode: PitchEvent? {
@@ -7029,16 +6947,21 @@ struct PitchTrackerView: View {
         ZStack {
             backgroundView
                 .ignoresSafeArea()
-            if isCompactHeight {
-                padPortraitContainer(
-                    ScrollView(.vertical, showsIndicators: false) {
-                        mainStack
-                            .padding(.bottom, 12)
-                    }
-                )
-            } else {
-                padPortraitContainer(mainStack)
-            }
+            // Always allow scrolling as a fallback, rather than gating it behind a
+            // fixed height threshold. mainStack sizes several regions as a fraction
+            // of effectiveScreenSize.height, but other chrome around it (header,
+            // pitch buttons, At Bat list, count row, score section) has fixed
+            // point heights - on a screen shorter than whatever device those
+            // fixed heights were tuned against, the fractional regions no longer
+            // leave enough room and content bleeds past the safe area with no way
+            // to reach it. A ScrollView whose content already fits behaves exactly
+            // like a plain stack, so this is a no-op on devices that already fit.
+            padPortraitContainer(
+                ScrollView(.vertical, showsIndicators: false) {
+                    mainStack
+                        .padding(.bottom, 12)
+                }
+            )
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .onAppear {
@@ -9003,15 +8926,17 @@ struct PitchTrackerView: View {
             } message: {
                 Text("This device doesn’t have a camera available.")
             }
-            .alert("Camera Access Needed", isPresented: $showCameraPermissionAlert) {
-                Button("Open Settings") {
+            .appConfirmationDialog(
+                isPresented: $showCameraPermissionAlert,
+                title: "Camera Access Needed",
+                message: "Enable Camera access in Settings to scan the owner’s QR code.",
+                primaryTitle: "Open Settings",
+                primaryAction: {
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                     UIApplication.shared.open(url)
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Enable Camera access in Settings to scan the owner’s QR code.")
-            }
+                },
+                secondaryTitle: "Cancel"
+            )
             .eraseToAnyView()
 
         let v4b = v4
@@ -9092,14 +9017,16 @@ struct PitchTrackerView: View {
                 },
                 secondaryTitle: "Not Now"
             )
-            .alert("Sign In Required", isPresented: $showDemoLoginWall) {
-                Button("Not Now", role: .cancel) { }
-                Button("Sign In") {
+            .appConfirmationDialog(
+                isPresented: $showDemoLoginWall,
+                title: "Sign In Required",
+                message: demoLoginWallMessage,
+                primaryTitle: "Sign In",
+                primaryAction: {
                     onRequireSignIn()
-                }
-            } message: {
-                Text(demoLoginWallMessage)
-            }
+                },
+                secondaryTitle: "Not Now"
+            )
             .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -9506,12 +9433,12 @@ private struct ProgressGameView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
                 ScoreTrackerCompact(usScore: $us, themScore: $them, onProgressChange: onProgressChange)
-                    .padding(.top, 8)
+                    .padding(.top, 2)
                     .padding(.leading, 12)
                 Spacer()
                 VStack(alignment: .leading, spacing: 2){
                     InningCounterCompact(inning: $inning)
-                        .padding(.top, 9)
+                        .padding(.top, 2)
                         .padding(.trailing, 8)
                     HitsCounterCompact(hits: $hits)
                         .padding(.trailing, 8)

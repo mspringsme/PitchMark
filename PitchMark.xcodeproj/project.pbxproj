@@ -64,6 +64,7 @@
 		23F7D2E22F7599BC0010D7BF /* Exceptions for "PitchMark" folder in "Pitchmark Display" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				AtBatCount.swift,
 				AuthManager.swift,
 				CalledPitchRecord.swift,
 				Games.swift,
