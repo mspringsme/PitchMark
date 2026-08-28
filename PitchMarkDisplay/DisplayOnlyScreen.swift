@@ -84,6 +84,13 @@ struct DisplayOnlyScreen: View {
             stopListening()
             forceOrientation(.portrait)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .permanentAccountLocalDataWillPurge)) { _ in
+            // Firestore.terminate() (used during account deletion) will not complete
+            // while listeners registered on this view are still attached, and that
+            // teardown runs before SwiftUI has unmounted this view via onDisappear.
+            // Detach them here, synchronously, so terminate() isn't left hanging.
+            stopListening()
+        }
     }
 
     private func startListeningToDisplayState() {

@@ -33,4 +33,8 @@ extension Notification.Name {
 
     // Fired after Stripe returns from a successful retail checkout
     static let retailCheckoutSucceeded = Notification.Name("retailCheckoutSucceeded")
+
+    // Fired only after permanent server-side account deletion succeeds, allowing
+    // mounted views to discard private in-memory buffers before local files vanish.
+    static let permanentAccountLocalDataWillPurge = Notification.Name("permanentAccountLocalDataWillPurge")
 }

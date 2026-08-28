@@ -1,44 +1,68 @@
 {
-  "hosting": {
-    "site": "pitchmark-fb9f8",
-    "public": "public",
-    "rewrites": [
-      {
-        "source": "/stripe/success",
-        "destination": "/stripe-success.html"
-      },
-      {
-        "source": "/stripe/cancel",
-        "destination": "/stripe-cancel.html"
-      }
-    ],
-    "redirects": [
-      {
-        "source": "/privacy",
-        "destination": "/privacy.html",
-        "type": 301
-      },
-      {
-        "source": "/terms",
-        "destination": "/terms.html",
-        "type": 301
-      },
-      {
-        "source": "/support",
-        "destination": "/support.html",
-        "type": 301
-      }
-    ],
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ]
-  },
+  "hosting": [
+    {
+      "site": "pitchmark-fb9f8",
+      "public": "public",
+      "appAssociation": "NONE",
+      "rewrites": [
+        {
+          "source": "/stripe/success",
+          "destination": "/stripe-success.html"
+        },
+        {
+          "source": "/stripe/cancel",
+          "destination": "/stripe-cancel.html"
+        }
+      ],
+      "redirects": [
+        {
+          "source": "/privacy",
+          "destination": "/privacy.html",
+          "type": 301
+        },
+        {
+          "source": "/terms",
+          "destination": "/terms.html",
+          "type": 301
+        },
+        {
+          "source": "/support",
+          "destination": "/support.html",
+          "type": 301
+        }
+      ],
+      "headers": [
+        {
+          "source": "/apple-app-site-association",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        {
+          "source": "/.well-known/apple-app-site-association",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      ],
+      "ignore": [
+        "firebase.json",
+        "**/.DS_Store",
+        "**/node_modules/**"
+      ]
+    }
+  ],
   "functions": {
     "source": "functions"
   },
   "firestore": {
-  "rules": "firestore.rules"
-}
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
 }

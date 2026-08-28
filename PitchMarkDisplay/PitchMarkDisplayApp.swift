@@ -37,6 +37,13 @@ struct PitchMarkDisplayApp: App {
                 .environmentObject(authManager)
                 .environmentObject(subscriptionManager)
                 .dynamicTypeSize(.medium)
+                .onOpenURL { url in
+                    _ = authManager.handleEmailSignInLink(url)
+                }
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    guard let url = activity.webpageURL else { return }
+                    _ = authManager.handleEmailSignInLink(url)
+                }
         }
     }
 }

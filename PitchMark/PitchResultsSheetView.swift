@@ -570,6 +570,9 @@ private struct HoldActionButton: View {
             .contentShape(shape)
         }
         .buttonStyle(.plain)
+        // Without this the button only *looks* disabled - it stayed tappable and
+        // would still fire its action while greyed out.
+        .disabled(!isEnabled)
         .overlay {
             shape
                 .stroke((isEnabled ? foregroundColor.opacity(0.95) : .gray.opacity(0.25)), lineWidth: 1.5)
@@ -583,10 +586,6 @@ private struct HoldActionButton: View {
 
 struct PitchResultSheetView: View {
     @Environment(\.dismiss) private var dismiss
-    private enum PendingSaveIntent {
-        case pitchOnly
-        case pitchEvent
-    }
     @Binding var isPresented: Bool
     @Binding var isStrikeSwinging: Bool
     @Binding var isStrikeLooking: Bool
@@ -608,9 +607,6 @@ struct PitchResultSheetView: View {
     @State private var showFieldOverlay: Bool = false
 
     @State private var showMissingBatterPrompt: Bool = false
-    @State private var pendingSaveIntent: PendingSaveIntent? = nil
-    @State private var confirmedBallsCount: Int = 0
-    @State private var confirmedStrikesCount: Int = 0
     private struct SavedPlayReviewDraft: Identifiable {
         let id = UUID()
         let title: String
@@ -618,18 +614,18 @@ struct PitchResultSheetView: View {
         let event: PitchEvent
     }
 
-    private struct CountSeedSnapshot: Equatable {
-        let balls: Int
-        let strikes: Int
-    }
-
     @State private var savedPlayReviewDraft: SavedPlayReviewDraft? = nil
     @State private var savedPlayReviewTitle: String = "Saved Play"
     @State private var savedPlayReviewSummaryLines: [String] = []
     @State private var savedPlayReviewEvent: PitchEvent? = nil
-    @State private var selectionCountSeed: CountSeedSnapshot? = nil
+    /// The count *before* this pitch. The displayed count is derived from this
+    /// plus the current selection - it is never mutated directly.
+    @State private var countSeed: AtBatCount = .start
     @State private var didInitializeManualCount: Bool = false
-    @State private var pendingCountSyncWorkItem: DispatchWorkItem? = nil
+    /// Set only when the user taps the count circles to correct the number by
+    /// hand. Keeping this separate from the seed is what stops a manual
+    /// correction from being incremented a second time by the pitch rules.
+    @State private var manualCountOverride: AtBatCount? = nil
     @State private var overrideOpponentJersey: String? = nil
     @State private var overrideOpponentBatterId: String? = nil
     @State private var showMissingLocationPrompt: Bool = false
@@ -739,7 +735,6 @@ struct PitchResultSheetView: View {
         battedBallSelection = nil
         battedBallTapNormalized = nil
         showMissingBatterPrompt = false
-        pendingSaveIntent = nil
         overrideOpponentJersey = nil
         overrideOpponentBatterId = nil
         shouldScrollToInPlayOutcome = false
@@ -852,15 +847,15 @@ struct PitchResultSheetView: View {
                                 let value = idx + 1
                                 Button {
                                     // Tap same filled value to step down by one, else set to that value.
-                                    confirmedBallsCount = (confirmedBallsCount == value) ? max(0, value - 1) : value
-                                    selectionCountSeed = CountSeedSnapshot(
-                                        balls: confirmedBallsCount,
-                                        strikes: confirmedStrikesCount
+                                    let current = resolvedCount
+                                    let nextBalls = (current.balls == value) ? max(0, value - 1) : value
+                                    manualCountOverride = AtBatCount(
+                                        balls: nextBalls,
+                                        strikes: current.strikes
                                     )
-                                    onCountChanged?(confirmedBallsCount, confirmedStrikesCount)
                                 } label: {
                                     countCircle(
-                                        isFilled: value <= confirmedBallsCount,
+                                        isFilled: value <= resolvedCount.balls,
                                         fillColor: .red,
                                         strokeColor: .red
                                     )
@@ -879,15 +874,15 @@ struct PitchResultSheetView: View {
                                 let value = idx + 1
                                 Button {
                                     // Tap same filled value to step down by one, else set to that value.
-                                    confirmedStrikesCount = (confirmedStrikesCount == value) ? max(0, value - 1) : value
-                                    selectionCountSeed = CountSeedSnapshot(
-                                        balls: confirmedBallsCount,
-                                        strikes: confirmedStrikesCount
+                                    let current = resolvedCount
+                                    let nextStrikes = (current.strikes == value) ? max(0, value - 1) : value
+                                    manualCountOverride = AtBatCount(
+                                        balls: current.balls,
+                                        strikes: nextStrikes
                                     )
-                                    onCountChanged?(confirmedBallsCount, confirmedStrikesCount)
                                 } label: {
                                     countCircle(
-                                        isFilled: value <= confirmedStrikesCount,
+                                        isFilled: value <= resolvedCount.strikes,
                                         fillColor: .green,
                                         strokeColor: .green
                                     )
@@ -899,7 +894,7 @@ struct PitchResultSheetView: View {
 
                     Spacer()
 
-                    Text("Count: \(confirmedBallsCount)-\(confirmedStrikesCount)")
+                    Text("Count: \(resolvedCount.displayText)")
                         .font(.subheadline.weight(.semibold))
                         .monospacedDigit()
                         .lineLimit(1)
@@ -920,10 +915,8 @@ struct PitchResultSheetView: View {
                 Spacer()
                 Button {
                     resetSelections()
-                    confirmedBallsCount = 0
-                    confirmedStrikesCount = 0
-                    selectionCountSeed = CountSeedSnapshot(balls: 0, strikes: 0)
-                    onCountChanged?(0, 0)
+                    countSeed = .start
+                    manualCountOverride = nil
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                         .font(.caption.weight(.semibold))
@@ -1097,14 +1090,14 @@ struct PitchResultSheetView: View {
         if outcome == "K" || outcome == "ꓘ" {
             return "3.circle"
         }
-        return "\(max(1, min(2, confirmedStrikesCount))).circle"
+        return "\(max(1, min(2, resolvedCount.strikes))).circle"
     }
 
     private func ballMarkerSymbol(outcome: String, prior: (balls: Int, strikes: Int)) -> String {
         if outcome.caseInsensitiveCompare("Walk") == .orderedSame || prior.balls >= 3 {
             return "4.circle"
         }
-        return "\(max(1, min(3, confirmedBallsCount))).circle"
+        return "\(max(1, min(3, resolvedCount.balls))).circle"
     }
 
     private func foulMarkerSymbol(prior: (balls: Int, strikes: Int)) -> String {
@@ -1125,7 +1118,7 @@ struct PitchResultSheetView: View {
         return effectiveOpponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
     }
 
-    private func performSave(_ intent: PendingSaveIntent) {
+    private func performSave() {
         guard hasSelectedLocation else {
             showMissingLocationPrompt = true
             onMissingLocation?()
@@ -1133,47 +1126,15 @@ struct PitchResultSheetView: View {
         }
         guard var event = buildCurrentEvent() else { return }
 
-        let balls = max(0, min(3, confirmedBallsCount))
-        let strikes = max(0, min(2, confirmedStrikesCount))
-        let prior = priorCount(for: event)
-
-        let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let isOutOutcome = normalizedOutcome.caseInsensitiveCompare("Out") == .orderedSame
-        let isWalkOutcome = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame
-        let isFoulOutcome = normalizedOutcome.caseInsensitiveCompare("Foul") == .orderedSame
-        let isKOutcome = normalizedOutcome == "K" || normalizedOutcome == "ꓘ"
-        let isStrikeTerminal = isKOutcome || ((event.strikeLooking || event.strikeSwinging) && prior.strikes >= 2)
-        let isBallTerminal = isWalkOutcome || ((event.isBall == true) && prior.balls >= 3)
-
-        if isStrikeTerminal {
-            event.atBatCount = "Strikeout"
-            event.atBatBalls = 0
-            event.atBatStrikes = 0
-        } else if isFoulOutcome {
-            event.atBatBalls = prior.balls
-            event.atBatStrikes = min(2, prior.strikes + 1)
-            event.atBatCount = "\(event.atBatBalls ?? prior.balls)-\(event.atBatStrikes ?? prior.strikes)"
-        } else if isBallTerminal {
+        // The saved count is exactly what the sheet was showing. Both come from
+        // AtBatCountRules, so the preview can no longer disagree with the record.
+        let terminal = resolvedTerminal
+        event.applyCount(resolvedCount, terminal: terminal)
+        if terminal == .walk {
             event.outcome = "Walk"
-            event.atBatCount = "Ball 4"
-            event.atBatBalls = 0
-            event.atBatStrikes = 0
-        } else if isOutOutcome {
-            event.atBatCount = "Out"
-            event.atBatBalls = 0
-            event.atBatStrikes = 0
-        } else {
-            event.atBatBalls = balls
-            event.atBatStrikes = strikes
-            event.atBatCount = "\(balls)-\(strikes)"
         }
 
-        if intent == .pitchOnly {
-            event.logDebugPayload(prefix: "📤 Saving Pitch-Only PitchEvent")
-        } else {
-            event.logDebugPayload()
-        }
-        pendingSaveIntent = nil
+        event.logDebugPayload()
         savedPlayReviewEvent = event
         savedPlayReviewTitle = "Save Pitch"
         savedPlayReviewSummaryLines = outcomeSummaryLines(for: event)
@@ -1199,80 +1160,23 @@ struct PitchResultSheetView: View {
         dismiss()
     }
 
-    private func initializeManualCountIfNeeded() {
-        guard !didInitializeManualCount else { return }
-        let source = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
-        let normalized = CountSeedSnapshot(
-            balls: max(0, min(3, source.balls)),
-            strikes: max(0, min(2, source.strikes))
-        )
-        confirmedBallsCount = normalized.balls
-        confirmedStrikesCount = normalized.strikes
-        selectionCountSeed = normalized
-        didInitializeManualCount = true
-    }
-
-    private func scheduleSelectionDrivenCountUpdate() {
-        pendingCountSyncWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [self] in
-            applySelectionDrivenCountUpdate()
-            pendingCountSyncWorkItem = nil
-        }
-        pendingCountSyncWorkItem = workItem
-        DispatchQueue.main.async(execute: workItem)
-    }
-
-    private func refreshedCountFromCurrentSelection() -> (balls: Int, strikes: Int) {
-        let source: CountSeedSnapshot = selectionCountSeed
-            ?? CountSeedSnapshot(
-                balls: currentCountSeed?.balls ?? suggestedCountSeed?.balls ?? 0,
-                strikes: currentCountSeed?.strikes ?? suggestedCountSeed?.strikes ?? 0
-            )
-        var balls = source.balls
-        var strikes = source.strikes
-
-        let normalizedOutcome = (selectedOutcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let isWalk = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame
-        let isK = normalizedOutcome == "K" || normalizedOutcome == "ꓘ"
-        let isHBP = isHitBatter || normalizedOutcome.caseInsensitiveCompare("HBP") == .orderedSame
-        let isFoul = normalizedOutcome.caseInsensitiveCompare("Foul") == .orderedSame
-
-        if isWalk || isK || isHBP {
-            return (0, 0)
-        }
-
-        if isFoul {
-            if strikes < 2 {
-                strikes += 1
-            }
-            return (balls, strikes)
-        }
-
-        if isBall {
-            balls = min(3, balls + 1)
-            return (balls, strikes)
-        }
-
-        if isStrikeSwinging || isStrikeLooking {
-            strikes = min(2, strikes + 1)
-            return (balls, strikes)
-        }
-
-        return (balls, strikes)
-    }
-
-    private func applySelectionDrivenCountUpdate() {
-        let next = refreshedCountFromCurrentSelection()
-        guard next.balls != confirmedBallsCount || next.strikes != confirmedStrikesCount else { return }
-        confirmedBallsCount = next.balls
-        confirmedStrikesCount = next.strikes
-        onCountChanged?(next.balls, next.strikes)
-    }
-
-    private func priorCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
+    /// The most recently saved pitch for whichever batter is currently at the
+    /// plate. Its `atBatBalls`/`atBatStrikes` are already the right seed for
+    /// the next pitch either way - `applyCount` resets them to 0/0 on a
+    /// terminal pitch, so there's no need to separately detect an at-bat
+    /// boundary here.
+    ///
+    /// This is preferred over `currentCountSeed` (the live-synced balls/
+    /// strikes cache) because that cache is gated by `progressRevision` on
+    /// the receiving device and can lag behind a partner's just-saved pitch.
+    /// `allPitchEvents` comes from the dedicated pitch-events listener, which
+    /// carries no such gate, so it reflects a partner's save sooner - often
+    /// before the coalesced progress snapshot does. See the two-device "Ball
+    /// 1 instead of Ball 4" bug this was fixed for.
+    private var lastPersistedEventForActiveBatter: PitchEvent? {
         let activeBatterId = effectiveOpponentBatterId
         let activeJersey = effectiveOpponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseEvent = allPitchEvents
+        return allPitchEvents
             .filter { existing in
                 if let activeBatterId, !activeBatterId.isEmpty {
                     return existing.opponentBatterId == activeBatterId
@@ -1284,63 +1188,63 @@ struct PitchResultSheetView: View {
             }
             .sorted(by: { $0.timestamp < $1.timestamp })
             .last
-
-        let preferredSeed: CountSeedSnapshot? = selectionCountSeed
-            ?? suggestedCountSeed.map { CountSeedSnapshot(balls: $0.balls, strikes: $0.strikes) }
-
-        let parsedFromText: (Int, Int)? = {
-            guard let text = baseEvent?.atBatCount else { return nil }
-            let parts = text.split(separator: "-", maxSplits: 1).map { Int($0.trimmingCharacters(in: .whitespaces)) }
-            guard parts.count == 2, let b = parts[0], let s = parts[1] else { return nil }
-            return (b, s)
-        }()
-
-        let balls = preferredSeed?.balls ?? baseEvent?.atBatBalls ?? parsedFromText?.0 ?? 0
-        let strikes = preferredSeed?.strikes ?? baseEvent?.atBatStrikes ?? parsedFromText?.1 ?? 0
-        return (balls, strikes)
     }
 
-    private func suggestedCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
-        let prior = priorCount(for: event)
-        var balls = prior.balls
-        var strikes = prior.strikes
+    private func initializeManualCountIfNeeded() {
+        guard !didInitializeManualCount else { return }
+        let persistedSeed: AtBatCount? = lastPersistedEventForActiveBatter.flatMap { event in
+            guard let balls = event.atBatBalls, let strikes = event.atBatStrikes else { return nil }
+            return AtBatCount(balls: balls, strikes: strikes)
+        }
+        let fallback = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
+        countSeed = persistedSeed ?? AtBatCount(balls: fallback.balls, strikes: fallback.strikes)
+        manualCountOverride = nil
+        didInitializeManualCount = true
+    }
 
-        let normalizedOutcome = (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        let isHBP = normalizedOutcome.caseInsensitiveCompare("HBP") == .orderedSame
-        let isWalk = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame
-        let isK = normalizedOutcome == "K" || normalizedOutcome == "ꓘ"
-        let isFoul = normalizedOutcome.caseInsensitiveCompare("Foul") == .orderedSame
+    /// The count-relevant facts of the pitch currently being composed.
+    private var currentPitchFacts: AtBatCountRules.PitchFacts {
+        AtBatCountRules.PitchFacts(
+            isBall: isBall,
+            strikeSwinging: isStrikeSwinging,
+            strikeLooking: isStrikeLooking,
+            isFoul: isFoulSelected,
+            // Location is not consulted for the preview: saving already requires an
+            // explicit call (Swinging/Looking/Foul/Ball/Hit), so the explicit facts
+            // fully determine the count and preview cannot drift from what is saved.
+            locationInStrikeZone: false,
+            isHitBatter: isHitBatter,
+            outcome: isHitTagSelected ? "Hit" : selectedOutcome
+        )
+    }
 
-        if isHBP {
-            return (balls, strikes)
-        }
-        if isWalk {
-            balls = 3
-            return (balls, strikes)
-        }
-        if isK {
-            strikes = 2
-            return (balls, strikes)
-        }
+    /// The count shown in the sheet, and the count written onto the saved pitch.
+    /// Derived, never mutated - a manual correction replaces it outright rather
+    /// than feeding back into the seed.
+    private var resolvedCount: AtBatCount {
+        manualCountOverride ?? AtBatCountRules.apply(currentPitchFacts, to: countSeed).count
+    }
 
-        if event.strikeLooking || event.strikeSwinging {
-            strikes = min(2, strikes + 1)
-            return (balls, strikes)
-        }
-        if isFoul {
-            if strikes < 2 {
-                strikes += 1
-            }
-            return (balls, strikes)
-        }
-        if event.isStrike {
-            strikes = min(2, strikes + 1)
-            return (balls, strikes)
-        }
-        if event.isBall == true {
-            balls = min(3, balls + 1)
-        }
+    private var resolvedTerminal: AtBatTerminal? {
+        // A hand-corrected count means the user is stating the result directly, so
+        // no terminal is inferred for it.
+        guard manualCountOverride == nil else { return nil }
+        return AtBatCountRules.apply(currentPitchFacts, to: countSeed).terminal
+    }
 
+    private func priorCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
+        let baseEvent = lastPersistedEventForActiveBatter
+
+        let preferredSeed: AtBatCount? = didInitializeManualCount
+            ? countSeed
+            : suggestedCountSeed.map { AtBatCount(balls: $0.balls, strikes: $0.strikes) }
+
+        // `atBatCount` is display text only. It is deliberately not parsed back
+        // into a count: it can legitimately hold "Strikeout" / "Ball 4" / "HBP",
+        // and treating it as a third source of truth is how the numeric fields and
+        // the label used to drift apart.
+        let balls = preferredSeed?.balls ?? baseEvent?.atBatBalls ?? 0
+        let strikes = preferredSeed?.strikes ?? baseEvent?.atBatStrikes ?? 0
         return (balls, strikes)
     }
 
@@ -1363,20 +1267,10 @@ struct PitchResultSheetView: View {
 
     private func handleSave() {
         if requiresBatterPromptBeforeSave() {
-            pendingSaveIntent = .pitchEvent
             showMissingBatterPrompt = true
             return
         }
-        performSave(.pitchEvent)
-    }
-
-    private func handlePitchOnlySave() {
-        if requiresBatterPromptBeforeSave() {
-            pendingSaveIntent = .pitchOnly
-            showMissingBatterPrompt = true
-            return
-        }
-        performSave(.pitchOnly)
+        performSave()
     }
 
     private func buildCurrentEvent() -> PitchEvent? {
@@ -1561,33 +1455,26 @@ struct PitchResultSheetView: View {
                     .padding(.top, 8)
 
                     let canSave: Bool = {
-                        // Require at least one of: overlay tap, outcome/descriptor/error, or any toggle
-                        (battedBallRegionName != nil) ||
-                        (selectedOutcome != nil) ||
-                        (selectedDescriptor != nil) ||
-                        isHitTagSelected ||
-                        isError ||
-                        isFoulSelected ||
+                        // Every pitch resolves to exactly one of these primary
+                        // outcomes, so require one before the result can be saved.
+                        // "Out" and "Safe" (1B/2B/3B/HR) each cover a ball in play
+                        // that fielders converted into a full result on their own,
+                        // not a supplementary tag. Other supplementary tags (K,
+                        // Walk, Wild Pitch, Passed Ball, Error, batted-ball
+                        // location, descriptors) refine a result but can no longer
+                        // stand in as the whole result.
                         isStrikeSwinging ||
                         isStrikeLooking ||
-                        isWildPitch ||
-                        isPassedBall ||
-                        isBall
+                        isFoulSelected ||
+                        isBall ||
+                        isHitTagSelected ||
+                        selectedOutcome == "Out" ||
+                        (selectedOutcome.map { ["1B", "2B", "3B", "HR"].contains($0) } ?? false)
                     }()
 
                     Divider()
 
                     HStack(alignment: .center, spacing: 8) {
-                        HoldActionButton(
-                            title: "Save Pitch",
-                            systemImage: "",
-                            foregroundColor: .blue,
-                            tint: .white,
-                            isEnabled: true,
-                            horizontalPadding: 10,
-                            action: handlePitchOnlySave
-                        )
-
                         SafeOutButtonsRow(
                             selectedOutcome: $selectedOutcome,
                             selectedDescriptor: $selectedDescriptor,
@@ -1640,22 +1527,17 @@ struct PitchResultSheetView: View {
                 )
             )
                 .onChange(of: isStrikeSwinging) { _, _ in
-                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: isStrikeLooking) { _, _ in
-                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: isBall) { _, _ in
-                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: isHitBatter) { _, _ in
-                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: selectedOutcome) { _, _ in
                 if selectedOutcome == "Walk" || selectedOutcome == "K" || selectedOutcome == "ꓘ" || selectedOutcome == "HBP" {
                     isBall = false
                 }
-                scheduleSelectionDrivenCountUpdate()
             }
             .onChange(of: battedBallTapNormalized) { _, newValue in
                 guard currentMode == .scout, newValue != nil else { return }
@@ -1675,14 +1557,27 @@ struct PitchResultSheetView: View {
                     didInitializeManualCount = false
                     initializeManualCountIfNeeded()
                 } else {
-                    pendingCountSyncWorkItem?.cancel()
-                    pendingCountSyncWorkItem = nil
-                    selectionCountSeed = nil
+                    manualCountOverride = nil
                     didInitializeManualCount = false
                     resetSelections()
                 }
             }
             .onAppear { initializeManualCountIfNeeded() }
+            // One notification point for the whole sheet. Previously each tap site
+            // called onCountChanged by hand, so any path that forgot to call it
+            // left the rest of the app showing a stale count.
+            .onChange(of: resolvedCount) { _, newValue in
+                // Only publish while the sheet is actually open and seeded.
+                //
+                // Tearing the sheet down clears every selection, which makes
+                // resolvedCount fall back to countSeed - the count from *before*
+                // this pitch. Without this guard that stale value was pushed out
+                // on dismiss and overwrote the count the save had just committed,
+                // so every recorded pitch snapped the game back to its pre-pitch
+                // count and the next pitch re-seeded from there.
+                guard isPresented, didInitializeManualCount else { return }
+                onCountChanged?(newValue.balls, newValue.strikes)
+            }
             .alert("Result Location Required", isPresented: $showMissingLocationPrompt) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -1718,10 +1613,8 @@ struct PitchResultSheetView: View {
                                 Button {
                                     overrideOpponentBatterId = cell.id.uuidString
                                     overrideOpponentJersey = cell.jerseyNumber
-                                    let intent = pendingSaveIntent ?? .pitchEvent
-                                    pendingSaveIntent = nil
                                     showMissingBatterPrompt = false
-                                    performSave(intent)
+                                    performSave()
                                 } label: {
                                     BatterPromptChipButton(
                                         jerseyNumber: cell.jerseyNumber,
@@ -1736,17 +1629,14 @@ struct PitchResultSheetView: View {
 
                     HStack(spacing: 10) {
                         Button("Save Without Batter") {
-                            let intent = pendingSaveIntent ?? .pitchEvent
-                            pendingSaveIntent = nil
                             overrideOpponentBatterId = nil
                             overrideOpponentJersey = nil
                             showMissingBatterPrompt = false
-                            performSave(intent)
+                            performSave()
                         }
                         .buttonStyle(.bordered)
 
                         Button("Cancel", role: .cancel) {
-                            pendingSaveIntent = nil
                             showMissingBatterPrompt = false
                         }
                         .buttonStyle(.borderedProminent)

@@ -2,7 +2,17 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function signedIn() { return request.auth != null; }
+    // Account-deletion tombstones are written by the Admin SDK and retained.
+    // Referencing the dedicated collection here avoids depending on rules for
+    // a document within the user's private tree while that tree is deleted.
+    function hasAccountDeletionTombstone() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/accountDeletionTombstones/$(request.auth.uid));
+    }
+
+    function signedIn() {
+      return request.auth != null && !hasAccountDeletionTombstone();
+    }
     function uid() { return request.auth.uid; }
 
     function notExpired(data) {
@@ -32,6 +42,12 @@ service cloud.firestore {
     function isRetailAdmin() {
       return signedIn()
         && request.auth.token.admin == true;
+    }
+
+    // Tombstones are server-owned barriers. Clients may not inspect, create,
+    // change, or remove them, including the user identified by the document ID.
+    match /accountDeletionTombstones/{tombstonedUid} {
+      allow read, write: if false;
     }
 
     match /retailOrders/{orderId} {
@@ -118,8 +134,16 @@ service cloud.firestore {
           )
           && request.resource.data.createdByUid == uid();
 
+        // A shared collaborator could create rows here but never correct one,
+        // so an edited outcome or an undone pitch never reached the pitcher's
+        // career record and it drifted from the game record permanently. They
+        // may now maintain the rows they wrote - and only those - which is the
+        // same shape liveGames/pitchEvents already uses below.
         allow update, delete: if signedIn()
-          && isActiveOwner(pitcherDoc());
+          && (
+            isActiveOwner(pitcherDoc())
+            || (sharedWithMe(pitcherDoc()) && resource.data.createdByUid == uid())
+          );
       }
 
       match /stats/{scopeId} {
@@ -135,7 +159,7 @@ service cloud.firestore {
           );
 
         // Only server (Cloud Functions) should write stats
-        allow create, update, delete: if request.auth.token.admin == true;
+        allow create, update, delete: if isRetailAdmin();
       }
     }
 
@@ -181,6 +205,11 @@ service cloud.firestore {
     match /users/{ownerUid}/displayState/{docId} {
       allow get, list, create, update, delete: if signedIn() && ownerUid == uid();
     }
+
+    // Note: /users/{uid}/joinedLiveSessions/{liveId} (see LiveGameService.
+    // recordJoinedLiveSession) needs no dedicated block - the catch-all
+    // "USERS PRIVATE TREE" rule below already grants the owning uid full
+    // read/write on everything under users/{uid}/**.
 
     // ─────────────────────────────────────────────
     // JOIN CODES: /joinCodes/{code}

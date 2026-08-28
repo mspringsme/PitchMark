@@ -45,6 +45,8 @@ enum ChangeEmailError: LocalizedError {
 enum DeleteAccountError: LocalizedError {
     case notSignedIn
     case requiresRecentLogin
+    case timedOut
+    case serviceUnavailable
     case unknown(String)
 
     var errorDescription: String? {
@@ -53,8 +55,229 @@ enum DeleteAccountError: LocalizedError {
             return "Not signed in."
         case .requiresRecentLogin:
             return "For security, please sign in again to delete your account."
+        case .timedOut:
+            return "Account deletion took too long to finish. Check your connection, then sign in again to confirm whether the account was deleted before retrying."
+        case .serviceUnavailable:
+            return "Account deletion is temporarily unavailable. Please check your connection and try again."
         case .unknown(let message):
             return message
+        }
+    }
+}
+
+private enum PitchMarkAppVariant: Equatable {
+    case live
+    case display
+
+    init?(bundleIdentifier: String?) {
+        switch bundleIdentifier {
+        case Self.liveBundleIdentifier:
+            self = .live
+        case Self.displayBundleIdentifier:
+            self = .display
+        default:
+            return nil
+        }
+    }
+
+    static let liveBundleIdentifier = "com.pitchmark.app"
+    static let displayBundleIdentifier = "app.Pitchmark-Display"
+
+    var bundleIdentifier: String {
+        switch self {
+        case .live: return Self.liveBundleIdentifier
+        case .display: return Self.displayBundleIdentifier
+        }
+    }
+
+    var emailSignInContinuationURL: URL {
+        switch self {
+        case .live:
+            return URL(string: "https://pitchmark-fb9f8.web.app/signin/live")!
+        case .display:
+            return URL(string: "https://pitchmark-fb9f8.web.app/signin/display")!
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .live: return "PitchMark Live"
+        case .display: return "PM Display"
+        }
+    }
+
+    nonisolated static func signInDestination(for url: URL) -> PitchMarkAppVariant? {
+        guard url.host?.lowercased() == "pitchmark-fb9f8.web.app" else { return nil }
+
+        let path = url.path.lowercased()
+        if path == "/signin/live" || path.hasPrefix("/signin/live/") {
+            return .live
+        }
+        if path == "/signin/display" || path.hasPrefix("/signin/display/") {
+            return .display
+        }
+        return nil
+    }
+}
+
+private enum EmailSignInLinkRouting {
+    private static let nestedLinkQueryNames = Set(["continueurl", "link"])
+
+    static func candidateURLs(from incomingURL: URL) -> [URL] {
+        var candidates: [URL] = []
+        var pending: [(url: URL, depth: Int)] = [(incomingURL, 0)]
+        var seen = Set<String>()
+
+        while !pending.isEmpty {
+            let next = pending.removeFirst()
+            let key = next.url.absoluteString
+            guard seen.insert(key).inserted else { continue }
+            candidates.append(next.url)
+
+            guard next.depth < 4,
+                  let components = URLComponents(url: next.url, resolvingAgainstBaseURL: false) else {
+                continue
+            }
+
+            for item in components.queryItems ?? [] where nestedLinkQueryNames.contains(item.name.lowercased()) {
+                guard let value = item.value,
+                      let nestedURL = decodedHTTPURL(from: value) else { continue }
+                pending.append((nestedURL, next.depth + 1))
+            }
+        }
+
+        return candidates
+    }
+
+    private static func decodedHTTPURL(from value: String) -> URL? {
+        var candidate = value
+
+        for _ in 0..<4 {
+            if let url = URL(string: candidate),
+               let scheme = url.scheme?.lowercased(),
+               scheme == "https" || scheme == "http" {
+                return url
+            }
+
+            guard let decoded = candidate.removingPercentEncoding,
+                  decoded != candidate else { return nil }
+            candidate = decoded
+        }
+
+        return nil
+    }
+}
+
+/// Removes device-local data that belongs to the account that was permanently
+/// deleted. Normal sign-out intentionally does not use this purge so a user who
+/// signs back in on the same device keeps their local preferences and drafts.
+private enum DeletedAccountLocalDataPurger {
+    private static let exactDefaultsKeys: Set<String> = [
+        "pendingEmailLinkSignInEmail",
+        "pendingInviteToken",
+        "pendingPitcherInviteToken",
+        "openOrderHistoryAfterCheckout",
+        "deviceSessionId",
+        "activeLiveId",
+        "activeOpponentName",
+        "displayOnlyMode",
+        "displayOnlyLiveId",
+        "lastTemplateId",
+        "lastBatterSide",
+        "lastMode",
+        "lastView",
+        "activeGameId",
+        "lastPitcherId",
+        "lastTemplateByGameId",
+        "lastPitcherByGameId",
+        "encryptedByGameId",
+        "activeGameOwnerUserId",
+        "hiddenTemplateIds",
+        "hiddenPitcherIds",
+        "lastBackgroundAt",
+        "forceSettingsOnNextLaunch",
+        "lastProgressByGameId",
+        "didShowDisplayOnboarding",
+        "pitchColorOverrides",
+        // Keys used by earlier releases. They can remain on devices upgraded to
+        // the current game-only persistence model.
+        "storedPracticeSessions",
+        "activePracticeId",
+        "activeIsPractice",
+        "encryptedByPracticeId",
+        "practiceCodesEnabled",
+        "pendingDisplayInviteToken"
+    ]
+
+    private static let defaultsKeyPrefixes = [
+        "activePitches.",
+        "lastProgressByGameId.",
+        "batterNotes_id_",
+        "batterNotes_jersey_"
+    ]
+
+    private static let temporaryFilePrefixes = [
+        "PitchMark_GridKey_",
+        "order_packet_",
+        "order_print_"
+    ]
+
+    static func purge() {
+        purgeDefaults()
+        purgeApplicationSupportFiles()
+        purgeTemporaryExports()
+    }
+
+    private static func purgeDefaults() {
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where shouldRemoveDefaultsKey(key) {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    private static func shouldRemoveDefaultsKey(_ key: String) -> Bool {
+        exactDefaultsKeys.contains(key)
+            || defaultsKeyPrefixes.contains(where: key.hasPrefix)
+    }
+
+    private static func purgeApplicationSupportFiles() {
+        guard let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return }
+
+        // This directory currently contains the offline shared-event buffer and
+        // PitcherPortraits. Removing the account-owned directory also protects
+        // future account-local files placed beside them.
+        removeItemIfPresent(
+            applicationSupport.appendingPathComponent("PitchMark", isDirectory: true)
+        )
+    }
+
+    private static func purgeTemporaryExports() {
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: temporaryDirectory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        for url in urls {
+            let filename = url.lastPathComponent
+            let isAccountExport = filename == "PitchMark_PrintableSheet.pdf"
+                || temporaryFilePrefixes.contains(where: filename.hasPrefix)
+            if isAccountExport {
+                removeItemIfPresent(url)
+            }
+        }
+    }
+
+    private static func removeItemIfPresent(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            debugLog("Local account-data purge could not remove \(url.lastPathComponent): \(error.localizedDescription)")
         }
     }
 }
@@ -66,10 +289,12 @@ class AuthManager: ObservableObject {
     @Published private(set) var isSigningInWithApple: Bool = false
     @Published private(set) var authenticationErrorMessage: String? = nil
     @Published private(set) var isRetailAdmin: Bool = false
+    @Published private(set) var accountDeletionAcknowledgementID: UUID? = nil
 
     private var authStateHandle: AuthStateDidChangeListenerHandle?
     private var currentAppleNonce: String? = nil
     private let pendingEmailLinkKey = "pendingEmailLinkSignInEmail"
+    private var accountDeletionAcknowledgementDismissWorkItem: DispatchWorkItem?
 
     init() {
         isCheckingAuth = true
@@ -108,6 +333,7 @@ class AuthManager: ObservableObject {
     }
 
     deinit {
+        accountDeletionAcknowledgementDismissWorkItem?.cancel()
         if let authStateHandle {
             Auth.auth().removeStateDidChangeListener(authStateHandle)
         }
@@ -241,10 +467,22 @@ class AuthManager: ObservableObject {
             return
         }
 
+        guard let appVariant = PitchMarkAppVariant(bundleIdentifier: Bundle.main.bundleIdentifier) else {
+            let error = NSError(
+                domain: "Auth",
+                code: 500,
+                userInfo: [NSLocalizedDescriptionKey: "Email sign-in is not configured for this app target."]
+            )
+            authenticationErrorMessage = error.localizedDescription
+            completion(.failure(error))
+            return
+        }
+
+        authenticationErrorMessage = nil
         let actionCodeSettings = ActionCodeSettings()
-        actionCodeSettings.url = URL(string: "https://pitchmark-fb9f8.web.app/signin")
+        actionCodeSettings.url = appVariant.emailSignInContinuationURL
         actionCodeSettings.handleCodeInApp = true
-        actionCodeSettings.setIOSBundleID(Bundle.main.bundleIdentifier ?? "com.pitchmark.app")
+        actionCodeSettings.setIOSBundleID(appVariant.bundleIdentifier)
 
         Auth.auth().sendSignInLink(toEmail: trimmed, actionCodeSettings: actionCodeSettings) { error in
             if let error {
@@ -259,26 +497,52 @@ class AuthManager: ObservableObject {
     }
 
     func handleEmailSignInLink(_ url: URL) -> Bool {
-        let link = url.absoluteString
-        guard Auth.auth().isSignIn(withEmailLink: link) else { return false }
-        guard let email = UserDefaults.standard.string(forKey: pendingEmailLinkKey),
-              !email.isEmpty else {
-            debugLog("Email link sign-in failed: missing stored email")
+        let candidates = EmailSignInLinkRouting.candidateURLs(from: url)
+        guard let firebaseSignInURL = candidates.first(where: {
+            Auth.auth().isSignIn(withEmailLink: $0.absoluteString)
+        }) else { return false }
+
+        guard let currentApp = PitchMarkAppVariant(bundleIdentifier: Bundle.main.bundleIdentifier) else {
+            authenticationErrorMessage = "Email sign-in is not configured for this app target."
             return true
         }
 
-        Auth.auth().signIn(withEmail: email, link: link) { authResult, error in
+        guard let intendedApp = candidates.compactMap(PitchMarkAppVariant.signInDestination(for:)).first else {
+            authenticationErrorMessage = "This email sign-in link does not identify which PitchMark app requested it. Request a new link from this app."
+            return true
+        }
+
+        guard intendedApp == currentApp else {
+            authenticationErrorMessage = "This sign-in link is for \(intendedApp.displayName). Open that app and request a new email link there."
+            return true
+        }
+
+        guard let email = UserDefaults.standard.string(forKey: pendingEmailLinkKey),
+              !email.isEmpty else {
+            debugLog("Email link sign-in failed: missing stored email")
+            authenticationErrorMessage = "Open the link on the same device and in the same app where you requested it, or request a new email link."
+            return true
+        }
+
+        authenticationErrorMessage = nil
+        Auth.auth().signIn(withEmail: email, link: firebaseSignInURL.absoluteString) { authResult, error in
             if let error {
                 debugLog("Email link sign-in failed: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.authenticationErrorMessage = "Unable to complete email sign-in. Request a new link and try again."
+                }
                 return
             }
 
             guard let firebaseUser = authResult?.user else { return }
-            self.user = firebaseUser
-            self.isSignedIn = true
-            self.refreshRetailAdminStatus(for: firebaseUser)
-            UserDefaults.standard.removeObject(forKey: self.pendingEmailLinkKey)
-            self.upsertUserDocument(for: firebaseUser)
+            DispatchQueue.main.async {
+                self.user = firebaseUser
+                self.isSignedIn = true
+                self.authenticationErrorMessage = nil
+                self.refreshRetailAdminStatus(for: firebaseUser)
+                UserDefaults.standard.removeObject(forKey: self.pendingEmailLinkKey)
+                self.upsertUserDocument(for: firebaseUser)
+            }
         }
 
         return true
@@ -398,26 +662,87 @@ class AuthManager: ObservableObject {
             return
         }
 
+        // The callable request or the server-side job can each occasionally hang
+        // with no response at all (observed directly in server logs: a request
+        // that was verified but never logged any further progress). The SDK-level
+        // timeoutInterval below is intentionally generous for the rare legitimate
+        // slow run, so it cannot be relied on to free the UI in a reasonable time.
+        // This watchdog does that instead - it only ever reports failure to the
+        // UI, once; if the real call succeeds afterward, local cleanup below still
+        // runs so this device doesn't stay signed in to a now-deleted account.
+        var didReportToUI = false
+        func reportToUI(_ result: Result<Void, Error>) {
+            DispatchQueue.main.async {
+                guard !didReportToUI else { return }
+                didReportToUI = true
+                completion(result)
+            }
+        }
+
+        let watchdog = DispatchWorkItem {
+            debugLog("⏱️ deleteAccount watchdog fired - no server response within 20s")
+            reportToUI(.failure(DeleteAccountError.timedOut))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: watchdog)
+
         let callable = Functions.functions().httpsCallable("deleteAccount")
+        // The server allows this cleanup job to run for up to nine minutes. Keep the
+        // client deadline above that limit so a valid deletion is not abandoned early
+        // purely by the SDK's own timeout; the watchdog above is what keeps the UI
+        // responsive well before that.
+        callable.timeoutInterval = 600
         callable.call { _, error in
+            watchdog.cancel()
+
             if let error {
                 let nsError = error as NSError
                 if nsError.domain == FunctionsErrorDomain,
                    let code = FunctionsErrorCode(rawValue: nsError.code) {
                     switch code {
                     case .unauthenticated:
-                        completion(.failure(DeleteAccountError.requiresRecentLogin))
+                        reportToUI(.failure(DeleteAccountError.requiresRecentLogin))
+                        return
+                    case .deadlineExceeded:
+                        reportToUI(.failure(DeleteAccountError.timedOut))
+                        return
+                    case .unavailable:
+                        reportToUI(.failure(DeleteAccountError.serviceUnavailable))
                         return
                     default:
                         break
                     }
                 }
-                completion(.failure(DeleteAccountError.unknown(error.localizedDescription)))
+                reportToUI(.failure(DeleteAccountError.unknown(error.localizedDescription)))
                 return
             }
 
-            self.signOut()
-            completion(.success(()))
+            DispatchQueue.main.async {
+                // The server has finished permanent deletion - the account and its
+                // data are already gone. Remove credentials, purge account-owned
+                // device data, and report success to the calling screen right away.
+                // Firestore's local cache teardown below is best-effort tidiness for
+                // the next sign-in; it must never block the user-facing completion,
+                // since Firestore.terminate()'s completion handler is not guaranteed
+                // to fire (e.g. if the SDK still considers the instance busy), which
+                // previously left the "Deleting Account…" screen stuck indefinitely.
+                NotificationCenter.default.post(name: .permanentAccountLocalDataWillPurge, object: nil)
+                self.clearLocalAuthenticationState()
+                DeletedAccountLocalDataPurger.purge()
+                self.showAccountDeletionAcknowledgement()
+                reportToUI(.success(()))
+                // Deliberately not calling Firestore's terminate()/clearPersistence()
+                // here. Confirmed via two separate live thread dumps that its
+                // disposal work is rescheduled by the SDK onto the main queue no
+                // matter which thread calls terminate() (it uses the "user executor"
+                // queue captured when the Firestore instance was first created, not
+                // the calling thread), where it can block indefinitely inside
+                // FirestoreClient::Dispose - freezing the entire app, not just this
+                // screen. It is not needed for correctness: the account and its data
+                // are already gone server-side by this point (confirmed via Cloud
+                // Function logs completing in ~1-3s). Leftover local Firestore cache
+                // for the deleted account is a minor privacy nit, not worth an
+                // app-wide freeze to avoid.
+            }
         }
     }
 
@@ -450,6 +775,14 @@ class AuthManager: ObservableObject {
             }
         }
 
+        clearLocalAuthenticationState()
+    }
+
+    /// Clears credentials and device-only session state without making another
+    /// Firestore request. Account deletion uses this path because the user's
+    /// server-side data and Auth record have already been removed.
+    private func clearLocalAuthenticationState() {
+        let defaults = UserDefaults.standard
         defaults.removeObject(forKey: "displayOnlyMode")
         defaults.removeObject(forKey: "displayOnlyLiveId")
         defaults.removeObject(forKey: "activeLiveId")
@@ -467,7 +800,21 @@ class AuthManager: ObservableObject {
         self.user = nil
         self.isSignedIn = false
     }
-    
+
+    private func showAccountDeletionAcknowledgement() {
+        accountDeletionAcknowledgementDismissWorkItem?.cancel()
+
+        let acknowledgementID = UUID()
+        accountDeletionAcknowledgementID = acknowledgementID
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard self?.accountDeletionAcknowledgementID == acknowledgementID else { return }
+            self?.accountDeletionAcknowledgementID = nil
+        }
+        accountDeletionAcknowledgementDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: workItem)
+    }
+
     func saveTemplate(_ template: PitchTemplate) {
         guard let user = user else {
             debugLog("No signed-in user to save template for.")

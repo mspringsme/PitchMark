@@ -515,6 +515,7 @@ struct SettingsView: View {
 
     @Binding var templates: [PitchTemplate]
     @Binding var games: [Game]
+    @Binding var joinedLiveSessions: [JoinedLiveSession]
     @Binding var pitchers: [Pitcher]
     let allPitches: [String]
     @Binding var selectedTemplate: PitchTemplate? // ✅ Add this line
@@ -539,6 +540,7 @@ struct SettingsView: View {
     @State private var deleteAccountError: String? = nil
     @State private var isDeletingAccount = false
     @State private var requiresDeleteRecentLogin = false
+    @FocusState private var isDeleteConfirmationFocused: Bool
     @State private var showAccountActionsSheet = false
     @State private var showLearnPitchMark = false
     @State private var showMoreAccountActionsSheet = false
@@ -886,7 +888,7 @@ struct SettingsView: View {
     private var gamesOverviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Games")
+                Text("My Games")
                     .font(.headline)
                 Spacer()
                 Button {
@@ -899,9 +901,15 @@ struct SettingsView: View {
             }
             .padding(.horizontal)
 
-            if !activeGames.isEmpty {
+            if !joinedLiveSessions.isEmpty || !activeGames.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
+                        // Live-joined games first - they're the ones with a
+                        // clock on them (owner can end the session any time).
+                        ForEach(joinedLiveSessions) { session in
+                            joinedLiveSessionChip(session)
+                        }
+
                         let sorted = activeGames.sorted(by: { $0.date > $1.date })
                         let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
                         ForEach(quickGames) { item in
@@ -914,11 +922,63 @@ struct SettingsView: View {
         }
     }
 
+    /// Re-enters a game joined as a partner, using the same
+    /// `.gameOrSessionChosen`/"liveGame" path a fresh join uses - it resumes
+    /// listeners and refreshes presence, it doesn't rejoin from scratch.
+    /// Stays in the list until the owner ends the session, the room expires
+    /// unrenewed, or this device explicitly disconnects (see
+    /// `LiveGameService.removeJoinedLiveSession`).
+    private func rejoinLiveSession(_ session: JoinedLiveSession) {
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NotificationCenter.default.post(
+                name: .gameOrSessionChosen,
+                object: nil,
+                userInfo: [
+                    "type": "liveGame",
+                    "liveId": session.liveId,
+                    "ownerUid": session.ownerUid
+                ]
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func joinedLiveSessionChip(_ session: JoinedLiveSession) -> some View {
+        Button {
+            rejoinLiveSession(session)
+        } label: {
+            VStack(spacing: 4) {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                    Text("LIVE")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.green)
+                }
+                Text(session.opponent)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(minWidth: 120)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.green.opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     private var joinGameButtonLabel: some View {
         HStack(spacing: 6) {
             Image(systemName: "person.2")
                 .font(.subheadline.weight(.semibold))
-            Text("Join a Game")
+            Text("Join Someone's Game")
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -1780,6 +1840,7 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
+                .contentShape(Rectangle())
             }
             .accessibilityHint("Opens PitchMark tutorial videos.")
 
@@ -1802,6 +1863,7 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
+                .contentShape(Rectangle())
             }
 
             Button(role: .destructive) {
@@ -1815,15 +1877,7 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
-            }
-            .alert("Sign Out?", isPresented: $showSignOutConfirmation) {
-                Button("Sign Out", role: .destructive) {
-                    showAccountActionsSheet = false
-                    authManager.signOut()
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Are you sure you want to sign out of \(authManager.userEmail)?")
+                .contentShape(Rectangle())
             }
 
             Button {
@@ -1840,10 +1894,28 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
+                .contentShape(Rectangle())
             }
 
         }
         .padding()
+        // Attached to the whole sheet, not to the Sign Out row. appConfirmationDialog
+        // draws as an .overlay, and SwiftUI clips an overlay's *hit testing* to its
+        // parent's frame even though it draws outside it. Hung off the small button
+        // the dialog was visible but untappable, so taps fell through to the "More"
+        // button underneath and opened the Delete Account sheet.
+        .appConfirmationDialog(
+            isPresented: $showSignOutConfirmation,
+            title: "Sign Out?",
+            message: "Are you sure you want to sign out of \(authManager.userEmail)?",
+            primaryTitle: "Sign Out",
+            primaryRole: .destructive,
+            primaryAction: {
+                showAccountActionsSheet = false
+                authManager.signOut()
+            },
+            secondaryTitle: "Cancel"
+        )
         .presentationDetents([.fraction(0.42)])
         .presentationDragIndicator(.visible)
     }
@@ -1971,66 +2043,123 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var deleteAccountSheetView: some View {
-        VStack(spacing: 16) {
-            Text("Delete Account")
-                .font(.headline)
+        ZStack {
+            VStack(spacing: 16) {
+                Text("Delete Account")
+                    .font(.headline)
 
-            Text("This permanently deletes your account and all data. Type DELETE to confirm.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                Text("This permanently deletes your PitchMark account and removes or unlinks account-associated app data. Some transaction records may be retained when legally required, without an active account link. Type DELETE to confirm.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
 
-            TextField("Type DELETE", text: $deleteAccountText)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
+                TextField("Type DELETE", text: $deleteAccountText)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                    .focused($isDeleteConfirmationFocused)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        isDeleteConfirmationFocused = false
+                    }
 
-            if let error = deleteAccountError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if requiresDeleteRecentLogin {
-                Button("Sign Out to Re-Authenticate", role: .destructive) {
-                    showDeleteAccountSheet = false
-                    authManager.signOut()
+                if let error = deleteAccountError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Account deletion failed. \(error)")
                 }
-                .buttonStyle(.bordered)
-            }
 
-            Button(isDeletingAccount ? "Deleting..." : "Delete Account") {
-                showFinalDeleteAccountConfirmation = true
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .disabled(isDeletingAccount || deleteAccountText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "DELETE")
-            .appConfirmationDialog(
-                isPresented: $showFinalDeleteAccountConfirmation,
-                title: "Permanently delete this account?",
-                message: "This cannot be undone.",
-                primaryTitle: "Delete Account Permanently",
-                primaryRole: .destructive,
-                primaryAction: {
-                    deleteAccount()
-                },
-                secondaryTitle: "Cancel"
-            )
+                if requiresDeleteRecentLogin {
+                    Button("Sign Out to Re-Authenticate", role: .destructive) {
+                        showDeleteAccountSheet = false
+                        authManager.signOut()
+                    }
+                    .buttonStyle(.bordered)
+                }
 
-            Button("Cancel", role: .cancel) {
-                showDeleteAccountSheet = false
+                Button("Delete Account") {
+                    isDeleteConfirmationFocused = false
+                    showFinalDeleteAccountConfirmation = true
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(deleteAccountText.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() != "DELETE")
+                .accessibilityHint("Opens the final permanent deletion confirmation.")
+
+                Button("Cancel", role: .cancel) {
+                    showDeleteAccountSheet = false
+                }
+            }
+            .padding()
+            .disabled(accountDeletionIsBlocking)
+            .accessibilityHidden(accountDeletionIsBlocking)
+
+            if accountDeletionIsBlocking {
+                accountDeletionStatusView
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
         }
-        .padding()
+        .appConfirmationDialog(
+            isPresented: $showFinalDeleteAccountConfirmation,
+            title: "Permanently delete this account?",
+            message: "This cannot be undone.",
+            primaryTitle: "Delete Account Permanently",
+            primaryRole: .destructive,
+            primaryAction: {
+                deleteAccount()
+            },
+            secondaryTitle: "Cancel"
+        )
         .presentationDetents([.fraction(0.5)])
-        .presentationDragIndicator(.visible)
+        .presentationDragIndicator(accountDeletionIsBlocking ? .hidden : .visible)
+        .interactiveDismissDisabled(accountDeletionIsBlocking)
+        .animation(.easeInOut(duration: 0.2), value: accountDeletionIsBlocking)
+        .onAppear {
+            isDeleteConfirmationFocused = true
+        }
+    }
+
+    private var accountDeletionIsBlocking: Bool {
+        isDeletingAccount
+    }
+
+    @ViewBuilder
+    private var accountDeletionStatusView: some View {
+        ZStack {
+            Color.black.opacity(0.32)
+                .ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Deleting Account…")
+                    .font(.headline)
+                Text("Securely removing your account data. Keep PitchMark open until this finishes.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .frame(maxWidth: 330)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(radius: 18)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Deleting account. Keep PitchMark open until this finishes.")
+        }
     }
 
     private func deleteAccount() {
+        isDeleteConfirmationFocused = false
+        showFinalDeleteAccountConfirmation = false
         isDeletingAccount = true
         deleteAccountError = nil
         requiresDeleteRecentLogin = false
+        UIAccessibility.post(
+            notification: .announcement,
+            argument: "Deleting account. Keep PitchMark open until this finishes."
+        )
         authManager.deleteAccount { result in
             DispatchQueue.main.async {
                 isDeletingAccount = false
@@ -2039,9 +2168,16 @@ struct SettingsView: View {
                     deleteAccountText = ""
                     deleteAccountError = nil
                     requiresDeleteRecentLogin = false
-                    showDeleteAccountSheet = false
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Account deleted. Returning to sign in."
+                    )
                 case .failure(let error):
                     deleteAccountError = error.localizedDescription
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: "Account deletion failed. \(error.localizedDescription)"
+                    )
                     if let deleteError = error as? DeleteAccountError {
                         if case .requiresRecentLogin = deleteError {
                             requiresDeleteRecentLogin = true
@@ -2131,15 +2267,17 @@ struct SettingsView: View {
             } message: {
                 Text("This device doesn’t have a camera available.")
             }
-            .alert("Camera Access Needed", isPresented: $showCameraPermissionAlert) {
-                Button("Open Settings") {
+            .appConfirmationDialog(
+                isPresented: $showCameraPermissionAlert,
+                title: "Camera Access Needed",
+                message: "Enable Camera access in Settings to scan the owner’s QR code.",
+                primaryTitle: "Open Settings",
+                primaryAction: {
                     guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                     UIApplication.shared.open(url)
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Enable Camera access in Settings to scan the owner’s QR code.")
-            }
+                },
+                secondaryTitle: "Cancel"
+            )
             .sheet(isPresented: $showAccountActionsSheet, onDismiss: {
                 showSignOutConfirmation = false
             }) {
@@ -2302,7 +2440,7 @@ struct SettingsView: View {
                     } label: {
                         joinGameButtonLabel
                     }
-                    .accessibilityLabel("Join a Game")
+                    .accessibilityLabel("Join Someone's Game")
                     .accessibilityHint("Open join flow for invite link or QR code.")
                     .transaction { transaction in
                         transaction.animation = nil
@@ -2651,6 +2789,7 @@ struct PitcherStatsSheetView: View {
     let games: [Game]
     let lockToGameId: String?
     let liveId: String?
+    let ownerUserId: String?
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -2660,13 +2799,15 @@ struct PitcherStatsSheetView: View {
         availablePitchers: [Pitcher]? = nil,
         games: [Game],
         lockToGameId: String? = nil,
-        liveId: String? = nil
+        liveId: String? = nil,
+        ownerUserId: String? = nil
     ) {
         self.pitcher = pitcher
         self.availablePitchers = availablePitchers ?? [pitcher]
         self.games = games
         self.lockToGameId = lockToGameId
         self.liveId = liveId
+        self.ownerUserId = ownerUserId
         _selectedPitcherId = State(initialValue: pitcher.id)
     }
 
@@ -3840,7 +3981,7 @@ struct PitcherStatsSheetView: View {
                             guard !gid.isEmpty else { return }
                             if isSelected {
                                 selectedGameIds.remove(gid)
-                            } else {
+                            } else {#imageLiteral(resourceName: "simulator_screenshot_B02F9BF3-0AE2-4CFF-8739-8DA9109E9856.png")
                                 selectedGameIds.insert(gid)
                             }
                         }
@@ -4129,7 +4270,7 @@ struct PitcherStatsSheetView: View {
                 }
             }
 
-            guard let ownerUid = authManager.user?.uid else {
+            guard let ownerUid = ownerUserId ?? authManager.user?.uid else {
                 DispatchQueue.main.async {
                     self.isLoading = false
                     self.hasLoadedEvents = true

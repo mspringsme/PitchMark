@@ -87,8 +87,9 @@ final class SubscriptionManager: ObservableObject {
 
     func refresh(reason: String = "manual") async {
         log("refresh start reason=\(reason)")
-        await loadProducts()
+        async let productsLoad: Void = loadProducts()
         await refreshEntitlements(reason: reason)
+        await productsLoad
         log("refresh complete reason=\(reason) isPro=\(isPro) status=\(statusLabel)")
     }
 
@@ -137,7 +138,13 @@ final class SubscriptionManager: ObservableObject {
             for signedTransaction in signedTransactions {
                 await syncAccountEntitlement(signedTransaction: signedTransaction)
             }
-            await refreshAccountEntitlement()
+            // When this device already has a locally verified entitlement, syncing it to the
+            // server is enough (isPro below is already satisfied by storeKitHasActiveEntitlement).
+            // Only ask the server directly when this device has no local entitlement to sync -
+            // e.g. the Display app, which relies entirely on the account's server-side record.
+            if signedTransactions.isEmpty {
+                await refreshAccountEntitlement()
+            }
         } else {
             accountHasActiveEntitlement = false
         }
