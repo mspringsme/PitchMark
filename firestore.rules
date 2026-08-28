@@ -134,8 +134,16 @@ service cloud.firestore {
           )
           && request.resource.data.createdByUid == uid();
 
+        // A shared collaborator could create rows here but never correct one,
+        // so an edited outcome or an undone pitch never reached the pitcher's
+        // career record and it drifted from the game record permanently. They
+        // may now maintain the rows they wrote - and only those - which is the
+        // same shape liveGames/pitchEvents already uses below.
         allow update, delete: if signedIn()
-          && isActiveOwner(pitcherDoc());
+          && (
+            isActiveOwner(pitcherDoc())
+            || (sharedWithMe(pitcherDoc()) && resource.data.createdByUid == uid())
+          );
       }
 
       match /stats/{scopeId} {
@@ -197,6 +205,11 @@ service cloud.firestore {
     match /users/{ownerUid}/displayState/{docId} {
       allow get, list, create, update, delete: if signedIn() && ownerUid == uid();
     }
+
+    // Note: /users/{uid}/joinedLiveSessions/{liveId} (see LiveGameService.
+    // recordJoinedLiveSession) needs no dedicated block - the catch-all
+    // "USERS PRIVATE TREE" rule below already grants the owning uid full
+    // read/write on everything under users/{uid}/**.
 
     // ─────────────────────────────────────────────
     // JOIN CODES: /joinCodes/{code}

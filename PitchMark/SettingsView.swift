@@ -515,6 +515,7 @@ struct SettingsView: View {
 
     @Binding var templates: [PitchTemplate]
     @Binding var games: [Game]
+    @Binding var joinedLiveSessions: [JoinedLiveSession]
     @Binding var pitchers: [Pitcher]
     let allPitches: [String]
     @Binding var selectedTemplate: PitchTemplate? // ✅ Add this line
@@ -900,9 +901,15 @@ struct SettingsView: View {
             }
             .padding(.horizontal)
 
-            if !activeGames.isEmpty {
+            if !joinedLiveSessions.isEmpty || !activeGames.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
+                        // Live-joined games first - they're the ones with a
+                        // clock on them (owner can end the session any time).
+                        ForEach(joinedLiveSessions) { session in
+                            joinedLiveSessionChip(session)
+                        }
+
                         let sorted = activeGames.sorted(by: { $0.date > $1.date })
                         let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
                         ForEach(quickGames) { item in
@@ -913,6 +920,58 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// Re-enters a game joined as a partner, using the same
+    /// `.gameOrSessionChosen`/"liveGame" path a fresh join uses - it resumes
+    /// listeners and refreshes presence, it doesn't rejoin from scratch.
+    /// Stays in the list until the owner ends the session, the room expires
+    /// unrenewed, or this device explicitly disconnects (see
+    /// `LiveGameService.removeJoinedLiveSession`).
+    private func rejoinLiveSession(_ session: JoinedLiveSession) {
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NotificationCenter.default.post(
+                name: .gameOrSessionChosen,
+                object: nil,
+                userInfo: [
+                    "type": "liveGame",
+                    "liveId": session.liveId,
+                    "ownerUid": session.ownerUid
+                ]
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func joinedLiveSessionChip(_ session: JoinedLiveSession) -> some View {
+        Button {
+            rejoinLiveSession(session)
+        } label: {
+            VStack(spacing: 4) {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                    Text("LIVE")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.green)
+                }
+                Text(session.opponent)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(minWidth: 120)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.green.opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private var joinGameButtonLabel: some View {
@@ -1781,6 +1840,7 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
+                .contentShape(Rectangle())
             }
             .accessibilityHint("Opens PitchMark tutorial videos.")
 
@@ -1803,6 +1863,7 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
+                .contentShape(Rectangle())
             }
 
             Button(role: .destructive) {
@@ -1816,6 +1877,7 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
+                .contentShape(Rectangle())
             }
 
             Button {
@@ -1832,6 +1894,7 @@ struct SettingsView: View {
                     Spacer()
                 }
                 .padding(.horizontal)
+                .contentShape(Rectangle())
             }
 
         }
@@ -2726,6 +2789,7 @@ struct PitcherStatsSheetView: View {
     let games: [Game]
     let lockToGameId: String?
     let liveId: String?
+    let ownerUserId: String?
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -2735,13 +2799,15 @@ struct PitcherStatsSheetView: View {
         availablePitchers: [Pitcher]? = nil,
         games: [Game],
         lockToGameId: String? = nil,
-        liveId: String? = nil
+        liveId: String? = nil,
+        ownerUserId: String? = nil
     ) {
         self.pitcher = pitcher
         self.availablePitchers = availablePitchers ?? [pitcher]
         self.games = games
         self.lockToGameId = lockToGameId
         self.liveId = liveId
+        self.ownerUserId = ownerUserId
         _selectedPitcherId = State(initialValue: pitcher.id)
     }
 
@@ -4204,7 +4270,7 @@ struct PitcherStatsSheetView: View {
                 }
             }
 
-            guard let ownerUid = authManager.user?.uid else {
+            guard let ownerUid = ownerUserId ?? authManager.user?.uid else {
                 DispatchQueue.main.async {
                     self.isLoading = false
                     self.hasLoadedEvents = true

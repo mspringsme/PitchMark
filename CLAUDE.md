@@ -92,6 +92,89 @@ are applied only when `remoteRevision > progressRevision`; the old timestamp
 comparison is kept solely as a fallback for documents written before the counter
 existed.
 
+**`progressRevision` is server-assigned only — never increment it locally, and
+never persist it across live rooms.** The number is minted inside
+`commitLiveProgress`'s transaction, so a locally-invented counter compared
+against it is comparing two different number spaces. The local guess runs ahead
+in three ordinary ways: recording one pitch calls `markLocalProgressChange()`
+three or four times in a single run-loop turn but those coalesce into **one**
+publish (+N local, +1 server); any progress change made with no live room open
+has no server counterpart at all; and a freshly created room has no
+`progressRevision` field, so its first commit lands at 1 no matter how high the
+old room got. Once local runs ahead, `remoteRevision > progressRevision` rejects
+the partner's next N snapshots outright — ball/strike circles that fail to fill
+in or fail to clear on the owner's device after a partner records a pitch.
+Protecting a local change that hasn't reached the room yet is
+`hasUnpublishedLocalProgress`'s job (a token pair, with a 5s grace window so a
+publish that never reports back can't deafen the device permanently); it stays
+out of the revision comparison. `progressRevision` resets when
+`startListeningToLiveGame` sees a different `liveId`, and `LocalProgressSnapshot`
+still writes the field but no longer restores it.
+
+**Every live progress write must go through `markLocalProgressChange()`**, which
+is what triggers the publish that earns a new revision. A write that lands in
+`/liveGames` carrying no new
+revision is ignored by the other device and then overwritten by the next write
+that *does* carry one — so the change appears to stick and then silently reverts.
+`updateCount`, `updateOuts` and `commitLiveProgressChange` are the three entry
+points; nothing else should write balls/strikes/outs/inning/hits/walks/us/them.
+`commitLiveProgressChange` defers the call precisely so it still runs on the
+participant's early return.
+
+**Never put an event's copies in one `WriteBatch`.** A pitch lives in up to three
+places — `/liveGames/{id}/pitchEvents`, `users/{owner}/games/{gid}/pitchEvents`
+and `/pitchers/{pid}/pitchEvents` — governed by three different rules. A
+participant has *create-only* access to the owner's copy and cannot touch the
+pitcher's. Batches are atomic, so one denial rejected the whole commit and the
+edit/delete/undo landed nowhere, while the optimistic UI had already shown it as
+applied. Use the `updateEventCopies` / `overwriteEventCopies` /
+`deleteEventCopies` helpers in `CalledPitchRecord.swift`.
+
+**The owner's device is the only bridge to the permanent record.** The live
+pitchEvents listener mirrors `/liveGames` into the owner's game *and* the
+pitcher's career collection, and it keys off `documentChanges` so `.modified`
+and `.removed` propagate too — not just `.added`. Reverting that to "mirror each
+id once" silently freezes the owner's copy at each event's first-written state.
+
+`mirroredLivePitchEventIds` must be cleared in **`startListeningToLivePitchEvents`**,
+not just in `startListeningToLiveGame` — that function restarts independently from
+several call sites, a fresh listener replays the collection as `.added`, and a
+surviving seen-set would skip exactly the edits made while it was detached.
+Re-mirroring an unchanged event is an idempotent `setData`; losing an edit is not.
+
+A `.removed` also has to be pruned from `seededGamePitchEventsForLive`, or
+`mergeLiveAndSeededEvents` re-adds the deleted pitch from the stale seed array
+and the card reappears on the next snapshot.
+
+**Never put join codes or invite tokens on `/liveGames/{liveId}`.** That document
+is readable by display participants and display-only sessions, which are meant to
+render a called pitch and nothing else — a credential there lets a display device
+rejoin as a full participant with write access to pitch events. They live in
+`users/{uid}/liveSessions/{liveId}`, which is owner-only.
+
+## Live session lifetime
+
+A room, its join code and its invite token all carry a 4h `expiresAt`
+(`LiveGameService.sessionLifetime`). Past that mark the participant's listener
+stops treating the room as active and called pitches silently stop arriving, so
+the owner renews all three once inside `renewalWindow` (45 min), driven off the
+live snapshot already in hand rather than a polling read. Renewing the *code*
+matters as much as the room: `cleanupExpiredJoinArtifacts` deletes expired code
+documents and `isActiveParticipantForThisGame` requires one to exist.
+
+`endLiveSession` is the only writer of `status: "ended"`, and the participant's
+live listener is what acts on it. The "End Live Session" button deliberately does
+**not** clear `didAutoCreateLiveSessionForGameId` — clearing it let
+`ensureAutoLiveSessionIfNeeded` spin up a new room on the very next called pitch,
+silently undoing a destructive action. Re-inviting has its own path:
+`CodeShareSheet`'s Generate button calls `createLiveGameAndJoinCode` directly.
+
+**`outs` syncs through the live room only.** `Game` has no `outs` column and one
+was not added — outs are inning-scoped. But because `outs` rides in the published
+progress snapshot it must also stay in `LocalProgressSnapshot`, or a relaunched
+device restores its old revision, skips the room snapshot as not-newer, keeps
+outs at 0, and republishes that 0 over the other device's real count.
+
 ## Dialogs
 
 Use `appConfirmationDialog` (in `SupportExtensions.swift`), not SwiftUI's
@@ -127,6 +210,12 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
 - **`atBatPulse` re-renders the whole tracker every 0.8s** when no batter is
   selected. Real performance defect, not yet addressed.
 - `atBatCountCacheByBatter` is retained deliberately — it is not dead code.
+- **Mixed-version live sessions still carry the old bugs.** An App Store build on
+  either side of a room behaves as before: an old *partner* writes hits/walks
+  without bumping `progressRevision` so the owner ignores them, and an old *owner*
+  mirrors each event only once so partner edits never reach the permanent record.
+  Neither is a regression — don't read a failed two-device test as one when a
+  device is on the store build.
 
 ## Working agreements
 

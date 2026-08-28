@@ -53,6 +53,26 @@ struct LiveGameDoc: Codable {
     var resultSelection: String?
 }
 
+/// A live game this account joined as a partner, mirrored from
+/// `users/{uid}/joinedLiveSessions/{liveId}`. See `LiveGameService.recordJoinedLiveSession`.
+struct JoinedLiveSession: Identifiable, Equatable {
+    var id: String { liveId }
+    let liveId: String
+    let ownerUid: String
+    let ownerGameId: String?
+    let opponent: String
+    let joinedAt: Date?
+
+    init?(liveId: String, data: [String: Any]) {
+        guard let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty else { return nil }
+        self.liveId = liveId
+        self.ownerUid = ownerUid
+        self.ownerGameId = data["ownerGameId"] as? String
+        self.opponent = (data["opponent"] as? String) ?? "Live Game"
+        self.joinedAt = (data["joinedAt"] as? Timestamp)?.dateValue()
+    }
+}
+
 struct AnyCodable: Codable {
     let value: Any
     init(_ value: Any) { self.value = value }
@@ -91,6 +111,14 @@ final class LiveGameService {
     private let db = Firestore.firestore()
     private let logPrefix = "🧩 LiveGameService"
 
+    /// How long a live room, join code and invite link stay valid.
+    static let sessionLifetime: TimeInterval = 4 * 60 * 60
+
+    /// How close to `expiresAt` the owner starts pushing the window out.
+    /// A baseball game routinely runs past a single lifetime, so the session
+    /// has to renew itself while it is still in use - see `renewLiveSession`.
+    static let renewalWindow: TimeInterval = 45 * 60
+
     // MARK: Firestore Paths / Keys
 
     private enum Col {
@@ -101,6 +129,8 @@ final class LiveGameService {
         static let pitchEvents = "pitchEvents"
         static let users = "users"
         static let games = "games"
+        static let liveSessions = "liveSessions"
+        static let joinedLiveSessions = "joinedLiveSessions"
     }
 
     private enum Key {
@@ -114,6 +144,7 @@ final class LiveGameService {
         static let expiresAt = "expiresAt"
         static let status = "status"
         static let inviteToken = "inviteToken"
+        static let joinCode = "joinCode"
 
         static let balls = "balls"
         static let strikes = "strikes"
@@ -129,6 +160,15 @@ final class LiveGameService {
         
         static let jerseyNumbers = "jerseyNumbers"
         static let batterIds = "batterIds"
+    }
+
+    private enum JoinedSessionKey {
+        static let liveId = "liveId"
+        static let ownerUid = "ownerUid"
+        static let ownerGameId = "ownerGameId"
+        static let opponent = "opponent"
+        static let joinedAt = "joinedAt"
+        static let lastSeenAt = "lastSeenAt"
     }
 
     private enum LiveStatus {
@@ -209,7 +249,7 @@ final class LiveGameService {
 
         let liveRef = db.collection(Col.liveGames).document()
         let liveId = liveRef.documentID
-        let expires = Timestamp(date: Date().addingTimeInterval(2 * 60 * 60))
+        let expires = Timestamp(date: Date().addingTimeInterval(Self.sessionLifetime))
 
         let liveData = makeLiveGamePayload(
             ownerUid: ownerUid,
@@ -262,6 +302,12 @@ final class LiveGameService {
                         self.createInviteToken(liveId: liveId, ownerUid: ownerUid, expiresAt: expires) { tokenResult in
                             switch tokenResult {
                             case .success(let token):
+                                self.recordOwnerSessionCredentials(
+                                    ownerUid: ownerUid,
+                                    liveId: liveId,
+                                    joinCode: join.code,
+                                    inviteToken: token
+                                )
                                 finishOnce(.success((liveId: join.liveId, code: join.code, inviteToken: token)))
                             case .failure(let err):
                                 finishOnce(.failure(err))
@@ -394,6 +440,141 @@ final class LiveGameService {
             }
     }
     
+    // MARK: - Session lifetime
+
+    /// Stores which code and invite link reach a room, in the owner's private
+    /// tree, so the owner can still renew them after a relaunch.
+    ///
+    /// Deliberately **not** on the live document. `/liveGames/{liveId}` is
+    /// readable by display participants and display-only sessions
+    /// (firestore.rules), which are meant to render a called pitch and nothing
+    /// else - putting the tracker join code there would let a display device
+    /// read it and rejoin as a full participant with write access to pitch
+    /// events. `users/{uid}/**` is owner-only.
+    private func recordOwnerSessionCredentials(
+        ownerUid: String,
+        liveId: String,
+        joinCode: String,
+        inviteToken: String
+    ) {
+        db.collection(Col.users).document(ownerUid)
+            .collection(Col.liveSessions).document(liveId)
+            .setData([
+                Key.liveId: liveId,
+                Key.joinCode: joinCode,
+                Key.inviteToken: inviteToken,
+                Key.createdAt: FieldValue.serverTimestamp()
+            ], merge: true) { err in
+                if let err {
+                    debugLog("⚠️ \(self.logPrefix) could not record owner session credentials:", err.localizedDescription)
+                }
+            }
+    }
+
+    /// Pushes `expiresAt` out on the room and on the credentials that reach it.
+    ///
+    /// A room was created with a fixed 4h window that nothing ever renewed.
+    /// Past that mark the participant's live listener stops treating the room
+    /// as active, so called pitches silently stop arriving mid-game, and a
+    /// partner who has to rejoin finds a dead code. Owner-only: rules pin
+    /// `expiresAt` for participant writes.
+    ///
+    /// Credentials are looked up from the owner's private record; `ownerGameId`
+    /// gives a fallback for rooms created before that record existed, whose
+    /// join code is still recoverable from the game's `activeSessionCode`.
+    /// Renewing the code matters as much as renewing the room:
+    /// `cleanupExpiredJoinArtifacts` deletes expired code documents, and
+    /// `isActiveParticipantForThisGame` needs one to exist.
+    ///
+    /// The writes are deliberately independent rather than batched - a code
+    /// that was already reaped would otherwise take the room's renewal with it.
+    func renewLiveSession(
+        liveId: String,
+        ownerGameId: String?,
+        completion: ((Error?) -> Void)? = nil
+    ) {
+        guard let ownerUid = Auth.auth().currentUser?.uid else {
+            completion?(LiveGameError.notSignedIn.nsError)
+            return
+        }
+
+        let extended = Timestamp(date: Date().addingTimeInterval(Self.sessionLifetime))
+        let fields: [String: Any] = [Key.expiresAt: extended]
+
+        db.collection(Col.liveGames).document(liveId).updateData(fields) { err in
+            if let err {
+                debugLog("⚠️ \(self.logPrefix) renew live room failed:", err.localizedDescription)
+            } else {
+                debugLog("♻️ \(self.logPrefix) renewed live room \(liveId) until \(extended.dateValue())")
+            }
+            completion?(err)
+        }
+
+        resolveOwnerSessionCredentials(ownerUid: ownerUid, liveId: liveId, ownerGameId: ownerGameId) { code, token in
+            if let code, !code.isEmpty {
+                self.db.collection(Col.joinCodes).document(code).updateData(fields) { err in
+                    if let err {
+                        debugLog("⚠️ \(self.logPrefix) renew join code failed:", err.localizedDescription)
+                    }
+                }
+            }
+            if let token, !token.isEmpty {
+                self.db.collection(Col.inviteTokens).document(token).updateData(fields) { err in
+                    if let err {
+                        debugLog("⚠️ \(self.logPrefix) renew invite token failed:", err.localizedDescription)
+                    }
+                }
+            }
+        }
+    }
+
+    private func resolveOwnerSessionCredentials(
+        ownerUid: String,
+        liveId: String,
+        ownerGameId: String?,
+        completion: @escaping (String?, String?) -> Void
+    ) {
+        db.collection(Col.users).document(ownerUid)
+            .collection(Col.liveSessions).document(liveId)
+            .getDocument { snap, _ in
+                if let data = snap?.data() {
+                    completion(data[Key.joinCode] as? String, data[Key.inviteToken] as? String)
+                    return
+                }
+
+                // Room predates the private record. The invite token is not
+                // recoverable, but the join code is mirrored onto the game as
+                // `activeSessionCode`, and that is the credential whose expiry
+                // gates participant access.
+                guard let gameId = ownerGameId, !gameId.isEmpty else {
+                    completion(nil, nil)
+                    return
+                }
+                self.db.collection(Col.users).document(ownerUid)
+                    .collection(Col.games).document(gameId)
+                    .getDocument { gameSnap, _ in
+                        completion(gameSnap?.data()?["activeSessionCode"] as? String, nil)
+                    }
+            }
+    }
+
+    /// Marks a room finished.
+    ///
+    /// Nothing wrote this before, so `LiveStatus.ended` and the client's
+    /// "ended remotely" handling were both dead code: the owner's disconnect
+    /// only tore down the owner's own session, leaving the partner connected
+    /// and still recording into a room nobody was mirroring.
+    func endLiveSession(liveId: String, completion: ((Error?) -> Void)? = nil) {
+        updateLiveFields(
+            liveId: liveId,
+            fields: [
+                Key.status: LiveStatus.ended,
+                "endedAt": FieldValue.serverTimestamp()
+            ],
+            completion: completion
+        )
+    }
+
     // MARK: - Cleanup (Client-Side)
 
     func cleanupExpiredJoinArtifacts() {
@@ -525,9 +706,11 @@ final class LiveGameService {
                 return
             }
 
+            let ownerUid = data[Key.ownerUid] as? String ?? ""
             self.upsertPresence(liveId: liveId, uid: uid) { result in
                 switch result {
                 case .success:
+                    self.recordJoinedLiveSession(liveId: liveId, ownerUid: ownerUid)
                     completion(.success(liveId))
                 case .failure(let e):
                     completion(.failure(e))
@@ -564,9 +747,11 @@ final class LiveGameService {
                 return
             }
 
+            let ownerUid = data[Key.ownerUid] as? String ?? ""
             self.upsertPresence(liveId: liveId, uid: uid) { result in
                 switch result {
                 case .success:
+                    self.recordJoinedLiveSession(liveId: liveId, ownerUid: ownerUid)
                     completion(.success(liveId))
                 case .failure(let e):
                     completion(.failure(e))
@@ -606,6 +791,57 @@ final class LiveGameService {
         }
     }
 
+    // MARK: - Participant: joined-session bookmark
+
+    /// Lets a partner see the game they joined in their own "My Games" list
+    /// and re-enter it after leaving the screen, backgrounding, or closing
+    /// the app - `activeLiveId` alone only survives on the one device that
+    /// wrote it to `UserDefaults`. Lives under the participant's own account
+    /// (`users/{uid}/joinedLiveSessions/{liveId}`), separate from
+    /// `liveGames/{liveId}/participants/{uid}` (room-scoped presence, deleted
+    /// by `endLiveSessionLocally`) and `users/{ownerUid}/liveSessions/{liveId}`
+    /// (owner-only credentials). `opponent`/`ownerGameId` are best-effort here;
+    /// the participant's live-room listener keeps them fresh afterward.
+    func recordJoinedLiveSession(
+        liveId: String,
+        ownerUid: String,
+        ownerGameId: String? = nil,
+        opponent: String? = nil
+    ) {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        var data: [String: Any] = [
+            JoinedSessionKey.liveId: liveId,
+            JoinedSessionKey.ownerUid: ownerUid,
+            JoinedSessionKey.joinedAt: FieldValue.serverTimestamp(),
+            JoinedSessionKey.lastSeenAt: FieldValue.serverTimestamp()
+        ]
+        if let ownerGameId, !ownerGameId.isEmpty { data[JoinedSessionKey.ownerGameId] = ownerGameId }
+        if let opponent, !opponent.isEmpty { data[JoinedSessionKey.opponent] = opponent }
+
+        db.collection(Col.users).document(uid)
+            .collection(Col.joinedLiveSessions).document(liveId)
+            .setData(data, merge: true) { err in
+                if let err {
+                    debugLog("⚠️ \(self.logPrefix) recordJoinedLiveSession failed:", err.localizedDescription)
+                }
+            }
+    }
+
+    /// Called once a session is truly over for this participant - the owner
+    /// ended it, the room is gone, or it expired unrenewed - so it stops
+    /// showing up as re-enterable in the games list. Also called from the
+    /// participant's own explicit "Disconnect".
+    func removeJoinedLiveSession(liveId: String) {
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+        db.collection(Col.users).document(uid)
+            .collection(Col.joinedLiveSessions).document(liveId)
+            .delete { err in
+                if let err {
+                    debugLog("⚠️ \(self.logPrefix) removeJoinedLiveSession failed:", err.localizedDescription)
+                }
+            }
+    }
+
     func heartbeatPresence(liveId: String) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let presenceRef = db.collection(Col.liveGames).document(liveId)
@@ -641,12 +877,21 @@ final class LiveGameService {
     }
     
     // MARK: - Lineup writes (LIVE)
-    func addLiveJersey(
+
+    // Applies `mutate` to the lineup as it currently exists on the server, inside a
+    // transaction, then writes the result back. Owner and participant can edit the
+    // lineup from two different devices at nearly the same moment; a plain
+    // updateData(fields:) built from a device's local jerseyCells silently clobbers
+    // whatever the other device just wrote, because it overwrites the whole array
+    // using a possibly-stale local copy as the base. Reading the live server copy
+    // inside the transaction and mutating that instead makes concurrent add/edit/
+    // reorder from both sides converge instead of racing.
+    func mutateLiveLineup(
         liveId: String,
-        jerseyNumber: String,
-        completion: ((Error?) -> Void)? = nil
+        mutate: @escaping (_ jerseys: inout [String], _ batterIds: inout [String]) -> Void,
+        completion: ((Result<(jerseys: [String], batterIds: [String]), Error>) -> Void)? = nil
     ) {
-        let liveRef = db.collection("liveGames").document(liveId)
+        let liveRef = db.collection(Col.liveGames).document(liveId)
 
         db.runTransaction({ txn, errPtr -> Any? in
             do {
@@ -656,37 +901,85 @@ final class LiveGameService {
                 var jerseys = (data["jerseyNumbers"] as? [String]) ?? []
                 var batterIds = (data["batterIds"] as? [String]) ?? []
 
-                // normalize
-                let trimmed = jerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return nil }
-
-                // prevent duplicates (optional)
-                if jerseys.contains(trimmed) {
-                    errPtr?.pointee = NSError(domain: "LiveGame", code: 409,
-                                              userInfo: [NSLocalizedDescriptionKey: "Jersey already exists"])
-                    return nil
-                }
-
-                jerseys.append(trimmed)
-                batterIds.append(UUID().uuidString)
+                mutate(&jerseys, &batterIds)
 
                 txn.updateData([
                     "jerseyNumbers": jerseys,
                     "batterIds": batterIds
                 ], forDocument: liveRef)
 
-                return nil
+                return ["jerseyNumbers": jerseys, "batterIds": batterIds]
             } catch let e as NSError {
                 errPtr?.pointee = e
                 return nil
             }
-        }) { _, err in
+        }) { result, err in
             if let err {
-                debugLog("❌ addLiveJersey failed:", err.localizedDescription)
-            } else {
-                debugLog("✅ addLiveJersey success jersey=\(jerseyNumber)")
+                debugLog("❌ mutateLiveLineup failed:", err.localizedDescription)
+                completion?(.failure(err))
+                return
             }
-            completion?(err)
+            guard let dict = result as? [String: Any],
+                  let jerseys = dict["jerseyNumbers"] as? [String],
+                  let batterIds = dict["batterIds"] as? [String] else {
+                completion?(.failure(NSError(domain: "LiveGame", code: -1,
+                                              userInfo: [NSLocalizedDescriptionKey: "mutateLiveLineup: malformed transaction result"])))
+                return
+            }
+            debugLog("✅ mutateLiveLineup success")
+            completion?(.success((jerseys, batterIds)))
+        }
+    }
+
+    // MARK: - Progress writes (LIVE)
+
+    // A plain `updateLiveFields` call let two devices race: each computes
+    // "progressRevision" from its own last-known value and writes that guess,
+    // so two nearly-simultaneous writes can carry the *same* revision number.
+    // Whichever commit lands second in Firestore then gets silently dropped by
+    // the other device's `remoteRevision > progressRevision` check, even
+    // though it carries the real, later state (e.g. a 3rd-out reset landing
+    // right after the flash). Reading the server's revision inside a
+    // transaction and incrementing it there — the same pattern as
+    // `mutateLiveLineup` — ties the number to actual commit order instead of
+    // to two devices' stale local guesses, so it always strictly increases
+    // and never collides.
+    func commitLiveProgress(
+        liveId: String,
+        fields: [String: Any],
+        completion: ((Result<Int, Error>) -> Void)? = nil
+    ) {
+        let liveRef = db.collection(Col.liveGames).document(liveId)
+
+        db.runTransaction({ txn, errPtr -> Any? in
+            do {
+                let snap = try txn.getDocument(liveRef)
+                let currentRevision = (snap.data()?["progressRevision"] as? Int) ?? 0
+                let nextRevision = currentRevision + 1
+
+                var payload = fields
+                payload["progressRevision"] = nextRevision
+                payload["progressUpdatedAt"] = FieldValue.serverTimestamp()
+
+                txn.updateData(payload, forDocument: liveRef)
+                return nextRevision
+            } catch let e as NSError {
+                errPtr?.pointee = e
+                return nil
+            }
+        }) { result, err in
+            if let err {
+                debugLog("❌ commitLiveProgress failed:", err.localizedDescription)
+                completion?(.failure(err))
+                return
+            }
+            guard let nextRevision = result as? Int else {
+                completion?(.failure(NSError(domain: "LiveGame", code: -1,
+                                              userInfo: [NSLocalizedDescriptionKey: "commitLiveProgress: malformed transaction result"])))
+                return
+            }
+            debugLog("✅ commitLiveProgress success rev=\(nextRevision)")
+            completion?(.success(nextRevision))
         }
     }
 

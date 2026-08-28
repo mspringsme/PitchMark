@@ -2478,33 +2478,6 @@ struct PitchResultSheet: View {
         didApplyInitialJerseyFilter = true
     }
     
-    private func reassignSelectedEvents(toPitcher pitcher: Pitcher) {
-        guard let pitcherId = pitcher.id else { return }
-        guard let uid = Auth.auth().currentUser?.uid else {
-            return
-        }
-        
-        let db = Firestore.firestore()
-        let batch = db.batch()
-
-        let selectedEvents = allEvents.filter { event in
-            guard let eid = event.id else { return false }
-            return selectedEventIDs.contains(eid)
-        }
-        for event in selectedEvents {
-            for ref in eventDocumentReferences(for: event, currentUid: uid) {
-                batch.updateData(["pitcherId": pitcherId], forDocument: ref)
-            }
-        }
-
-        batch.commit { error in
-            if error == nil {
-                selectedEventIDs.removeAll()
-                isSelecting = false
-            }
-        }
-    }
-
     private func applyPendingSelectionChangesAndPersist() {
         guard let uid = Auth.auth().currentUser?.uid else {
             pendingPitcherSelection = nil
@@ -2564,52 +2537,11 @@ struct PitchResultSheet: View {
         selectedEventIDs.removeAll()
         isSelecting = false
 
-        let db = Firestore.firestore()
-        let batch = db.batch()
-        for event in selectedEvents {
-            for ref in eventDocumentReferences(for: event, currentUid: uid) {
-                batch.updateData(updateData, forDocument: ref)
-            }
+        if let newPitcherId = updateData["pitcherId"] as? String, !newPitcherId.isEmpty {
+            removeStalePitcherCopies(for: selectedEvents, newPitcherId: newPitcherId)
         }
-
-        batch.commit { error in
-            DispatchQueue.main.async {
-                if let error {
-                    debugLog("❌ applyPendingSelectionChangesAndPersist failed: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    private func reassignSelectedEvents(toBatterJersey jersey: String) {
-        guard let uid = Auth.auth().currentUser?.uid else { return }
-        let trimmed = jersey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let db = Firestore.firestore()
-        let batch = db.batch()
-
-        let selectedEvents = allEvents.filter { event in
-            guard let eid = event.id else { return false }
-            return selectedEventIDs.contains(eid)
-        }
-
-        for event in selectedEvents {
-            let update: [String: Any] = [
-                "opponentJersey": trimmed,
-                "opponentBatterId": FieldValue.delete()
-            ]
-            for ref in eventDocumentReferences(for: event, currentUid: uid) {
-                batch.updateData(update, forDocument: ref)
-            }
-        }
-
-        batch.commit { error in
-            if error == nil {
-                selectedEventIDs.removeAll()
-                isSelecting = false
-            }
-        }
+        let refs = selectedEvents.flatMap { eventDocumentReferences(for: $0, currentUid: uid) }
+        updateEventCopies(refs, updateData, label: "applyPendingSelectionChangesAndPersist")
     }
 
     private func applySelectedBatterImmediately(_ jersey: String) {
@@ -2635,22 +2567,12 @@ struct PitchResultSheet: View {
 
         // Persist immediately so the change survives sheet/game close.
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        let db = Firestore.firestore()
-        let batch = db.batch()
-        for event in selectedEvents {
-            let update: [String: Any] = [
-                "opponentJersey": trimmed,
-                "opponentBatterId": FieldValue.delete()
-            ]
-            for ref in eventDocumentReferences(for: event, currentUid: uid) {
-                batch.updateData(update, forDocument: ref)
-            }
-        }
-        batch.commit { error in
-            if let error {
-                debugLog("❌ applySelectedBatterImmediately failed: \(error.localizedDescription)")
-            }
-        }
+        let update: [String: Any] = [
+            "opponentJersey": trimmed,
+            "opponentBatterId": FieldValue.delete()
+        ]
+        let refs = selectedEvents.flatMap { eventDocumentReferences(for: $0, currentUid: uid) }
+        updateEventCopies(refs, update, label: "applySelectedBatterImmediately")
 
         // Clear pending since this change is already applied/persisted.
         pendingBatterSelection = nil
@@ -2675,19 +2597,9 @@ struct PitchResultSheet: View {
         onApplyPitcherOverride?(selectedIds, pitcherId)
 
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        let db = Firestore.firestore()
-        let batch = db.batch()
-        for event in selectedEvents {
-            let update: [String: Any] = ["pitcherId": pitcherId]
-            for ref in eventDocumentReferences(for: event, currentUid: uid) {
-                batch.updateData(update, forDocument: ref)
-            }
-        }
-        batch.commit { error in
-            if let error {
-                debugLog("❌ applySelectedPitcherImmediately failed: \(error.localizedDescription)")
-            }
-        }
+        removeStalePitcherCopies(for: selectedEvents, newPitcherId: pitcherId)
+        let refs = selectedEvents.flatMap { eventDocumentReferences(for: $0, currentUid: uid) }
+        updateEventCopies(refs, ["pitcherId": pitcherId], label: "applySelectedPitcherImmediately")
 
         pendingPitcherSelection = nil
     }
@@ -2726,6 +2638,75 @@ struct PitchResultSheet: View {
         return refs
     }
 
+    /// Applies the same change to every stored copy of an event, one request
+    /// per copy.
+    ///
+    /// These used to go out as a single `WriteBatch`. A batch is atomic, and a
+    /// participant has *create-only* access to
+    /// users/{owner}/games/{gid}/pitchEvents (see firestore.rules) - so the
+    /// denied owner-copy write took the permitted /liveGames write down with
+    /// it and the edit landed nowhere, while the optimistic UI above had
+    /// already shown it as applied. Sending the copies independently lets each
+    /// one succeed on its own merits; the owner's device then mirrors the
+    /// /liveGames change into its own copy.
+    private func updateEventCopies(_ refs: [DocumentReference], _ data: [String: Any], label: String) {
+        for ref in refs {
+            ref.updateData(data) { error in
+                if let error {
+                    debugLog("❌ \(label) failed for \(ref.path): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Replaces every stored copy of an event, one request per copy.
+    /// Split for the same reason as `updateEventCopies`.
+    private func overwriteEventCopies(_ refs: [DocumentReference], _ data: [String: Any], label: String) {
+        for ref in refs {
+            ref.setData(data, merge: false) { error in
+                if let error {
+                    debugLog("❌ \(label) failed for \(ref.path): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Removes an event's row under the pitcher it is being moved *away* from.
+    ///
+    /// The live-room mirror writes the pitcher copy from the event's current
+    /// `pitcherId` and has no way to know which pitcher it left, so without
+    /// this the old row lingers and the pitch keeps counting toward both
+    /// pitchers' career stats. This is the only place that sees both the old
+    /// and the new id, which is why it belongs here rather than in the mirror.
+    private func removeStalePitcherCopies(for events: [PitchEvent], newPitcherId: String) {
+        for event in events {
+            guard let eid = event.id else { continue }
+            let previous = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let previous, !previous.isEmpty, previous != newPitcherId else { continue }
+
+            Firestore.firestore()
+                .collection("pitchers").document(previous)
+                .collection("pitchEvents").document(eid)
+                .delete { error in
+                    if let error {
+                        debugLog("❌ stale pitcher copy delete failed for pitchers/\(previous)/pitchEvents/\(eid): \(error.localizedDescription)")
+                    }
+                }
+        }
+    }
+
+    /// Deletes every stored copy of an event, one request per copy.
+    /// Split for the same reason as `updateEventCopies`.
+    private func deleteEventCopies(_ refs: [DocumentReference], label: String) {
+        for ref in refs {
+            ref.delete { error in
+                if let error {
+                    debugLog("❌ \(label) failed for \(ref.path): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     private func deleteSelectedEvents() {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let selectedEvents = allEvents.filter { event in
@@ -2746,18 +2727,8 @@ struct PitchResultSheet: View {
         localPitcherOverrides = localPitcherOverrides.filter { !selectedIds.contains($0.key) }
         localEditedEventOverrides = localEditedEventOverrides.filter { !selectedIds.contains($0.key) }
 
-        let db = Firestore.firestore()
-        let batch = db.batch()
-        for event in selectedEvents {
-            for ref in eventDocumentReferences(for: event, currentUid: uid) {
-                batch.deleteDocument(ref)
-            }
-        }
-        batch.commit { error in
-            if let error {
-                debugLog("❌ deleteSelectedEvents failed: \(error.localizedDescription)")
-            }
-        }
+        let refs = selectedEvents.flatMap { eventDocumentReferences(for: $0, currentUid: uid) }
+        deleteEventCopies(refs, label: "deleteSelectedEvents")
     }
 
     private func prepareEditForSelectedEvent() {
@@ -2926,16 +2897,8 @@ struct PitchResultSheet: View {
                 data["createdByUid"] = createdBy
             }
 
-            let db = Firestore.firestore()
-            let batch = db.batch()
-            for ref in eventDocumentReferences(for: original, currentUid: uid) {
-                batch.setData(data, forDocument: ref, merge: false)
-            }
-            batch.commit { error in
-                if let error {
-                    debugLog("❌ saveEditedEvent failed: \(error.localizedDescription)")
-                }
-            }
+            let refs = eventDocumentReferences(for: original, currentUid: uid)
+            overwriteEventCopies(refs, data, label: "saveEditedEvent")
             selectedEventIDs.removeAll()
             isSelecting = false
         } catch {

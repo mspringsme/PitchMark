@@ -1160,10 +1160,44 @@ struct PitchResultSheetView: View {
         dismiss()
     }
 
+    /// The most recently saved pitch for whichever batter is currently at the
+    /// plate. Its `atBatBalls`/`atBatStrikes` are already the right seed for
+    /// the next pitch either way - `applyCount` resets them to 0/0 on a
+    /// terminal pitch, so there's no need to separately detect an at-bat
+    /// boundary here.
+    ///
+    /// This is preferred over `currentCountSeed` (the live-synced balls/
+    /// strikes cache) because that cache is gated by `progressRevision` on
+    /// the receiving device and can lag behind a partner's just-saved pitch.
+    /// `allPitchEvents` comes from the dedicated pitch-events listener, which
+    /// carries no such gate, so it reflects a partner's save sooner - often
+    /// before the coalesced progress snapshot does. See the two-device "Ball
+    /// 1 instead of Ball 4" bug this was fixed for.
+    private var lastPersistedEventForActiveBatter: PitchEvent? {
+        let activeBatterId = effectiveOpponentBatterId
+        let activeJersey = effectiveOpponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return allPitchEvents
+            .filter { existing in
+                if let activeBatterId, !activeBatterId.isEmpty {
+                    return existing.opponentBatterId == activeBatterId
+                }
+                if let activeJersey, !activeJersey.isEmpty {
+                    return existing.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) == activeJersey
+                }
+                return false
+            }
+            .sorted(by: { $0.timestamp < $1.timestamp })
+            .last
+    }
+
     private func initializeManualCountIfNeeded() {
         guard !didInitializeManualCount else { return }
-        let source = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
-        countSeed = AtBatCount(balls: source.balls, strikes: source.strikes)
+        let persistedSeed: AtBatCount? = lastPersistedEventForActiveBatter.flatMap { event in
+            guard let balls = event.atBatBalls, let strikes = event.atBatStrikes else { return nil }
+            return AtBatCount(balls: balls, strikes: strikes)
+        }
+        let fallback = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
+        countSeed = persistedSeed ?? AtBatCount(balls: fallback.balls, strikes: fallback.strikes)
         manualCountOverride = nil
         didInitializeManualCount = true
     }
@@ -1199,20 +1233,7 @@ struct PitchResultSheetView: View {
     }
 
     private func priorCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
-        let activeBatterId = effectiveOpponentBatterId
-        let activeJersey = effectiveOpponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseEvent = allPitchEvents
-            .filter { existing in
-                if let activeBatterId, !activeBatterId.isEmpty {
-                    return existing.opponentBatterId == activeBatterId
-                }
-                if let activeJersey, !activeJersey.isEmpty {
-                    return existing.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines) == activeJersey
-                }
-                return false
-            }
-            .sorted(by: { $0.timestamp < $1.timestamp })
-            .last
+        let baseEvent = lastPersistedEventForActiveBatter
 
         let preferredSeed: AtBatCount? = didInitializeManualCount
             ? countSeed
@@ -1434,16 +1455,21 @@ struct PitchResultSheetView: View {
                     .padding(.top, 8)
 
                     let canSave: Bool = {
-                        // Every pitch resolves to exactly one of these five primary
+                        // Every pitch resolves to exactly one of these primary
                         // outcomes, so require one before the result can be saved.
-                        // Supplementary tags (Out/Safe, K, Walk, Wild Pitch, Passed
-                        // Ball, Error, batted-ball location, descriptors) refine a
-                        // result but can no longer stand in as the whole result.
+                        // "Out" and "Safe" (1B/2B/3B/HR) each cover a ball in play
+                        // that fielders converted into a full result on their own,
+                        // not a supplementary tag. Other supplementary tags (K,
+                        // Walk, Wild Pitch, Passed Ball, Error, batted-ball
+                        // location, descriptors) refine a result but can no longer
+                        // stand in as the whole result.
                         isStrikeSwinging ||
                         isStrikeLooking ||
                         isFoulSelected ||
                         isBall ||
-                        isHitTagSelected
+                        isHitTagSelected ||
+                        selectedOutcome == "Out" ||
+                        (selectedOutcome.map { ["1B", "2B", "3B", "HR"].contains($0) } ?? false)
                     }()
 
                     Divider()
