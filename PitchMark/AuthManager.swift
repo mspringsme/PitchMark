@@ -99,6 +99,24 @@ private enum PitchMarkAppVariant: Equatable {
         }
     }
 
+    // Firebase's default email-link wrapper redirects through the project's
+    // shared authDomain at a generic path (/__/auth/links) with the real
+    // destination buried in a query param, which both apps' AASA entries
+    // claim identically -- Universal Links can't route on query strings, so
+    // without this the OS picks whichever app it likes (observed: always
+    // PitchMark). Pointing each variant at a domain only *that* app's
+    // entitlements declare (PitchMark never claims pitchmark.app; Display
+    // never claims the firebaseapp.com authDomain) makes each one the sole
+    // candidate on its own link.
+    var emailSignInLinkDomain: String {
+        switch self {
+        case .live:
+            return "pitchmark-fb9f8.firebaseapp.com"
+        case .display:
+            return "pitchmark.app"
+        }
+    }
+
     var displayName: String {
         switch self {
         case .live: return "PitchMark Live"
@@ -483,6 +501,7 @@ class AuthManager: ObservableObject {
         actionCodeSettings.url = appVariant.emailSignInContinuationURL
         actionCodeSettings.handleCodeInApp = true
         actionCodeSettings.setIOSBundleID(appVariant.bundleIdentifier)
+        actionCodeSettings.linkDomain = appVariant.emailSignInLinkDomain
 
         Auth.auth().sendSignInLink(toEmail: trimmed, actionCodeSettings: actionCodeSettings) { error in
             if let error {
