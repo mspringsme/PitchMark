@@ -41,8 +41,14 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
             margin: 0;
             min-height: 100vh;
-            background: #f6f7fb;
+            background: #f6f7fb url("assets/site-background.jpg") center 55% / cover no-repeat fixed;
             color: #1c1c1e;
+        }
+        @media (max-width: 480px) {
+            body {
+                background-position: 30% 55%;
+                background-attachment: scroll;
+            }
         }
         .page {
             min-height: 100vh;
@@ -71,13 +77,14 @@
         .top-bar-brand {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 20px;
             min-width: 0;
+            flex: 1 1 auto;
         }
         .top-bar-mark {
-            width: 40px;
-            height: 40px;
-            border-radius: 12px;
+            width: 80px;
+            height: 80px;
+            border-radius: 24px;
             background: linear-gradient(135deg, rgba(34, 197, 94, 0.16), rgba(59, 130, 246, 0.12));
             display: grid;
             place-items: center;
@@ -87,29 +94,37 @@
         }
         .top-bar-mark img {
             display: block;
-            width: 28px;
-            height: 28px;
+            width: 56px;
+            height: 56px;
             object-fit: contain;
         }
         .top-bar-text {
             display: flex;
-            flex-direction: column;
+            flex-direction: row;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 16px;
+            flex: 1 1 auto;
             min-width: 0;
         }
         .top-bar-title {
-            font-size: 18px;
+            font-size: 36px;
             line-height: 1.1;
             font-weight: 700;
             letter-spacing: -0.02em;
             color: #111827;
+            flex: 0 0 auto;
         }
         .top-bar-subtitle {
-            font-size: 12px;
+            font-size: 24px;
             line-height: 1.2;
             color: #6b7280;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            text-align: right;
+            flex: 1 1 auto;
+            min-width: 0;
         }
         .top-bar-chip {
             display: inline-flex;
@@ -246,8 +261,12 @@
             font-size: 12px;
         }
         .footer a {
-            color: #b2b7c0;
+            color: #4b5563;
             text-decoration: none;
+            background: #ffffff;
+            padding: 8px 14px;
+            border-radius: 999px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
         .footer a:hover { text-decoration: underline; }
         .store-badge-row {
@@ -261,9 +280,6 @@
             align-items: center;
             justify-content: center;
             text-decoration: none;
-            opacity: 0.48;
-            filter: grayscale(1) saturate(0.15);
-            pointer-events: none;
         }
         .app-store-badge img {
             display: block;
@@ -397,19 +413,29 @@
                 gap: 12px;
             }
             .top-bar-mark {
-                width: 34px;
-                height: 34px;
-                border-radius: 10px;
+                width: 60px;
+                height: 60px;
+                border-radius: 16px;
             }
             .top-bar-mark img {
-                width: 24px;
-                height: 24px;
+                width: 42px;
+                height: 42px;
+            }
+            .top-bar-text {
+                flex-direction: column;
+                align-items: flex-start;
+                justify-content: flex-start;
+                gap: 0;
             }
             .top-bar-title {
-                font-size: 16px;
+                font-size: 26px;
             }
             .top-bar-subtitle {
-                font-size: 11px;
+                font-size: 16px;
+                text-align: left;
+                white-space: normal;
+                overflow: visible;
+                text-overflow: clip;
             }
             .top-bar-chip {
                 padding: 7px 10px;
@@ -487,12 +513,8 @@
                 line-height: 1.2;
             }
             .store-badge-row {
-                position: fixed;
-                left: 50%;
-                bottom: 34px;
-                transform: translateX(-50%);
                 width: min(calc(100% - 24px), 420px);
-                margin: 0;
+                margin: 0 auto;
                 z-index: 11;
             }
             .app-store-badge img {
@@ -581,12 +603,8 @@
                 z-index: 10;
             }
             .store-badge-row {
-                position: fixed;
-                left: 50%;
-                bottom: 38px;
-                transform: translateX(-50%);
                 width: min(100% - 24px, 420px);
-                margin: 0;
+                margin: 0 auto;
                 z-index: 11;
             }
             .popup-card {
@@ -611,8 +629,12 @@
                     <div class="top-bar-subtitle">Pitch calling and tracking for softball and baseball</div>
                 </div>
             </div>
-            <div class="top-bar-chip">Coming soon</div>
         </header>
+        <div class="store-badge-row" aria-label="App Store badge">
+            <a class="app-store-badge" href="https://apps.apple.com/app/id6791446420" target="_blank" rel="noopener" aria-label="Download PitchMark on the App Store">
+        <img src="assets/download-app-store-badge.svg" alt="Download on the App Store" />
+            </a>
+        </div>
         <div class="hero-shell">
             <div class="hero" aria-label="PitchMark visual hero">
                 <div class="hero-header">
@@ -650,10 +672,10 @@
                                 alt="Available waterproof tear-proof pitch keys and backup call sheets"
                             />
                         </div>
-                        <div class="blank-square" aria-label="Developed and owned image">
+                        <div class="blank-square" aria-label="Actively developed image">
                             <img
-                                src="assets/Group%204%20(1).png"
-                                alt="Developed and owned by an old softball dad"
+                                src="assets/actively-developed-card.jpg"
+                                alt="Actively developed and adding features often. Built with travel coach input"
                             />
                         </div>
                         <div class="blank-square" aria-label="Coming soon image">
@@ -670,11 +692,6 @@
                     alt="PitchMark app feature collage"
                 />
             </div>
-        </div>
-        <div class="store-badge-row" aria-label="App Store badge placeholder">
-            <a class="app-store-badge" href="#" aria-label="Apple App Store link placeholder">
-        <img src="assets/download-app-store-badge.svg" alt="Download on the App Store" />
-            </a>
         </div>
         <nav class="footer" aria-label="App Store links">
             <a href="/support">Support</a>
