@@ -736,6 +736,15 @@ struct PitchTrackerView: View {
                     label: currentCall.location,
                     isStrike: currentCall.isStrike
                 ) {
+                    if template.codeMode == .normal {
+                        return EncryptedCodeGenerator.generateNormalCalls(
+                            template: template,
+                            selectedPitch: selected,
+                            gridKind: gridKind,
+                            columnIndex: columnIndex,
+                            rowIndex: rowIndex
+                        )
+                    }
                     return EncryptedCodeGenerator.generateCalls(
                         template: template,
                         selectedPitch: selected,
@@ -3735,6 +3744,15 @@ struct PitchTrackerView: View {
     private func calledPitchCodes(pitch: String, location: String, isStrike: Bool) -> [String] {
         if let template = selectedTemplate, useEncrypted(for: template) {
             if let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(label: location, isStrike: isStrike) {
+                if template.codeMode == .normal {
+                    return EncryptedCodeGenerator.generateNormalCalls(
+                        template: template,
+                        selectedPitch: pitch,
+                        gridKind: gridKind,
+                        columnIndex: columnIndex,
+                        rowIndex: rowIndex
+                    )
+                }
                 return EncryptedCodeGenerator.generateCalls(
                     template: template,
                     selectedPitch: pitch,
@@ -4295,29 +4313,32 @@ struct PitchTrackerView: View {
     }
 
     private var cardsAndOverlay: some View {
-        ZStack {
-            VStack(spacing: 8) {
-                overlayTabsHeader
+        VStack(spacing: 8) {
+            overlayTabsHeader
 
-                Divider()
-                    .padding(.top, 5)
+            Divider()
+                .padding(.top, 5)
 
-                overlayContent
-                    .padding(.top, 0)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 170, alignment: .top)
-            }
-            .transition(.opacity)
-
+            overlayContent
+                .padding(.top, 0)
+                .frame(maxWidth: .infinity)
+                .frame(height: 250, alignment: .top)
+                .overlay(alignment: .top) {
+                    if overlayTab == .cards {
+                        cardsFilterButton
+                            .offset(y: -8)
+                    }
+                }
         }
+        .transition(.opacity)
         .frame(maxWidth: .infinity, alignment: .top)
         .background(.regularMaterial)
         .sheet(isPresented: $showCardsFullScreenSheet, onDismiss: {
             cardsEditTargetEventID = nil
         }) {
             pitchResultSheetBody(
-                controlButtonsOffsetY: 0,
-                controlButtonsVerticalPadding: 10,
+                controlButtonsOffsetY: 10,
+                controlButtonsVerticalPadding: 20,
                 initialJerseyFilter: selectedJerseyNumberDisplay ?? selectedBatterJersey,
                 initialSelectedEventID: cardsEditTargetEventID,
                 shouldAutoOpenEditOutcome: false,
@@ -4331,78 +4352,203 @@ struct PitchTrackerView: View {
     }
 
     private var overlayTabsHeader: some View {
-        let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
-        let latestEditableEvent = filteredEvents.first(where: { $0.id != nil })
-        return VStack(spacing: 8) {
+        Group {
             if sessionManager.currentMode == .game {
-                HStack {
-                    ballsInlineView
-                    Spacer(minLength: 0)
-                    outsInlineView
-                    Spacer(minLength: 0)
-                    strikesInlineView
-                }
+                gameOverlayHeaderRow
+            } else {
+                legacyOverlayTabsRow
             }
-
-            HStack(spacing: 6) {
-                if showCards {
-                    Button {
-                        showUndoConfirm = true
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward.circle.fill")
-                            .font(.title3.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(lastPersistedEventInCurrentMode == nil)
-                    .accessibilityLabel("Undo Last Pitch")
-                    .confirmationDialog("Undo Last Pitch?", isPresented: $showUndoConfirm, titleVisibility: .visible) {
-                        Button("Undo", role: .destructive) {
-                            undoLastPitch()
-                        }
-                        Button("Cancel", role: .cancel) {}
-                    } message: {
-                        Text("This will remove the last recorded pitch.")
-                    }
-                }
-
-                Spacer(minLength: 0)
-
-                OverlayTabButton(
-                    title: "Progress",
-                    systemImage: "chart.bar.xaxis",
-                    isSelected: overlayTab == .progress
-                ) {
-                    overlayTab = .progress
-                }
-
-                OverlayTabButton(
-                    title: "Cards",
-                    systemImage: "square.grid.2x2",
-                    isSelected: overlayTab == .cards
-                ) {
-                    overlayTab = .cards
-                }
-
-                Spacer(minLength: 0)
-
-                if showCards {
-                    Button {
-                        cardsEditTargetEventID = latestEditableEvent?.id
-                        showCardsFullScreenSheet = true
-                    } label: {
-                        Image(systemName: "slider.horizontal.2.arrow.trianglehead.counterclockwise")
-                            .font(.title3.weight(.semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(latestEditableEvent?.id == nil)
-                    .accessibilityLabel("Edit Last Result")
-                }
-            }
-            .foregroundStyle(.black)
-            .padding(.horizontal, 6)
         }
         .padding(.horizontal, 8)
         .padding(.top, 12)
+    }
+
+    /// Compact single-row header: [B/S/O display] [Cards] [Us] [Them].
+    /// The count box is read-only — tapping it (like tapping "Cards") just
+    /// switches `overlayTab`, and the active box gets a stroke outline.
+    /// All editing happens in the revealed panel below (progressOverlayContent).
+    ///
+    /// The filter button used to float below "Cards" via a GeometryReader +
+    /// PreferenceKey reading the pill's frame — too fragile, it silently
+    /// failed to appear. Nesting it directly under the pill in ordinary
+    /// SwiftUI layout instead can't fail to render.
+    private var gameOverlayHeaderRow: some View {
+        HStack(alignment: .top, spacing: 8) {
+            countDisplaySegment
+            cardsSegmentButton
+            scoreSegment(label: "Us", value: usBinding.wrappedValue)
+            scoreSegment(label: "Them", value: themBinding.wrappedValue)
+        }
+        .foregroundStyle(.black)
+    }
+
+    private var countDisplaySegment: some View {
+        let isActive = overlayTab == .progress
+        return Button {
+            overlayTab = .progress
+        } label: {
+            HStack(spacing: 10) {
+                staticCountDots(prefix: "B", count: balls, maxCount: 3, filledColor: .red, shape: .circle)
+                staticCountDots(prefix: "S", count: strikes, maxCount: 2, filledColor: .green, shape: .circle)
+                staticCountDots(prefix: "O", count: outs, maxCount: 3, filledColor: .primary, shape: .square)
+                    .scaleEffect(showOutsFlash ? 1.08 : 1.0)
+                    .shadow(color: showOutsFlash ? Color.red.opacity(0.35) : .clear, radius: showOutsFlash ? 8 : 0, x: 0, y: 0)
+                    .animation(.easeInOut(duration: 0.18), value: showOutsFlash)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(Color(.systemGray5))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isActive ? Color.accentColor : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Edit Count, Inning, Hits, Walks and Score")
+    }
+
+    private func staticCountDots(
+        prefix: String,
+        count: Int,
+        maxCount: Int,
+        filledColor: Color,
+        shape: CountDotShape
+    ) -> some View {
+        HStack(spacing: 4) {
+            Text(prefix)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize()
+            HStack(spacing: 3) {
+                ForEach(0..<maxCount, id: \.self) { idx in
+                    Image(systemName: countDotSystemImageName(filled: idx < max(0, min(maxCount, count)), shape: shape))
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundStyle(idx < max(0, min(maxCount, count)) ? filledColor : Color.primary.opacity(0.5))
+                }
+            }
+        }
+    }
+
+    private var cardsSegmentButton: some View {
+        let isActive = overlayTab == .cards
+        return Button {
+            overlayTab = .cards
+        } label: {
+            Text("Cards")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray5))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(isActive ? Color.accentColor : Color.clear, lineWidth: 2)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Floats above the cards scroll (see `cardsAndOverlay`) rather than
+    /// reserving its own row beneath the "Cards" pill — that used to push
+    /// the whole header taller and leave a gap above the card list.
+    private var cardsFilterButton: some View {
+        let latestEditableEvent = filteredEvents.first(where: { $0.id != nil })
+        return Button {
+            cardsEditTargetEventID = latestEditableEvent?.id
+            showCardsFullScreenSheet = true
+        } label: {
+            Image(systemName: "slider.horizontal.2.arrow.trianglehead.counterclockwise")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(9)
+                .background(Color.accentColor)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .disabled(latestEditableEvent?.id == nil)
+        .accessibilityLabel("Filter and Edit Cards")
+    }
+
+    private func scoreSegment(label: String, value: Int) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.subheadline)
+            Text("\(value)")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(.blue)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color(.systemGray5))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    /// Pre-existing tab bar, kept for non-game modes (practice/scout), where
+    /// the compact game-score header above doesn't apply.
+    private var legacyOverlayTabsRow: some View {
+        let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
+        let latestEditableEvent = filteredEvents.first(where: { $0.id != nil })
+        return HStack(spacing: 6) {
+            if showCards {
+                Button {
+                    showUndoConfirm = true
+                } label: {
+                    Image(systemName: "arrow.uturn.backward.circle.fill")
+                        .font(.title3.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .disabled(lastPersistedEventInCurrentMode == nil)
+                .accessibilityLabel("Undo Last Pitch")
+                .confirmationDialog("Undo Last Pitch?", isPresented: $showUndoConfirm, titleVisibility: .visible) {
+                    Button("Undo", role: .destructive) {
+                        undoLastPitch()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This will remove the last recorded pitch.")
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            OverlayTabButton(
+                title: "Progress",
+                systemImage: "chart.bar.xaxis",
+                isSelected: overlayTab == .progress
+            ) {
+                overlayTab = .progress
+            }
+
+            OverlayTabButton(
+                title: "Cards",
+                systemImage: "square.grid.2x2",
+                isSelected: overlayTab == .cards
+            ) {
+                overlayTab = .cards
+            }
+
+            Spacer(minLength: 0)
+
+            if showCards {
+                Button {
+                    cardsEditTargetEventID = latestEditableEvent?.id
+                    showCardsFullScreenSheet = true
+                } label: {
+                    Image(systemName: "slider.horizontal.2.arrow.trianglehead.counterclockwise")
+                        .font(.title3.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .disabled(latestEditableEvent?.id == nil)
+                .accessibilityLabel("Edit Last Result")
+            }
+        }
+        .foregroundStyle(.black)
+        .padding(.horizontal, 6)
     }
     private struct OverlayTabButton: View {
         let title: String
@@ -4442,6 +4588,10 @@ struct PitchTrackerView: View {
         }
     }
     @ViewBuilder
+    /// Undo moved out to a floating button beside the strike zone
+    /// (`undoButtonOverlay`), and the filter/edit button (`cardsFilterButton`)
+    /// floats as an overlay on top of `overlayContent` in `cardsAndOverlay` —
+    /// so this view is just the card list now, no floating buttons of its own.
     private var cardsOverlayContent: some View {
         let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
         if showCards {
@@ -4516,89 +4666,6 @@ struct PitchTrackerView: View {
         .environmentObject(sessionManager)
     }
 
-    private var ballsInlineView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Balls")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.black)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            HStack(spacing: 8) {
-                ForEach(0..<3, id: \.self) { idx in
-                    let value = idx + 1
-                    Button {
-                        let next = (balls == value) ? max(0, value - 1) : value
-                        ballsBinding.wrappedValue = next
-                    } label: {
-                        Image(systemName: idx < max(0, min(3, balls)) ? "circle.fill" : "circle")
-                            .font(.system(size: 17, weight: .regular))
-                            .foregroundStyle(idx < max(0, min(3, balls)) ? Color.red : Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .frame(minWidth: 44, alignment: .leading)
-    }
-
-    private var strikesInlineView: some View {
-        VStack(alignment: .trailing, spacing: 6) {
-            Text("Strikes")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.black)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            HStack(spacing: 8) {
-                ForEach(0..<2, id: \.self) { idx in
-                    let value = idx + 1
-                    Button {
-                        let next = (strikes == value) ? max(0, value - 1) : value
-                        strikesBinding.wrappedValue = next
-                    } label: {
-                        Image(systemName: idx < max(0, min(2, strikes)) ? "circle.fill" : "circle")
-                            .font(.system(size: 17, weight: .regular))
-                            .foregroundStyle(idx < max(0, min(2, strikes)) ? Color.green : Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .frame(minWidth: 44, alignment: .trailing)
-    }
-
-    private var outsInlineView: some View {
-        VStack(alignment: .center, spacing: 6) {
-            Text("Outs")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.black)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            HStack(spacing: 8) {
-                ForEach(0..<3, id: \.self) { idx in
-                    let value = idx + 1
-                    Button {
-                        pendingOutsResetWorkItem?.cancel()
-                        let next = (outs == value) ? max(0, value - 1) : value
-                        updateOuts(next)
-                        if next >= 3 {
-                            lastOutResetEventIdentity = nil
-                            lastOutResetPreviousOuts = nil
-                            scheduleOutsResetToZero()
-                        }
-                    } label: {
-                        Image(systemName: idx < max(0, min(3, outs)) ? "circle.fill" : "circle")
-                            .font(.system(size: 17, weight: .regular))
-                            .foregroundStyle(idx < max(0, min(3, outs)) ? Color.primary : Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-        .scaleEffect(showOutsFlash ? 1.08 : 1.0)
-        .shadow(color: showOutsFlash ? Color.red.opacity(0.35) : .clear, radius: showOutsFlash ? 8 : 0, x: 0, y: 0)
-        .animation(.easeInOut(duration: 0.18), value: showOutsFlash)
-        .frame(minWidth: 44, alignment: .center)
-    }
     private var calledPitchLayer: some View {
         Group {
             if let call = calledPitch {
@@ -4653,6 +4720,19 @@ struct PitchTrackerView: View {
             ownerUserId: effectiveGameOwnerUserId,
             balls: ballsBinding,
             strikes: strikesBinding,
+            outs: outs,
+            showOutsFlash: showOutsFlash,
+            onOutsTapIndex: { idx in
+                pendingOutsResetWorkItem?.cancel()
+                let value = idx + 1
+                let next = (outs == value) ? max(0, value - 1) : value
+                updateOuts(next)
+                if next >= 3 {
+                    lastOutResetEventIdentity = nil
+                    lastOutResetPreviousOuts = nil
+                    scheduleOutsResetToZero()
+                }
+            },
             inning: inningBinding,
             hits: hitsBinding,
             walks: walksBinding,
@@ -4664,7 +4744,7 @@ struct PitchTrackerView: View {
             }
         )
         .environmentObject(authManager)
-        .frame(maxWidth: .infinity, minHeight: 170, alignment: .top)
+        .frame(maxWidth: .infinity, minHeight: 250, alignment: .top)
     }
 
 
@@ -6206,45 +6286,103 @@ struct PitchTrackerView: View {
         .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
     }
 
+    /// Just the "vs. opponent" bubble now — the reset button itself moved to
+    /// `resetButtonOverlay`, floating higher up beside the strike zone
+    /// (mirrored by `undoButtonOverlay` on the right) instead of sitting
+    /// right next to this label.
     private var resetOverlay: some View {
-        HStack(spacing: 8) {
-            ResetPitchButton {
-                // ✅ 1) Reset local call/result UI
-                resetCallAndResultUIState()
+        Text("vs. \(opponentName ?? "Game")")
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .foregroundStyle(.primary)
+            .frame(maxWidth: 130, alignment: .center)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+    }
 
-                // ✅ 2) Broadcast reset to participant by clearing SHARED pending + resultSelection
-                if isGame,
-                   let gid = selectedGameId,
-                   let owner = effectiveGameOwnerUserId,
-                   !owner.isEmpty,
-                   isOwnerForActiveGame
-                {
-                    if let liveId = activeLiveId, !liveId.isEmpty {
-                        LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
-                            "pending": FieldValue.delete(),
-                            "resultSelection": FieldValue.delete(),
-                            "displayCode": FieldValue.delete()
-                        ])
-                    } else {
-                        // Legacy fallback when not connected to a live session.
-                        authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
-                        writeResultSelection(label: nil)
-                    }
-                }
+    private func resetPitchSelection() {
+        // ✅ 1) Reset local call/result UI
+        resetCallAndResultUIState()
+
+        // ✅ 2) Broadcast reset to participant by clearing SHARED pending + resultSelection
+        if isGame,
+           let gid = selectedGameId,
+           let owner = effectiveGameOwnerUserId,
+           !owner.isEmpty,
+           isOwnerForActiveGame
+        {
+            if let liveId = activeLiveId, !liveId.isEmpty {
+                LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [
+                    "pending": FieldValue.delete(),
+                    "resultSelection": FieldValue.delete(),
+                    "displayCode": FieldValue.delete()
+                ])
+            } else {
+                // Legacy fallback when not connected to a live session.
+                authManager.clearPendingPitch(ownerUserId: owner, gameId: gid)
+                writeResultSelection(label: nil)
             }
-
-            Text("vs. \(opponentName ?? "Game")")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .foregroundStyle(.primary)
-                .frame(maxWidth: 130, alignment: .center)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial)
-                .clipShape(Capsule())
-                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         }
+    }
+
+    /// Floats beside the strike zone's bottom-left corner, above the
+    /// "vs. opponent" bubble that stays at the true bottom edge.
+    /// Both text buttons sit inside a frame of this same fixed height
+    /// (reserving room for "Undo last pitch" wrapping to 2 lines) so their
+    /// top edges land at the same y even though "Reset" is 1 line and
+    /// "Undo last pitch" is 2 — a bottom-anchored block sized only to its
+    /// own content would otherwise push the taller one higher.
+    private var zoneCornerButtonBlockHeight: CGFloat { 36 }
+
+    /// Text-only now (icon dropped for space) — tappable via a plain Button
+    /// so it keeps a reasonable hit target despite the small caption font.
+    private var resetButtonOverlay: some View {
+        Button {
+            resetPitchSelection()
+        } label: {
+            Text("Reset")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.red)
+                .padding(6)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Reset pitch selection")
+        .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
+        .offset(y: -115)
+    }
+
+    /// Mirrors `resetButtonOverlay` on the opposite corner — Undo moved here
+    /// from the Cards view now that only the filter button lives there.
+    private var undoButtonOverlay: some View {
+        Button {
+            showUndoConfirm = true
+        } label: {
+            Text("Undo last pitch")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(maxWidth: 70)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(6)
+        }
+        .buttonStyle(.plain)
+        .disabled(lastPersistedEventInCurrentMode == nil)
+        .accessibilityLabel("Undo Last Pitch")
+        .confirmationDialog("Undo Last Pitch?", isPresented: $showUndoConfirm, titleVisibility: .visible) {
+            Button("Undo", role: .destructive) {
+                undoLastPitch()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will remove the last recorded pitch.")
+        }
+        .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
+        .offset(y: -115)
     }
     
     private var gameStatsOverlay: some View {
@@ -6531,8 +6669,10 @@ struct PitchTrackerView: View {
             card
                 .overlay(AnyView(resetOverlay), alignment: .bottomLeading)
                 .overlay(AnyView(gameStatsOverlay), alignment: .bottomTrailing)
+                .overlay(AnyView(resetButtonOverlay), alignment: .bottomLeading)
+                .overlay(AnyView(undoButtonOverlay), alignment: .bottomTrailing)
         )
-        let batterOverlay = AnyView(batterSideOverlay(SZwidth: SZwidth))
+        let batterOverlay = AnyView(batterSideOverlay(SZwidth: SZwidth, verticalOffset: 90))
 
         return AnyView(ZStack(alignment: .top) {
             decoratedCard
@@ -9944,10 +10084,177 @@ struct PitchTrackerView: View {
     }
 }
 
+/// Shared by the header's read-only dots and this panel's large interactive
+/// ones so both render outs as squares (distinct from the balls/strikes
+/// circles) with a single source of truth for the glyph names.
+private enum CountDotShape {
+    case circle
+    case square
+}
+
+private func countDotSystemImageName(filled: Bool, shape: CountDotShape) -> String {
+    switch shape {
+    case .circle: return filled ? "circle.fill" : "circle"
+    case .square: return filled ? "square.fill" : "square"
+    }
+}
+
+/// White rounded row card that groups one or more `StatStepper`s, matching
+/// the flat card style used for the Score / Hits-Walks / Inning rows.
+/// Width-bound (not scrolling) so `Spacer`s inside can actually distribute
+/// space and center content — every row here was slimmed down (shorter
+/// labels, fewer steppers per row) specifically so it fits without scrolling
+/// on the narrowest supported phone (iPhone 17).
+private struct StatsPanelCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(spacing: 8) {
+            content()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.1), radius: 3, x: 0, y: 2)
+    }
+}
+
+private struct StatDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.black.opacity(0.15))
+            .frame(width: 1, height: 26)
+    }
+}
+
+private enum StatLabelPosition {
+    case leading
+    case trailing
+}
+
+/// Label + minus/number/plus row used by Score (US/THEM) and Hits/Walks.
+/// `labelPosition` lets THEM mirror US — label after the controls instead
+/// of before — so the two flank a centered "Score" like a scoreboard.
+private struct StatStepper: View {
+    let label: String
+    @Binding var value: Int
+    var floor: Int = 0
+    var labelPosition: StatLabelPosition = .leading
+    let onChange: () -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if labelPosition == .leading {
+                labelText
+            }
+
+            Button {
+                let generator = UIImpactFeedbackGenerator(style: .light)
+                generator.impactOccurred()
+                if value > floor {
+                    value -= 1
+                    onChange()
+                }
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.black)
+                    .frame(width: 24, height: 24)
+                    .background(Color(.systemGray5))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Text("\(value)")
+                .font(.subheadline.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(.black)
+                .lineLimit(1)
+                .frame(minWidth: 24)
+                .padding(.vertical, 2)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            Button {
+                let generator = UIImpactFeedbackGenerator(style: .light)
+                generator.impactOccurred()
+                value += 1
+                onChange()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Color.accentColor)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            if labelPosition == .trailing {
+                labelText
+            }
+        }
+        .fixedSize()
+    }
+
+    private var labelText: some View {
+        Text(label)
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(.black)
+            .lineLimit(1)
+            .fixedSize()
+    }
+}
+
+/// Tappable numbered circle for the Inn. row — filled solid once the
+/// current inning has reached it, mirroring the balls/strikes/outs dots'
+/// fill-as-you-go pattern but with the number visible inside each circle.
+private struct InningCircle: View {
+    let number: Int
+    let isFilled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("\(number)")
+                .font(.system(size: 13, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(isFilled ? Color.white : Color.black)
+                .frame(width: 26, height: 26)
+                .background(isFilled ? Color.accentColor : Color(.systemGray5))
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Trailing "+" circle on the Inn. row for extending manually past inning 7.
+private struct InningAddCircle: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "plus")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(Color.accentColor)
+                .clipShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add Inning")
+    }
+}
+
 private struct ProgressGameView: View {
     let ownerUserId: String?
     @Binding var balls: Int
     @Binding var strikes: Int
+    let outs: Int
+    let showOutsFlash: Bool
+    let onOutsTapIndex: (Int) -> Void
     @Binding var inning: Int
     @Binding var hits: Int
     @Binding var walks: Int
@@ -9963,23 +10270,80 @@ private struct ProgressGameView: View {
 
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                ScoreTrackerCompact(usScore: $us, themScore: $them, onProgressChange: onProgressChange)
-                    .padding(.top, 2)
-                    .padding(.leading, 12)
-                Spacer()
-                VStack(alignment: .leading, spacing: 2){
-                    InningCounterCompact(inning: $inning)
-                        .padding(.top, 2)
-                        .padding(.trailing, 8)
-                    HitsCounterCompact(hits: $hits)
-                        .padding(.trailing, 8)
-                    WalksCounterCompact(walks: $walks)
-                        .padding(.trailing, 8)
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(spacing: 6) {
+                StatsPanelCard {
+                    Spacer(minLength: 0)
+                    Text("Inn.")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.black)
+                        .lineLimit(1)
+                        .fixedSize()
+                    ForEach(inningWindow, id: \.self) { number in
+                        InningCircle(number: number, isFilled: inning >= number) {
+                            let generator = UIImpactFeedbackGenerator(style: .light)
+                            generator.impactOccurred()
+                            inning = number
+                        }
+                    }
+                    InningAddCircle {
+                        let generator = UIImpactFeedbackGenerator(style: .light)
+                        generator.impactOccurred()
+                        inning = max(inning, 7) + 1
+                    }
+                    Spacer(minLength: 0)
                 }
             }
+            .padding(.horizontal, 12)
+
+            HStack(spacing: 0) {
+                largeCountEditor(prefix: "B", count: balls, maxCount: 3, filledColor: .red, shape: .circle) { idx in
+                    let value = idx + 1
+                    balls = (balls == value) ? max(0, value - 1) : value
+                    onProgressChange()
+                }
+                .frame(maxWidth: .infinity)
+
+                largeCountEditor(prefix: "S", count: strikes, maxCount: 2, filledColor: .green, shape: .circle) { idx in
+                    let value = idx + 1
+                    strikes = (strikes == value) ? max(0, value - 1) : value
+                    onProgressChange()
+                }
+                .frame(maxWidth: .infinity)
+
+                largeCountEditor(prefix: "O", count: outs, maxCount: 3, filledColor: .primary, shape: .square, onTapIndex: onOutsTapIndex)
+                    .scaleEffect(showOutsFlash ? 1.08 : 1.0)
+                    .shadow(color: showOutsFlash ? Color.red.opacity(0.35) : .clear, radius: showOutsFlash ? 8 : 0, x: 0, y: 0)
+                    .animation(.easeInOut(duration: 0.18), value: showOutsFlash)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 2)
+
             Divider()
+
+            VStack(spacing: 6) {
+                StatsPanelCard {
+                    StatStepper(label: "US", value: $us, onChange: onProgressChange)
+                    StatDivider()
+                    Spacer(minLength: 8)
+                    Text("Score")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.blue)
+                        .lineLimit(1)
+                        .fixedSize()
+                    Spacer(minLength: 8)
+                    StatDivider()
+                    StatStepper(label: "THEM", value: $them, labelPosition: .trailing, onChange: onProgressChange)
+                }
+                StatsPanelCard {
+                    StatStepper(label: "Hits", value: $hits, onChange: {})
+                    StatDivider()
+                    Spacer(minLength: 8)
+                    StatStepper(label: "Walks", value: $walks, labelPosition: .trailing, onChange: {})
+                }
+            }
+            .padding(.horizontal, 12)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 2)
@@ -10032,6 +10396,53 @@ private struct ProgressGameView: View {
         }
     }
 
+    /// Larger, tappable balls/strikes/outs editor for this revealed panel —
+    /// the header's dots are display-only, so this is the only place these
+    /// values can be changed.
+    /// Inline label-then-dots layout, mirroring the header's compact
+    /// B/S/O pattern (single-letter prefix beside the dots, not stacked
+    /// above them) but with bigger, tappable dots since this is the only
+    /// place balls/strikes/outs can actually be edited.
+    private func largeCountEditor(
+        prefix: String,
+        count: Int,
+        maxCount: Int,
+        filledColor: Color,
+        shape: CountDotShape,
+        onTapIndex: @escaping (Int) -> Void
+    ) -> some View {
+        HStack(spacing: 6) {
+            Text(prefix)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.black)
+                .lineLimit(1)
+                .fixedSize()
+            HStack(spacing: 6) {
+                ForEach(0..<maxCount, id: \.self) { idx in
+                    Button {
+                        onTapIndex(idx)
+                    } label: {
+                        Image(systemName: countDotSystemImageName(filled: idx < max(0, min(maxCount, count)), shape: shape))
+                            .font(.system(size: 18, weight: .regular))
+                            .foregroundStyle(idx < max(0, min(maxCount, count)) ? filledColor : Color.primary.opacity(0.4))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    /// Always exactly 7 numbers wide. Stays pinned to 1...7 while `inning`
+    /// is within that range; once "+" pushes `inning` past 7, the window
+    /// slides to keep the current inning as the rightmost circle (e.g.
+    /// inning 8 shows 2...8) instead of leaving every circle in 1...7
+    /// permanently filled with no way to tell which inning it actually is.
+    private var inningWindow: ClosedRange<Int> {
+        let end = max(inning, 7)
+        let start = end - 6
+        return start...end
+    }
+
     private func ballBinding(index: Int) -> Binding<Bool> {
         Binding(
             get: { ballToggles[index] },
@@ -10070,367 +10481,6 @@ private struct ProgressGameView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Toggle")
-    }
-}
-
-struct InningCounterCompact: View {
-    @Binding var inning: Int
-    
-    var body: some View {
-        
-        HStack(alignment: .center, spacing: 6) {
-            HStack(spacing: 6) {
-                Button {
-                    let generator = UIImpactFeedbackGenerator(style: .light)
-                    generator.impactOccurred()
-                    if inning > 1 { inning -= 1 }
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(.primary)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                
-                // Current inning
-                Text("\(inning)")
-                    .font(.headline.weight(.semibold))
-                    .monospacedDigit()
-                    .frame(minWidth: 28)
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 8)
-                    .background(
-                        .ultraThinMaterial,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-                
-                // Increment
-                Button {
-                    let generator = UIImpactFeedbackGenerator(style: .light)
-                    generator.impactOccurred()
-                    inning += 1
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(.primary)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                
-                
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 10)
-            .background(
-                .ultraThickMaterial,
-                in: Capsule()
-            )
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
-            
-            Text("Inning")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.trailing, 12)
-        .padding(.top, 18)
-        .contentShape(Rectangle())
-    }
-}
-struct HitsCounterCompact: View {
-    @Binding var hits: Int
-    
-    var body: some View {
-        
-        HStack(alignment: .center, spacing: 6) {
-            
-            HStack(spacing: 6) {
-                // Decrement
-                Button {
-                    let generator = UIImpactFeedbackGenerator(style: .light)
-                    generator.impactOccurred()
-                    if hits > 0 { hits -= 1 }
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(.primary)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                
-                // Current inning
-                Text("\(hits)")
-                    .font(.headline.weight(.semibold))
-                    .monospacedDigit()
-                    .frame(minWidth: 28)
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 8)
-                    .background(
-                        .ultraThinMaterial,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-                
-                // Increment
-                Button {
-                    let generator = UIImpactFeedbackGenerator(style: .light)
-                    generator.impactOccurred()
-                    hits += 1
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(.primary)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                
-                
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 10)
-            .background(
-                .ultraThickMaterial,
-                in: Capsule()
-            )
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
-            
-            Text("Hits")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.trailing, 12)
-    }
-}
-struct WalksCounterCompact: View {
-    @Binding var walks: Int
-    
-    var body: some View {
-        
-        HStack(alignment: .center, spacing: 6) {
-            
-            HStack(spacing: 6) {
-                // Decrement
-                Button {
-                    let generator = UIImpactFeedbackGenerator(style: .light)
-                    generator.impactOccurred()
-                    if walks > 0 { walks -= 1 }
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(.primary)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                
-                // Current inning
-                Text("\(walks)")
-                    .font(.headline.weight(.semibold))
-                    .monospacedDigit()
-                    .frame(minWidth: 28)
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 8)
-                    .background(
-                        .ultraThinMaterial,
-                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-                
-                // Increment
-                Button {
-                    let generator = UIImpactFeedbackGenerator(style: .light)
-                    generator.impactOccurred()
-                    walks += 1
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(.primary)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                
-                
-            }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 10)
-            .background(
-                .ultraThickMaterial,
-                in: Capsule()
-            )
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
-            
-            Text("Walks")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.trailing, 12)
-    }
-}
-struct ScoreTrackerCompact: View {
-    @Binding var usScore: Int
-    @Binding var themScore: Int
-    let onProgressChange: () -> Void
-    
-    var body: some View {
-        VStack(alignment: .center) {
-            Text("Score")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            
-            VStack(spacing: 0) {
-                // Us row with label above
-                VStack(spacing: 1) {   // no extra spacing
-                    Text("us")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 2) // optional, keep horizontal only
-                    scoreRow(score: $usScore)
-                }
-                .padding(.bottom, 2)
-                // Them row with label below
-                VStack(spacing: 1) {   // no extra spacing
-                    scoreRow(score: $themScore)
-                    Text("them")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 2) // optional, keep horizontal only
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(
-                .ultraThickMaterial,
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.15), radius: 2, x: 0, y: 1)
-            .fixedSize()
-        }
-        .padding(.top, 16)
-    }
-    
-    // MARK: - Row (no leading label)
-    private func scoreRow(score: Binding<Int>) -> some View {
-            HStack(spacing: 8) {
-                // Decrement
-                Button {
-                    let generator = UIImpactFeedbackGenerator(style: .light)
-                    generator.impactOccurred()
-                    if score.wrappedValue > 0 {
-                        score.wrappedValue -= 1
-                        onProgressChange()
-                    }
-                } label: {
-                Image(systemName: "minus")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(.primary)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Circle())
-                    .overlay(
-                        Circle()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-            }
-            .buttonStyle(.plain)
-            
-            // Score Display
-            Text("\(score.wrappedValue)")
-                .font(.headline.weight(.semibold))
-                .monospacedDigit()
-                .frame(minWidth: 32)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 10)
-                .background(
-                    .ultraThinMaterial,
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                )
-            
-            // Increment
-                Button {
-                    let generator = UIImpactFeedbackGenerator(style: .light)
-                    generator.impactOccurred()
-                    score.wrappedValue += 1
-                    onProgressChange()
-                } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(.primary)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Circle())
-                    .overlay(
-                        Circle()
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 8)
-        .contentShape(Rectangle())
     }
 }
 
@@ -11443,25 +11493,34 @@ struct CalledPitchView: View {
     let isEncryptedMode: Bool
     let onDeferDisplayCode: ((String, String) -> Void)?
     
+    /// Call length is 4 (Advanced: C1C2|C3C4) or 3 (Normal: C1C2|Cloc). Pitch is always the leading
+    /// 2 characters; the remainder is the location. `pitchFirst == false` swaps the two groups.
+    private var expectedCodeLength: Int {
+        template?.codeMode == .normal ? 3 : 4
+    }
+
     private func normalizeCode(_ code: String) -> String {
         let cleaned = code.uppercased().filter { $0.isNumber || ($0.isLetter && $0.isASCII) }
-        let base = String(cleaned.prefix(4))
-        guard !pitchFirst, base.count == 4 else { return base }
+        let expectedLength = expectedCodeLength
+        let base = String(cleaned.prefix(expectedLength))
+        guard !pitchFirst, base.count == expectedLength else { return base }
         let start = base.startIndex
         let mid = base.index(start, offsetBy: 2)
-        let firstTwo = base[start..<mid]
-        let lastTwo = base[mid..<base.endIndex]
-        return String(lastTwo + firstTwo)
+        let pitchPart = base[start..<mid]
+        let locationPart = base[mid..<base.endIndex]
+        return String(locationPart + pitchPart)
     }
 
     private func displayCode(_ code: String) -> String {
         let normalized = normalizeCode(code)
-        guard normalized.count == 4 else { return normalized }
+        let expectedLength = expectedCodeLength
+        guard normalized.count == expectedLength else { return normalized }
+        let firstSegmentLength = pitchFirst ? 2 : (expectedLength - 2)
         let start = normalized.startIndex
-        let mid = normalized.index(start, offsetBy: 2)
-        let firstTwo = normalized[start..<mid]
-        let lastTwo = normalized[mid..<normalized.endIndex]
-        return "\(firstTwo)·\(lastTwo)"
+        let mid = normalized.index(start, offsetBy: firstSegmentLength)
+        let firstPart = normalized[start..<mid]
+        let secondPart = normalized[mid..<normalized.endIndex]
+        return "\(firstPart)·\(secondPart)"
     }
 
     private var selectedDisplayedCode: String? {

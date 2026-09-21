@@ -40,9 +40,15 @@ private struct PitchButtonView: View {
 
     var body: some View {
         let tappedPoint = CGPoint(x: x, y: y)
-        let isSelected = lastTappedPosition == tappedPoint
         let adjustedLabel = labelManager.adjustedLabel(from: location.label)
         let fullLabel = "\(location.isStrike ? "Strike" : "Ball") \(adjustedLabel)"
+        // A call placed via the batter heat map sheet never taps this button
+        // directly, so lastTappedPosition alone misses it — the glow also has
+        // to fire when this cell is the one the active call points at.
+        let isCalledLocation = calledPitch != nil
+            && location.isStrike == calledPitch?.isStrike
+            && calledPitchLocation?.trimmingCharacters(in: .whitespacesAndNewlines) == adjustedLabel
+        let isSelected = lastTappedPosition == tappedPoint || isCalledLocation
         let isLocationUnavailable = shouldGreyOutLocation(
             adjustedLabel: adjustedLabel,
             fullLabel: fullLabel,
@@ -133,6 +139,15 @@ private struct PitchButtonView: View {
                                 let labelForGrid = adjustedLabel.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard let (gridKind, columnIndex, rowIndex) = mapLabelToGridInfo(label: labelForGrid, isStrike: location.isStrike) else {
                                     return []
+                                }
+                                if template.codeMode == .normal {
+                                    return EncryptedCodeGenerator.generateNormalCalls(
+                                        template: template,
+                                        selectedPitch: selected,
+                                        gridKind: gridKind,
+                                        columnIndex: columnIndex,
+                                        rowIndex: rowIndex
+                                    )
                                 }
                                 return EncryptedCodeGenerator.generateCalls(
                                     template: template,
@@ -249,34 +264,49 @@ private struct PitchButtonView: View {
             return false
         }
 
-        let bottomHeaders: [String]
-        let bottomRowsRaw: [[String]]
-        switch gridKind {
-        case .strikes:
-            bottomHeaders = template.strikeTopRow
-            bottomRowsRaw = template.strikeRows
-        case .balls:
-            bottomHeaders = template.ballsTopRow
-            bottomRowsRaw = template.ballsRows
-        }
-
-        let bottomRows: [[String]] = {
-            if bottomRowsRaw.count == 4,
-               bottomRowsRaw.first?.allSatisfy({ sanitizeGridCodeCell($0).isEmpty }) == true {
-                return Array(bottomRowsRaw.dropFirst())
+        let hasBottomSource: Bool
+        if template.codeMode == .normal {
+            let locationCells: [[String]]
+            switch gridKind {
+            case .strikes: locationCells = template.strikeLocationCells
+            case .balls: locationCells = template.ballsLocationCells
             }
-            return bottomRowsRaw
-        }()
+            guard locationCells.indices.contains(rowIndex),
+                  locationCells[rowIndex].indices.contains(columnIndex) else {
+                return false
+            }
+            hasBottomSource = !sanitizeGridCodeCell(locationCells[rowIndex][columnIndex]).isEmpty
+        } else {
+            let bottomHeaders: [String]
+            let bottomRowsRaw: [[String]]
+            switch gridKind {
+            case .strikes:
+                bottomHeaders = template.strikeTopRow
+                bottomRowsRaw = template.strikeRows
+            case .balls:
+                bottomHeaders = template.ballsTopRow
+                bottomRowsRaw = template.ballsRows
+            }
 
-        guard bottomHeaders.indices.contains(columnIndex),
-              bottomRows.indices.contains(rowIndex),
-              bottomRows[rowIndex].indices.contains(columnIndex) else {
-            return false
+            let bottomRows: [[String]] = {
+                if bottomRowsRaw.count == 4,
+                   bottomRowsRaw.first?.allSatisfy({ sanitizeGridCodeCell($0).isEmpty }) == true {
+                    return Array(bottomRowsRaw.dropFirst())
+                }
+                return bottomRowsRaw
+            }()
+
+            guard bottomHeaders.indices.contains(columnIndex),
+                  bottomRows.indices.contains(rowIndex),
+                  bottomRows[rowIndex].indices.contains(columnIndex) else {
+                return false
+            }
+
+            let hasBottomColumnHeader = !sanitizeGridCodeCell(bottomHeaders[columnIndex]).isEmpty
+            let hasBottomCell = !sanitizeGridCodeCell(bottomRows[rowIndex][columnIndex]).isEmpty
+            hasBottomSource = hasBottomColumnHeader && hasBottomCell
         }
-
-        let hasBottomColumnHeader = !sanitizeGridCodeCell(bottomHeaders[columnIndex]).isEmpty
-        let hasBottomCell = !sanitizeGridCodeCell(bottomRows[rowIndex][columnIndex]).isEmpty
-        guard hasBottomColumnHeader, hasBottomCell else { return false }
+        guard hasBottomSource else { return false }
 
         return template.pitchGridValues.contains { row in
             guard row.indices.contains(0), row.indices.contains(pitchCol) else { return false }

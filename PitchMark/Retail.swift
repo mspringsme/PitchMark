@@ -579,7 +579,10 @@ private struct TemplateDetailView: View {
             locationFirstColors: template.locationFirstColors,
             outerPadding: outerPadding,
             scale: scaleFactor,
-            textScale: textScale
+            textScale: textScale,
+            codeMode: template.codeMode,
+            strikeLocationCells: template.strikeLocationCells,
+            ballsLocationCells: template.ballsLocationCells
         )
 
         if let img = preview.renderAsPNG(size: targetSize, scale: 2.0, alignment: Alignment.center) {
@@ -614,7 +617,10 @@ private struct TemplateDetailView: View {
             locationFirstColors: template.locationFirstColors,
             outerPadding: outerPadding,
             scale: scaleFactor,
-            textScale: textScale
+            textScale: textScale,
+            codeMode: template.codeMode,
+            strikeLocationCells: template.strikeLocationCells,
+            ballsLocationCells: template.ballsLocationCells
         )
 
         guard let image = printableView.renderAsPNG(size: targetSize, scale: 3.0, alignment: .center) else {
@@ -967,25 +973,46 @@ struct PrintableLocationSheetView: View {
         copy.ballsRows = template.ballsRows.map { row in
             row.map { sanitizeAlnum($0) }
         }
+        copy.strikeLocationCells = template.strikeLocationCells.map { row in
+            row.map { sanitizeAlnum($0) }
+        }
+        copy.ballsLocationCells = template.ballsLocationCells.map { row in
+            row.map { sanitizeAlnum($0) }
+        }
         return copy
     }
 
+    /// Splits a code into pitch (first 2 chars) and location (remainder) groups, joined with "·".
+    /// Advanced codes are 4 chars (2+2); Normal codes are 3 chars (2+1).
     private func formatCode(_ code: String) -> String {
         let cleaned = sanitizeAlnum(code)
         let chars = Array(cleaned)
-        guard chars.count >= 4 else { return cleaned }
-        return String(chars[0...1]) + "·" + String(chars[2...3])
+        guard chars.count >= 3 else { return cleaned }
+        let pitchPart = String(chars[0...1])
+        let locationPart = String(chars[2...])
+        return pitchPart + "·" + locationPart
     }
 
     private func codes(for pitch: String, location: PrintableLocation) -> [String] {
         let cleanTemplate = sanitizedTemplateForCodes(template)
-        let allCodes = EncryptedCodeGenerator.generateCalls(
-            template: cleanTemplate,
-            selectedPitch: pitch,
-            gridKind: location.gridKind,
-            columnIndex: location.col,
-            rowIndex: location.row
-        )
+        let allCodes: [String]
+        if cleanTemplate.codeMode == .normal {
+            allCodes = EncryptedCodeGenerator.generateNormalCalls(
+                template: cleanTemplate,
+                selectedPitch: pitch,
+                gridKind: location.gridKind,
+                columnIndex: location.col,
+                rowIndex: location.row
+            )
+        } else {
+            allCodes = EncryptedCodeGenerator.generateCalls(
+                template: cleanTemplate,
+                selectedPitch: pitch,
+                gridKind: location.gridKind,
+                columnIndex: location.col,
+                rowIndex: location.row
+            )
+        }
         let trimmed = Array(allCodes.prefix(columnCount)).map { formatCode($0) }
         if trimmed.count >= columnCount { return trimmed }
         return trimmed + Array(repeating: "", count: columnCount - trimmed.count)

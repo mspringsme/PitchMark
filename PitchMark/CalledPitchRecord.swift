@@ -2271,7 +2271,8 @@ struct PitchResultSheet: View {
                                     }
                                 } label: {
                                     Image(systemName: "gearshape")
-                                        .imageScale(.medium)
+                                        .font(.system(size: 22, weight: .medium))
+                                        .padding(6)
                                 }
                                 .buttonStyle(.plain)
                                 .transition(.scale.combined(with: .opacity))
@@ -2287,7 +2288,8 @@ struct PitchResultSheet: View {
                                     }
                                 } label: {
                                     Image(systemName: "gearshape")
-                                        .imageScale(.medium)
+                                        .font(.system(size: 22, weight: .medium))
+                                        .padding(6)
                                 }
                                 .buttonStyle(.plain)
                                 .transition(.scale.combined(with: .opacity))
@@ -2310,7 +2312,8 @@ struct PitchResultSheet: View {
                                 Image(systemName: hasActiveFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
                                     .foregroundStyle(hasActiveFilters ? Color.blue : .primary)
                                     .shadow(color: hasActiveFilters ? Color.blue.opacity(0.35) : .clear, radius: hasActiveFilters ? 6 : 0)
-                                    .imageScale(.medium)
+                                    .font(.system(size: 22, weight: .medium))
+                                    .padding(6)
                                     .clipShape(Capsule())
                                     .compositingGroup()
                             }

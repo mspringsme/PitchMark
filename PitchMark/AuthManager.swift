@@ -878,7 +878,9 @@ class AuthManager: ObservableObject {
         let pitchGridMap: [String: [String]] = rowsToMap(template.pitchGridValues)
         let strikeRowsMap: [String: [String]] = rowsToMap(template.strikeRows)
         let ballsRowsMap: [String: [String]] = rowsToMap(template.ballsRows)
-        
+        let strikeLocationCellsMap: [String: [String]] = rowsToMap(template.strikeLocationCells)
+        let ballsLocationCellsMap: [String: [String]] = rowsToMap(template.ballsLocationCells)
+
         let ownerUid = user.uid
         let data: [String: Any] = [
             "name": template.name,
@@ -887,17 +889,20 @@ class AuthManager: ObservableObject {
             "isEncrypted": template.isEncrypted,
             "pitchFirstColors": template.pitchFirstColors,
             "locationFirstColors": template.locationFirstColors,
+            "codeMode": template.codeMode.rawValue,
             "pitchGrid": [
                 "headers": headersArray,
                 "gridRows": pitchGridMap
             ],
             "strikeGrid": [
                 "topRow": template.strikeTopRow,
-                "rowsMap": strikeRowsMap
+                "rowsMap": strikeRowsMap,
+                "locationCellsMap": strikeLocationCellsMap
             ],
             "ballsGrid": [
                 "topRow": template.ballsTopRow,
-                "rowsMap": ballsRowsMap
+                "rowsMap": ballsRowsMap,
+                "locationCellsMap": ballsLocationCellsMap
             ],
             "ownerUid": ownerUid,
             "sharedWith": template.sharedWith,
@@ -1138,10 +1143,22 @@ class AuthManager: ObservableObject {
                         ballsRows = sorted.map { rowsMap[String($0)] ?? [] }
                     }
 
+                    var strikeLocationCells: [[String]] = []
+                    if let cellsMap = strikeGrid?["locationCellsMap"] as? [String: [String]] {
+                        let sorted = cellsMap.keys.compactMap { Int($0) }.sorted()
+                        strikeLocationCells = sorted.map { cellsMap[String($0)] ?? [] }
+                    }
+                    var ballsLocationCells: [[String]] = []
+                    if let cellsMap = ballsGrid?["locationCellsMap"] as? [String: [String]] {
+                        let sorted = cellsMap.keys.compactMap { Int($0) }.sorted()
+                        ballsLocationCells = sorted.map { cellsMap[String($0)] ?? [] }
+                    }
+
                     let pitchFirstColors = data["pitchFirstColors"] as? [String] ?? []
                     let locationFirstColors = data["locationFirstColors"] as? [String] ?? []
 
                     let isEncrypted = data["isEncrypted"] as? Bool ?? false
+                    let codeMode = PitchCodeMode(rawValue: data["codeMode"] as? String ?? "") ?? .advanced
                     let templateId = UUID(uuidString: doc.documentID) ?? UUID()
 
                     let ownerUid = data["ownerUid"] as? String
@@ -1164,7 +1181,10 @@ class AuthManager: ObservableObject {
                         ballsTopRow: ballsTop,
                         ballsRows: ballsRows,
                         pitchFirstColors: pitchFirstColors,
-                        locationFirstColors: locationFirstColors
+                        locationFirstColors: locationFirstColors,
+                        codeMode: codeMode,
+                        strikeLocationCells: strikeLocationCells,
+                        ballsLocationCells: ballsLocationCells
                     )
 
                     templatesById[templateId] = template
@@ -1618,10 +1638,22 @@ class AuthManager: ObservableObject {
                     ballsRows = sorted.map { rowsMap[String($0)] ?? [] }
                 }
 
+                var strikeLocationCells: [[String]] = []
+                if let cellsMap = strikeGrid?["locationCellsMap"] as? [String: [String]] {
+                    let sorted = cellsMap.keys.compactMap { Int($0) }.sorted()
+                    strikeLocationCells = sorted.map { cellsMap[String($0)] ?? [] }
+                }
+                var ballsLocationCells: [[String]] = []
+                if let cellsMap = ballsGrid?["locationCellsMap"] as? [String: [String]] {
+                    let sorted = cellsMap.keys.compactMap { Int($0) }.sorted()
+                    ballsLocationCells = sorted.map { cellsMap[String($0)] ?? [] }
+                }
+
                 let pitchFirstColors = data["pitchFirstColors"] as? [String] ?? []
                 let locationFirstColors = data["locationFirstColors"] as? [String] ?? []
 
                 let isEncrypted = data["isEncrypted"] as? Bool ?? false
+                let codeMode = PitchCodeMode(rawValue: data["codeMode"] as? String ?? "") ?? .advanced
 
                 return PitchTemplate(
                     id: UUID(uuidString: id) ?? UUID(),
@@ -1636,7 +1668,10 @@ class AuthManager: ObservableObject {
                     ballsTopRow: ballsTop,
                     ballsRows: ballsRows,
                     pitchFirstColors: pitchFirstColors,
-                    locationFirstColors: locationFirstColors
+                    locationFirstColors: locationFirstColors,
+                    codeMode: codeMode,
+                    strikeLocationCells: strikeLocationCells,
+                    ballsLocationCells: ballsLocationCells
                 )
             }
         } catch {

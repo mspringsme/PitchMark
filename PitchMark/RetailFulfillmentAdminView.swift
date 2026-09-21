@@ -349,7 +349,10 @@ struct RetailFulfillmentAdminView: View {
             locationFirstColors: template.locationFirstColors,
             outerPadding: outerPadding,
             scale: scaleFactor,
-            textScale: 1.5
+            textScale: 1.5,
+            codeMode: template.codeMode,
+            strikeLocationCells: template.strikeLocationCells,
+            ballsLocationCells: template.ballsLocationCells
         )
 
         guard let image = printableView.renderAsPNG(size: targetSize, scale: 3.0, alignment: .center) else {

@@ -458,6 +458,22 @@ struct PitcherAvatarView: View {
     }
 }
 
+/// The character length of an encrypted grid key's generated call.
+/// `.advanced` is the original C1C2C3C4 scheme (pitch pair + location pair).
+/// `.normal` collapses the location pair into a single character (C1C2Cloc),
+/// trading the location axis's redundancy for a shorter, faster-to-read call.
+enum PitchCodeMode: String, Codable, CaseIterable {
+    case advanced
+    case normal
+
+    var displayName: String {
+        switch self {
+        case .advanced: return "Advanced (4-character)"
+        case .normal: return "Normal (3-character)"
+        }
+    }
+}
+
 struct PitchTemplate: Identifiable, Hashable, Codable {
     let id: UUID
     var name: String
@@ -480,6 +496,11 @@ struct PitchTemplate: Identifiable, Hashable, Codable {
 
     var pitchFirstColors: [String] = []              // length 2
     var locationFirstColors: [String] = []           // length 3
+
+    // Normal (3-character) mode data
+    var codeMode: PitchCodeMode = .advanced
+    var strikeLocationCells: [[String]] = []          // 3 x 3, single-character-per-cell, used only when codeMode == .normal
+    var ballsLocationCells: [[String]] = []           // 3 x 3, same; [1][1] is the disabled "Ball, Middle" cell
 }
 
 enum BatterSide: String, CaseIterable, Identifiable, Codable {

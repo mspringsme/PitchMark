@@ -402,6 +402,104 @@ extension EnvironmentValues {
     }
 }
 
+/// Coordinates the two single-character-per-cell 3x3 location grids used by Normal (3-character) mode.
+/// Unlike `TopRowValidationCoordinator`'s header+body pair, each cell here holds exactly one character,
+/// and characters are kept unique across BOTH grids combined (not just within one grid or one column) —
+/// so a call's location character alone, with no other context, pins down a single cell.
+final class NormalLocationCoordinator: ObservableObject {
+    @Published var strikeCells: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 3)
+    @Published var ballsCells: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 3)
+
+    /// "Ball, Middle" isn't a real location (a ball down the middle is a strike) — same cell
+    /// `PrintableEncryptedGridsView.selectedBallBodyCell` and `BallsLocationGridView` already block out.
+    static let disabledBallCell: (row: Int, col: Int) = (1, 1)
+
+    private func isDisabled(isStrike: Bool, row: Int, col: Int) -> Bool {
+        !isStrike && row == Self.disabledBallCell.row && col == Self.disabledBallCell.col
+    }
+
+    func usedChars(excluding isStrike: Bool, row: Int, col: Int) -> Set<Character> {
+        var set: Set<Character> = []
+        for r in 0..<3 {
+            for c in 0..<3 where !(isStrike && r == row && c == col) {
+                for ch in alnumOnlyUppercased(strikeCells[r][c]) { set.insert(ch) }
+            }
+        }
+        for r in 0..<3 {
+            for c in 0..<3 where !(!isStrike && r == row && c == col) {
+                for ch in alnumOnlyUppercased(ballsCells[r][c]) { set.insert(ch) }
+            }
+        }
+        return set
+    }
+
+    /// Keeps at most one character; rejects any character already used elsewhere in either grid.
+    func sanitizeCellInput(isStrike: Bool, row: Int, col: Int, newValue: String) -> String {
+        guard !isDisabled(isStrike: isStrike, row: row, col: col) else { return "" }
+        let existing = usedChars(excluding: isStrike, row: row, col: col)
+        for ch in alnumOnlyUppercased(newValue) where !existing.contains(ch) {
+            return String(ch)
+        }
+        return ""
+    }
+
+    func setCell(isStrike: Bool, row: Int, col: Int, value: String) {
+        guard !isDisabled(isStrike: isStrike, row: row, col: col) else { return }
+        if isStrike {
+            guard strikeCells.indices.contains(row), strikeCells[row].indices.contains(col) else { return }
+            strikeCells[row][col] = value
+        } else {
+            guard ballsCells.indices.contains(row), ballsCells[row].indices.contains(col) else { return }
+            ballsCells[row][col] = value
+        }
+    }
+
+    func cell(isStrike: Bool, row: Int, col: Int) -> String {
+        if isStrike {
+            guard strikeCells.indices.contains(row), strikeCells[row].indices.contains(col) else { return "" }
+            return strikeCells[row][col]
+        } else {
+            guard ballsCells.indices.contains(row), ballsCells[row].indices.contains(col) else { return "" }
+            return ballsCells[row][col]
+        }
+    }
+
+    /// Assigns a unique safe-alphabet character to every valid cell across both grids (17 cells total).
+    func randomizeAll() {
+        var pool = EncryptedCodeGenerator.safeAlnumPool.shuffled()
+        func nextChar() -> String {
+            guard !pool.isEmpty else { return "" }
+            return String(pool.removeFirst())
+        }
+        for r in 0..<3 {
+            for c in 0..<3 {
+                strikeCells[r][c] = nextChar()
+            }
+        }
+        for r in 0..<3 {
+            for c in 0..<3 {
+                ballsCells[r][c] = isDisabled(isStrike: false, row: r, col: c) ? "" : nextChar()
+            }
+        }
+    }
+
+    func clearAll() {
+        strikeCells = Array(repeating: Array(repeating: "", count: 3), count: 3)
+        ballsCells = Array(repeating: Array(repeating: "", count: 3), count: 3)
+    }
+}
+
+private struct NormalLocationCoordinatorKey: EnvironmentKey {
+    static let defaultValue: NormalLocationCoordinator? = nil
+}
+
+extension EnvironmentValues {
+    var normalLocationCoordinator: NormalLocationCoordinator? {
+        get { self[NormalLocationCoordinatorKey.self] }
+        set { self[NormalLocationCoordinatorKey.self] = newValue }
+    }
+}
+
 private enum GridPaletteColor: String, CaseIterable, Identifiable {
     case red
     case black
@@ -513,9 +611,17 @@ struct TemplateEditorView: View {
     @State private var initialStrikeRows: [[String]] = []
     @State private var initialBallsTopRow: [String] = []
     @State private var initialBallsRows: [[String]] = []
+    @State private var initialStrikeLocationCells: [[String]] = []
+    @State private var initialBallsLocationCells: [[String]] = []
     @State private var gridPaletteSelections: [GridPaletteColor?] = Array(repeating: nil, count: 5)
-    
+
+    // The code-length mode (Advanced/4-char vs Normal/3-char). Fixed at creation: the two modes use
+    // different location-grid editors (header+body vs single-cell), so it isn't a small in-place edit.
+    @State private var codeMode: PitchCodeMode
+    private let isNewTemplate: Bool
+
     @StateObject private var topRowCoordinator = TopRowValidationCoordinator()
+    @StateObject private var normalLocationCoordinator = NormalLocationCoordinator()
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     
     let allPitches: [String]
@@ -568,7 +674,7 @@ struct TemplateEditorView: View {
         let ballsRows = topRowCoordinator.ballsRows
         let pitchFirstColors = gridPaletteSelections.prefix(2).compactMap { $0?.rawValue }
         let locationFirstColors = gridPaletteSelections.suffix(3).compactMap { $0?.rawValue }
-        
+
         let newTemplate = PitchTemplate(
             id: templateID,
             name: name,
@@ -581,7 +687,10 @@ struct TemplateEditorView: View {
             ballsTopRow: ballsTop,
             ballsRows: ballsRows,
             pitchFirstColors: pitchFirstColors,
-            locationFirstColors: locationFirstColors
+            locationFirstColors: locationFirstColors,
+            codeMode: codeMode,
+            strikeLocationCells: normalLocationCoordinator.strikeCells,
+            ballsLocationCells: normalLocationCoordinator.ballsCells
         )
         Self.saveActivePitches(for: templateID, active: selectedPitches)
         onSave(newTemplate)
@@ -609,7 +718,9 @@ struct TemplateEditorView: View {
         let strikeRows = template?.strikeRows ?? []
         let ballsTop = template?.ballsTopRow ?? []
         let ballsRows = template?.ballsRows ?? []
-        
+        let strikeLocationCells = template?.strikeLocationCells ?? []
+        let ballsLocationCells = template?.ballsLocationCells ?? []
+
         _name = State(initialValue: initialName)
         _selectedPitches = State(initialValue: initialPitches)
         _codeAssignments = State(initialValue: initialAssignments)
@@ -620,9 +731,13 @@ struct TemplateEditorView: View {
         _initialStrikeRows = State(initialValue: strikeRows)
         _initialBallsTopRow = State(initialValue: ballsTop)
         _initialBallsRows = State(initialValue: ballsRows)
+        _initialStrikeLocationCells = State(initialValue: strikeLocationCells)
+        _initialBallsLocationCells = State(initialValue: ballsLocationCells)
         _gridPaletteSelections = State(initialValue: initialPalette)
+        _codeMode = State(initialValue: template?.codeMode ?? .advanced)
+        self.isNewTemplate = (template?.pitchGridValues ?? []).isEmpty
         self.templateID = id
-        
+
     }
 
     private static func paletteSelections(from template: PitchTemplate?) -> [GridPaletteColor?] {
@@ -864,38 +979,52 @@ struct TemplateEditorView: View {
                 VStack(spacing: 4) {
                     HStack(spacing: 6) {
                         VStack {
-                            StrikeLocationGridView()
-                                .environment(\.topRowCoordinator, topRowCoordinator)
-                                .padding(.top, 8)
-                                .simultaneousGesture(
-                                    TapGesture().onEnded {
-                                        noteGridInteraction(.strikes)
-                                    }
-                                )
-                                .overlay {
-                                    if showGridShieldOverlays && hiddenShieldTarget != .strikes {
-                                        AnimatedGridShieldOverlay(baseSizeScale: 0.52)
-                                    }
+                            Group {
+                                if codeMode == .normal {
+                                    StrikeLocationSingleGridView()
+                                        .environment(\.normalLocationCoordinator, normalLocationCoordinator)
+                                } else {
+                                    StrikeLocationGridView()
+                                        .environment(\.topRowCoordinator, topRowCoordinator)
                                 }
+                            }
+                            .padding(.top, 8)
+                            .simultaneousGesture(
+                                TapGesture().onEnded {
+                                    noteGridInteraction(.strikes)
+                                }
+                            )
+                            .overlay {
+                                if showGridShieldOverlays && hiddenShieldTarget != .strikes {
+                                    AnimatedGridShieldOverlay(baseSizeScale: 0.52)
+                                }
+                            }
                             Text("Strikes")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(.black)
                                 .padding(.top, -2)
                         }
                         VStack {
-                            BallsLocationGridView()
-                                .environment(\.topRowCoordinator, topRowCoordinator)
-                                .padding(.top, 8)
-                                .simultaneousGesture(
-                                    TapGesture().onEnded {
-                                        noteGridInteraction(.balls)
-                                    }
-                                )
-                                .overlay {
-                                    if showGridShieldOverlays && hiddenShieldTarget != .balls {
-                                        AnimatedGridShieldOverlay(baseSizeScale: 0.52)
-                                    }
+                            Group {
+                                if codeMode == .normal {
+                                    BallsLocationSingleGridView()
+                                        .environment(\.normalLocationCoordinator, normalLocationCoordinator)
+                                } else {
+                                    BallsLocationGridView()
+                                        .environment(\.topRowCoordinator, topRowCoordinator)
                                 }
+                            }
+                            .padding(.top, 8)
+                            .simultaneousGesture(
+                                TapGesture().onEnded {
+                                    noteGridInteraction(.balls)
+                                }
+                            )
+                            .overlay {
+                                if showGridShieldOverlays && hiddenShieldTarget != .balls {
+                                    AnimatedGridShieldOverlay(baseSizeScale: 0.52)
+                                }
+                            }
                             Text("Balls")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(.black)
@@ -1037,6 +1166,23 @@ struct TemplateEditorView: View {
                         }
                     }
                     
+                    // Code length mode is fixed once a template has data (Normal and Advanced use
+                    // different location-grid editors), so only offer the choice while creating new.
+                    if isNewTemplate {
+                        VStack(spacing: 4) {
+                            Text("Code Length")
+                                .font(.caption)
+                                .foregroundColor(.black)
+                            Picker("Code Length", selection: $codeMode) {
+                                ForEach(PitchCodeMode.allCases, id: \.self) { mode in
+                                    Text(mode.displayName).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                        .padding(.top, 4)
+                    }
+
                     // Encrypted template: show pitch grid editor
                     Text("Pitcher's Pitches Grid Key")
                         .font(.title3)
@@ -1060,24 +1206,6 @@ struct TemplateEditorView: View {
                             .tint(.white)
                             .foregroundColor(.black)
                             .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
-                            .appConfirmationDialog(
-                                isPresented: $showRandomConfirm,
-                                title: "Randomize grid values?",
-                                message: "This will randomize the values in your grids. This action cannot be undone.",
-                                primaryTitle: "Randomize",
-                                primaryRole: .destructive,
-                                primaryAction: {
-                                    if !hasAnyPitchInTopRow {
-                                        showNoPitchAlert = true
-                                        return
-                                    }
-                                    randomizeFirstColumnAction?()
-                                    topRowCoordinator.randomizeTopRowsWithSequentialPairs()
-                                    topRowCoordinator.randomizeBodyRowsWithSequentialPairs()
-                                    randomizePaletteSelections()
-                                },
-                                secondaryTitle: "Cancel"
-                            )
                             .alert("Add a pitch first", isPresented: $showNoPitchAlert) {
                                 Button("OK", role: .cancel) { }
                             } message: {
@@ -1095,20 +1223,6 @@ struct TemplateEditorView: View {
                             .tint(.white)
                             .foregroundColor(.black)
                             .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
-                            .appConfirmationDialog(
-                                isPresented: $showClearConfirm,
-                                title: "Clear all grid values?",
-                                message: "This will remove all values from your grids. This action cannot be undone.",
-                                primaryTitle: "Clear",
-                                primaryRole: .destructive,
-                                primaryAction: {
-                                    topRowCoordinator.clearAll()
-                                    clearPitchGridAction?()
-                                    gridPaletteSelections = Array(repeating: nil, count: 5)
-                                    hasAnyPitchInTopRow = false
-                                },
-                                secondaryTitle: "Cancel"
-                            )
                         }
                         .padding(.horizontal)
                         Spacer()
@@ -1121,16 +1235,6 @@ struct TemplateEditorView: View {
                         )
                         .fixedAppDynamicType()
                     }
-                    .appConfirmationDialog(
-                        isPresented: $showProPitchLimitAlert,
-                        title: "Upgrade to Pro",
-                        message: "Adding more than two pitches to a grid key is available with PitchMark Pro.",
-                        primaryTitle: "Upgrade",
-                        primaryAction: {
-                            showProPaywall = true
-                        },
-                        secondaryTitle: "Not Now"
-                    )
                     Spacer()
                     
                     
@@ -1152,6 +1256,12 @@ struct TemplateEditorView: View {
                     }
                     if initialBallsRows.count == 4 {
                         topRowCoordinator.ballsRows = initialBallsRows
+                    }
+                    if initialStrikeLocationCells.count == 3 {
+                        normalLocationCoordinator.strikeCells = initialStrikeLocationCells
+                    }
+                    if initialBallsLocationCells.count == 3 {
+                        normalLocationCoordinator.ballsCells = initialBallsLocationCells
                     }
                 }
 
@@ -1190,6 +1300,53 @@ struct TemplateEditorView: View {
                 dismiss()
             },
             secondaryTitle: "Keep Editing"
+        )
+        .appConfirmationDialog(
+            isPresented: $showRandomConfirm,
+            title: "Randomize grid values?",
+            message: "This will randomize the values in your grids. This action cannot be undone.",
+            primaryTitle: "Randomize",
+            primaryRole: .destructive,
+            primaryAction: {
+                if !hasAnyPitchInTopRow {
+                    showNoPitchAlert = true
+                    return
+                }
+                randomizeFirstColumnAction?()
+                if codeMode == .normal {
+                    normalLocationCoordinator.randomizeAll()
+                } else {
+                    topRowCoordinator.randomizeTopRowsWithSequentialPairs()
+                    topRowCoordinator.randomizeBodyRowsWithSequentialPairs()
+                }
+                randomizePaletteSelections()
+            },
+            secondaryTitle: "Cancel"
+        )
+        .appConfirmationDialog(
+            isPresented: $showClearConfirm,
+            title: "Clear all grid values?",
+            message: "This will remove all values from your grids. This action cannot be undone.",
+            primaryTitle: "Clear",
+            primaryRole: .destructive,
+            primaryAction: {
+                topRowCoordinator.clearAll()
+                normalLocationCoordinator.clearAll()
+                clearPitchGridAction?()
+                gridPaletteSelections = Array(repeating: nil, count: 5)
+                hasAnyPitchInTopRow = false
+            },
+            secondaryTitle: "Cancel"
+        )
+        .appConfirmationDialog(
+            isPresented: $showProPitchLimitAlert,
+            title: "Upgrade to Pro",
+            message: "Adding more than two pitches to a grid key is available with PitchMark Pro.",
+            primaryTitle: "Upgrade",
+            primaryAction: {
+                showProPaywall = true
+            },
+            secondaryTitle: "Not Now"
         )
     }
 }
@@ -2462,6 +2619,139 @@ struct StrikeLocationGridView: View {
     }
 }
 
+/// Normal (3-character) mode's single 3x3 grid: one character per cell, no header row.
+/// Same tap geometry as `StrikeLocationGridView`'s body rows (row 0 = top of zone, col 0 = away from batter).
+///
+/// Mirrors a local `@State` grid + `.onReceive` on the coordinator's `@Published` array, the same
+/// pattern `StrikeLocationGridView` uses — `@Environment` does not itself trigger a re-render when a
+/// `@Published` property inside the referenced coordinator changes (e.g. from the Random/Clear buttons
+/// or from editing a sibling cell), so without this a cell would only ever reflect its own edits.
+struct StrikeLocationSingleGridView: View {
+    let cellWidth: CGFloat = 46
+    let cellHeight: CGFloat = 30
+    @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 3)
+
+    @Environment(\.normalLocationCoordinator) private var coordinator
+
+    private var gridColumns: [GridItem] { Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3) }
+
+    private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
+        ZStack {
+            TextField("", text: Binding(
+                get: { binding.wrappedValue },
+                set: { newValue in
+                    guard let coordinator else { return }
+                    let sanitized = coordinator.sanitizeCellInput(isStrike: true, row: row, col: col, newValue: newValue)
+                    coordinator.setCell(isStrike: true, row: row, col: col, value: sanitized)
+                    binding.wrappedValue = sanitized
+                }
+            ))
+            .textFieldStyle(.plain)
+            .multilineTextAlignment(.center)
+            .fontWeight(.bold)
+            .foregroundColor(.clear)
+            .tint(.blue)
+            Text(binding.wrappedValue)
+                .fontWeight(.bold)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .allowsHitTesting(false)
+        }
+        .frame(width: cellWidth, height: cellHeight)
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(.green, lineWidth: 1.0))
+        .onAppear {
+            if let v = coordinator?.cell(isStrike: true, row: row, col: col), binding.wrappedValue != v {
+                binding.wrappedValue = v
+            }
+        }
+        .onReceive((coordinator?.$strikeCells.receive(on: RunLoop.main).eraseToAnyPublisher()) ?? Just([[String]]()).eraseToAnyPublisher()) { cells in
+            guard cells.indices.contains(row), cells[row].indices.contains(col) else { return }
+            let v = cells[row][col]
+            if binding.wrappedValue != v { binding.wrappedValue = v }
+        }
+    }
+
+    var body: some View {
+        LazyVGrid(columns: gridColumns, spacing: 0) {
+            ForEach(0..<9, id: \.self) { index in
+                let r = index / 3
+                let c = index % 3
+                cellBinding(row: r, col: c, binding: $grid[r][c])
+            }
+        }
+    }
+}
+
+/// Normal-mode counterpart to `StrikeLocationSingleGridView`; blocks out the true-center cell the same
+/// way `BallsLocationGridView` does, since "Ball, Middle" isn't a real location.
+struct BallsLocationSingleGridView: View {
+    let cellWidth: CGFloat = 46
+    let cellHeight: CGFloat = 30
+    @State private var grid: [[String]] = Array(repeating: Array(repeating: "", count: 3), count: 3)
+
+    @Environment(\.normalLocationCoordinator) private var coordinator
+
+    private var gridColumns: [GridItem] { Array(repeating: GridItem(.fixed(cellWidth), spacing: 0), count: 3) }
+
+    private func cellBinding(row: Int, col: Int, binding: Binding<String>) -> some View {
+        if row == NormalLocationCoordinator.disabledBallCell.row, col == NormalLocationCoordinator.disabledBallCell.col {
+            return AnyView(
+                ZStack { Color.green; Text("") }
+                    .frame(width: cellWidth, height: cellHeight)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.red, lineWidth: 1.0))
+                    .allowsHitTesting(false)
+            )
+        }
+        return AnyView(
+            ZStack {
+                TextField("", text: Binding(
+                    get: { binding.wrappedValue },
+                    set: { newValue in
+                        guard let coordinator else { return }
+                        let sanitized = coordinator.sanitizeCellInput(isStrike: false, row: row, col: col, newValue: newValue)
+                        coordinator.setCell(isStrike: false, row: row, col: col, value: sanitized)
+                        binding.wrappedValue = sanitized
+                    }
+                ))
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.center)
+                .fontWeight(.bold)
+                .foregroundColor(.clear)
+                .tint(.blue)
+                Text(binding.wrappedValue)
+                    .fontWeight(.bold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .allowsHitTesting(false)
+            }
+            .frame(width: cellWidth, height: cellHeight)
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.red, lineWidth: 1.0))
+            .onAppear {
+                if let v = coordinator?.cell(isStrike: false, row: row, col: col), binding.wrappedValue != v {
+                    binding.wrappedValue = v
+                }
+            }
+            .onReceive((coordinator?.$ballsCells.receive(on: RunLoop.main).eraseToAnyPublisher()) ?? Just([[String]]()).eraseToAnyPublisher()) { cells in
+                guard cells.indices.contains(row), cells[row].indices.contains(col) else { return }
+                let v = cells[row][col]
+                if binding.wrappedValue != v { binding.wrappedValue = v }
+            }
+        )
+    }
+
+    var body: some View {
+        LazyVGrid(columns: gridColumns, spacing: 0) {
+            ForEach(0..<9, id: \.self) { index in
+                let r = index / 3
+                let c = index % 3
+                cellBinding(row: r, col: c, binding: $grid[r][c])
+            }
+        }
+    }
+}
+
 struct BallsLocationGridView: View {
     let cellWidth: CGFloat = 46
     let cellHeight: CGFloat = 30
@@ -2599,11 +2889,14 @@ struct PrintableEncryptedGridsView: View {
     let outerPadding: CGFloat
     let scale: CGFloat
     let textScale: CGFloat
-    
+    let codeMode: PitchCodeMode
+    let strikeLocationCells: [[String]]   // Normal mode only: 3 x 3
+    let ballsLocationCells: [[String]]    // Normal mode only: 3 x 3
+
     // Your screenshot has a fixed green block in Balls at (row 2, col 1) in the 4x3 grid
     // (i.e., body row 2, col 1). Keep this default for drop-in compatibility.
     let selectedBallBodyCell: (row: Int, col: Int) = (1, 1)
-    
+
     private let baseBodyFontSize: CGFloat = 18
     private let baseHeaderFontSize: CGFloat = 22
     private let basePrintFontSize: CGFloat = 20
@@ -2623,7 +2916,10 @@ struct PrintableEncryptedGridsView: View {
         locationFirstColors: [String] = [],
         outerPadding: CGFloat = 24,
         scale: CGFloat = 1.0,
-        textScale: CGFloat = 1.0
+        textScale: CGFloat = 1.0,
+        codeMode: PitchCodeMode = .advanced,
+        strikeLocationCells: [[String]] = [],
+        ballsLocationCells: [[String]] = []
     ) {
         self.grid = grid
         self.pitchHeaders = pitchHeaders
@@ -2636,6 +2932,9 @@ struct PrintableEncryptedGridsView: View {
         self.outerPadding = outerPadding
         self.scale = scale
         self.textScale = textScale
+        self.codeMode = codeMode
+        self.strikeLocationCells = strikeLocationCells
+        self.ballsLocationCells = ballsLocationCells
     }
     
     private let baseTopBlockHeight: CGFloat = 228
@@ -2691,21 +2990,37 @@ struct PrintableEncryptedGridsView: View {
                 pitchSelectionBlock()
 
                 HStack(alignment: .top, spacing: s(50)) {
-                    locationBlock(
-                        title: "Strikes",
-                        header: strikeTopRow,
-                        rows: strikeRows,
-                        border: .green,
-                        highlightBodyCell: nil
-                    )
-                    
-                    locationBlock(
-                        title: "Balls",
-                        header: ballsTopRow,
-                        rows: ballsRows,
-                        border: .red,
-                        highlightBodyCell: selectedBallBodyCell
-                    )
+                    if codeMode == .normal {
+                        locationSingleBlock(
+                            title: "Strikes",
+                            cells: strikeLocationCells,
+                            border: .green,
+                            highlightCell: nil
+                        )
+
+                        locationSingleBlock(
+                            title: "Balls",
+                            cells: ballsLocationCells,
+                            border: .red,
+                            highlightCell: selectedBallBodyCell
+                        )
+                    } else {
+                        locationBlock(
+                            title: "Strikes",
+                            header: strikeTopRow,
+                            rows: strikeRows,
+                            border: .green,
+                            highlightBodyCell: nil
+                        )
+
+                        locationBlock(
+                            title: "Balls",
+                            header: ballsTopRow,
+                            rows: ballsRows,
+                            border: .red,
+                            highlightBodyCell: selectedBallBodyCell
+                        )
+                    }
                 }
                 .padding(.top, s(4))
             }
@@ -2865,6 +3180,43 @@ private extension PrintableEncryptedGridsView {
             }
             
         Text(title)
+                .font(.system(size: s(16)))
+                .foregroundColor(.black)
+        }
+    }
+
+    /// Normal (3-character) mode: a single 3x3 grid, one character per cell, no header row.
+    /// Same row/column geometry as `locationBlock` (row 0 = top of zone, col 0 = away from batter)
+    /// so the printed card stays spatially identical between modes.
+    func locationSingleBlock(
+        title: String,
+        cells: [[String]],
+        border: Color,
+        highlightCell: (row: Int, col: Int)?
+    ) -> some View {
+        VStack(spacing: 8) {
+            VStack(spacing: 0) {
+                ForEach(0..<3, id: \.self) { r in
+                    HStack(spacing: 0) {
+                        ForEach(0..<3, id: \.self) { c in
+                            let isHighlighted = (highlightCell?.row == r && highlightCell?.col == c)
+                            let txt: String = {
+                                guard cells.indices.contains(r), cells[r].indices.contains(c) else { return "" }
+                                return cells[r][c]
+                            }()
+                            cell(
+                                isHighlighted ? "" : txt,
+                                stroke: border,
+                                fill: isHighlighted ? .green : .white,
+                                bold: false,
+                                emphasized: true
+                            )
+                        }
+                    }
+                }
+            }
+
+            Text(title)
                 .font(.system(size: s(16)))
                 .foregroundColor(.black)
         }
