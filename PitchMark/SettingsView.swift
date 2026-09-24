@@ -552,6 +552,7 @@ struct SettingsView: View {
     
     @State private var showAppSettingsSheet = false
     @State private var myTeams: [(team: Team, membership: TeamMembership)] = []
+    @State private var selectedTeamEntry: TeamEntrySelection? = nil
     @State private var newTeamNameForHome: String = ""
     @State private var showGameChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
@@ -940,14 +941,20 @@ struct SettingsView: View {
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(myTeams, id: \.team.id) { entry in
-                        HStack {
-                            Text(entry.team.name)
-                                .font(.subheadline.weight(.semibold))
-                            Spacer()
-                            Text(entry.membership.roles.map { $0.displayName }.joined(separator: ", "))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        Button {
+                            selectedTeamEntry = TeamEntrySelection(team: entry.team, membership: entry.membership)
+                        } label: {
+                            HStack {
+                                Text(entry.team.name)
+                                    .font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text(entry.membership.roles.map { $0.displayName }.joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal)
@@ -2371,6 +2378,10 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showAppSettingsSheet) {
                 appSettingsSheetView
+            }
+            .sheet(item: $selectedTeamEntry) { entry in
+                ParentGameShellView(selection: entry)
+                    .environmentObject(authManager)
             }
             .fullScreenCover(isPresented: $showQRScanner) {
                 ZStack(alignment: .bottom) {
