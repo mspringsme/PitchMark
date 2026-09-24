@@ -164,6 +164,9 @@ struct PitchTrackerView: View {
     @State private var selectedLocation: String = ""
     @State private var gameIsActive: Bool = false
     @State private var showSettings = false
+    @State private var showMomentsSheet = false
+    @State private var showFamilySheet = false
+    @State private var pendingHomeAreaSwitch: HomeArea? = nil
     @State private var showProfile = false
     @State private var templates: [PitchTemplate] = []
     @EnvironmentObject var authManager: AuthManager
@@ -8632,11 +8635,49 @@ struct PitchTrackerView: View {
             shareCode: $shareCode,
             codeShareSheetID: $codeShareSheetID,
             showCodeShareModePicker: $showCodeShareModePicker,
-            hasActiveSessionSelection: (selectedGameId != nil)
+            hasActiveSessionSelection: (selectedGameId != nil),
+            onSwitchToArea: { selectHomeArea($0) }
         )
         .environmentObject(authManager)
         .environmentObject(subscriptionManager)
         .dynamicTypeSize(.medium)
+    }
+
+    @ViewBuilder private var homeAreaTabBar: some View {
+        HomeAreaTabBar(current: .games) { selectHomeArea($0) }
+    }
+
+    /// `.games` means "close whatever's open, show the tracker underneath" -
+    /// there's no sheet for it. The other three each own a `Bool`/`.sheet`
+    /// pair; if one is already open, defer to its `onDismiss` instead of
+    /// presenting on top of it (see `presentPendingHomeAreaIfNeeded`).
+    private func selectHomeArea(_ area: HomeArea) {
+        let aSheetIsOpen = showSettings || showMomentsSheet || showFamilySheet
+        guard !aSheetIsOpen else {
+            pendingHomeAreaSwitch = (area == .games) ? nil : area
+            showSettings = false
+            showMomentsSheet = false
+            showFamilySheet = false
+            return
+        }
+        switch area {
+        case .games:
+            break
+        case .home:
+            showSettings = true
+        case .moments:
+            showMomentsSheet = true
+        case .family:
+            showFamilySheet = true
+        }
+    }
+
+    private func presentPendingHomeAreaIfNeeded() {
+        guard let pending = pendingHomeAreaSwitch else { return }
+        pendingHomeAreaSwitch = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.selectHomeArea(pending)
+        }
     }
 
     @ViewBuilder private var gameStatsSheetView: some View {
@@ -9692,7 +9733,7 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v8 = v7
-            .sheet(isPresented: $showSettings) {
+            .sheet(isPresented: $showSettings, onDismiss: { presentPendingHomeAreaIfNeeded() }) {
                 settingsSheetView
                     .interactiveDismissDisabled({
                         guard selectedGameId != nil else { return true }
@@ -9704,7 +9745,33 @@ struct PitchTrackerView: View {
             }
             .eraseToAnyView()
 
-        let v9 = v8
+        let v8b = v8
+            .sheet(isPresented: $showMomentsSheet, onDismiss: { presentPendingHomeAreaIfNeeded() }) {
+                ComingSoonSheetView(
+                    area: .moments,
+                    title: "Moments",
+                    systemImage: "video.fill",
+                    message: "Capture and relive the season's best plays. Coming soon.",
+                    onSwitchToArea: { selectHomeArea($0) }
+                )
+                .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showFamilySheet, onDismiss: { presentPendingHomeAreaIfNeeded() }) {
+                ComingSoonSheetView(
+                    area: .family,
+                    title: "Family",
+                    systemImage: "person.2.fill",
+                    message: "Keep family up to date and connected. Coming soon.",
+                    onSwitchToArea: { selectHomeArea($0) }
+                )
+                .fixedAppDynamicType()
+            }
+            .safeAreaInset(edge: .bottom) {
+                homeAreaTabBar
+            }
+            .eraseToAnyView()
+
+        let v9 = v8b
             .sheet(isPresented: $showGameStatsSheet) {
                 gameStatsSheetView
                     .fixedAppDynamicType()

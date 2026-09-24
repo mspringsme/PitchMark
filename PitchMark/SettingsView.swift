@@ -525,7 +525,8 @@ struct SettingsView: View {
     @Binding var codeShareSheetID: UUID
     @Binding var showCodeShareModePicker: Bool
     let hasActiveSessionSelection: Bool
-    
+    var onSwitchToArea: ((HomeArea) -> Void)? = nil
+
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     @State private var showSignOutConfirmation = false
@@ -2356,6 +2357,12 @@ struct SettingsView: View {
                     .padding(.vertical, 8)
                     .padding(.horizontal)
                     .background(.ultraThinMaterial)
+                }
+                .safeAreaInset(edge: .bottom) {
+                    HomeAreaTabBar(current: .home) { selected in
+                        onSwitchToArea?(selected)
+                        dismiss()
+                    }
                 }
             }
             .sheet(isPresented: $showInviteJoinSheet) {
