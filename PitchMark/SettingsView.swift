@@ -549,6 +549,9 @@ struct SettingsView: View {
     @State private var showDeleteAlert = false
     @Environment(\.dismiss) private var dismiss
     
+    @State private var showAppSettingsSheet = false
+    @State private var myTeams: [(team: Team, membership: TeamMembership)] = []
+    @State private var newTeamNameForHome: String = ""
     @State private var showGameChooser = false
     @State private var editorTemplate: PitchTemplate? = nil
     @State private var showAddPitcher = false
@@ -884,11 +887,130 @@ struct SettingsView: View {
         games.map { "\($0.id ?? "")|\($0.archivedAt?.timeIntervalSince1970 ?? 0)" }
     }
 
+    private var homeHeaderRow: some View {
+        HStack {
+            Text("PitchMark")
+                .font(.title2.weight(.bold))
+            Spacer()
+            Button {
+                showAppSettingsSheet = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.title3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Settings")
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var myTeamsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("My Teams & Players")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    refreshMyTeams()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal)
+
+            if myTeams.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("You're not on any teams yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        TextField("Team name", text: $newTeamNameForHome)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Create a Team") {
+                            createTeamFromHome()
+                        }
+                        .disabled(newTeamNameForHome.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+                .padding(.horizontal)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(myTeams, id: \.team.id) { entry in
+                        HStack {
+                            Text(entry.team.name)
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Text(entry.membership.roles.map { $0.displayName }.joined(separator: ", "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+        .onAppear {
+            if myTeams.isEmpty {
+                refreshMyTeams()
+            }
+        }
+    }
+
+    private func refreshMyTeams() {
+        authManager.loadMyTeams { teams, error in
+            myTeams = teams
+        }
+    }
+
+    private func createTeamFromHome() {
+        let name = newTeamNameForHome.trimmingCharacters(in: .whitespaces)
+        authManager.createTeam(name: name) { result in
+            if case .success = result {
+                newTeamNameForHome = ""
+                refreshMyTeams()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var appSettingsSheetView: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    sectionCard {
+                        templatesSection
+                    }
+
+                    sectionCard {
+                        pitchersSection
+                    }
+
+                    sectionCard {
+                        storeSection
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        showAppSettingsSheet = false
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var gamesOverviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("My Games")
+                Text("Today's Games")
                     .font(.headline)
                 Spacer()
                 Button {
@@ -2197,22 +2319,14 @@ struct SettingsView: View {
             ZStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-                        Color.clear.frame(height: 0)
+                        homeHeaderRow
 
                         sectionCard {
                             gamesOverviewSection
                         }
 
                         sectionCard {
-                            templatesSection
-                        }
-
-                        sectionCard {
-                            pitchersSection
-                        }
-
-                        sectionCard {
-                            storeSection
+                            myTeamsSection
                         }
 
                         #if DEBUG
@@ -2247,6 +2361,9 @@ struct SettingsView: View {
             .sheet(isPresented: $showInviteJoinSheet) {
                 inviteJoinSheetView
                     .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showAppSettingsSheet) {
+                appSettingsSheetView
             }
             .fullScreenCover(isPresented: $showQRScanner) {
                 ZStack(alignment: .bottom) {
@@ -2492,7 +2609,6 @@ struct SettingsView: View {
             } message: {
                 Text("Choose a game before closing Settings.")
             }
-            //.navigationTitle("Settings")
             .sheet(item: $editorTemplate) { template in
                 TemplateEditorView(
                     template: template,
