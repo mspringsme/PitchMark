@@ -180,6 +180,85 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────
+    // TOP-LEVEL TEAMS: /teams/{teamId}
+    // Phase 1 of the Team/Player/Role foundation (2026-09-24 direction doc).
+    // Coach-driven roster: only the team creator can add players or change
+    // member roles for now; members can read their own membership and the
+    // player roster. Game/pitchEvents visibility is unchanged - not this
+    // phase's problem.
+    // ─────────────────────────────────────────────
+    match /teams/{teamId} {
+      function isTeamCreator() {
+        return get(/databases/$(database)/documents/teams/$(teamId)).data.createdByUid == uid();
+      }
+
+      allow get: if signedIn() && (
+        resource.data.createdByUid == uid()
+        || exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()))
+      );
+      allow list: if false; // fetched individually via the members collectionGroup query
+
+      allow create: if signedIn() && request.resource.data.createdByUid == uid();
+      allow update, delete: if signedIn() && resource.data.createdByUid == uid();
+
+      match /members/{memberUid} {
+        allow get: if signedIn() && (memberUid == uid() || isTeamCreator());
+        // A rule nested under /teams/{teamId} only authorizes direct,
+        // single-team access to this subcollection - it does NOT authorize
+        // a collectionGroup("members") query across every team at once.
+        // That needs the separate recursive-wildcard rule below
+        // (MEMBERS COLLECTION GROUP). Direct, single-team listing isn't
+        // used by anything yet, so deny it here explicitly.
+        allow list: if false;
+
+        allow create: if signedIn() && memberUid == uid() && request.resource.data.uid == uid();
+        allow update, delete: if signedIn() && isTeamCreator();
+      }
+
+      match /players/{playerId} {
+        allow get, list: if signedIn()
+          && exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()));
+        allow create, update, delete: if signedIn() && isTeamCreator();
+      }
+    }
+
+    // ─────────────────────────────────────────────
+    // MEMBERS COLLECTION GROUP (for "my teams": collectionGroup("members")
+    // across every team at once). Needs its own recursive-wildcard rule -
+    // the nested rule under /teams/{teamId}/members only covers direct,
+    // single-team reads, not a cross-team collectionGroup query.
+    //
+    // "request.query.where(...)" is NOT a real rules function (the deploy
+    // warning "Invalid function name: where" was saying so all along, on
+    // this rule and the pre-existing joinCodes/inviteTokens/
+    // displayInviteTokens ones this was copied from - those just never
+    // actually get exercised as list queries by the app, so the breakage
+    // went unnoticed). The real mechanism: compare resource.data directly:
+    // Firestore checks that the client's own query filter already
+    // guarantees the condition, without a manual introspection call.
+    // ─────────────────────────────────────────────
+    match /{path=**}/members/{memberUid} {
+      allow list: if signedIn() && resource.data.uid == uid();
+    }
+
+    // ─────────────────────────────────────────────
+    // TEAM INVITE TOKENS: /teamInviteTokens/{token}
+    // ─────────────────────────────────────────────
+    match /teamInviteTokens/{token} {
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if signedIn()
+        && request.resource.data.createdByUid == uid()
+        && request.resource.data.teamId is string
+        && request.resource.data.expiresAt is timestamp;
+
+      allow update, delete: if signedIn()
+        && resource != null
+        && resource.data.createdByUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
     // USER TEMPLATES (LEGACY): /users/{ownerUid}/templates/{templateId}
     // ─────────────────────────────────────────────
     match /users/{ownerUid}/templates/{templateId} {

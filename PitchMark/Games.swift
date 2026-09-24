@@ -61,6 +61,7 @@ struct Game: Identifiable, Codable {
     var date: Date
     var createdAt: Date = Date()
     var archivedAt: Date? = nil
+    var teamId: String? = nil
 
     // Lineup / participants
     var jerseyNumbers: [String] = []

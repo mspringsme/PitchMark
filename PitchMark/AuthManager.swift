@@ -1325,7 +1325,7 @@ class AuthManager: ObservableObject {
         }
     }
 
-    private func randomToken(length: Int = 10) -> String {
+    func randomToken(length: Int = 10) -> String {
         let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
         var output = ""
         output.reserveCapacity(length)
