@@ -3674,6 +3674,9 @@ struct PitcherStatsSheetView: View {
                     pitchBreakdownSection
                     outcomesSection
                     heatMapSection
+                    if hasCatcherReads {
+                        catcherReadsSection
+                    }
                 }
                 .padding(.vertical, 8)
             }
@@ -3843,6 +3846,156 @@ struct PitcherStatsSheetView: View {
                     .frame(maxWidth: .infinity)
                     .padding(6)
                     .padding(.top, 18)
+            }
+        }
+    }
+
+    // MARK: - Catcher Reads
+
+    /// Catcher-mode pitches (the coach watched, not called) within the
+    /// current filter scope, regardless of whether an estimate was logged.
+    private var catcherModeEvents: [PitchEvent] {
+        filteredEvents.filter { $0.pitch.trimmingCharacters(in: .whitespacesAndNewlines) == "Catcher" }
+    }
+
+    private var hasCatcherReads: Bool {
+        !catcherModeEvents.isEmpty
+    }
+
+    /// Catcher-mode pitches where the coach also estimated the opposing
+    /// catcher's pitch type/location call (see `CatcherEstimateView`).
+    private var catcherReadEvents: [PitchEvent] {
+        catcherModeEvents.filter { $0.catcherEstimate != nil }
+    }
+
+    /// Location-only match between the coach's estimate and the actual
+    /// result. Deliberately ignores pitch name (unlike `strictIsLocationMatch`)
+    /// since the estimate's pitch type has no ground truth to check against -
+    /// only the guessed target location does.
+    private func catcherEstimateLocationMatches(_ event: PitchEvent) -> Bool {
+        guard let estimate = event.catcherEstimate else { return false }
+
+        func parse(_ raw: String) -> (type: String?, zone: String) {
+            let manager = PitchLabelManager(batterSide: event.batterSide)
+            let adjusted = manager.adjustedLabel(from: raw)
+            let cleaned = adjusted
+                .replacingOccurrences(of: "—", with: " ")
+                .replacingOccurrences(of: "–", with: " ")
+                .replacingOccurrences(of: "-", with: " ")
+                .replacingOccurrences(of: "&", with: "and")
+                .replacingOccurrences(of: "  ", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if cleaned.hasPrefix("strike ") {
+                return ("strike", String(cleaned.dropFirst("strike ".count)).trimmingCharacters(in: .whitespaces))
+            } else if cleaned.hasPrefix("ball ") {
+                return ("ball", String(cleaned.dropFirst("ball ".count)).trimmingCharacters(in: .whitespaces))
+            }
+            return (nil, cleaned)
+        }
+
+        let estimated = parse(estimate.location)
+        let actual = parse(event.location)
+        guard estimated.zone == actual.zone else { return false }
+        let estimatedType = estimated.type ?? (estimate.isStrike ? "strike" : "ball")
+        let actualType = actual.type ?? (event.isStrike ? "strike" : "ball")
+        return estimatedType == actualType
+    }
+
+    private var catcherReadAccuracyPercent: Int {
+        catcherReadEvents.isEmpty
+            ? 0
+            : Int(Double(catcherReadEvents.filter(catcherEstimateLocationMatches).count) / Double(catcherReadEvents.count) * 100)
+    }
+
+    private var catcherEstimatedPitchBreakdown: [(name: String, count: Int)] {
+        Dictionary(grouping: catcherReadEvents) { event -> String in
+            let name = event.catcherEstimate?.pitch.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Catcher"
+            return name.isEmpty ? "Catcher" : name
+        }
+        .map { (name: $0.key, count: $0.value.count) }
+        .sorted { lhs, rhs in
+            if lhs.count == rhs.count { return lhs.name < rhs.name }
+            return lhs.count > rhs.count
+        }
+    }
+
+    /// Reuses `StrikeZoneHeatmapView`'s existing called-vs-actual plotting by
+    /// swapping in the estimate as the "called" pitch for display only.
+    private var catcherReadHeatmapEvents: [PitchEvent] {
+        catcherReadEvents.map { event in
+            var copy = event
+            copy.calledPitch = event.catcherEstimate
+            return copy
+        }
+    }
+
+    private var catcherReadsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Catcher Reads")
+                .font(.headline)
+                .padding(.horizontal)
+
+            Text("Your estimate of what the catcher called, logged after each pitch tracked in Catcher mode.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+
+            if catcherReadEvents.isEmpty {
+                Text("No estimates logged yet. Choose a pitch type and location on the estimate prompt after a catcher-mode pitch, then tap Done.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+            } else {
+                HStack(spacing: 20) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(catcherReadEvents.count) of \(catcherModeEvents.count)")
+                            .font(.title3.weight(.bold))
+                            .monospacedDigit()
+                        Text("Pitches estimated")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Divider().frame(height: 30)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(catcherReadAccuracyPercent)%")
+                            .font(.title3.weight(.bold))
+                            .monospacedDigit()
+                        Text("Estimate matched result")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(catcherEstimatedPitchBreakdown.enumerated()), id: \.offset) { _, item in
+                        HStack {
+                            Circle()
+                                .fill(colorForPitch(item.name))
+                                .frame(width: 8, height: 8)
+                            Text(item.name)
+                                .font(.subheadline)
+                            Spacer()
+                            Text("\(item.count)")
+                                .font(.subheadline.weight(.semibold))
+                                .monospacedDigit()
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .padding(.horizontal)
+
+                StrikeZoneHeatmapView(
+                    events: catcherReadHeatmapEvents,
+                    interactionHint: "Estimated call → actual result"
+                )
+                .frame(maxWidth: .infinity)
+                .padding(6)
+                .padding(.top, 8)
             }
         }
     }

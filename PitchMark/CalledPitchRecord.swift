@@ -405,7 +405,8 @@ private func buildSavedPlayReviewedEvent(
         atBatBalls: balls,
         atBatStrikes: strikes,
         atBatCount: "\(balls)-\(strikes)",
-        trackingMode: base.trackingMode
+        trackingMode: base.trackingMode,
+        catcherEstimate: base.catcherEstimate
     )
 }
 
@@ -2441,6 +2442,7 @@ struct PitchResultSheet: View {
                         isStrike: target.isStrike,
                         codes: target.codes
                     ),
+                    catcherEstimate: target.catcherEstimate,
                     batterSide: target.batterSide,
                     selectedTemplateId: target.templateId,
                     currentMode: target.mode,
@@ -3045,6 +3047,12 @@ struct PitchEvent: Codable, Identifiable {
     var atBatStrikes: Int? = nil
     var atBatCount: String? = nil
     var trackingMode: TrackingMode? = .coach
+
+    /// The coach's after-the-fact guess at what the opposing catcher actually
+    /// called (pitch type + location), for Catcher-mode pitches only. Distinct
+    /// from `calledPitch`, which for Catcher-mode events just mirrors the
+    /// observed result location (see `CatcherEstimateView`).
+    var catcherEstimate: PitchCall? = nil
 }
 
 extension PitchEvent: Hashable {
@@ -3223,6 +3231,29 @@ extension PitchEvent {
         } else {
             self.trackingMode = .coach
         }
+        self.catcherEstimate = {
+            guard let payload = data["catcherEstimate"] as? [String: Any] else { return nil }
+            guard let cePitch = payload["pitch"] as? String,
+                  let ceLocation = payload["location"] as? String
+            else { return nil }
+
+            let ceCodes: [String] = {
+                if let arr = payload["codes"] as? [String], !arr.isEmpty {
+                    return arr
+                }
+                if let single = payload["code"] as? String, !single.isEmpty {
+                    return [single]
+                }
+                return []
+            }()
+
+            return PitchCall(
+                pitch: cePitch,
+                location: ceLocation,
+                isStrike: payload["isStrike"] as? Bool ?? false,
+                codes: ceCodes
+            )
+        }()
     }
 
     func logDebugPayload(prefix: String = "📤 Saving PitchEvent") {
@@ -3254,6 +3285,7 @@ extension PitchEvent {
             let opponentBatterId: String?
             let pitcherId: String?
             let trackingMode: TrackingMode?
+            let catcherEstimate: PitchCall?
         }
         let debug = DebugEvent(
             id: self.id,
@@ -3282,7 +3314,8 @@ extension PitchEvent {
             opponentJersey: self.opponentJersey,
             opponentBatterId: self.opponentBatterId,
             pitcherId: self.pitcherId,
-            trackingMode: self.trackingMode
+            trackingMode: self.trackingMode,
+            catcherEstimate: self.catcherEstimate
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -3307,6 +3340,11 @@ extension PitchEvent {
     }
 
     var supportsLocationAnalytics: Bool {
-        (trackingMode ?? .coach) == .coach && calledPitch != nil && !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Catcher-mode events set `calledPitch` to mirror the observed result
+        // location (see CatcherEstimateView), so they'd trivially "hit spot"
+        // 100% of the time - that's not a real call/execution comparison.
+        // Their location data belongs in the Catcher Reads section instead.
+        guard pitch.trimmingCharacters(in: .whitespacesAndNewlines) != "Catcher" else { return false }
+        return (trackingMode ?? .coach) == .coach && calledPitch != nil && !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

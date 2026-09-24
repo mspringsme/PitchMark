@@ -665,6 +665,11 @@ struct PitchResultSheetView: View {
 
     let pendingResultLabel: String?
     let pitchCall: PitchCall?
+    /// The coach's estimate of the opposing catcher's actual call, captured by
+    /// `CatcherEstimateView` before this sheet appears. Carried straight
+    /// through to the saved `PitchEvent`; nil unless this is a Catcher-mode
+    /// pitch the coach chose to guess on.
+    var catcherEstimate: PitchCall? = nil
     let batterSide: BatterSide
     let selectedTemplateId: String?
     let currentMode: PitchMode
@@ -1379,7 +1384,8 @@ struct PitchResultSheetView: View {
             strikeSwingingMarker: isStrikeSwinging ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
             strikeLookingMarker: isStrikeLooking ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
             ballMarker: isBall ? ballMarkerSymbol(outcome: normalizedOutcome, prior: prior) : nil,
-            foulMarker: isFoulSelected ? foulMarkerSymbol(prior: prior) : nil
+            foulMarker: isFoulSelected ? foulMarkerSymbol(prior: prior) : nil,
+            catcherEstimate: isCatcherCall ? catcherEstimate : nil
         )
     }
 

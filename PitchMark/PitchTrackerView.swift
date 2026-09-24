@@ -195,6 +195,13 @@ struct PitchTrackerView: View {
     @State private var atBatCountCacheByBatter: [String: (balls: Int, strikes: Int)] = [:]
     @State private var resultVisualState: String? = nil
     @State private var pendingResultLabel: String? = nil
+    /// Whether the coach has already answered (Reset doesn't count; No/Done do)
+    /// the "estimate what was called" prompt for the current Catcher-mode
+    /// pitch. Reset to false whenever a fresh catcher result location arrives.
+    @State private var catcherEstimateDismissed: Bool = true
+    @State private var catcherEstimate: PitchCall? = nil
+    @State private var catcherEstimateDraftPitch: String = "Catcher"
+    @State private var catcherEstimateDraftLocation: String? = nil
     @State private var autoPitchOnlyEnabled: Bool = false
     @State private var showResultConfirmation = false
     @State private var isGameMode: Double = 1
@@ -1961,6 +1968,10 @@ struct PitchTrackerView: View {
         actualLocationRecorded = nil
         lastCallInitiatedAt = nil
         lastObservedPendingCallId = nil
+        catcherEstimateDismissed = true
+        catcherEstimate = nil
+        catcherEstimateDraftPitch = "Catcher"
+        catcherEstimateDraftLocation = nil
         resetScoutComposer()
         clearDisplayCodeIfNeeded()
     }
@@ -4921,7 +4932,11 @@ struct PitchTrackerView: View {
                     )
                     .padding(.top, 4)
 
-                    gatedPitchResultSheetView
+                    if showCatcherEstimatePrompt, let call = catcherRealCall {
+                        catcherEstimateSheetView(for: call)
+                    } else {
+                        gatedPitchResultSheetView
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 8)
@@ -4929,6 +4944,52 @@ struct PitchTrackerView: View {
         } else {
             Color.clear.frame(height: 1)
         }
+    }
+
+    /// The observed catcher-mode call once it carries a real (non-placeholder)
+    /// location - i.e. once the coach has tapped where the pitch actually
+    /// ended up. `beginCatcherCoachCall()` seeds `calledPitch` with a
+    /// placeholder location of "Catcher" before that tap happens.
+    private var catcherRealCall: PitchCall? {
+        guard let calledPitch, calledPitch.pitch.trimmingCharacters(in: .whitespacesAndNewlines) == "Catcher" else {
+            return nil
+        }
+        let loc = calledPitch.location.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (loc.isEmpty || loc == "Catcher") ? nil : calledPitch
+    }
+
+    private var showCatcherEstimatePrompt: Bool {
+        catcherRealCall != nil && !catcherEstimateDismissed
+    }
+
+    private func catcherEstimateSheetView(for call: PitchCall) -> some View {
+        CatcherEstimateView(
+            resultCall: call,
+            batterSide: batterSide,
+            pitchOptions: ["Catcher"] + (selectedTemplate?.pitches ?? []),
+            draftPitch: $catcherEstimateDraftPitch,
+            draftLocation: $catcherEstimateDraftLocation,
+            onReset: {
+                catcherEstimateDraftPitch = "Catcher"
+                catcherEstimateDraftLocation = nil
+            },
+            onSkip: {
+                catcherEstimate = nil
+                catcherEstimateDismissed = true
+            },
+            onDone: {
+                guard let location = catcherEstimateDraftLocation else { return }
+                let isStrike = location.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Strike ")
+                catcherEstimate = PitchCall(
+                    pitch: catcherEstimateDraftPitch,
+                    location: location,
+                    isStrike: isStrike,
+                    codes: []
+                )
+                catcherEstimateDismissed = true
+            }
+        )
+        .padding(.horizontal, 12)
     }
 
     private var gatedPitchResultSheetView: some View {
@@ -8521,6 +8582,7 @@ struct PitchTrackerView: View {
             isDemoMode: isDemoMode,
             pendingResultLabel: pendingResultLabel,
             pitchCall: calledPitch,
+            catcherEstimate: catcherEstimate,
             batterSide: batterSide,
             selectedTemplateId: selectedTemplate?.id.uuidString,
             currentMode: sessionManager.currentMode,
@@ -9464,6 +9526,13 @@ struct PitchTrackerView: View {
             }
             .onChange(of: pendingResultLabel) { _, newValue in
                 handlePendingResultChange(newValue)
+            }
+            .onChange(of: catcherRealCall?.location) { _, newValue in
+                guard newValue != nil else { return }
+                catcherEstimateDismissed = false
+                catcherEstimate = nil
+                catcherEstimateDraftPitch = "Catcher"
+                catcherEstimateDraftLocation = nil
             }
             .onChange(of: selectedTemplate?.id) { _, newValue in
                 guard !isRestoringState else { return }
