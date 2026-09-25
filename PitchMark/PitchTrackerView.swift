@@ -9753,11 +9753,7 @@ struct PitchTrackerView: View {
                 .fixedAppDynamicType()
             }
             .sheet(isPresented: $showFamilySheet, onDismiss: { presentPendingHomeAreaIfNeeded() }) {
-                ComingSoonSheetView(
-                    area: .family,
-                    title: "Family",
-                    systemImage: "person.2.fill",
-                    message: "Keep family up to date and connected. Coming soon.",
+                FamilyView(
                     onSwitchToArea: { selectHomeArea($0) }
                 )
                 .fixedAppDynamicType()

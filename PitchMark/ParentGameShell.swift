@@ -102,12 +102,7 @@ struct ParentGameShellView: View {
                 )
             }
             .sheet(isPresented: $showFamilySheet) {
-                ComingSoonSheetView(
-                    area: .family,
-                    title: "Family",
-                    systemImage: "person.2.fill",
-                    message: "Keep family up to date and connected. Coming soon."
-                )
+                FamilyView(contextPlayerName: selectedPlayer?.name)
             }
         }
         .onAppear {
