@@ -39,6 +39,7 @@ struct ParentGameShellView: View {
     @State private var selectedPlayerId: String? = nil
     @State private var selectedMode: ParentTrackingMode = .pitching
     @State private var visitedPitchingPlayerIds: Set<String> = []
+    @State private var visitedBattingPlayerIds: Set<String> = []
 
     @State private var newPlayerName: String = ""
     @State private var newPlayerJersey: String = ""
@@ -187,17 +188,32 @@ struct ParentGameShellView: View {
             if selectedMode == .pitching {
                 pitchingTrackers
             } else {
-                battingPlaceholder(for: player)
+                battingTrackers
             }
         }
         .onChange(of: selectedPlayerId) { _, id in
-            if selectedMode == .pitching, let id { visitedPitchingPlayerIds.insert(id) }
+            guard let id else { return }
+            if selectedMode == .pitching {
+                visitedPitchingPlayerIds.insert(id)
+            } else {
+                visitedBattingPlayerIds.insert(id)
+            }
         }
         .onChange(of: selectedMode) { _, mode in
-            if mode == .pitching, let id = selectedPlayerId { visitedPitchingPlayerIds.insert(id) }
+            guard let id = selectedPlayerId else { return }
+            if mode == .pitching {
+                visitedPitchingPlayerIds.insert(id)
+            } else {
+                visitedBattingPlayerIds.insert(id)
+            }
         }
         .onAppear {
-            if selectedMode == .pitching, let id = selectedPlayerId { visitedPitchingPlayerIds.insert(id) }
+            guard let id = selectedPlayerId else { return }
+            if selectedMode == .pitching {
+                visitedPitchingPlayerIds.insert(id)
+            } else {
+                visitedBattingPlayerIds.insert(id)
+            }
         }
     }
 
@@ -206,8 +222,7 @@ struct ParentGameShellView: View {
     /// `ParentPitchingTrackerView` instance's @State (current count, last
     /// tap, etc.) survives switching to a different child and back. A
     /// SwiftUI `.id()` here would do the opposite: force teardown/recreate
-    /// on every switch. Batting has no real state yet, so its placeholder
-    /// doesn't need this treatment.
+    /// on every switch.
     @ViewBuilder
     private var pitchingTrackers: some View {
         ZStack {
@@ -220,19 +235,19 @@ struct ParentGameShellView: View {
         }
     }
 
+    /// Same keep-alive treatment as Pitching, so an in-progress at-bat
+    /// (opposing pitcher name, count) survives switching to a different
+    /// child and back.
     @ViewBuilder
-    private func battingPlaceholder(for player: TeamPlayer) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "figure.softball")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text("\(player.name)'s batting tracker is coming soon.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+    private var battingTrackers: some View {
+        ZStack {
+            ForEach(players.filter { visitedBattingPlayerIds.contains($0.id ?? "") }, id: \.id) { player in
+                let isCurrent = player.id == selectedPlayerId
+                ParentBattingTrackerView(player: player, teamId: selection.team.id ?? "")
+                    .opacity(isCurrent ? 1 : 0)
+                    .allowsHitTesting(isCurrent)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
     }
 
     private func refreshPlayers() {
