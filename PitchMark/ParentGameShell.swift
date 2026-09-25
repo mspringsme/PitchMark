@@ -96,11 +96,9 @@ struct ParentGameShellView: View {
                 }
             }
             .sheet(isPresented: $showMomentsSheet) {
-                ComingSoonSheetView(
-                    area: .moments,
-                    title: "Moments",
-                    systemImage: "video.fill",
-                    message: "Capture and relive the season's best plays. Coming soon."
+                MomentsLibraryView(
+                    contextPlayer: selectedPlayer,
+                    contextTeamId: selection.team.id
                 )
             }
             .sheet(isPresented: $showFamilySheet) {

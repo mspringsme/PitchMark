@@ -469,8 +469,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
-				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to scan QR codes for joining a live game.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to record Moments and to scan QR codes for joining a live game.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PitchMark uses the microphone to record audio with Moments videos.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "PitchMark needs photo library access so you can choose a pitcher image.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -514,8 +515,9 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
-				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to scan QR codes for joining a live game.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to record Moments and to scan QR codes for joining a live game.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PitchMark uses the microphone to record audio with Moments videos.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "PitchMark needs photo library access so you can choose a pitcher image.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

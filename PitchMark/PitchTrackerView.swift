@@ -9747,11 +9747,7 @@ struct PitchTrackerView: View {
 
         let v8b = v8
             .sheet(isPresented: $showMomentsSheet, onDismiss: { presentPendingHomeAreaIfNeeded() }) {
-                ComingSoonSheetView(
-                    area: .moments,
-                    title: "Moments",
-                    systemImage: "video.fill",
-                    message: "Capture and relive the season's best plays. Coming soon.",
+                MomentsLibraryView(
                     onSwitchToArea: { selectHomeArea($0) }
                 )
                 .fixedAppDynamicType()
