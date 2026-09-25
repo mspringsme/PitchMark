@@ -22,6 +22,50 @@ struct Moment: Identifiable, Codable {
     var playerId: String? = nil
     var playerName: String? = nil
     var durationSeconds: Double? = nil
+    // Stored as Optional deliberately, even though every write always sets
+    // a real value - see the two custom-decoder attempts this replaced,
+    // both wrong, in git history for why. Swift's synthesized Decodable
+    // only skips a missing key without throwing for Optional-typed
+    // properties; a non-optional `var photoCount: Int = 0` still throws on
+    // decode when an older document has no "photoCount" field, and `try?`
+    // at the call site then silently drops that whole document. Keeping
+    // these Optional and relying on the plain synthesized Decodable (the
+    // same mechanism @DocumentID already works correctly with elsewhere in
+    // this codebase - Team.swift, TeamMembership, TeamPlayer) sidesteps
+    // that without any custom init(from:) to get subtly wrong again.
+    // Read via `moment.isFavorite ?? false` / `moment.photoCount ?? 0`.
+    var isFavorite: Bool? = false
+    var opponent: String? = nil
+    var score: String? = nil
+    var inning: Int? = nil
+    var gameInfoUpdatedAt: Date? = nil
+    var photoCount: Int? = 0
+
+    init(
+        createdAt: Date = Date(),
+        teamId: String? = nil,
+        playerId: String? = nil,
+        playerName: String? = nil,
+        durationSeconds: Double? = nil,
+        isFavorite: Bool = false,
+        opponent: String? = nil,
+        score: String? = nil,
+        inning: Int? = nil,
+        gameInfoUpdatedAt: Date? = nil,
+        photoCount: Int = 0
+    ) {
+        self.createdAt = createdAt
+        self.teamId = teamId
+        self.playerId = playerId
+        self.playerName = playerName
+        self.durationSeconds = durationSeconds
+        self.isFavorite = isFavorite
+        self.opponent = opponent
+        self.score = score
+        self.inning = inning
+        self.gameInfoUpdatedAt = gameInfoUpdatedAt
+        self.photoCount = photoCount
+    }
 }
 
 // MARK: - Local video storage (mirrors Utilities.swift's portrait pattern)
@@ -62,6 +106,26 @@ func removeLocalMomentVideo(momentId: String) {
     try? FileManager.default.removeItem(at: url)
 }
 
+// MARK: - Local photo storage (same directory convention as video)
+
+func localMomentPhotoURL(momentId: String, index: Int) -> URL? {
+    guard !momentId.isEmpty, let directory = momentsDirectory() else { return nil }
+    return directory.appendingPathComponent("\(momentId)-photo-\(index).jpg")
+}
+
+@discardableResult
+func saveLocalMomentPhoto(_ data: Data, momentId: String, index: Int) -> Bool {
+    guard let destinationURL = localMomentPhotoURL(momentId: momentId, index: index) else { return false }
+    do {
+        try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: destinationURL, options: [.atomic])
+        return true
+    } catch {
+        debugLog("❌ saveLocalMomentPhoto failed: \(error.localizedDescription)")
+        return false
+    }
+}
+
 // MARK: - AuthManager persistence
 
 extension AuthManager {
@@ -89,6 +153,23 @@ extension AuthManager {
         } catch {
             completion(.failure(error))
         }
+    }
+
+    /// Partial update - callers pass only the fields they're changing.
+    /// Used for Favorite/Game Info/photoCount so an edit to one field
+    /// never touches the others.
+    func updateMomentFields(momentId: String, fields: [String: Any], completion: @escaping (Error?) -> Void) {
+        guard let user = user, !momentId.isEmpty else {
+            completion(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+
+        Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("moments").document(momentId)
+            .updateData(fields) { error in
+                completion(error)
+            }
     }
 
     func loadMoments(completion: @escaping ([Moment]) -> Void) {

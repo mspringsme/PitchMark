@@ -11,7 +11,6 @@
 //
 
 import SwiftUI
-import AVKit
 
 struct MomentsLibraryView: View {
     /// When opened from inside the Parent Game Shell for a specific child,
@@ -28,7 +27,7 @@ struct MomentsLibraryView: View {
     @State private var moments: [Moment] = []
     @State private var showCameraPicker = false
     @State private var showCameraDeniedDialog = false
-    @State private var playingMoment: Moment? = nil
+    @State private var selectedMomentForDetail: Moment? = nil
     @State private var isSaving = false
 
     var body: some View {
@@ -73,11 +72,8 @@ struct MomentsLibraryView: View {
             }
             .ignoresSafeArea()
         }
-        .sheet(item: $playingMoment) { moment in
-            if let id = moment.id, let url = localMomentVideoURL(for: id) {
-                VideoPlayer(player: AVPlayer(url: url))
-                    .ignoresSafeArea()
-            }
+        .sheet(item: $selectedMomentForDetail, onDismiss: { refreshMoments() }) { moment in
+            MomentDetailView(moment: moment, allMoments: moments)
         }
         .appConfirmationDialog(
             isPresented: $showCameraDeniedDialog,
@@ -125,7 +121,7 @@ struct MomentsLibraryView: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(moments) { moment in
                     Button {
-                        playingMoment = moment
+                        selectedMomentForDetail = moment
                     } label: {
                         momentRow(moment)
                     }
@@ -141,8 +137,15 @@ struct MomentsLibraryView: View {
                 .font(.title2)
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 2) {
-                Text(moment.playerName ?? "Moment")
-                    .font(.subheadline.weight(.semibold))
+                HStack(spacing: 4) {
+                    Text(moment.playerName ?? "Moment")
+                        .font(.subheadline.weight(.semibold))
+                    if moment.isFavorite == true {
+                        Image(systemName: "heart.fill")
+                            .font(.caption)
+                            .foregroundStyle(Color.red)
+                    }
+                }
                 Text(moment.createdAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption)
                     .foregroundStyle(.secondary)
