@@ -38,6 +38,7 @@ struct ParentGameShellView: View {
     @State private var players: [TeamPlayer] = []
     @State private var selectedPlayerId: String? = nil
     @State private var selectedMode: ParentTrackingMode = .pitching
+    @State private var visitedPitchingPlayerIds: Set<String> = []
 
     @State private var newPlayerName: String = ""
     @State private var newPlayerJersey: String = ""
@@ -183,24 +184,55 @@ struct ParentGameShellView: View {
             }
             .pickerStyle(.segmented)
 
-            // Placeholder only - Phase 4/5 build the real pitching/batting
-            // tracker here. When they do, preserving state across switching
-            // children/modes needs an explicit store keyed by
-            // (player.id, selectedMode) - NOT a SwiftUI `.id()` on this
-            // content, which would force teardown/recreate on every switch
-            // instead of preserving it.
-            VStack(spacing: 12) {
-                Image(systemName: selectedMode == .pitching ? "figure.baseball" : "figure.softball")
-                    .font(.system(size: 40))
-                    .foregroundStyle(.secondary)
-                Text("\(player.name)'s \(selectedMode.displayName.lowercased()) tracker is coming soon.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+            if selectedMode == .pitching {
+                pitchingTrackers
+            } else {
+                battingPlaceholder(for: player)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 32)
         }
+        .onChange(of: selectedPlayerId) { _, id in
+            if selectedMode == .pitching, let id { visitedPitchingPlayerIds.insert(id) }
+        }
+        .onChange(of: selectedMode) { _, mode in
+            if mode == .pitching, let id = selectedPlayerId { visitedPitchingPlayerIds.insert(id) }
+        }
+        .onAppear {
+            if selectedMode == .pitching, let id = selectedPlayerId { visitedPitchingPlayerIds.insert(id) }
+        }
+    }
+
+    /// Every player visited in Pitching mode so far stays mounted, just
+    /// hidden - not conditionally removed from the view tree - so each
+    /// `ParentPitchingTrackerView` instance's @State (current count, last
+    /// tap, etc.) survives switching to a different child and back. A
+    /// SwiftUI `.id()` here would do the opposite: force teardown/recreate
+    /// on every switch. Batting has no real state yet, so its placeholder
+    /// doesn't need this treatment.
+    @ViewBuilder
+    private var pitchingTrackers: some View {
+        ZStack {
+            ForEach(players.filter { visitedPitchingPlayerIds.contains($0.id ?? "") }, id: \.id) { player in
+                let isCurrent = player.id == selectedPlayerId
+                ParentPitchingTrackerView(player: player, teamId: selection.team.id ?? "")
+                    .opacity(isCurrent ? 1 : 0)
+                    .allowsHitTesting(isCurrent)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func battingPlaceholder(for player: TeamPlayer) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "figure.softball")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text("\(player.name)'s batting tracker is coming soon.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
     }
 
     private func refreshPlayers() {
