@@ -12,6 +12,8 @@
 //
 
 import Foundation
+import UIKit
+import Photos
 import FirebaseFirestore
 import FirebaseAuth
 
@@ -22,6 +24,10 @@ struct Moment: Identifiable, Codable {
     var playerId: String? = nil
     var playerName: String? = nil
     var durationSeconds: Double? = nil
+    /// User-set name for the clip, editable any time after recording -
+    /// falls back to the player's name (then "Moment") wherever displayed
+    /// when unset.
+    var title: String? = nil
     // Stored as Optional deliberately, even though every write always sets
     // a real value - see the two custom-decoder attempts this replaced,
     // both wrong, in git history for why. Swift's synthesized Decodable
@@ -66,6 +72,15 @@ struct Moment: Identifiable, Codable {
         self.gameInfoUpdatedAt = gameInfoUpdatedAt
         self.photoCount = photoCount
     }
+
+    /// The user-set title if there is one, else the tagged player's name,
+    /// else a generic fallback - the one place this fallback chain should
+    /// be computed, used everywhere a Moment's name is displayed.
+    var displayTitle: String {
+        let trimmed = title?.trimmingCharacters(in: .whitespaces) ?? ""
+        if !trimmed.isEmpty { return trimmed }
+        return playerName ?? "Moment"
+    }
 }
 
 // MARK: - Local video storage (mirrors Utilities.swift's portrait pattern)
@@ -106,6 +121,24 @@ func removeLocalMomentVideo(momentId: String) {
     try? FileManager.default.removeItem(at: url)
 }
 
+/// The exported, edited video (Phase 7b) - separate from the original so
+/// re-editing always starts from the untouched recording, never a prior
+/// export.
+func localMomentEditedVideoURL(for momentId: String) -> URL? {
+    guard !momentId.isEmpty, let directory = momentsDirectory() else { return nil }
+    return directory.appendingPathComponent("\(momentId)-edited.mov")
+}
+
+/// Playback and sharing should resolve a Moment's video through this,
+/// not `localMomentVideoURL` directly - it prefers the edited file once
+/// one exists, falling back to the original otherwise.
+func resolvedMomentVideoURL(for momentId: String) -> URL? {
+    if let edited = localMomentEditedVideoURL(for: momentId), FileManager.default.fileExists(atPath: edited.path) {
+        return edited
+    }
+    return localMomentVideoURL(for: momentId)
+}
+
 // MARK: - Local photo storage (same directory convention as video)
 
 func localMomentPhotoURL(momentId: String, index: Int) -> URL? {
@@ -113,12 +146,30 @@ func localMomentPhotoURL(momentId: String, index: Int) -> URL? {
     return directory.appendingPathComponent("\(momentId)-photo-\(index).jpg")
 }
 
+/// Camera captures (and some Photos-library assets) can carry an HDR gain
+/// map. Displaying that as-is produces a real, ~0.8s brightness
+/// "breathing" pulse on the thumbnail as iOS's HDR-to-SDR tone-mapping
+/// re-negotiates - reported against the Moments detail screen and
+/// confirmed via frame-by-frame brightness analysis of a screen
+/// recording (both thumbnails pulsed in sync; the plain white background
+/// and text around them stayed perfectly constant, ruling out a
+/// display/auto-brightness cause). Round-tripping through UIImage's
+/// re-encoder strips the gain map, so every path that saves a Moment
+/// photo - the camera shutter and the PhotosPicker "+" button alike -
+/// writes plain SDR to disk.
+private func stripHDRGainMap(from data: Data) -> Data {
+    guard let image = UIImage(data: data), let sdrData = image.jpegData(compressionQuality: 0.92) else {
+        return data
+    }
+    return sdrData
+}
+
 @discardableResult
 func saveLocalMomentPhoto(_ data: Data, momentId: String, index: Int) -> Bool {
     guard let destinationURL = localMomentPhotoURL(momentId: momentId, index: index) else { return false }
     do {
         try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: destinationURL, options: [.atomic])
+        try stripHDRGainMap(from: data).write(to: destinationURL, options: [.atomic])
         return true
     } catch {
         debugLog("❌ saveLocalMomentPhoto failed: \(error.localizedDescription)")
@@ -188,5 +239,63 @@ extension AuthManager {
                 } ?? []
                 completion(moments)
             }
+    }
+
+    func deleteMoment(momentId: String, completion: @escaping (Error?) -> Void) {
+        guard let user = user, !momentId.isEmpty else {
+            completion(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+
+        Firestore.firestore()
+            .collection("users").document(user.uid)
+            .collection("moments").document(momentId)
+            .delete { error in
+                completion(error)
+            }
+    }
+}
+
+/// Removes everything local to a Moment - original video, edited video,
+/// and any attached photos. Call after the Firestore doc itself is
+/// deleted (see AuthManager.deleteMoment).
+func removeAllLocalMomentFiles(momentId: String, photoCount: Int) {
+    removeLocalMomentVideo(momentId: momentId)
+    if let edited = localMomentEditedVideoURL(for: momentId) {
+        try? FileManager.default.removeItem(at: edited)
+    }
+    for index in 0..<max(photoCount, 0) {
+        if let photoURL = localMomentPhotoURL(momentId: momentId, index: index) {
+            try? FileManager.default.removeItem(at: photoURL)
+        }
+    }
+}
+
+/// Saves a copy of a Moment's current video (edited version if one
+/// exists, else the original) to the system Photos library.
+func saveMomentVideoToCameraRoll(momentId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    guard let url = resolvedMomentVideoURL(for: momentId) else {
+        completion(.failure(NSError(domain: "Moment", code: -1, userInfo: [NSLocalizedDescriptionKey: "No video file found for this Moment."])))
+        return
+    }
+
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+        guard status == .authorized || status == .limited else {
+            DispatchQueue.main.async {
+                completion(.failure(NSError(domain: "Moment", code: -2, userInfo: [NSLocalizedDescriptionKey: "Photos access is needed to save this video."])))
+            }
+            return
+        }
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+        }) { success, error in
+            DispatchQueue.main.async {
+                if success {
+                    completion(.success(()))
+                } else {
+                    completion(.failure(error ?? NSError(domain: "Moment", code: -3, userInfo: [NSLocalizedDescriptionKey: "Couldn't save to Photos."])))
+                }
+            }
+        }
     }
 }

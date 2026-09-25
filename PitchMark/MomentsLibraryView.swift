@@ -30,10 +30,16 @@ struct MomentsLibraryView: View {
     @State private var selectedMomentForDetail: Moment? = nil
     @State private var isSaving = false
 
+    @State private var momentPendingDelete: Moment? = nil
+    @State private var showDeleteDialog = false
+    @State private var deleteErrorMessage: String? = nil
+
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+            // List, not ScrollView/VStack, specifically so swipe-to-delete
+            // (.swipeActions) is available - it's a List row modifier only.
+            List {
+                Section {
                     recordButton
 
                     if let player = contextPlayer {
@@ -42,10 +48,42 @@ struct MomentsLibraryView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    libraryList
+                    if let deleteErrorMessage {
+                        Text(deleteErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
-                .padding()
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+
+                Section {
+                    if moments.isEmpty {
+                        Text("No Moments yet. Record one above.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .listRowSeparator(.hidden)
+                    } else {
+                        ForEach(moments) { moment in
+                            Button {
+                                selectedMomentForDetail = moment
+                            } label: {
+                                momentRow(moment)
+                            }
+                            .buttonStyle(.plain)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    momentPendingDelete = moment
+                                    showDeleteDialog = true
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
             }
+            .listStyle(.plain)
             .navigationTitle("Moments")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -64,10 +102,10 @@ struct MomentsLibraryView: View {
         }
         .onAppear { refreshMoments() }
         .sheet(isPresented: $showCameraPicker) {
-            MomentCameraPicker { url, duration in
+            MomentCameraPicker { url, duration, photos in
                 showCameraPicker = false
                 if let url {
-                    saveRecordedMoment(from: url, duration: duration)
+                    saveRecordedMoment(from: url, duration: duration, capturedPhotos: photos)
                 }
             }
             .ignoresSafeArea()
@@ -86,6 +124,29 @@ struct MomentsLibraryView: View {
             },
             secondaryTitle: "Cancel"
         )
+        // A 3-option destructive action sheet doesn't fit
+        // appConfirmationDialog's primary/secondary shape (that component
+        // exists specifically to avoid SwiftUI's .alert(), which squeezes
+        // horizontally at large accessibility text sizes - see CLAUDE.md).
+        // .confirmationDialog presents as a bottom action sheet with
+        // stacked buttons instead, so it doesn't have that problem.
+        .confirmationDialog(
+            "Delete \(momentPendingDelete?.displayTitle ?? "this Moment")?",
+            isPresented: $showDeleteDialog,
+            titleVisibility: .visible
+        ) {
+            Button("Save to Camera Roll, then Delete") {
+                saveToCameraRollThenDelete()
+            }
+            Button("Delete", role: .destructive) {
+                deletePendingMoment()
+            }
+            Button("Cancel", role: .cancel) {
+                momentPendingDelete = nil
+            }
+        } message: {
+            Text("This removes it from PitchMark. The video can't be recovered afterward unless you save a copy first.")
+        }
     }
 
     private var recordButton: some View {
@@ -138,7 +199,7 @@ struct MomentsLibraryView: View {
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text(moment.playerName ?? "Moment")
+                    Text(moment.displayTitle)
                         .font(.subheadline.weight(.semibold))
                     if moment.isFavorite == true {
                         Image(systemName: "heart.fill")
@@ -170,14 +231,43 @@ struct MomentsLibraryView: View {
         authManager.loadMoments { moments = $0 }
     }
 
-    private func saveRecordedMoment(from tempURL: URL, duration: Double?) {
+    private func deletePendingMoment() {
+        guard let moment = momentPendingDelete, let id = moment.id else { return }
+        momentPendingDelete = nil
+        deleteErrorMessage = nil
+        authManager.deleteMoment(momentId: id) { error in
+            if let error {
+                deleteErrorMessage = "Couldn't delete: \(error.localizedDescription)"
+                return
+            }
+            removeAllLocalMomentFiles(momentId: id, photoCount: moment.photoCount ?? 0)
+            refreshMoments()
+        }
+    }
+
+    private func saveToCameraRollThenDelete() {
+        guard let moment = momentPendingDelete, let id = moment.id else { return }
+        deleteErrorMessage = nil
+        saveMomentVideoToCameraRoll(momentId: id) { result in
+            switch result {
+            case .success:
+                deletePendingMoment()
+            case .failure(let error):
+                momentPendingDelete = nil
+                deleteErrorMessage = "Couldn't save to Camera Roll, so nothing was deleted: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func saveRecordedMoment(from tempURL: URL, duration: Double?, capturedPhotos: [Data]) {
         isSaving = true
         let moment = Moment(
             createdAt: Date(),
             teamId: contextTeamId,
             playerId: contextPlayer?.id,
             playerName: contextPlayer?.name,
-            durationSeconds: duration
+            durationSeconds: duration,
+            photoCount: capturedPhotos.count
         )
         authManager.saveMoment(moment) { result in
             isSaving = false
@@ -185,6 +275,9 @@ struct MomentsLibraryView: View {
             case .success(let saved):
                 if let id = saved.id {
                     saveLocalMomentVideo(from: tempURL, momentId: id)
+                    for (index, data) in capturedPhotos.enumerated() {
+                        saveLocalMomentPhoto(data, momentId: id, index: index)
+                    }
                 }
                 refreshMoments()
             case .failure(let error):

@@ -32,6 +32,7 @@ struct MomentDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var isFavorite: Bool
+    @State private var title: String
     @State private var opponent: String
     @State private var score: String
     @State private var inningText: String
@@ -40,11 +41,32 @@ struct MomentDetailView: View {
     @State private var photoCount: Int
     @State private var photoSelections: [PhotosPickerItem] = []
     @State private var fullScreenPhoto: FullScreenPhoto? = nil
+    /// Decoded once and cached, same reasoning as `player` below: every
+    /// re-render of this view (e.g. a keystroke in Opponent/Score) used
+    /// to call photoThumbnail(index:), which re-read the file and ran
+    /// UIImage(data:) fresh each time - reported as a "pulsating"/
+    /// flashing artifact on the thumbnails. Loaded once in onAppear and
+    /// whenever photoCount changes, not decoded inline in the view body.
+    @State private var photoImages: [Int: UIImage] = [:]
+
+    @State private var showTrimEditor = false
+    @State private var trimErrorMessage: String? = nil
+    /// Created once and reused, never rebuilt inline in the view body -
+    /// on-device testing showed the video "flash the first frame, only
+    /// play about a second" when it was constructed inline
+    /// (`VideoPlayer(player: AVPlayer(url: url))` directly in a computed
+    /// property): SwiftUI re-evaluates that property on every body
+    /// re-render (e.g. every keystroke in the Opponent/Score fields
+    /// below), and each re-render built a brand-new AVPlayer pointed at
+    /// the same URL, discarding playback position back to frame 0. Only
+    /// reloaded explicitly, when the underlying file actually changes.
+    @State private var player: AVPlayer? = nil
 
     init(moment: Moment, allMoments: [Moment]) {
         self.moment = moment
         self.allMoments = allMoments
         _isFavorite = State(initialValue: moment.isFavorite ?? false)
+        _title = State(initialValue: moment.title ?? "")
         _opponent = State(initialValue: moment.opponent ?? "")
         _score = State(initialValue: moment.score ?? "")
         _inningText = State(initialValue: moment.inning.map(String.init) ?? "")
@@ -53,6 +75,11 @@ struct MomentDetailView: View {
     }
 
     private var momentId: String { moment.id ?? "" }
+
+    private var displayTitle: String {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? (moment.playerName ?? "Moment") : trimmed
+    }
 
     private var copySuggestion: (source: Moment, minutesAgo: Int)? {
         guard opponent.isEmpty, score.isEmpty, inningText.isEmpty else { return nil }
@@ -68,13 +95,15 @@ struct MomentDetailView: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    nameSection
                     playbackSection
+                    trimSection
                     gameInfoSection
                     photosSection
                 }
                 .padding()
             }
-            .navigationTitle(moment.playerName ?? "Moment")
+            .navigationTitle(displayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -101,18 +130,69 @@ struct MomentDetailView: View {
             guard !items.isEmpty else { return }
             addPhotos(items)
         }
+        .fullScreenCover(isPresented: $showTrimEditor) {
+            if let path = localMomentVideoURL(for: momentId)?.path {
+                MomentTrimEditor(videoPath: path) { editedPath in
+                    showTrimEditor = false
+                    if let editedPath {
+                        saveTrimResult(editedPath)
+                    }
+                }
+                .ignoresSafeArea()
+            }
+        }
+        .onAppear {
+            reloadPlayer()
+            loadPhotoImages()
+        }
+        // commitTitle() only fired from the TextField's onSubmit (return
+        // key), so tapping Done - or swiping the sheet away - with an
+        // edited title still in the field and the keyboard still up
+        // dismissed without ever saving it. onDisappear fires for both
+        // exit paths, not just Done, so it's the one place that reliably
+        // flushes whatever's currently in the field.
+        .onDisappear { commitTitle() }
     }
 
     @ViewBuilder
     private var playbackSection: some View {
-        if let url = localMomentVideoURL(for: momentId) {
-            VideoPlayer(player: AVPlayer(url: url))
+        if let player {
+            VideoPlayer(player: player)
                 .frame(height: 220)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         Text(moment.createdAt.formatted(date: .abbreviated, time: .shortened))
             .font(.caption)
             .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var nameSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Name")
+                .font(.headline)
+            TextField(moment.playerName ?? "Moment", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { commitTitle() }
+        }
+    }
+
+    @ViewBuilder
+    private var trimSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Trim")
+                .font(.headline)
+
+            Button("Trim Video") {
+                startTrimEditor()
+            }
+
+            if let trimErrorMessage {
+                Text(trimErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
     }
 
     @ViewBuilder
@@ -183,9 +263,7 @@ struct MomentDetailView: View {
 
     @ViewBuilder
     private func photoThumbnail(index: Int) -> some View {
-        if let url = localMomentPhotoURL(momentId: momentId, index: index),
-           let data = try? Data(contentsOf: url),
-           let image = UIImage(data: data) {
+        if let image = photoImages[index] {
             Button {
                 fullScreenPhoto = FullScreenPhoto(id: index, image: image)
             } label: {
@@ -199,9 +277,58 @@ struct MomentDetailView: View {
         }
     }
 
+    private func loadPhotoImages() {
+        var images: [Int: UIImage] = [:]
+        for index in 0..<max(photoCount, 0) {
+            if let url = localMomentPhotoURL(momentId: momentId, index: index),
+               let data = try? Data(contentsOf: url),
+               let image = UIImage(data: data) {
+                images[index] = image
+            }
+        }
+        photoImages = images
+    }
+
+    private func startTrimEditor() {
+        trimErrorMessage = nil
+        guard let path = localMomentVideoURL(for: momentId)?.path,
+              UIVideoEditorController.canEditVideo(atPath: path) else {
+            trimErrorMessage = "This video can't be trimmed on this device."
+            return
+        }
+        showTrimEditor = true
+    }
+
+    /// Native trim already produces a finished, playable file - copied
+    /// straight to the edited slot, no separate "Apply" step needed now
+    /// that there's nothing left to composite on top of it.
+    private func saveTrimResult(_ editedPath: String) {
+        guard let destination = localMomentEditedVideoURL(for: momentId) else { return }
+        do {
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: editedPath), to: destination)
+            reloadPlayer()
+        } catch {
+            trimErrorMessage = "Couldn't save the trimmed video: \(error.localizedDescription)"
+        }
+    }
+
+    private func reloadPlayer() {
+        guard let url = resolvedMomentVideoURL(for: momentId) else {
+            player = nil
+            return
+        }
+        player = AVPlayer(url: url)
+    }
+
     private func toggleFavorite() {
         isFavorite.toggle()
         authManager.updateMomentFields(momentId: momentId, fields: ["isFavorite": isFavorite]) { _ in }
+    }
+
+    private func commitTitle() {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        authManager.updateMomentFields(momentId: momentId, fields: ["title": trimmed.isEmpty ? NSNull() : trimmed]) { _ in }
     }
 
     private func applyCopySuggestion(_ source: Moment) {
@@ -232,6 +359,7 @@ struct MomentDetailView: View {
             await MainActor.run {
                 photoCount = nextIndex
                 photoSelections = []
+                loadPhotoImages()
                 authManager.updateMomentFields(momentId: momentId, fields: ["photoCount": photoCount]) { _ in }
             }
         }

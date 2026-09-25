@@ -169,18 +169,18 @@ struct FamilyView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(moments) { moment in
-                    let hasLocalFile = moment.id.flatMap(localMomentVideoURL(for:)).map {
+                    let hasLocalFile = moment.id.flatMap(resolvedMomentVideoURL(for:)).map {
                         FileManager.default.fileExists(atPath: $0.path)
                     } ?? false
 
                     Button {
                         showMomentPicker = false
-                        guard let id = moment.id, let url = localMomentVideoURL(for: id) else { return }
+                        guard let id = moment.id, let url = resolvedMomentVideoURL(for: id) else { return }
                         activeShareItem = ShareSheetItem(items: [url])
                     } label: {
                         HStack {
                             VStack(alignment: .leading) {
-                                Text(moment.playerName ?? "Moment")
+                                Text(moment.displayTitle)
                                 Text(moment.createdAt.formatted(date: .abbreviated, time: .shortened))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
