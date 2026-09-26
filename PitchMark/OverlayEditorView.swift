@@ -134,10 +134,22 @@ struct OverlayEditorView: View {
             .padding(.vertical, 8)
         }
         .background(Color(.systemBackground).ignoresSafeArea())
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("Done") { dismiss() }
+        // A plain `.toolbar` renders nothing here - this view has no
+        // NavigationView/NavigationStack to host a nav bar, since it's
+        // presented as a bare .fullScreenCover (deliberately, to keep the
+        // video full-bleed rather than losing height to a nav bar, the
+        // same choice MomentCameraPicker's full-bleed recording screen
+        // makes with its own manual close button). A visible overlay
+        // button is the only way to actually dismiss this screen.
+        .overlay(alignment: .topTrailing) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.white, .black.opacity(0.5))
             }
+            .padding()
         }
         .onAppear { setUpPlayer() }
         .onDisappear { tearDownPlayer() }
