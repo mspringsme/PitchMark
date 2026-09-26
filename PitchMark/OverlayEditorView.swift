@@ -174,6 +174,24 @@ struct OverlayEditorView: View {
 
             transportControls
 
+            // Sits directly above the asset strip, left-aligned, rather
+            // than floating over the video - keeps it clear of the video
+            // area entirely and out of the way of overlay gestures.
+            if selectedOverlayID != nil {
+                HStack {
+                    Button {
+                        removeSelectedOverlay()
+                    } label: {
+                        Image(systemName: "trash.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.white, .red)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.top, 4)
+            }
+
             AssetThumbnailStrip(assets: libraryAssets) { asset in
                 addOverlay(for: asset)
             }
@@ -186,19 +204,12 @@ struct OverlayEditorView: View {
         // video full-bleed rather than losing height to a nav bar, the
         // same choice MomentCameraPicker's full-bleed recording screen
         // makes with its own manual close button). A visible overlay
-        // button is the only way to actually dismiss this screen.
-        .overlay(alignment: .topLeading) {
-            if selectedOverlayID != nil {
-                Button {
-                    removeSelectedOverlay()
-                } label: {
-                    Image(systemName: "trash.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white, .red)
-                }
-                .padding()
-            }
-        }
+        // button is the only way to actually dismiss this screen. Pulled
+        // down and inward from the exact top-right corner - this whole
+        // view ignores the safe area (see MomentDetailView's
+        // .ignoresSafeArea() on the fullScreenCover), so a bare `.padding()`
+        // landed the button right under the notch/Dynamic Island, where
+        // it was effectively untappable.
         .overlay(alignment: .topTrailing) {
             Button {
                 dismiss()
@@ -207,7 +218,8 @@ struct OverlayEditorView: View {
                     .font(.system(size: 28))
                     .foregroundStyle(.white, .black.opacity(0.5))
             }
-            .padding()
+            .padding(.top, 50)
+            .padding(.trailing, 20)
         }
         .onAppear { setUpPlayer() }
         .onDisappear { tearDownPlayer() }
