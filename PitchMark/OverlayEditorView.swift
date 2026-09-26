@@ -13,10 +13,12 @@
 //  transport controls would fight for the same taps - better to settle on
 //  the lower-level layer now than swap later.
 //
-//  No persistence yet: `overlays` lives only in this screen's @State for
-//  the preview session. There's nothing worth saving until step 4's real
-//  gesture-driven edits exist - that step is what adds a Moment.overlays
-//  field and its encode/decode path.
+//  Step 4 extends this same screen in place: real overlay creation (tap a
+//  library thumbnail to add one, centered, at the current playhead - the
+//  spec's own sanctioned fallback to dragging from the strip), drag/
+//  pinch/rotate on the selected overlay with auto-keyframe on gesture end
+//  (upsertKeyframe, no explicit "add keyframe" control), and persistence
+//  via Moment.overlays now that real edits exist worth saving.
 //
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
@@ -53,6 +55,40 @@ func videoDisplayRect(containerSize: CGSize, naturalSize: CGSize) -> CGRect {
         y: (containerSize.height - fitSize.height) / 2
     )
     return CGRect(origin: origin, size: fitSize)
+}
+
+/// Combines a selected overlay's base transform (from `item.transform(at:
+/// currentTime)`, frozen while playback is paused for editing) with a
+/// drag/pinch/rotate gesture's live deltas into the transform to render
+/// *and*, on gesture end, to commit via `upsertKeyframe`. Pure geometry,
+/// no SwiftUI/UIKit dependency, verified standalone the same way as
+/// `videoDisplayRect`.
+///
+/// `dragTranslation` is in points (a SwiftUI `DragGesture`'s
+/// `.translation`); dividing by `videoRectSize` puts it into the same
+/// normalized 0...1 space `videoDisplayRect` establishes for position.
+/// Position is clamped to 0...1; scale is clamped to 0.2...5 as a sanity
+/// bound the spec doesn't set one for, guarding against a pinch shrinking
+/// an overlay to invisible or blowing it up absurdly; rotation is left
+/// unclamped since wrapping past 2π is harmless.
+func applyGestureDelta(
+    to base: OverlayTransform,
+    dragTranslation: CGSize,
+    videoRectSize: CGSize,
+    magnification: CGFloat,
+    rotation: Double
+) -> OverlayTransform {
+    let dx = videoRectSize.width > 0 ? dragTranslation.width / videoRectSize.width : 0
+    let dy = videoRectSize.height > 0 ? dragTranslation.height / videoRectSize.height : 0
+
+    let position = CGPoint(
+        x: min(max(base.position.x + dx, 0), 1),
+        y: min(max(base.position.y + dy, 0), 1)
+    )
+    let scale = min(max(base.scale * magnification, 0.2), 5)
+    let newRotation = base.rotation + rotation
+
+    return OverlayTransform(position: position, scale: scale, rotation: newRotation, opacity: base.opacity)
 }
 
 /// Thin AVPlayerLayer host - no transport controls, so overlay gesture
@@ -93,23 +129,32 @@ final class PlayerLayerContainerUIView: UIView {
 }
 
 struct OverlayEditorView: View {
+    let momentId: String
     let videoURL: URL
     let libraryAssets: [LibraryAsset]
 
+    @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var player: AVPlayer
-    @State private var overlays: [OverlayItem] = []
+    @State private var overlays: [OverlayItem]
     @State private var currentTime: Double = 0
     @State private var duration: Double = 0
     @State private var naturalSize: CGSize = .zero
     @State private var isPlaying = false
     @State private var timeObserverToken: Any?
 
-    init(videoURL: URL, libraryAssets: [LibraryAsset]) {
+    @State private var selectedOverlayID: UUID? = nil
+    @GestureState private var dragTranslation: CGSize = .zero
+    @GestureState private var magnification: CGFloat = 1
+    @GestureState private var rotation: Angle = .zero
+
+    init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem]) {
+        self.momentId = momentId
         self.videoURL = videoURL
         self.libraryAssets = libraryAssets
         _player = State(initialValue: AVPlayer(url: videoURL))
+        _overlays = State(initialValue: initialOverlays)
     }
 
     var body: some View {
@@ -117,10 +162,11 @@ struct OverlayEditorView: View {
             GeometryReader { geometry in
                 ZStack {
                     PlayerContainerView(player: player)
+                        .onTapGesture { selectedOverlayID = nil }
 
                     let videoRect = videoDisplayRect(containerSize: geometry.size, naturalSize: naturalSize)
                     ForEach(visibleOverlays(), id: \.item.id) { entry in
-                        overlayView(for: entry.item, transform: entry.transform, in: videoRect)
+                        overlayView(for: entry.item, transform: entry.transform, in: videoRect, videoRectSize: videoRect.size)
                     }
                 }
             }
@@ -129,7 +175,7 @@ struct OverlayEditorView: View {
             transportControls
 
             AssetThumbnailStrip(assets: libraryAssets) { asset in
-                addDemoOverlay(for: asset)
+                addOverlay(for: asset)
             }
             .padding(.vertical, 8)
         }
@@ -141,6 +187,18 @@ struct OverlayEditorView: View {
         // same choice MomentCameraPicker's full-bleed recording screen
         // makes with its own manual close button). A visible overlay
         // button is the only way to actually dismiss this screen.
+        .overlay(alignment: .topLeading) {
+            if selectedOverlayID != nil {
+                Button {
+                    removeSelectedOverlay()
+                } label: {
+                    Image(systemName: "trash.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.white, .red)
+                }
+                .padding()
+            }
+        }
         .overlay(alignment: .topTrailing) {
             Button {
                 dismiss()
@@ -168,20 +226,112 @@ struct OverlayEditorView: View {
     }
 
     @ViewBuilder
-    private func overlayView(for item: OverlayItem, transform: OverlayTransform, in videoRect: CGRect) -> some View {
+    private func overlayView(for item: OverlayItem, transform baseTransform: OverlayTransform, in videoRect: CGRect, videoRectSize: CGSize) -> some View {
         if videoRect != .zero, let asset = libraryAssets.first(where: { $0.id == item.assetID }), let image = asset.image {
+            let isSelected = item.id == selectedOverlayID
+            // While selected, live gesture deltas ride on top of the
+            // committed base transform for both rendering and (on
+            // gesture end) the value that gets upserted as a keyframe -
+            // one function, so drag/pinch/rotate always render exactly
+            // what upsertKeyframe is about to save.
+            let liveTransform = isSelected
+                ? applyGestureDelta(to: baseTransform, dragTranslation: dragTranslation, videoRectSize: videoRectSize, magnification: magnification, rotation: rotation.radians)
+                : baseTransform
+
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
                 .frame(width: 80, height: 80)
-                .opacity(transform.opacity)
-                .rotationEffect(.radians(transform.rotation))
-                .scaleEffect(transform.scale)
+                .opacity(liveTransform.opacity)
+                .rotationEffect(.radians(liveTransform.rotation))
+                .scaleEffect(liveTransform.scale)
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.yellow, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                            .rotationEffect(.radians(liveTransform.rotation))
+                            .scaleEffect(liveTransform.scale)
+                    }
+                }
                 .position(
-                    x: videoRect.minX + transform.position.x * videoRect.width,
-                    y: videoRect.minY + transform.position.y * videoRect.height
+                    x: videoRect.minX + liveTransform.position.x * videoRect.width,
+                    y: videoRect.minY + liveTransform.position.y * videoRect.height
                 )
+                .onTapGesture {
+                    selectOverlay(item.id)
+                }
+                .gesture(dragGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
+                .simultaneousGesture(magnificationGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
+                .simultaneousGesture(rotationGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
         }
+    }
+
+    // Every overlay view gets all three gesture recognizers attached
+    // (SwiftUI doesn't support cleanly attaching-or-not an opaque `some
+    // Gesture` via a ternary) - `isSelected` is captured per-view from
+    // the ForEach's own `item`, so only the actually-selected overlay's
+    // closures ever mutate the shared @GestureState or commit anything.
+    // An unselected overlay's recognizers fire but no-op.
+
+    private func dragGesture(for item: OverlayItem, isSelected: Bool, baseTransform: OverlayTransform, videoRectSize: CGSize) -> some Gesture {
+        DragGesture()
+            .updating($dragTranslation) { value, state, _ in
+                guard isSelected else { return }
+                state = value.translation
+            }
+            .onEnded { value in
+                guard isSelected else { return }
+                commitGesture(for: item, baseTransform: baseTransform, videoRectSize: videoRectSize, dragTranslation: value.translation, magnification: magnification, rotation: rotation.radians)
+            }
+    }
+
+    private func magnificationGesture(for item: OverlayItem, isSelected: Bool, baseTransform: OverlayTransform, videoRectSize: CGSize) -> some Gesture {
+        MagnificationGesture()
+            .updating($magnification) { value, state, _ in
+                guard isSelected else { return }
+                state = value
+            }
+            .onEnded { value in
+                guard isSelected else { return }
+                commitGesture(for: item, baseTransform: baseTransform, videoRectSize: videoRectSize, dragTranslation: dragTranslation, magnification: value, rotation: rotation.radians)
+            }
+    }
+
+    private func rotationGesture(for item: OverlayItem, isSelected: Bool, baseTransform: OverlayTransform, videoRectSize: CGSize) -> some Gesture {
+        RotationGesture()
+            .updating($rotation) { value, state, _ in
+                guard isSelected else { return }
+                state = value
+            }
+            .onEnded { value in
+                guard isSelected else { return }
+                commitGesture(for: item, baseTransform: baseTransform, videoRectSize: videoRectSize, dragTranslation: dragTranslation, magnification: magnification, rotation: value.radians)
+            }
+    }
+
+    /// Shared commit path for all three gestures' `.onEnded` - each reads
+    /// the other two gestures' still-current @GestureState values, so a
+    /// two-finger pinch-and-rotate-while-dragging commits one coherent
+    /// transform regardless of which recognizer's `.onEnded` happens to
+    /// fire first. `upsertKeyframe`'s own tolerance absorbs the case
+    /// where two of these end a few milliseconds apart.
+    private func commitGesture(for item: OverlayItem, baseTransform: OverlayTransform, videoRectSize: CGSize, dragTranslation: CGSize, magnification: CGFloat, rotation: Double) {
+        let resolved = applyGestureDelta(to: baseTransform, dragTranslation: dragTranslation, videoRectSize: videoRectSize, magnification: magnification, rotation: rotation)
+        guard let index = overlays.firstIndex(where: { $0.id == item.id }) else { return }
+        overlays[index].upsertKeyframe(time: currentTime, transform: resolved, tolerance: 0.2)
+        persistOverlays()
+    }
+
+    private func selectOverlay(_ id: UUID) {
+        selectedOverlayID = id
+        if isPlaying { togglePlayback() }
+    }
+
+    private func removeSelectedOverlay() {
+        guard let selectedOverlayID else { return }
+        overlays.removeAll { $0.id == selectedOverlayID }
+        self.selectedOverlayID = nil
+        persistOverlays()
     }
 
     private var transportControls: some View {
@@ -240,16 +390,27 @@ struct OverlayEditorView: View {
         player.pause()
     }
 
-    /// Scaffolding for step 3's verification, standing in for step 4's
-    /// real drag-onto-video placement: adds a small animated overlay for
-    /// the tapped asset so there's something concrete to watch track
-    /// position/scale/rotation/opacity in sync with playback and
-    /// scrubbing. Not persisted.
-    private func addDemoOverlay(for asset: LibraryAsset) {
+    /// Tapping a library thumbnail adds one real overlay, centered, that
+    /// "starts at the current playhead time" (the spec's own sanctioned
+    /// fallback to dragging a thumbnail onto the video). Selecting it
+    /// immediately and pausing playback lets the user drag it into place
+    /// right away.
+    private func addOverlay(for asset: LibraryAsset) {
         let clipDuration = duration > 0 ? duration : 5
-        let start = OverlayKeyframe(time: 0, position: CGPoint(x: 0.5, y: 0.5), scale: 1, rotation: 0, opacity: 1)
-        let end = OverlayKeyframe(time: clipDuration, position: CGPoint(x: 0.85, y: 0.2), scale: 1.6, rotation: .pi / 4, opacity: 0.6)
-        let item = OverlayItem(assetID: asset.id, startTime: 0, endTime: clipDuration, keyframes: [start, end])
+        let startTime = min(currentTime, clipDuration)
+        let keyframe = OverlayKeyframe(time: startTime, position: CGPoint(x: 0.5, y: 0.5), scale: 1, rotation: 0, opacity: 1)
+        let item = OverlayItem(assetID: asset.id, startTime: startTime, endTime: clipDuration, keyframes: [keyframe])
         overlays.append(item)
+        selectOverlay(item.id)
+        persistOverlays()
+    }
+
+    private func persistOverlays() {
+        guard !momentId.isEmpty else { return }
+        authManager.updateMomentOverlays(momentId: momentId, overlays: overlays) { error in
+            if let error {
+                debugLog("❌ updateMomentOverlays failed:", error.localizedDescription)
+            }
+        }
     }
 }

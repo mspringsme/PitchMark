@@ -46,6 +46,10 @@ struct Moment: Identifiable, Codable {
     var inning: Int? = nil
     var gameInfoUpdatedAt: Date? = nil
     var photoCount: Int? = 0
+    /// Step 4 of the Asset + Overlay editor spec - Optional for the same
+    /// reason every other field added after Phase 6 is: existing saved
+    /// Moment documents have no "overlays" key.
+    var overlays: [OverlayItem]? = nil
 
     init(
         createdAt: Date = Date(),
@@ -58,7 +62,8 @@ struct Moment: Identifiable, Codable {
         score: String? = nil,
         inning: Int? = nil,
         gameInfoUpdatedAt: Date? = nil,
-        photoCount: Int = 0
+        photoCount: Int = 0,
+        overlays: [OverlayItem]? = nil
     ) {
         self.createdAt = createdAt
         self.teamId = teamId
@@ -71,6 +76,7 @@ struct Moment: Identifiable, Codable {
         self.inning = inning
         self.gameInfoUpdatedAt = gameInfoUpdatedAt
         self.photoCount = photoCount
+        self.overlays = overlays
     }
 
     /// The user-set title if there is one, else the tagged player's name,
@@ -221,6 +227,35 @@ extension AuthManager {
             .updateData(fields) { error in
                 completion(error)
             }
+    }
+
+    /// `overlays` is an array of Codable structs, not a primitive -
+    /// updateMomentFields's plain [String: Any] shape can't carry that
+    /// directly. Encoding through a tiny wrapper via Firestore.Encoder
+    /// produces exactly the ["overlays": [[String: Any]]] shape
+    /// updateData expects - the same mechanism saveMoment already trusts
+    /// via setData(from:), aimed at one field instead of a whole document.
+    func updateMomentOverlays(momentId: String, overlays: [OverlayItem], completion: @escaping (Error?) -> Void) {
+        guard let user = user, !momentId.isEmpty else {
+            completion(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+
+        struct OverlaysFieldWrapper: Encodable {
+            var overlays: [OverlayItem]
+        }
+
+        do {
+            let encoded = try Firestore.Encoder().encode(OverlaysFieldWrapper(overlays: overlays))
+            Firestore.firestore()
+                .collection("users").document(user.uid)
+                .collection("moments").document(momentId)
+                .updateData(encoded) { error in
+                    completion(error)
+                }
+        } catch {
+            completion(error)
+        }
     }
 
     func loadMoments(completion: @escaping ([Moment]) -> Void) {
