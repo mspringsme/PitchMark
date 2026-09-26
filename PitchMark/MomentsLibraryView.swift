@@ -25,6 +25,7 @@ struct MomentsLibraryView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var moments: [Moment] = []
+    @State private var showAssetLibrary = false
     @State private var showCameraPicker = false
     @State private var showCameraDeniedDialog = false
     @State private var selectedMomentForDetail: Moment? = nil
@@ -87,6 +88,13 @@ struct MomentsLibraryView: View {
             .navigationTitle("Moments")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showAssetLibrary = true
+                    } label: {
+                        Image(systemName: "square.stack.3d.up")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
                         dismiss()
@@ -101,6 +109,10 @@ struct MomentsLibraryView: View {
             }
         }
         .onAppear { refreshMoments() }
+        .sheet(isPresented: $showAssetLibrary) {
+            AssetLibraryView()
+                .environmentObject(authManager)
+        }
         .sheet(isPresented: $showCameraPicker) {
             MomentCameraPicker { url, duration, photos in
                 showCameraPicker = false
