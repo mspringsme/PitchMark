@@ -551,6 +551,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     
     @State private var showAppSettingsSheet = false
+    @State private var showAssetLibrarySheet = false
     @State private var myTeams: [(team: Team, membership: TeamMembership)] = []
     @State private var selectedTeamEntry: TeamEntrySelection? = nil
     @State private var newTeamNameForHome: String = ""
@@ -998,6 +999,10 @@ struct SettingsView: View {
 
                     sectionCard {
                         storeSection
+                    }
+
+                    sectionCard {
+                        assetLibrarySection
                     }
                 }
                 .padding(.top, 4)
@@ -1883,6 +1888,37 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    /// Temporary home for Step 2 of the Asset + Overlay editor spec - moves
+    /// to live alongside the video editor once that exists (steps 3+).
+    private var assetLibrarySection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Asset Library")
+                    .font(.headline)
+                    .bold()
+                Spacer()
+            }
+            .padding(.horizontal, 4)
+
+            Button {
+                showAssetLibrarySheet = true
+            } label: {
+                HStack {
+                    Image(systemName: "square.stack.3d.up")
+                    Text("Open Asset Library")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     private var storeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink {
@@ -2378,6 +2414,10 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showAppSettingsSheet) {
                 appSettingsSheetView
+            }
+            .sheet(isPresented: $showAssetLibrarySheet) {
+                AssetLibraryView()
+                    .environmentObject(authManager)
             }
             .sheet(item: $selectedTeamEntry) { entry in
                 ParentGameShellView(selection: entry)

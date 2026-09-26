@@ -1,0 +1,269 @@
+//
+//  AssetLibraryView.swift
+//  PitchMark
+//
+//  Step 2 of the 2026-09-26 Asset + Video Overlay Keyframe Editor spec.
+//  AssetThumbnailStrip is the reusable "adjacent to the video editor"
+//  component the spec calls for - step 3+ wires it into the editor.
+//  AssetLibraryView hosts it as a full screen for now, since the editor
+//  doesn't exist yet, plus a PhotosPicker "Add from Photos" import (the
+//  spec's own sanctioned secondary path - the camera + shape-crop +
+//  Smart Cutout flow is step 7) and rename/delete for user-created
+//  assets. Deliberately kept out of the Pitchmark Display target's
+//  membershipExceptions; Display has no use for this.
+//
+
+import SwiftUI
+import PhotosUI
+
+/// Horizontally-scrolling thumbnail strip - the component the spec wants
+/// "adjacent to the video editor." Takes a plain array + selection
+/// closure so it has no dependency on where its assets came from.
+struct AssetThumbnailStrip: View {
+    let assets: [LibraryAsset]
+    var onSelect: ((LibraryAsset) -> Void)? = nil
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                ForEach(assets) { asset in
+                    Button {
+                        onSelect?(asset)
+                    } label: {
+                        VStack(spacing: 4) {
+                            thumbnail(for: asset)
+                            Text(asset.name)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
+    private func thumbnail(for asset: LibraryAsset) -> some View {
+        Group {
+            if let image = asset.image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(8)
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 64, height: 64)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+struct AssetLibraryView: View {
+    @EnvironmentObject var authManager: AuthManager
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var userAssets: [AssetItem] = []
+    @State private var photoSelection: PhotosPickerItem? = nil
+    @State private var isImporting = false
+    @State private var importErrorMessage: String? = nil
+
+    @State private var renamingAsset: LibraryAsset? = nil
+    @State private var renameText = ""
+
+    @State private var assetPendingDelete: LibraryAsset? = nil
+    @State private var showDeleteDialog = false
+    @State private var deleteErrorMessage: String? = nil
+
+    private var libraryAssets: [LibraryAsset] {
+        bundledAssets.map(LibraryAsset.bundled) + userAssets.compactMap(LibraryAsset.userCreated)
+    }
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    PhotosPicker(selection: $photoSelection, matching: .images) {
+                        HStack {
+                            Image(systemName: "photo.badge.plus")
+                            Text(isImporting ? "Adding…" : "Add from Photos")
+                        }
+                    }
+                    .disabled(isImporting)
+
+                    if let importErrorMessage {
+                        Text(importErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Section("Library") {
+                    ForEach(libraryAssets) { asset in
+                        assetRow(asset)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                if asset.isDeletable {
+                                    Button(role: .destructive) {
+                                        assetPendingDelete = asset
+                                        showDeleteDialog = true
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                }
+                                if asset.isRenamable {
+                                    Button {
+                                        renamingAsset = asset
+                                        renameText = asset.name
+                                    } label: {
+                                        Label("Rename", systemImage: "pencil")
+                                    }
+                                    .tint(.blue)
+                                }
+                            }
+                    }
+
+                    if let deleteErrorMessage {
+                        Text(deleteErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Asset Library")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .onAppear { refreshAssets() }
+        .onChange(of: photoSelection) { _, item in
+            guard let item else { return }
+            importPhoto(item)
+        }
+        .alert("Rename Asset", isPresented: renameAlertBinding) {
+            TextField("Name", text: $renameText)
+            Button("Save") { commitRename() }
+            Button("Cancel", role: .cancel) { renamingAsset = nil }
+        }
+        .appConfirmationDialog(
+            isPresented: $showDeleteDialog,
+            title: "Delete \(assetPendingDelete?.name ?? "this asset")?",
+            message: "This removes it from your library. Any overlay already using it will lose the image.",
+            primaryTitle: "Delete",
+            primaryRole: .destructive,
+            primaryAction: { deletePendingAsset() },
+            secondaryTitle: "Cancel",
+            secondaryAction: { assetPendingDelete = nil }
+        )
+    }
+
+    @ViewBuilder
+    private func assetRow(_ asset: LibraryAsset) -> some View {
+        HStack(spacing: 12) {
+            Group {
+                if let image = asset.image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(6)
+                } else {
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 44, height: 44)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            Text(asset.name)
+                .font(.subheadline)
+
+            Spacer()
+
+            if !asset.isDeletable {
+                Text("Bundled")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// `.alert(_:isPresented:)` needs a plain Bool binding; this wraps the
+    /// optional `renamingAsset` so dismissing the alert (Cancel, tap
+    /// outside, or after Save) clears it consistently from one place.
+    private var renameAlertBinding: Binding<Bool> {
+        Binding(
+            get: { renamingAsset != nil },
+            set: { newValue in if !newValue { renamingAsset = nil } }
+        )
+    }
+
+    private func refreshAssets() {
+        authManager.loadAssets { userAssets = $0 }
+    }
+
+    private func importPhoto(_ item: PhotosPickerItem) {
+        isImporting = true
+        importErrorMessage = nil
+        Task {
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                await MainActor.run {
+                    isImporting = false
+                    importErrorMessage = "Couldn't load that photo."
+                    photoSelection = nil
+                }
+                return
+            }
+
+            let name = "New Asset"
+            authManager.saveAsset(AssetItem(name: name)) { result in
+                switch result {
+                case .success(let saved):
+                    if let id = saved.id {
+                        saveLocalAssetImage(data, assetId: id)
+                    }
+                    isImporting = false
+                    photoSelection = nil
+                    refreshAssets()
+                case .failure(let error):
+                    isImporting = false
+                    photoSelection = nil
+                    importErrorMessage = "Couldn't save: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func commitRename() {
+        guard let asset = renamingAsset, let assetId = asset.backingAssetId else {
+            renamingAsset = nil
+            return
+        }
+        let trimmed = renameText.trimmingCharacters(in: .whitespaces)
+        renamingAsset = nil
+        guard !trimmed.isEmpty else { return }
+        authManager.updateAssetFields(assetId: assetId, fields: ["name": trimmed]) { _ in
+            refreshAssets()
+        }
+    }
+
+    private func deletePendingAsset() {
+        guard let asset = assetPendingDelete, let assetId = asset.backingAssetId else { return }
+        assetPendingDelete = nil
+        deleteErrorMessage = nil
+        authManager.deleteAsset(assetId: assetId) { error in
+            if let error {
+                deleteErrorMessage = "Couldn't delete: \(error.localizedDescription)"
+                return
+            }
+            removeLocalAssetImage(assetId: assetId)
+            refreshAssets()
+        }
+    }
+}
