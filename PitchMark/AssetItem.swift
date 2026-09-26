@@ -233,6 +233,16 @@ extension AuthManager {
             }
     }
 
+    /// Bundled defaults + the user's own assets, merged into the single
+    /// list the UI presents everywhere an asset picker is needed -
+    /// AssetLibraryView and OverlayEditorView both call this rather than
+    /// each doing their own merge.
+    func loadLibraryAssets(completion: @escaping ([LibraryAsset]) -> Void) {
+        loadAssets { assets in
+            completion(bundledAssets.map(LibraryAsset.bundled) + assets.compactMap(LibraryAsset.userCreated))
+        }
+    }
+
     func deleteAsset(assetId: String, completion: @escaping (Error?) -> Void) {
         guard let user = user, !assetId.isEmpty else {
             completion(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))

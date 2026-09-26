@@ -49,12 +49,16 @@ struct OverlayTransform: Equatable {
 
 struct OverlayItem: Identifiable, Codable {
     let id: UUID
-    var assetID: UUID
+    /// A `LibraryAsset`/`AssetItem` id - a plain String for both bundled
+    /// assets ("bundled-circle") and user-created ones (Firestore's
+    /// `@DocumentID`), not a UUID. Fixed here in step 3, before step 2's
+    /// asset-library shape existed yet.
+    var assetID: String
     var startTime: Double
     var endTime: Double
     var keyframes: [OverlayKeyframe]
 
-    init(id: UUID = UUID(), assetID: UUID, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = []) {
+    init(id: UUID = UUID(), assetID: String, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = []) {
         self.id = id
         self.assetID = assetID
         self.startTime = startTime

@@ -67,7 +67,7 @@ struct AssetLibraryView: View {
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
 
-    @State private var userAssets: [AssetItem] = []
+    @State private var libraryAssets: [LibraryAsset] = []
     @State private var photoSelection: PhotosPickerItem? = nil
     @State private var isImporting = false
     @State private var importErrorMessage: String? = nil
@@ -78,10 +78,6 @@ struct AssetLibraryView: View {
     @State private var assetPendingDelete: LibraryAsset? = nil
     @State private var showDeleteDialog = false
     @State private var deleteErrorMessage: String? = nil
-
-    private var libraryAssets: [LibraryAsset] {
-        bundledAssets.map(LibraryAsset.bundled) + userAssets.compactMap(LibraryAsset.userCreated)
-    }
 
     var body: some View {
         NavigationView {
@@ -205,7 +201,7 @@ struct AssetLibraryView: View {
     }
 
     private func refreshAssets() {
-        authManager.loadAssets { userAssets = $0 }
+        authManager.loadLibraryAssets { libraryAssets = $0 }
     }
 
     private func importPhoto(_ item: PhotosPickerItem) {

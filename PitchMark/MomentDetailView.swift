@@ -51,6 +51,9 @@ struct MomentDetailView: View {
 
     @State private var showTrimEditor = false
     @State private var trimErrorMessage: String? = nil
+
+    @State private var showOverlayEditor = false
+    @State private var overlayEditorAssets: [LibraryAsset] = []
     /// Created once and reused, never rebuilt inline in the view body -
     /// on-device testing showed the video "flash the first frame, only
     /// play about a second" when it was constructed inline
@@ -98,6 +101,7 @@ struct MomentDetailView: View {
                     nameSection
                     playbackSection
                     trimSection
+                    overlaysSection
                     gameInfoSection
                     photosSection
                 }
@@ -139,6 +143,12 @@ struct MomentDetailView: View {
                     }
                 }
                 .ignoresSafeArea()
+            }
+        }
+        .fullScreenCover(isPresented: $showOverlayEditor) {
+            if let url = resolvedMomentVideoURL(for: momentId) {
+                OverlayEditorView(videoURL: url, libraryAssets: overlayEditorAssets)
+                    .ignoresSafeArea()
             }
         }
         .onAppear {
@@ -191,6 +201,21 @@ struct MomentDetailView: View {
                 Text(trimErrorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var overlaysSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Overlays")
+                .font(.headline)
+
+            Button("Preview Overlays") {
+                authManager.loadLibraryAssets { assets in
+                    overlayEditorAssets = assets
+                    showOverlayEditor = true
+                }
             }
         }
     }
