@@ -145,6 +145,7 @@ struct OverlayEditorView: View {
     @State private var timeObserverToken: Any?
 
     @State private var selectedOverlayID: UUID? = nil
+    @State private var selectedKeyframe: SelectedKeyframe? = nil
     @GestureState private var dragTranslation: CGSize = .zero
     @GestureState private var magnification: CGFloat = 1
     @GestureState private var rotation: Angle = .zero
@@ -162,7 +163,10 @@ struct OverlayEditorView: View {
             GeometryReader { geometry in
                 ZStack {
                     PlayerContainerView(player: player)
-                        .onTapGesture { selectedOverlayID = nil }
+                        .onTapGesture {
+                            selectedOverlayID = nil
+                            selectedKeyframe = nil
+                        }
 
                     let videoRect = videoDisplayRect(containerSize: geometry.size, naturalSize: naturalSize)
                     ForEach(visibleOverlays(), id: \.item.id) { entry in
@@ -348,13 +352,20 @@ struct OverlayEditorView: View {
 
     private var transportControls: some View {
         VStack(spacing: 4) {
-            Slider(value: Binding(
-                get: { currentTime },
-                set: { newValue in
-                    currentTime = newValue
-                    player.seek(to: CMTime(seconds: newValue, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-                }
-            ), in: 0...max(duration, 0.01))
+            OverlayTimelineView(
+                overlays: $overlays,
+                duration: duration,
+                currentTime: Binding(
+                    get: { currentTime },
+                    set: { newValue in
+                        currentTime = newValue
+                        player.seek(to: CMTime(seconds: newValue, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                    }
+                ),
+                selectedOverlayID: $selectedOverlayID,
+                selectedKeyframe: $selectedKeyframe,
+                onCommit: persistOverlays
+            )
 
             Button {
                 togglePlayback()
