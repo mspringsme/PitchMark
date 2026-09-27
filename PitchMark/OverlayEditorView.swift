@@ -15,10 +15,18 @@
 //
 //  Step 4 extends this same screen in place: real overlay creation (tap a
 //  library thumbnail to add one, centered, at the current playhead - the
-//  spec's own sanctioned fallback to dragging from the strip), drag/
-//  pinch/rotate on the selected overlay with auto-keyframe on gesture end
+//  spec's own sanctioned fallback to dragging from the strip), drag on
+//  the selected overlay to reposition with auto-keyframe on gesture end
 //  (upsertKeyframe, no explicit "add keyframe" control), and persistence
 //  via Moment.overlays now that real edits exist worth saving.
+//
+//  Scale/rotation were originally a pinch/two-finger-rotate gesture too,
+//  but the user found both that and the timeline's tiny drag handles
+//  (OverlayTimelineView) hard to control by touch on a small portrait
+//  screen. Only position stays a direct canvas gesture (a reasonably
+//  large touch target - the overlay image itself); scale and rotation
+//  moved to sliders in `selectedOverlayPanel`, which edit the same
+//  transform-at-the-current-playhead via the same upsertKeyframe path.
 //
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
@@ -59,23 +67,26 @@ func videoDisplayRect(containerSize: CGSize, naturalSize: CGSize) -> CGRect {
 
 /// Combines a selected overlay's base transform (from `item.transform(at:
 /// currentTime)`, frozen while playback is paused for editing) with a
-/// drag/pinch/rotate gesture's live deltas into the transform to render
-/// *and*, on gesture end, to commit via `upsertKeyframe`. Pure geometry,
+/// drag gesture's live position delta *and* the Scale/Rotation sliders'
+/// current absolute values into the transform to render *and*, on
+/// gesture/slider-release, to commit via `upsertKeyframe`. Pure geometry,
 /// no SwiftUI/UIKit dependency, verified standalone the same way as
 /// `videoDisplayRect`.
 ///
-/// `dragTranslation` is in points (a SwiftUI `DragGesture`'s
-/// `.translation`); dividing by `videoRectSize` puts it into the same
-/// normalized 0...1 space `videoDisplayRect` establishes for position.
-/// Position is clamped to 0...1; scale is clamped to 0.2...5 as a sanity
-/// bound the spec doesn't set one for, guarding against a pinch shrinking
-/// an overlay to invisible or blowing it up absurdly; rotation is left
-/// unclamped since wrapping past 2π is harmless.
-func applyGestureDelta(
+/// Position is the one piece still edited by continuous touch, so it
+/// stays delta-based: `dragTranslation` is in points (a SwiftUI
+/// `DragGesture`'s `.translation`), and dividing by `videoRectSize` puts
+/// it into the same normalized 0...1 space `videoDisplayRect` establishes,
+/// clamped to 0...1. `scale`/`rotation` are absolute target values
+/// (already resolved from a slider, not a delta) - scale is clamped to
+/// 0.2...5 as a sanity bound the spec doesn't set one for, guarding
+/// against an absurdly tiny or huge overlay; rotation is left unclamped
+/// since wrapping past 2π is harmless.
+func composeOverlayTransform(
     to base: OverlayTransform,
     dragTranslation: CGSize,
     videoRectSize: CGSize,
-    magnification: CGFloat,
+    scale: Double,
     rotation: Double
 ) -> OverlayTransform {
     let dx = videoRectSize.width > 0 ? dragTranslation.width / videoRectSize.width : 0
@@ -85,10 +96,9 @@ func applyGestureDelta(
         x: min(max(base.position.x + dx, 0), 1),
         y: min(max(base.position.y + dy, 0), 1)
     )
-    let scale = min(max(base.scale * magnification, 0.2), 5)
-    let newRotation = base.rotation + rotation
+    let clampedScale = min(max(scale, 0.2), 5)
 
-    return OverlayTransform(position: position, scale: scale, rotation: newRotation, opacity: base.opacity)
+    return OverlayTransform(position: position, scale: clampedScale, rotation: rotation, opacity: base.opacity)
 }
 
 /// Thin AVPlayerLayer host - no transport controls, so overlay gesture
@@ -147,8 +157,18 @@ struct OverlayEditorView: View {
     @State private var selectedOverlayID: UUID? = nil
     @State private var selectedKeyframe: SelectedKeyframe? = nil
     @GestureState private var dragTranslation: CGSize = .zero
-    @GestureState private var magnification: CGFloat = 1
-    @GestureState private var rotation: Angle = .zero
+
+    // Scale/rotation for the selected overlay, edited via sliders rather
+    // than a gesture (see the type-level comment). Mirrors the selected
+    // overlay's transform at the current playhead - resynced by
+    // `syncSliders()` whenever the selection or playhead time changes, so
+    // touching a slider never jumps from a stale value.
+    @State private var scaleSliderValue: Double = 1
+    @State private var rotationDegrees: Double = 0
+
+    /// Minimum start/end span for an overlay - also the smallest visible
+    /// duration `selectedOverlayPanel`'s Start/End sliders will allow.
+    private let minimumSpan: Double = 0.15
 
     init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem]) {
         self.momentId = momentId
@@ -178,23 +198,10 @@ struct OverlayEditorView: View {
 
             transportControls
 
-            // Sits directly above the asset strip, left-aligned, rather
-            // than floating over the video - keeps it clear of the video
-            // area entirely and out of the way of overlay gestures.
-            if selectedOverlayID != nil {
-                HStack {
-                    Button {
-                        removeSelectedOverlay()
-                    } label: {
-                        Image(systemName: "trash.circle.fill")
-                            .font(.system(size: 24))
-                            .foregroundStyle(.white, .red)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal)
-                .padding(.top, 4)
-            }
+            // Sits directly above the asset strip rather than floating
+            // over the video - keeps every selected-overlay control clear
+            // of the video area and out of the way of the drag gesture.
+            selectedOverlayPanel
 
             AssetThumbnailStrip(assets: libraryAssets) { asset in
                 addOverlay(for: asset)
@@ -202,6 +209,8 @@ struct OverlayEditorView: View {
             .padding(.vertical, 8)
         }
         .background(Color(.systemBackground).ignoresSafeArea())
+        .onChange(of: selectedOverlayID) { _, _ in syncSliders() }
+        .onChange(of: currentTime) { _, _ in syncSliders() }
         // A plain `.toolbar` renders nothing here - this view has no
         // NavigationView/NavigationStack to host a nav bar, since it's
         // presented as a bare .fullScreenCover (deliberately, to keep the
@@ -245,13 +254,14 @@ struct OverlayEditorView: View {
     private func overlayView(for item: OverlayItem, transform baseTransform: OverlayTransform, in videoRect: CGRect, videoRectSize: CGSize) -> some View {
         if videoRect != .zero, let asset = libraryAssets.first(where: { $0.id == item.assetID }), let image = asset.image {
             let isSelected = item.id == selectedOverlayID
-            // While selected, live gesture deltas ride on top of the
-            // committed base transform for both rendering and (on
-            // gesture end) the value that gets upserted as a keyframe -
-            // one function, so drag/pinch/rotate always render exactly
-            // what upsertKeyframe is about to save.
+            // While selected, the drag gesture's live position delta and
+            // the Scale/Rotation sliders' current values ride on top of
+            // the committed base transform for both rendering and (on
+            // gesture end / slider release) the value that gets upserted
+            // as a keyframe - one function, so what's on screen always
+            // matches what's about to be saved.
             let liveTransform = isSelected
-                ? applyGestureDelta(to: baseTransform, dragTranslation: dragTranslation, videoRectSize: videoRectSize, magnification: magnification, rotation: rotation.radians)
+                ? composeOverlayTransform(to: baseTransform, dragTranslation: dragTranslation, videoRectSize: videoRectSize, scale: scaleSliderValue, rotation: rotationDegrees * .pi / 180)
                 : baseTransform
 
             Image(uiImage: image)
@@ -277,17 +287,15 @@ struct OverlayEditorView: View {
                     selectOverlay(item.id)
                 }
                 .gesture(dragGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
-                .simultaneousGesture(magnificationGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
-                .simultaneousGesture(rotationGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
         }
     }
 
-    // Every overlay view gets all three gesture recognizers attached
-    // (SwiftUI doesn't support cleanly attaching-or-not an opaque `some
-    // Gesture` via a ternary) - `isSelected` is captured per-view from
-    // the ForEach's own `item`, so only the actually-selected overlay's
+    // Every overlay view gets the drag recognizer attached (SwiftUI
+    // doesn't support cleanly attaching-or-not an opaque `some Gesture`
+    // via a ternary) - `isSelected` is captured per-view from the
+    // ForEach's own `item`, so only the actually-selected overlay's
     // closures ever mutate the shared @GestureState or commit anything.
-    // An unselected overlay's recognizers fire but no-op.
+    // An unselected overlay's recognizer fires but no-ops.
 
     private func dragGesture(for item: OverlayItem, isSelected: Bool, baseTransform: OverlayTransform, videoRectSize: CGSize) -> some Gesture {
         DragGesture()
@@ -297,42 +305,16 @@ struct OverlayEditorView: View {
             }
             .onEnded { value in
                 guard isSelected else { return }
-                commitGesture(for: item, baseTransform: baseTransform, videoRectSize: videoRectSize, dragTranslation: value.translation, magnification: magnification, rotation: rotation.radians)
+                commitTransform(for: item, baseTransform: baseTransform, videoRectSize: videoRectSize, dragTranslation: value.translation)
             }
     }
 
-    private func magnificationGesture(for item: OverlayItem, isSelected: Bool, baseTransform: OverlayTransform, videoRectSize: CGSize) -> some Gesture {
-        MagnificationGesture()
-            .updating($magnification) { value, state, _ in
-                guard isSelected else { return }
-                state = value
-            }
-            .onEnded { value in
-                guard isSelected else { return }
-                commitGesture(for: item, baseTransform: baseTransform, videoRectSize: videoRectSize, dragTranslation: dragTranslation, magnification: value, rotation: rotation.radians)
-            }
-    }
-
-    private func rotationGesture(for item: OverlayItem, isSelected: Bool, baseTransform: OverlayTransform, videoRectSize: CGSize) -> some Gesture {
-        RotationGesture()
-            .updating($rotation) { value, state, _ in
-                guard isSelected else { return }
-                state = value
-            }
-            .onEnded { value in
-                guard isSelected else { return }
-                commitGesture(for: item, baseTransform: baseTransform, videoRectSize: videoRectSize, dragTranslation: dragTranslation, magnification: magnification, rotation: value.radians)
-            }
-    }
-
-    /// Shared commit path for all three gestures' `.onEnded` - each reads
-    /// the other two gestures' still-current @GestureState values, so a
-    /// two-finger pinch-and-rotate-while-dragging commits one coherent
-    /// transform regardless of which recognizer's `.onEnded` happens to
-    /// fire first. `upsertKeyframe`'s own tolerance absorbs the case
-    /// where two of these end a few milliseconds apart.
-    private func commitGesture(for item: OverlayItem, baseTransform: OverlayTransform, videoRectSize: CGSize, dragTranslation: CGSize, magnification: CGFloat, rotation: Double) {
-        let resolved = applyGestureDelta(to: baseTransform, dragTranslation: dragTranslation, videoRectSize: videoRectSize, magnification: magnification, rotation: rotation)
+    /// Commit path for the drag gesture's `.onEnded` - folds in whatever
+    /// the Scale/Rotation sliders currently show, so dragging right after
+    /// adjusting a slider (without an intervening playhead move) doesn't
+    /// discard that pending value.
+    private func commitTransform(for item: OverlayItem, baseTransform: OverlayTransform, videoRectSize: CGSize, dragTranslation: CGSize) {
+        let resolved = composeOverlayTransform(to: baseTransform, dragTranslation: dragTranslation, videoRectSize: videoRectSize, scale: scaleSliderValue, rotation: rotationDegrees * .pi / 180)
         guard let index = overlays.firstIndex(where: { $0.id == item.id }) else { return }
         overlays[index].upsertKeyframe(time: currentTime, transform: resolved, tolerance: 0.2)
         persistOverlays()
@@ -347,7 +329,109 @@ struct OverlayEditorView: View {
         guard let selectedOverlayID else { return }
         overlays.removeAll { $0.id == selectedOverlayID }
         self.selectedOverlayID = nil
+        self.selectedKeyframe = nil
         persistOverlays()
+    }
+
+    /// Resyncs the Scale/Rotation sliders to the selected overlay's
+    /// transform at the current playhead, so touching a slider never
+    /// jumps from a stale value left over from a different overlay or a
+    /// different point in time.
+    private func syncSliders() {
+        guard let selectedOverlayID,
+              let item = overlays.first(where: { $0.id == selectedOverlayID }),
+              let base = item.transform(at: currentTime) else {
+            scaleSliderValue = 1
+            rotationDegrees = 0
+            return
+        }
+        scaleSliderValue = base.scale
+        rotationDegrees = base.rotation * 180 / .pi
+    }
+
+    /// Commit path for the Scale/Rotation sliders' `onEditingChanged`
+    /// (fires once, on release) - position is left untouched (`.zero`
+    /// drag, `.zero` videoRectSize is safe since `composeOverlayTransform`
+    /// guards divide-by-zero and a zero delta leaves position unchanged).
+    private func commitScaleRotation() {
+        guard let selectedOverlayID,
+              let index = overlays.firstIndex(where: { $0.id == selectedOverlayID }),
+              let base = overlays[index].transform(at: currentTime) else { return }
+        let resolved = composeOverlayTransform(to: base, dragTranslation: .zero, videoRectSize: .zero, scale: scaleSliderValue, rotation: rotationDegrees * .pi / 180)
+        overlays[index].upsertKeyframe(time: currentTime, transform: resolved, tolerance: 0.2)
+        persistOverlays()
+    }
+
+    /// The selected overlay's controls: delete, Scale/Rotation (auto-
+    /// keyframed at the current playhead, same as the drag gesture) and
+    /// Start/End (direct fields on the overlay, no keyframe involved).
+    /// All four replaced a small-target gesture (pinch/rotate on the
+    /// canvas, drag handles on the timeline) that the user found hard to
+    /// control by touch on a small portrait screen.
+    @ViewBuilder
+    private var selectedOverlayPanel: some View {
+        if let index = overlays.firstIndex(where: { $0.id == selectedOverlayID }) {
+            let item = overlays[index]
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Selected Overlay")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        removeSelectedOverlay()
+                    } label: {
+                        Image(systemName: "trash.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.white, .red)
+                    }
+                }
+
+                labeledSlider(
+                    "Scale", value: $scaleSliderValue, range: 0.2...5,
+                    format: { String(format: "%.1fx", $0) },
+                    onEditingChanged: { editing in if !editing { commitScaleRotation() } }
+                )
+                labeledSlider(
+                    "Rotate", value: $rotationDegrees, range: -180...180,
+                    format: { String(format: "%.0f°", $0) },
+                    onEditingChanged: { editing in if !editing { commitScaleRotation() } }
+                )
+                labeledSlider(
+                    "Start", value: $overlays[index].startTime,
+                    range: 0...max(item.endTime - minimumSpan, 0),
+                    format: formattedTime,
+                    onEditingChanged: { editing in if !editing { persistOverlays() } }
+                )
+                labeledSlider(
+                    "End", value: $overlays[index].endTime,
+                    range: min(item.startTime + minimumSpan, duration)...max(duration, minimumSpan),
+                    format: formattedTime,
+                    onEditingChanged: { editing in if !editing { persistOverlays() } }
+                )
+            }
+            .padding(.horizontal)
+            .padding(.top, 4)
+        }
+    }
+
+    @ViewBuilder
+    private func labeledSlider(_ label: String, value: Binding<Double>, range: ClosedRange<Double>, format: (Double) -> String, onEditingChanged: @escaping (Bool) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .frame(width: 44, alignment: .leading)
+            Slider(value: value, in: range, onEditingChanged: onEditingChanged)
+            Text(format(value.wrappedValue))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    private func formattedTime(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     private var transportControls: some View {
