@@ -170,7 +170,7 @@ struct MomentsLibraryView: View {
             importVideo(item)
         }
         .sheet(isPresented: $showAssetLibrary) {
-            AssetLibraryView()
+            AssetLibraryHubView()
                 .environmentObject(authManager)
         }
         .sheet(isPresented: $showCameraPicker) {

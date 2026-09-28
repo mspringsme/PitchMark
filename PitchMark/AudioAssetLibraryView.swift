@@ -19,6 +19,12 @@ import AVFoundation
 
 struct AudioAssetLibraryView: View {
     var onPick: ((AudioAssetItem) -> Void)? = nil
+    /// true when hosted inside `AssetLibraryHubView`'s own NavigationView
+    /// + segmented switcher - skips this view's own NavigationView/title/
+    /// Done button so there's only ever one nav bar on screen. false (the
+    /// default) keeps this view fully self-contained, e.g. the "Add
+    /// Audio" picker sheet MomentAudioEditorView presents.
+    var embedded: Bool = false
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -41,55 +47,19 @@ struct AudioAssetLibraryView: View {
     @State private var previewPlayer: AVAudioPlayer? = nil
 
     var body: some View {
-        NavigationView {
-            List {
-                Section {
-                    Button {
-                        requestAudioRecordingAccess { authorization in
-                            switch authorization {
-                            case .ready: showRecorder = true
-                            case .denied: showMicDeniedDialog = true
+        Group {
+            if embedded {
+                listContent
+            } else {
+                NavigationView {
+                    listContent
+                        .navigationTitle(onPick != nil ? "Add Audio" : "Audio Library")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") { dismiss() }
                             }
                         }
-                    } label: {
-                        HStack {
-                            Image(systemName: "mic.badge.plus")
-                            Text("Record Audio")
-                        }
-                    }
-                }
-
-                Section("Library") {
-                    if audioAssets.isEmpty {
-                        Text("No audio yet. Record one above.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(audioAssets) { asset in
-                            assetRow(asset)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    Button(role: .destructive) {
-                                        assetPendingDelete = asset
-                                        showDeleteDialog = true
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                        }
-                    }
-
-                    if let deleteErrorMessage {
-                        Text(deleteErrorMessage)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-            }
-            .navigationTitle(onPick != nil ? "Add Audio" : "Audio Library")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
                 }
             }
         }
@@ -148,6 +118,52 @@ struct AudioAssetLibraryView: View {
             primaryAction: { deletePendingAsset() },
             secondaryTitle: "Cancel"
         )
+    }
+
+    private var listContent: some View {
+        List {
+            Section {
+                Button {
+                    requestAudioRecordingAccess { authorization in
+                        switch authorization {
+                        case .ready: showRecorder = true
+                        case .denied: showMicDeniedDialog = true
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "mic.badge.plus")
+                        Text("Record Audio")
+                    }
+                }
+            }
+
+            Section("Library") {
+                if audioAssets.isEmpty {
+                    Text("No audio yet. Record one above.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(audioAssets) { asset in
+                        assetRow(asset)
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    assetPendingDelete = asset
+                                    showDeleteDialog = true
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                    }
+                }
+
+                if let deleteErrorMessage {
+                    Text(deleteErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
     }
 
     @ViewBuilder

@@ -73,6 +73,13 @@ private struct AssetEditingTarget: Identifiable {
 }
 
 struct AssetLibraryView: View {
+    /// true when hosted inside `AssetLibraryHubView`'s own NavigationView
+    /// + segmented switcher - skips this view's own NavigationView/title/
+    /// Done button so there's only ever one nav bar on screen. false (the
+    /// default) keeps this view fully self-contained, its original shape
+    /// before the combined hub existed.
+    var embedded: Bool = false
+
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
 
@@ -98,76 +105,19 @@ struct AssetLibraryView: View {
     @State private var showActionsDialog = false
 
     var body: some View {
-        NavigationView {
-            List {
-                Section {
-                    Button {
-                        requestAssetCameraAccess { authorization in
-                            switch authorization {
-                            case .ready: showCreateAssetFlow = true
-                            case .denied: showCameraDeniedDialog = true
+        Group {
+            if embedded {
+                listContent
+            } else {
+                NavigationView {
+                    listContent
+                        .navigationTitle("Asset Library")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") { dismiss() }
                             }
                         }
-                    } label: {
-                        HStack {
-                            Image(systemName: "camera.badge.plus")
-                            Text("Create Asset")
-                        }
-                    }
-
-                    PhotosPicker(selection: $photoSelection, matching: .images) {
-                        HStack {
-                            Image(systemName: "photo.badge.plus")
-                            Text(isImporting ? "Adding…" : "Add from Photos")
-                        }
-                    }
-                    .disabled(isImporting)
-
-                    if let importErrorMessage {
-                        Text(importErrorMessage)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-
-                Section("Library") {
-                    ForEach(libraryAssets) { asset in
-                        Button {
-                            assetPendingAction = asset
-                            showActionsDialog = true
-                        } label: {
-                            assetRow(asset)
-                        }
-                        .buttonStyle(.plain)
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            if asset.isDeletable {
-                                Button(role: .destructive) {
-                                    assetPendingDelete = asset
-                                    showDeleteDialog = true
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                        }
-                    }
-
-                    if let deleteErrorMessage {
-                        Text(deleteErrorMessage)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                    if let actionErrorMessage {
-                        Text(actionErrorMessage)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-                }
-            }
-            .navigationTitle("Asset Library")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
                 }
             }
         }
@@ -256,6 +206,73 @@ struct AssetLibraryView: View {
                 onCancel: { editingTarget = nil }
             )
             .environmentObject(authManager)
+        }
+    }
+
+    private var listContent: some View {
+        List {
+            Section {
+                Button {
+                    requestAssetCameraAccess { authorization in
+                        switch authorization {
+                        case .ready: showCreateAssetFlow = true
+                        case .denied: showCameraDeniedDialog = true
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "camera.badge.plus")
+                        Text("Create Asset")
+                    }
+                }
+
+                PhotosPicker(selection: $photoSelection, matching: .images) {
+                    HStack {
+                        Image(systemName: "photo.badge.plus")
+                        Text(isImporting ? "Adding…" : "Add from Photos")
+                    }
+                }
+                .disabled(isImporting)
+
+                if let importErrorMessage {
+                    Text(importErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section("Library") {
+                ForEach(libraryAssets) { asset in
+                    Button {
+                        assetPendingAction = asset
+                        showActionsDialog = true
+                    } label: {
+                        assetRow(asset)
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        if asset.isDeletable {
+                            Button(role: .destructive) {
+                                assetPendingDelete = asset
+                                showDeleteDialog = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+
+                if let deleteErrorMessage {
+                    Text(deleteErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                if let actionErrorMessage {
+                    Text(actionErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
         }
     }
 
@@ -394,6 +411,57 @@ struct AssetLibraryView: View {
             }
             removeLocalAssetImage(assetId: assetId)
             refreshAssets()
+        }
+    }
+}
+
+/// 2026-09-28: the one "Asset Library" entry point, replacing the old
+/// visual-only screen `MomentsLibraryView`'s toolbar button opened. A
+/// segmented switcher swaps between the two already-built libraries
+/// (`AssetLibraryView`, `AudioAssetLibraryView`) hosted `embedded` so
+/// only this view's NavigationView/title/Done button ever shows - never
+/// two nav bars stacked. Neither library's own internals changed;
+/// `embedded` just skips each one's own NavigationView wrapper when
+/// hosted here.
+struct AssetLibraryHubView: View {
+    private enum Kind: String, CaseIterable, Identifiable {
+        case visual = "Visual"
+        case audio = "Audio"
+        var id: String { rawValue }
+    }
+
+    @EnvironmentObject var authManager: AuthManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedKind: Kind = .visual
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                Picker("Asset Kind", selection: $selectedKind) {
+                    ForEach(Kind.allCases) { kind in
+                        Text(kind.rawValue).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.top, 8)
+
+                switch selectedKind {
+                case .visual:
+                    AssetLibraryView(embedded: true)
+                        .environmentObject(authManager)
+                case .audio:
+                    AudioAssetLibraryView(embedded: true)
+                        .environmentObject(authManager)
+                }
+            }
+            .navigationTitle("Asset Library")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
     }
 }
