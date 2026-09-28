@@ -42,6 +42,20 @@
 //  placed overlay - two clips referencing the same asset share one
 //  decode), shown only while that overlay is selected.
 //
+//  Every mix operation (preview and export alike) sources from
+//  `audioBaseURL`, a frozen snapshot (see `localMomentAudioBaseVideoURL`
+//  in Moment.swift), never from `videoURL` directly. `videoURL` is
+//  `resolvedMomentVideoURL` - once this editor has exported even once,
+//  that *is* a prior audio mix's own output, and treating it as a
+//  clean source to mix on top of again is exactly the bug this file
+//  used to have: moving or deleting a placed clip left its old copy
+//  permanently baked into that prior export's single flattened audio
+//  track - unremovable - while a fresh copy of the current overlay list
+//  got added on top, so a moved clip "echoed" at both positions and a
+//  deleted clip's audio kept playing regardless, in both the live
+//  preview and every future export. `ensureAudioBase()` snapshots once,
+//  lazily, the first time this editor opens on a given Moment.
+//
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
 //
@@ -62,6 +76,10 @@ struct MomentAudioEditorView: View {
     @State private var currentTime: Double = 0
     @State private var isPlaying = false
     @State private var timeObserverToken: Any?
+    /// The frozen source every mix operation actually reads from - see
+    /// `ensureAudioBase()` and the file header comment. Falls back to
+    /// `videoURL` only in the instant before `ensureAudioBase()` has run.
+    @State private var audioBaseURL: URL? = nil
 
     @State private var originalVolume: Double
     @State private var originalVolumeKeyframes: [VolumeKeyframe]
@@ -640,7 +658,9 @@ struct MomentAudioEditorView: View {
     // MARK: Playback
 
     private func setUp() {
-        let asset = AVURLAsset(url: videoURL)
+        let sourceURL = ensureAudioBase()
+
+        let asset = AVURLAsset(url: sourceURL)
         Task {
             let loadedDuration = try? await asset.load(.duration)
             await MainActor.run {
@@ -660,7 +680,7 @@ struct MomentAudioEditorView: View {
             }
         }
 
-        extractWaveformPeaks(from: videoURL, bucketCount: waveformBucketCount) { result in
+        extractWaveformPeaks(from: sourceURL, bucketCount: waveformBucketCount) { result in
             if case .success(let peaks) = result {
                 originalWaveformPeaks = peaks
             }
@@ -669,6 +689,22 @@ struct MomentAudioEditorView: View {
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { time in
             currentTime = time.seconds
         }
+    }
+
+    /// Snapshots `videoURL` into the frozen audio-mix base the first
+    /// time this editor opens on a Moment (the base file survives
+    /// between sessions - see `localMomentAudioBaseVideoURL`). Every
+    /// later mix operation reads from that snapshot, never from
+    /// `videoURL` again - see the file header comment for why.
+    private func ensureAudioBase() -> URL {
+        guard let baseURL = localMomentAudioBaseVideoURL(for: momentId) else {
+            return videoURL
+        }
+        if !FileManager.default.fileExists(atPath: baseURL.path) {
+            try? FileManager.default.copyItem(at: videoURL, to: baseURL)
+        }
+        audioBaseURL = baseURL
+        return FileManager.default.fileExists(atPath: baseURL.path) ? baseURL : videoURL
     }
 
     private func tearDown() {
@@ -709,7 +745,7 @@ struct MomentAudioEditorView: View {
         let seekTime = currentTime
 
         buildAudioMixedComposition(
-            sourceURL: videoURL,
+            sourceURL: audioBaseURL ?? videoURL,
             audioOverlays: audioOverlays,
             originalVolume: originalVolume,
             originalVolumeKeyframes: originalVolumeKeyframes,
@@ -738,7 +774,7 @@ struct MomentAudioEditorView: View {
         isExporting = true
 
         exportAudioMixedMoment(
-            sourceURL: videoURL,
+            sourceURL: audioBaseURL ?? videoURL,
             audioOverlays: audioOverlays,
             originalVolume: originalVolume,
             originalVolumeKeyframes: originalVolumeKeyframes,

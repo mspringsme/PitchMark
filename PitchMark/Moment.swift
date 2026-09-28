@@ -164,6 +164,45 @@ func resolvedMomentVideoURL(for momentId: String) -> URL? {
     return localMomentVideoURL(for: momentId)
 }
 
+/// The video `MomentAudioEditorView` always mixes from - snapshotted
+/// once, the first time that editor touches this Moment, from whatever
+/// `resolvedMomentVideoURL` was at that moment (untouched original, or
+/// already trimmed/speed-ramped/overlaid, but never yet audio-mixed).
+/// Every later audio-mix operation (live preview and export alike)
+/// rebuilds fully from this same frozen file plus the *current* full
+/// overlays/volume state - never from a *previous* audio-mix's own
+/// output.
+///
+/// Without this, re-opening the audio editor after a previous audio
+/// export would treat that prior export's already-mixed audio track as
+/// if it were still a clean, unmixed source: moving or deleting a
+/// placed clip added a fresh copy of the current overlay list on top of
+/// a track that already permanently contained the old one, so a moved
+/// clip "echoed" at both its old and new position, and deleting a clip
+/// couldn't remove audio already flattened into that prior export - it
+/// kept playing in both the live preview and every future export,
+/// because both were built by re-mixing on top of an already-mixed
+/// track instead of a clean one.
+///
+/// Invalidated by `invalidateMomentAudioBase` whenever Trim/Speed/
+/// Overlay produce a new edited file, so the next audio edit
+/// re-snapshots a fresh base instead of mixing on top of a stale one
+/// (stale in the sense of missing that newer video content entirely,
+/// not in the ghost-audio sense above).
+func localMomentAudioBaseVideoURL(for momentId: String) -> URL? {
+    guard !momentId.isEmpty, let directory = momentsDirectory() else { return nil }
+    return directory.appendingPathComponent("\(momentId)-audio-base.mov")
+}
+
+/// Deletes the audio-mix base snapshot, if any. Call this whenever a
+/// non-audio edit (Trim/Speed/Overlay) commits a new edited file - the
+/// base's video would otherwise silently miss that newer edit the next
+/// time audio is mixed, since the base only gets refreshed lazily.
+func invalidateMomentAudioBase(momentId: String) {
+    guard let url = localMomentAudioBaseVideoURL(for: momentId) else { return }
+    try? FileManager.default.removeItem(at: url)
+}
+
 // MARK: - Local photo storage (same directory convention as video)
 
 func localMomentPhotoURL(momentId: String, index: Int) -> URL? {
@@ -419,6 +458,7 @@ func removeAllLocalMomentFiles(momentId: String, photoCount: Int) {
     if let edited = localMomentEditedVideoURL(for: momentId) {
         try? FileManager.default.removeItem(at: edited)
     }
+    invalidateMomentAudioBase(momentId: momentId)
     for index in 0..<max(photoCount, 0) {
         if let photoURL = localMomentPhotoURL(momentId: momentId, index: index) {
             try? FileManager.default.removeItem(at: photoURL)
