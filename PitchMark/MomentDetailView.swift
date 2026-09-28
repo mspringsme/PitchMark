@@ -55,6 +55,8 @@ struct MomentDetailView: View {
     @State private var showOverlayEditor = false
     @State private var overlayEditorAssets: [LibraryAsset] = []
 
+    @State private var showAudioEditor = false
+
     @State private var showSpeedEditor = false
     /// Created once and reused, never rebuilt inline in the view body -
     /// on-device testing showed the video "flash the first frame, only
@@ -105,6 +107,7 @@ struct MomentDetailView: View {
                     trimSection
                     speedSection
                     overlaysSection
+                    audioSection
                     gameInfoSection
                     photosSection
                 }
@@ -167,6 +170,19 @@ struct MomentDetailView: View {
                     momentId: momentId,
                     videoURL: url,
                     initialKeyframes: moment.speedKeyframes ?? [],
+                    onExported: { reloadPlayer() }
+                )
+                    .environmentObject(authManager)
+                    .ignoresSafeArea()
+            }
+        }
+        .fullScreenCover(isPresented: $showAudioEditor) {
+            if let url = resolvedMomentVideoURL(for: momentId) {
+                MomentAudioEditorView(
+                    momentId: momentId,
+                    videoURL: url,
+                    initialAudioOverlays: moment.audioOverlays ?? [],
+                    initialOriginalVolume: moment.originalAudioVolume ?? 1.0,
                     onExported: { reloadPlayer() }
                 )
                     .environmentObject(authManager)
@@ -249,6 +265,17 @@ struct MomentDetailView: View {
                     overlayEditorAssets = assets
                     showOverlayEditor = true
                 }
+            }
+        }
+    }
+
+    private var audioSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Audio")
+                .font(.headline)
+
+            Button("Edit Audio") {
+                showAudioEditor = true
             }
         }
     }

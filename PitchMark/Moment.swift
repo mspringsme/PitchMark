@@ -53,6 +53,10 @@ struct Moment: Identifiable, Codable {
     var overlays: [OverlayItem]? = nil
     /// 2026-09-28 speed ramp editor - same Optional reasoning as `overlays`.
     var speedKeyframes: [SpeedKeyframe]? = nil
+    /// 2026-09-28 audio overlay editor - same Optional reasoning.
+    var audioOverlays: [AudioOverlayItem]? = nil
+    /// nil/1.0 = unchanged, 0 = muted. Same Optional reasoning.
+    var originalAudioVolume: Double? = nil
 
     init(
         createdAt: Date = Date(),
@@ -67,7 +71,9 @@ struct Moment: Identifiable, Codable {
         gameInfoUpdatedAt: Date? = nil,
         photoCount: Int = 0,
         overlays: [OverlayItem]? = nil,
-        speedKeyframes: [SpeedKeyframe]? = nil
+        speedKeyframes: [SpeedKeyframe]? = nil,
+        audioOverlays: [AudioOverlayItem]? = nil,
+        originalAudioVolume: Double? = nil
     ) {
         self.createdAt = createdAt
         self.teamId = teamId
@@ -82,6 +88,8 @@ struct Moment: Identifiable, Codable {
         self.photoCount = photoCount
         self.overlays = overlays
         self.speedKeyframes = speedKeyframes
+        self.audioOverlays = audioOverlays
+        self.originalAudioVolume = originalAudioVolume
     }
 
     /// The user-set title if there is one, else the tagged player's name,
@@ -303,6 +311,30 @@ extension AuthManager {
 
         do {
             let encoded = try Firestore.Encoder().encode(SpeedKeyframesFieldWrapper(speedKeyframes: keyframes))
+            Firestore.firestore()
+                .collection("users").document(user.uid)
+                .collection("moments").document(momentId)
+                .updateData(encoded) { error in
+                    completion(error)
+                }
+        } catch {
+            completion(error)
+        }
+    }
+
+    /// Same shape as `updateMomentOverlays`/`updateMomentSpeedKeyframes`.
+    func updateMomentAudioOverlays(momentId: String, audioOverlays: [AudioOverlayItem], completion: @escaping (Error?) -> Void) {
+        guard let user = user, !momentId.isEmpty else {
+            completion(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+
+        struct AudioOverlaysFieldWrapper: Encodable {
+            var audioOverlays: [AudioOverlayItem]
+        }
+
+        do {
+            let encoded = try Firestore.Encoder().encode(AudioOverlaysFieldWrapper(audioOverlays: audioOverlays))
             Firestore.firestore()
                 .collection("users").document(user.uid)
                 .collection("moments").document(momentId)
