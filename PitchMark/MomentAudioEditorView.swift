@@ -33,6 +33,15 @@
 //  Reuses PlayerContainerView (OverlayEditorView.swift) and
 //  timeToX/xToTime (OverlayTimelineView.swift) as-is.
 //
+//  Waveforms (AudioWaveform.swift) are a visual aid layered behind each
+//  VolumeKeyframeStrip, sharing that strip's own rangeStart/rangeEnd
+//  mapping so a keyframe marker lines up with the loud/quiet moment it
+//  actually sits on. The original track's waveform is extracted once
+//  from the Moment's video and always shown; each overlay's waveform is
+//  extracted from its own asset file and cached per asset id (not per
+//  placed overlay - two clips referencing the same asset share one
+//  decode), shown only while that overlay is selected.
+//
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
 //
@@ -57,9 +66,16 @@ struct MomentAudioEditorView: View {
     @State private var originalVolume: Double
     @State private var originalVolumeKeyframes: [VolumeKeyframe]
     @State private var selectedOriginalKeyframeID: UUID? = nil
+    @State private var originalWaveformPeaks: [Float] = []
 
     @State private var audioOverlays: [AudioOverlayItem]
     @State private var audioAssetsById: [String: AudioAssetItem] = [:]
+    /// Keyed by asset id, not overlay id, so two placed clips referencing
+    /// the same library asset share one decode. Populated lazily -
+    /// missing key means "not requested yet," not "silence."
+    @State private var overlayWaveformPeaksByAssetId: [String: [Float]] = [:]
+
+    private let waveformBucketCount = 120
 
     @State private var selectedOverlayID: UUID? = nil
     @State private var selectedOverlayKeyframeID: UUID? = nil
@@ -249,6 +265,24 @@ struct MomentAudioEditorView: View {
                 }
             }
 
+            // The original track's waveform always shows, regardless of
+            // flat/keyframed mode - a constant visual reference for
+            // where the actual audio is loud/quiet while placing clips
+            // or volume points.
+            ZStack {
+                WaveformView(peaks: originalWaveformPeaks, color: Color.accentColor.opacity(0.5))
+                if !originalVolumeKeyframes.isEmpty {
+                    VolumeKeyframeStrip(
+                        rangeStart: 0,
+                        rangeEnd: max(totalDuration, 0.01),
+                        keyframes: originalVolumeKeyframes,
+                        selectedID: selectedOriginalKeyframeID,
+                        onSelect: { selectedOriginalKeyframeID = $0 }
+                    )
+                }
+            }
+            .frame(height: 32)
+
             if originalVolumeKeyframes.isEmpty {
                 Slider(
                     value: Binding(
@@ -261,13 +295,6 @@ struct MomentAudioEditorView: View {
                     }
                 )
             } else {
-                VolumeKeyframeStrip(
-                    rangeStart: 0,
-                    rangeEnd: max(totalDuration, 0.01),
-                    keyframes: originalVolumeKeyframes,
-                    selectedID: selectedOriginalKeyframeID,
-                    onSelect: { selectedOriginalKeyframeID = $0 }
-                )
                 volumeKeyframeDetailRow(
                     keyframes: $originalVolumeKeyframes,
                     selectedID: $selectedOriginalKeyframeID,
@@ -414,6 +441,24 @@ struct MomentAudioEditorView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
 
+                    // This clip's own waveform - separate from the
+                    // original track's, extracted from its own asset
+                    // file and only shown while this overlay is
+                    // selected (see loadWaveformIfNeeded).
+                    ZStack {
+                        WaveformView(peaks: overlayWaveformPeaksByAssetId[overlay.assetId] ?? [], color: Color.purple.opacity(0.55))
+                        if !(audioOverlays[index].volumeKeyframes ?? []).isEmpty {
+                            VolumeKeyframeStrip(
+                                rangeStart: overlay.startTime,
+                                rangeEnd: clipEnd,
+                                keyframes: audioOverlays[index].volumeKeyframes ?? [],
+                                selectedID: selectedOverlayKeyframeID,
+                                onSelect: { selectedOverlayKeyframeID = $0 }
+                            )
+                        }
+                    }
+                    .frame(height: 32)
+
                     if (audioOverlays[index].volumeKeyframes ?? []).isEmpty {
                         Slider(
                             value: Binding(
@@ -426,13 +471,6 @@ struct MomentAudioEditorView: View {
                             }
                         )
                     } else {
-                        VolumeKeyframeStrip(
-                            rangeStart: overlay.startTime,
-                            rangeEnd: clipEnd,
-                            keyframes: audioOverlays[index].volumeKeyframes ?? [],
-                            selectedID: selectedOverlayKeyframeID,
-                            onSelect: { selectedOverlayKeyframeID = $0 }
-                        )
                         volumeKeyframeDetailRow(
                             keyframes: overlayVolumeKeyframesBinding(index),
                             selectedID: $selectedOverlayKeyframeID,
@@ -468,11 +506,27 @@ struct MomentAudioEditorView: View {
     private func addOverlay(for asset: AudioAssetItem) {
         guard let id = asset.id else { return }
         audioAssetsById[id] = asset
+        loadWaveformIfNeeded(for: id)
         let overlay = AudioOverlayItem(assetId: id, startTime: currentTime, volume: 1.0)
         audioOverlays.append(overlay)
         selectedOverlayID = overlay.id
         selectedOverlayKeyframeID = nil
         persistOverlays()
+    }
+
+    /// Missing key means "not requested yet" - an empty array (set on
+    /// failure too) means "tried, nothing to show," so this never
+    /// re-triggers a decode that already ran.
+    private func loadWaveformIfNeeded(for assetId: String) {
+        guard overlayWaveformPeaksByAssetId[assetId] == nil, let url = localAudioAssetURL(for: assetId) else { return }
+        extractWaveformPeaks(from: url, bucketCount: waveformBucketCount) { result in
+            switch result {
+            case .success(let peaks):
+                overlayWaveformPeaksByAssetId[assetId] = peaks
+            case .failure:
+                overlayWaveformPeaksByAssetId[assetId] = []
+            }
+        }
     }
 
     private func persistOverlays() {
@@ -595,8 +649,20 @@ struct MomentAudioEditorView: View {
                     for asset in assets {
                         if let id = asset.id { audioAssetsById[id] = asset }
                     }
+                    // Only the assets already placed as overlays need a
+                    // waveform up front - the rest load lazily from
+                    // addOverlay when the user actually adds one.
+                    for assetId in Set(audioOverlays.map(\.assetId)) {
+                        loadWaveformIfNeeded(for: assetId)
+                    }
                     rebuildPreview()
                 }
+            }
+        }
+
+        extractWaveformPeaks(from: videoURL, bucketCount: waveformBucketCount) { result in
+            if case .success(let peaks) = result {
+                originalWaveformPeaks = peaks
             }
         }
 
