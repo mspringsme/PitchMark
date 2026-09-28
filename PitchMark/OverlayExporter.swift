@@ -158,6 +158,17 @@ func exportMomentWithOverlays(
 
             let beginTime = AVCoreAnimationBeginTimeAtZero + item.startTime
 
+            // isRemovedOnCompletion = false (+ the default .removed fillMode,
+            // set explicitly here for clarity) is required for
+            // AVVideoCompositionCoreAnimationTool specifically: its offline
+            // renderer can treat a default (isRemovedOnCompletion = true)
+            // animation as already expired before ever sampling a relevant
+            // frame, silently dropping it for the whole export - "the
+            // overlay never appears" rather than a partial/wrong result.
+            // fillMode = .removed still reverts to the layer's model value
+            // (opacity = 0) outside [beginTime, beginTime+duration], so
+            // this doesn't reintroduce the "visible forever" problem
+            // .both would.
             let positionAnimation = CAKeyframeAnimation(keyPath: "position")
             positionAnimation.values = transforms.map {
                 NSValue(cgPoint: CGPoint(x: $0.position.x * renderSize.width, y: $0.position.y * renderSize.height))
@@ -166,6 +177,8 @@ func exportMomentWithOverlays(
             positionAnimation.calculationMode = .linear
             positionAnimation.beginTime = beginTime
             positionAnimation.duration = animDuration
+            positionAnimation.fillMode = .removed
+            positionAnimation.isRemovedOnCompletion = false
             layer.add(positionAnimation, forKey: "position")
 
             let transformAnimation = CAKeyframeAnimation(keyPath: "transform")
@@ -177,6 +190,8 @@ func exportMomentWithOverlays(
             transformAnimation.calculationMode = .linear
             transformAnimation.beginTime = beginTime
             transformAnimation.duration = animDuration
+            transformAnimation.fillMode = .removed
+            transformAnimation.isRemovedOnCompletion = false
             layer.add(transformAnimation, forKey: "transform")
 
             let opacityAnimation = CAKeyframeAnimation(keyPath: "opacity")
@@ -185,6 +200,8 @@ func exportMomentWithOverlays(
             opacityAnimation.calculationMode = .linear
             opacityAnimation.beginTime = beginTime
             opacityAnimation.duration = animDuration
+            opacityAnimation.fillMode = .removed
+            opacityAnimation.isRemovedOnCompletion = false
             layer.add(opacityAnimation, forKey: "opacity")
         }
 
