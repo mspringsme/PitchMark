@@ -13,6 +13,7 @@
 
 import Foundation
 import UIKit
+import AVFoundation
 import Photos
 import FirebaseFirestore
 import FirebaseAuth
@@ -231,6 +232,32 @@ extension AuthManager {
             .updateData(fields) { error in
                 completion(error)
             }
+    }
+
+    /// Trim and speed-ramp export both change a Moment's actual video
+    /// duration but don't otherwise touch this field - without calling
+    /// this after either edit, the list's displayed duration goes stale
+    /// (still reflects whatever the Moment's duration was at recording
+    /// time). Fire-and-forget by design, matching every other small
+    /// field update in this app - callers don't block on it.
+    func refreshMomentDuration(momentId: String, videoURL: URL, completion: (() -> Void)? = nil) {
+        guard !momentId.isEmpty else {
+            completion?()
+            return
+        }
+        Task {
+            let asset = AVURLAsset(url: videoURL)
+            let loadedDuration = try? await asset.load(.duration)
+            guard let seconds = loadedDuration?.seconds, seconds.isFinite else {
+                await MainActor.run { completion?() }
+                return
+            }
+            await MainActor.run {
+                self.updateMomentFields(momentId: momentId, fields: ["durationSeconds": seconds]) { _ in
+                    completion?()
+                }
+            }
+        }
     }
 
     /// `overlays` is an array of Codable structs, not a primitive -

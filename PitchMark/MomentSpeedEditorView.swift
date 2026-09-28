@@ -409,6 +409,7 @@ struct MomentSpeedEditorView: View {
                     try? FileManager.default.removeItem(at: destination)
                     try FileManager.default.copyItem(at: tempURL, to: destination)
                     try? FileManager.default.removeItem(at: tempURL)
+                    authManager.refreshMomentDuration(momentId: momentId, videoURL: destination)
                     onExported()
                     dismiss()
                 } catch {

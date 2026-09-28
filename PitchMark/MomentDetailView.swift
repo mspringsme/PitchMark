@@ -366,6 +366,7 @@ struct MomentDetailView: View {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.copyItem(at: URL(fileURLWithPath: editedPath), to: destination)
             reloadPlayer()
+            authManager.refreshMomentDuration(momentId: momentId, videoURL: destination)
         } catch {
             trimErrorMessage = "Couldn't save the trimmed video: \(error.localizedDescription)"
         }
