@@ -5,11 +5,18 @@
 //  Step 7 of the 2026-09-26 Asset + Video Overlay Keyframe Editor spec:
 //  the real "Create Asset" flow - a dedicated single-photo camera screen
 //  (no multi-cam, no video, unlike MomentCapture.swift's recorder),
-//  Choose Crop Mode (circle/square/rounded square; Smart Cutout is step
-//  8, not built here), pan/zoom to position the subject, save as a
-//  transparent PNG. Bundles capture UI + crop UI + a scoped permission
-//  check together, matching how MomentCapture.swift already bundles
-//  capture + permission-check.
+//  Choose Crop Mode (circle/square/rounded square), pan/zoom to position
+//  the subject, save as a transparent PNG. Bundles capture UI + crop UI
+//  + a scoped permission check together, matching how MomentCapture.swift
+//  already bundles capture + permission-check.
+//
+//  Step 8 extends AssetCropView with a second crop mode, Smart Cutout:
+//  Vision (VNGenerateForegroundInstanceMaskRequest, iOS 17+ - already
+//  covered by this app's 17.6 deployment target) isolates the subject
+//  automatically instead of a manual shape mask. It's a mode fork, not a
+//  fourth AssetCropShape case, since its mask follows the subject's own
+//  silhouette and it replaces pan/zoom entirely rather than combining
+//  with it.
 //
 //  Design note: step 2's "Add from Photos" button on AssetLibraryView
 //  saves a picked photo as-is, uncropped - a deliberate simplification
@@ -27,6 +34,8 @@
 import SwiftUI
 import AVFoundation
 import PhotosUI
+import Vision
+import CoreImage
 
 enum AssetCameraAuthorization {
     case ready
@@ -243,10 +252,36 @@ enum AssetCropShape: String, CaseIterable, Identifiable {
     }
 }
 
+/// Step 8: Smart Cutout is a mode fork alongside the manual shape crop,
+/// not a fourth AssetCropShape case - unlike a preset shape, its mask
+/// follows the subject's own silhouette rather than a fixed geometric
+/// shape, and it replaces pan/zoom entirely rather than combining with
+/// it.
+enum AssetCropMode: String, CaseIterable, Identifiable {
+    case shape
+    case smartCutout
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .shape: return "Shape"
+        case .smartCutout: return "Smart Cutout"
+        }
+    }
+}
+
+enum SmartCutoutError: Error {
+    case noImage
+    case noSubjectFound
+}
+
 struct AssetCropView: View {
     let sourceImage: UIImage
     let onSave: (UIImage) -> Void
     let onCancel: () -> Void
+
+    @State private var mode: AssetCropMode = .shape
 
     @State private var shape: AssetCropShape = .circle
     @State private var offset: CGSize = .zero
@@ -255,43 +290,48 @@ struct AssetCropView: View {
     @GestureState private var magnifyBy: CGFloat = 1
     @State private var isSaving = false
 
+    // Smart Cutout state - separate from the shape-crop state above,
+    // since the two modes don't share any of it.
+    @State private var isProcessingCutout = false
+    @State private var cutoutCandidates: [UIImage] = []
+    @State private var selectedCutoutIndex: Int = 0
+    @State private var cutoutErrorMessage: String? = nil
+
     private let cropDiameter: CGFloat = 280
+    private let smartCutoutAvailable = {
+        if #available(iOS 17.0, *) { return true }
+        return false
+    }()
 
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
 
-            croppedContent(scale: committedScale * magnifyBy, offset: liveOffset)
-                .overlay(shape.shape.stroke(Color.white, lineWidth: 3))
-                .frame(width: cropDiameter, height: cropDiameter)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture()
-                        .updating($dragOffset) { value, state, _ in
-                            state = value.translation
-                        }
-                        .onEnded { value in
-                            offset.width += value.translation.width
-                            offset.height += value.translation.height
-                        }
-                )
-                .simultaneousGesture(
-                    MagnificationGesture()
-                        .updating($magnifyBy) { value, state, _ in
-                            state = value
-                        }
-                        .onEnded { value in
-                            committedScale = min(max(committedScale * value, 1), 5)
-                        }
-                )
-
-            Picker("Shape", selection: $shape) {
-                ForEach(AssetCropShape.allCases) { option in
-                    Label(option.label, systemImage: option.icon).tag(option)
-                }
+            if mode == .shape {
+                shapeCropContent
+            } else {
+                smartCutoutContent
             }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
+
+            if smartCutoutAvailable {
+                Picker("Crop Mode", selection: $mode) {
+                    ForEach(AssetCropMode.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+            }
+
+            if mode == .shape {
+                Picker("Shape", selection: $shape) {
+                    ForEach(AssetCropShape.allCases) { option in
+                        Label(option.label, systemImage: option.icon).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+            }
 
             Spacer()
 
@@ -302,12 +342,45 @@ struct AssetCropView: View {
                 Spacer()
                 Button(isSaving ? "Saving…" : "Save") { save() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(isSaving)
+                    .disabled(isSaving || (mode == .smartCutout && cutoutCandidates.isEmpty))
             }
             .padding(.horizontal)
             .padding(.bottom, 24)
         }
         .background(Color.black.ignoresSafeArea())
+        .onChange(of: mode) { _, newMode in
+            if newMode == .smartCutout, cutoutCandidates.isEmpty, !isProcessingCutout {
+                runSmartCutout()
+            }
+        }
+    }
+
+    // MARK: Shape crop (unchanged from before step 8)
+
+    private var shapeCropContent: some View {
+        croppedContent(scale: committedScale * magnifyBy, offset: liveOffset)
+            .overlay(shape.shape.stroke(Color.white, lineWidth: 3))
+            .frame(width: cropDiameter, height: cropDiameter)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture()
+                    .updating($dragOffset) { value, state, _ in
+                        state = value.translation
+                    }
+                    .onEnded { value in
+                        offset.width += value.translation.width
+                        offset.height += value.translation.height
+                    }
+            )
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .updating($magnifyBy) { value, state, _ in
+                        state = value
+                    }
+                    .onEnded { value in
+                        committedScale = min(max(committedScale * value, 1), 5)
+                    }
+            )
     }
 
     private var liveOffset: CGSize {
@@ -329,6 +402,93 @@ struct AssetCropView: View {
             .clipShape(shape.shape)
     }
 
+    // MARK: Smart Cutout
+
+    @ViewBuilder
+    private var smartCutoutContent: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Color.white.opacity(0.06)
+                if isProcessingCutout {
+                    VStack(spacing: 8) {
+                        ProgressView().tint(.white)
+                        Text("Finding subject…")
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                    }
+                } else if let error = cutoutErrorMessage {
+                    VStack(spacing: 8) {
+                        Text(error)
+                            .foregroundStyle(.white)
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                        Button("Try Again") { runSmartCutout() }
+                            .font(.caption)
+                    }
+                    .padding()
+                } else if !cutoutCandidates.isEmpty {
+                    Image(uiImage: cutoutCandidates[selectedCutoutIndex])
+                        .resizable()
+                        .scaledToFit()
+                        .padding(12)
+                }
+            }
+            .frame(width: cropDiameter, height: cropDiameter)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+            // Multiple detected subjects show as separately-selectable
+            // thumbnails rather than requiring a precise tap on the photo
+            // itself (the spec's literal suggestion) - steps 4/5 already
+            // found tap-targeting directly on an image doesn't hold up
+            // well on a small screen, hence the sliders/enlarged-tap-
+            // targets built there. Same fix, not a new pattern.
+            if cutoutCandidates.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(cutoutCandidates.indices, id: \.self) { index in
+                            Button {
+                                selectedCutoutIndex = index
+                            } label: {
+                                Image(uiImage: cutoutCandidates[index])
+                                    .resizable()
+                                    .scaledToFit()
+                                    .padding(4)
+                                    .frame(width: 60, height: 60)
+                                    .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .strokeBorder(index == selectedCutoutIndex ? Color.accentColor : Color.clear, lineWidth: 2)
+                                    )
+                            }
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+        }
+    }
+
+    private func runSmartCutout() {
+        guard smartCutoutAvailable else { return }
+        isProcessingCutout = true
+        cutoutErrorMessage = nil
+        cutoutCandidates = []
+        selectedCutoutIndex = 0
+
+        Task {
+            let result = await generateCutoutCandidates(from: sourceImage)
+            await MainActor.run {
+                isProcessingCutout = false
+                switch result {
+                case .success(let images):
+                    cutoutCandidates = images
+                case .failure:
+                    cutoutErrorMessage = "No clear subject found in this photo. Try Shape mode instead."
+                }
+            }
+        }
+    }
+
     /// Renders via ImageRenderer - the spec's own suggested simpler path
     /// over hand-rolled Core Graphics crop-rect math. Preserves
     /// transparency outside the clip shape by default, satisfying "must
@@ -337,6 +497,14 @@ struct AssetCropView: View {
     /// is already respected by `Image(uiImage:)` here exactly as it is
     /// live above.
     private func save() {
+        if mode == .smartCutout {
+            guard !cutoutCandidates.isEmpty else { return }
+            // Vision's masked output is already the final transparent
+            // image - no ImageRenderer pass needed for this mode.
+            onSave(cutoutCandidates[selectedCutoutIndex])
+            return
+        }
+
         isSaving = true
         let content = croppedContent(scale: committedScale, offset: offset)
             .frame(width: cropDiameter, height: cropDiameter)
@@ -348,6 +516,73 @@ struct AssetCropView: View {
         }
         onSave(rendered)
     }
+}
+
+/// Isolated as a free function (rather than a method needing
+/// `@available` on the whole type) since it's the one piece of this file
+/// that actually calls iOS 17+-only Vision APIs.
+@available(iOS 17.0, *)
+private func generateCutoutCandidates(from image: UIImage) async -> Result<[UIImage], Error> {
+    guard let cgImage = image.cgImage else { return .failure(SmartCutoutError.noImage) }
+    let orientation = CGImagePropertyOrientation(image.imageOrientation)
+    let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
+    let request = VNGenerateForegroundInstanceMaskRequest()
+
+    do {
+        try handler.perform([request])
+        guard let observation = request.results?.first else {
+            return .failure(SmartCutoutError.noSubjectFound)
+        }
+
+        let instances = observation.allInstances
+        guard !instances.isEmpty else {
+            return .failure(SmartCutoutError.noSubjectFound)
+        }
+
+        var images: [UIImage] = []
+        for index in instances {
+            guard let pixelBuffer = try? observation.generateMaskedImage(
+                ofInstances: [index],
+                from: handler,
+                croppedToInstancesExtent: true
+            ) else { continue }
+            if let uiImage = uiImage(from: pixelBuffer) {
+                images.append(uiImage)
+            }
+        }
+
+        guard !images.isEmpty else { return .failure(SmartCutoutError.noSubjectFound) }
+        return .success(images)
+    } catch {
+        return .failure(error)
+    }
+}
+
+/// Not an SDK-provided initializer - Vision's CGImagePropertyOrientation
+/// and UIKit's UIImage.Orientation are different enums with matching
+/// cases, and Apple's own sample code for exactly this Vision API
+/// defines this same conversion by hand.
+private extension CGImagePropertyOrientation {
+    init(_ uiOrientation: UIImage.Orientation) {
+        switch uiOrientation {
+        case .up: self = .up
+        case .upMirrored: self = .upMirrored
+        case .down: self = .down
+        case .downMirrored: self = .downMirrored
+        case .left: self = .left
+        case .leftMirrored: self = .leftMirrored
+        case .right: self = .right
+        case .rightMirrored: self = .rightMirrored
+        @unknown default: self = .up
+        }
+    }
+}
+
+private func uiImage(from pixelBuffer: CVPixelBuffer) -> UIImage? {
+    let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+    let context = CIContext()
+    guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+    return UIImage(cgImage: cgImage)
 }
 
 struct AssetCreationFlow: View {
