@@ -137,6 +137,15 @@ func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], com
         var compAudioTrack: AVMutableCompositionTrack?
         do {
             try compVideoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: sourceAsset.duration), of: sourceVideoTrack, at: .zero)
+            // A composition track does NOT inherit the source track's
+            // preferredTransform automatically - it defaults to identity.
+            // Since there's no AVMutableVideoComposition/layerInstruction
+            // here (unlike OverlayExporter, this file only retimes, it
+            // doesn't need to composite CALayers), AVPlayerItem and
+            // AVAssetExportSession fall back to reading this track's own
+            // transform directly - without this line a portrait-recorded
+            // video plays/exports in its raw, unrotated encoding.
+            compVideoTrack.preferredTransform = sourceVideoTrack.preferredTransform
             if let sourceAudioTrack {
                 let audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
                 try audioTrack?.insertTimeRange(CMTimeRange(start: .zero, duration: sourceAsset.duration), of: sourceAudioTrack, at: .zero)
