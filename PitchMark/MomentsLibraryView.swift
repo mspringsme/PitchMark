@@ -9,8 +9,43 @@
 //  library. Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this UI.
 //
+//  "Import from Photos" (2026-09-28) covers the case where a user
+//  recorded with the system Camera app instead of the in-app record
+//  button - picks an existing video via PhotosPicker and runs it through
+//  the exact same saveRecordedMoment path a fresh recording uses, so it
+//  becomes a real Moment (owner-copy sync, overlays, trim, export, all
+//  of it) rather than a second, lesser way to add one.
+//
 
 import SwiftUI
+import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
+
+/// Bridges a PhotosPicker-selected video into a local temp file PitchMark
+/// owns - `FileRepresentation` streams the asset to disk rather than
+/// loading it into memory as `Data`, the standard Transferable shape for
+/// picking video (as opposed to the plain `Data` transferable
+/// `AssetLibraryView`'s Photos import uses for still images, which are
+/// small enough not to need this).
+private struct MomentVideoTransfer: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { transfer in
+            SentTransferredFile(transfer.url)
+        } importing: { received in
+            let destination = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("mov")
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            try FileManager.default.copyItem(at: received.file, to: destination)
+            return Self(url: destination)
+        }
+    }
+}
 
 struct MomentsLibraryView: View {
     /// When opened from inside the Parent Game Shell for a specific child,
@@ -31,6 +66,10 @@ struct MomentsLibraryView: View {
     @State private var selectedMomentForDetail: Moment? = nil
     @State private var isSaving = false
 
+    @State private var videoPickerSelection: PhotosPickerItem? = nil
+    @State private var isImportingVideo = false
+    @State private var importVideoErrorMessage: String? = nil
+
     @State private var momentPendingDelete: Moment? = nil
     @State private var showDeleteDialog = false
     @State private var deleteErrorMessage: String? = nil
@@ -42,6 +81,7 @@ struct MomentsLibraryView: View {
             List {
                 Section {
                     recordButton
+                    importVideoButton
 
                     if let player = contextPlayer {
                         Text("New Moments will be tagged with \(player.name).")
@@ -51,6 +91,11 @@ struct MomentsLibraryView: View {
 
                     if let deleteErrorMessage {
                         Text(deleteErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    if let importVideoErrorMessage {
+                        Text(importVideoErrorMessage)
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
@@ -109,6 +154,10 @@ struct MomentsLibraryView: View {
             }
         }
         .onAppear { refreshMoments() }
+        .onChange(of: videoPickerSelection) { _, item in
+            guard let item else { return }
+            importVideo(item)
+        }
         .sheet(isPresented: $showAssetLibrary) {
             AssetLibraryView()
                 .environmentObject(authManager)
@@ -182,6 +231,25 @@ struct MomentsLibraryView: View {
         }
         .buttonStyle(.plain)
         .disabled(isSaving)
+    }
+
+    /// For a Moment recorded with the system Camera app instead of
+    /// `recordButton` above - the `.videos` PhotosPicker filter keeps
+    /// photos out of the picker entirely, so there's no wrong-media-type
+    /// case to handle.
+    private var importVideoButton: some View {
+        PhotosPicker(selection: $videoPickerSelection, matching: .videos) {
+            HStack {
+                Image(systemName: "square.and.arrow.down")
+                Text(isImportingVideo ? "Importing…" : "Import from Photos")
+            }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(isImportingVideo)
     }
 
     @ViewBuilder
@@ -267,6 +335,37 @@ struct MomentsLibraryView: View {
             case .failure(let error):
                 momentPendingDelete = nil
                 deleteErrorMessage = "Couldn't save to Camera Roll, so nothing was deleted: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Picked video content is best handled as a file, not `Data` -
+    /// loading a whole video into memory just to write it back out again
+    /// would be wasteful and slow for anything beyond a trivially short
+    /// clip. `FileRepresentation` streams the picked asset straight to a
+    /// temp file PitchMark owns, the same standard pattern used anywhere
+    /// PhotosPicker hands back video.
+    private func importVideo(_ item: PhotosPickerItem) {
+        isImportingVideo = true
+        importVideoErrorMessage = nil
+        Task {
+            guard let transfer = try? await item.loadTransferable(type: MomentVideoTransfer.self) else {
+                await MainActor.run {
+                    isImportingVideo = false
+                    importVideoErrorMessage = "Couldn't load that video."
+                    videoPickerSelection = nil
+                }
+                return
+            }
+
+            let asset = AVURLAsset(url: transfer.url)
+            let loadedDuration = try? await asset.load(.duration)
+            let seconds = loadedDuration?.seconds.isFinite == true ? loadedDuration!.seconds : nil
+
+            await MainActor.run {
+                isImportingVideo = false
+                videoPickerSelection = nil
+                saveRecordedMoment(from: transfer.url, duration: seconds, capturedPhotos: [])
             }
         }
     }
