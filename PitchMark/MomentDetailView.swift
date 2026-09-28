@@ -147,7 +147,13 @@ struct MomentDetailView: View {
         }
         .fullScreenCover(isPresented: $showOverlayEditor) {
             if let url = resolvedMomentVideoURL(for: momentId) {
-                OverlayEditorView(momentId: momentId, videoURL: url, libraryAssets: overlayEditorAssets, initialOverlays: moment.overlays ?? [])
+                OverlayEditorView(
+                    momentId: momentId,
+                    videoURL: url,
+                    libraryAssets: overlayEditorAssets,
+                    initialOverlays: moment.overlays ?? [],
+                    onExported: { reloadPlayer() }
+                )
                     .environmentObject(authManager)
                     .ignoresSafeArea()
             }

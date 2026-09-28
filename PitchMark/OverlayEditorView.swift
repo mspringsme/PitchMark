@@ -142,9 +142,17 @@ struct OverlayEditorView: View {
     let momentId: String
     let videoURL: URL
     let libraryAssets: [LibraryAsset]
+    /// Called after a successful export, before this screen dismisses -
+    /// wired by MomentDetailView to reload its own player so it picks up
+    /// the newly-burned-in edited file, the same completion shape
+    /// MomentTrimEditor's saveTrimResult already uses.
+    var onExported: () -> Void = {}
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
+
+    @State private var isExporting = false
+    @State private var exportErrorMessage: String? = nil
 
     @State private var player: AVPlayer
     @State private var overlays: [OverlayItem]
@@ -170,10 +178,11 @@ struct OverlayEditorView: View {
     /// duration `selectedOverlayPanel`'s Start/End sliders will allow.
     private let minimumSpan: Double = 0.15
 
-    init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem]) {
+    init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem], onExported: @escaping () -> Void = {}) {
         self.momentId = momentId
         self.videoURL = videoURL
         self.libraryAssets = libraryAssets
+        self.onExported = onExported
         _player = State(initialValue: AVPlayer(url: videoURL))
         _overlays = State(initialValue: initialOverlays)
     }
@@ -233,6 +242,49 @@ struct OverlayEditorView: View {
             }
             .padding(.top, 50)
             .padding(.trailing, 20)
+        }
+        // Same top-inset reasoning as the close button - this whole
+        // screen ignores the safe area, so a bare `.padding()` would land
+        // under the notch/Dynamic Island.
+        .overlay(alignment: .topLeading) {
+            Button {
+                startExport()
+            } label: {
+                Text("Export")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.white, in: Capsule())
+            }
+            .padding(.top, 50)
+            .padding(.leading, 20)
+            .disabled(isExporting || overlays.isEmpty)
+        }
+        .overlay {
+            if isExporting {
+                ZStack {
+                    Color.black.opacity(0.55).ignoresSafeArea()
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .tint(.white)
+                        Text("Exporting…")
+                            .foregroundStyle(.white)
+                            .font(.subheadline.weight(.semibold))
+                    }
+                }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let exportErrorMessage {
+                Text(exportErrorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.85), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .padding(.bottom, 12)
+                    .onTapGesture { self.exportErrorMessage = nil }
+            }
         }
         .onAppear { setUpPlayer() }
         .onDisappear { tearDownPlayer() }
@@ -477,10 +529,23 @@ struct OverlayEditorView: View {
         Task {
             let loadedDuration = try? await asset.load(.duration)
             let tracks = try? await asset.loadTracks(withMediaType: .video)
-            let size = try? await tracks?.first?.load(.naturalSize)
+            let track = tracks?.first
+            let rawSize = try? await track?.load(.naturalSize)
+            let transform = try? await track?.load(.preferredTransform)
             await MainActor.run {
                 duration = loadedDuration?.seconds.isFinite == true ? loadedDuration!.seconds : 0
-                naturalSize = size ?? .zero
+                // naturalSize is the raw encoded pixel size before rotation
+                // metadata is applied - for a portrait-recorded video that
+                // can be the landscape dimensions, with preferredTransform
+                // carrying the rotation needed for correct display. Same
+                // technique MomentCapture.swift's stitchMultiCam already
+                // uses for exactly this reason.
+                if let rawSize, let transform {
+                    let transformedSize = rawSize.applying(transform)
+                    naturalSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
+                } else {
+                    naturalSize = rawSize ?? .zero
+                }
             }
         }
 
@@ -517,6 +582,48 @@ struct OverlayEditorView: View {
         authManager.updateMomentOverlays(momentId: momentId, overlays: overlays) { error in
             if let error {
                 debugLog("❌ updateMomentOverlays failed:", error.localizedDescription)
+            }
+        }
+    }
+
+    /// Burns the current `overlays` into whatever video is currently
+    /// playing (`resolvedMomentVideoURL` - so this composites on top of
+    /// any prior trim, matching how `MomentTrimEditor` already treats the
+    /// edited slot as an evolving committed derivative, not a one-shot
+    /// diff off the original). On success, copies the result into that
+    /// same slot so every existing consumer (playback, share, save-to-
+    /// Camera-Roll) picks it up automatically, then calls `onExported`
+    /// and dismisses.
+    private func startExport() {
+        guard !momentId.isEmpty, let sourceURL = resolvedMomentVideoURL(for: momentId) else { return }
+        if isPlaying { togglePlayback() }
+        exportErrorMessage = nil
+        isExporting = true
+
+        exportMomentWithOverlays(
+            sourceURL: sourceURL,
+            overlays: overlays,
+            resolveImage: { assetID in libraryAssets.first(where: { $0.id == assetID })?.image }
+        ) { result in
+            isExporting = false
+            switch result {
+            case .success(let tempURL):
+                guard let destination = localMomentEditedVideoURL(for: momentId) else {
+                    exportErrorMessage = "Couldn't save the exported video."
+                    return
+                }
+                do {
+                    try? FileManager.default.removeItem(at: destination)
+                    try FileManager.default.copyItem(at: tempURL, to: destination)
+                    try? FileManager.default.removeItem(at: tempURL)
+                    onExported()
+                    dismiss()
+                } catch {
+                    exportErrorMessage = "Couldn't save the exported video: \(error.localizedDescription)"
+                }
+            case .failure(let error):
+                debugLog("❌ exportMomentWithOverlays failed:", error.localizedDescription)
+                exportErrorMessage = "Export failed: \(error.localizedDescription)"
             }
         }
     }
