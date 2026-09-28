@@ -316,10 +316,12 @@ struct OverlayEditorView: View {
                 ? composeOverlayTransform(to: baseTransform, dragTranslation: dragTranslation, videoRectSize: videoRectSize, scale: scaleSliderValue, rotation: rotationDegrees * .pi / 180)
                 : baseTransform
 
+            let baseSize = overlayBaseSizeFraction * min(videoRect.width, videoRect.height)
+
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 80, height: 80)
+                .frame(width: baseSize, height: baseSize)
                 .opacity(liveTransform.opacity)
                 .rotationEffect(.radians(liveTransform.rotation))
                 .scaleEffect(liveTransform.scale)

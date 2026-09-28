@@ -20,6 +20,16 @@
 import Foundation
 import CoreGraphics
 
+/// An overlay's base (scale = 1) size, as a fraction of the video frame's
+/// shorter dimension. Shared by the live preview (`OverlayEditorView`,
+/// scaled against the on-screen letterboxed `videoRect`) and export
+/// (`OverlayExporter`, scaled against the full pixel `renderSize`) so an
+/// overlay's size relative to the video frame is identical in both,
+/// regardless of device/window size - a fixed point value (what preview
+/// used before this existed) doesn't translate to export pixels without
+/// silently changing proportion from device to device.
+let overlayBaseSizeFraction: CGFloat = 0.18
+
 struct OverlayKeyframe: Identifiable, Codable, Equatable {
     let id: UUID
     var time: Double        // seconds, relative to the overlay item's own timeline

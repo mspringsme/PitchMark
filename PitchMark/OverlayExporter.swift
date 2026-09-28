@@ -66,14 +66,6 @@ func sampledTransforms(for item: OverlayItem, sampleInterval: Double) -> (times:
 /// `transform(at:)` at the same cadence.
 private let exportSampleInterval = 1.0 / 30.0
 
-/// Fraction of the shorter render dimension used as an overlay's base
-/// (scale = 1) size in pixels. The spec doesn't pin an exact size, and
-/// the live preview's own 80pt-in-view-points convention doesn't
-/// translate to export pixels without inventing a device-size
-/// assumption - this is a deliberate, documented, tunable default, not a
-/// hidden approximation.
-private let overlayBaseSizeFraction: CGFloat = 0.15
-
 func exportMomentWithOverlays(
     sourceURL: URL,
     overlays: [OverlayItem],
@@ -127,6 +119,16 @@ func exportMomentWithOverlays(
 
         let parentLayer = CALayer()
         parentLayer.frame = CGRect(origin: .zero, size: renderSize)
+        // A bare CALayer tree used for AVFoundation compositing (not
+        // hosted inside a UIView) defaults to Core Animation's native
+        // bottom-left-origin, Y-up coordinate system - not UIKit's
+        // top-left-origin, Y-down one that videoDisplayRect/transform(at:)
+        // and every position value in this feature already assume.
+        // Without this, overlays render vertically mirrored relative to
+        // where the live preview showed them. Flipping the parent makes
+        // its sublayers' `position` interpret Y the same way UIKit does;
+        // it does not flip each layer's own `contents` image.
+        parentLayer.isGeometryFlipped = true
         let videoLayer = CALayer()
         videoLayer.frame = CGRect(origin: .zero, size: renderSize)
         parentLayer.addSublayer(videoLayer)
