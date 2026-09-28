@@ -72,6 +72,9 @@ struct AssetLibraryView: View {
     @State private var isImporting = false
     @State private var importErrorMessage: String? = nil
 
+    @State private var showCreateAssetFlow = false
+    @State private var showCameraDeniedDialog = false
+
     @State private var renamingAsset: LibraryAsset? = nil
     @State private var renameText = ""
 
@@ -83,6 +86,20 @@ struct AssetLibraryView: View {
         NavigationView {
             List {
                 Section {
+                    Button {
+                        requestAssetCameraAccess { authorization in
+                            switch authorization {
+                            case .ready: showCreateAssetFlow = true
+                            case .denied: showCameraDeniedDialog = true
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "camera.badge.plus")
+                            Text("Create Asset")
+                        }
+                    }
+
                     PhotosPicker(selection: $photoSelection, matching: .images) {
                         HStack {
                             Image(systemName: "photo.badge.plus")
@@ -157,6 +174,21 @@ struct AssetLibraryView: View {
             secondaryTitle: "Cancel",
             secondaryAction: { assetPendingDelete = nil }
         )
+        .appConfirmationDialog(
+            isPresented: $showCameraDeniedDialog,
+            title: "Camera Access Needed",
+            message: "Enable Camera access in Settings to create an asset from a photo.",
+            primaryTitle: "Open Settings",
+            primaryAction: {
+                guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+                UIApplication.shared.open(url)
+            },
+            secondaryTitle: "Cancel"
+        )
+        .fullScreenCover(isPresented: $showCreateAssetFlow, onDismiss: { refreshAssets() }) {
+            AssetCreationFlow()
+                .environmentObject(authManager)
+        }
     }
 
     @ViewBuilder
