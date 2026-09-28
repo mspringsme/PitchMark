@@ -63,6 +63,15 @@ struct AssetThumbnailStrip: View {
     }
 }
 
+/// Which asset's file gets overwritten when `AssetCropView`'s `onSave`
+/// fires, plus the image to seed that screen with - the asset's
+/// *current* saved image, not the original unedited one, so repeated
+/// edits (circle crop, then later Smart Cutout on the result) compose.
+private struct AssetEditingTarget: Identifiable {
+    let id: String
+    let image: UIImage
+}
+
 struct AssetLibraryView: View {
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -81,6 +90,9 @@ struct AssetLibraryView: View {
     @State private var assetPendingDelete: LibraryAsset? = nil
     @State private var showDeleteDialog = false
     @State private var deleteErrorMessage: String? = nil
+
+    @State private var editingTarget: AssetEditingTarget? = nil
+    @State private var actionErrorMessage: String? = nil
 
     var body: some View {
         NavigationView {
@@ -136,11 +148,38 @@ struct AssetLibraryView: View {
                                     }
                                     .tint(.blue)
                                 }
+                                // Editing overwrites the asset's own file in
+                                // place, so it only makes sense for a real
+                                // user asset with somewhere writable to
+                                // overwrite - not a bundled one. Duplicate
+                                // has no such restriction: it always creates
+                                // a brand-new user asset, so it's offered
+                                // for bundled assets too (the way to turn a
+                                // bundled starter into a customizable copy).
+                                if asset.isDeletable {
+                                    Button {
+                                        startEditing(asset)
+                                    } label: {
+                                        Label("Edit", systemImage: "crop")
+                                    }
+                                    .tint(.orange)
+                                }
+                                Button {
+                                    duplicateAsset(asset)
+                                } label: {
+                                    Label("Duplicate", systemImage: "plus.square.on.square")
+                                }
+                                .tint(.indigo)
                             }
                     }
 
                     if let deleteErrorMessage {
                         Text(deleteErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    if let actionErrorMessage {
+                        Text(actionErrorMessage)
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
@@ -188,6 +227,26 @@ struct AssetLibraryView: View {
         .fullScreenCover(isPresented: $showCreateAssetFlow, onDismiss: { refreshAssets() }) {
             AssetCreationFlow()
                 .environmentObject(authManager)
+        }
+        // Re-presents the same AssetCropView the Create Asset flow uses,
+        // seeded from the asset's *current* saved image rather than a
+        // fresh capture - lets a circle-cropped asset later also go
+        // through Smart Cutout (or vice versa), any number of times.
+        // Saving here overwrites that asset's file in place rather than
+        // creating a new AssetItem; Duplicate (below) is the explicit,
+        // user-requested way to keep the original instead.
+        .fullScreenCover(item: $editingTarget, onDismiss: { refreshAssets() }) { target in
+            AssetCropView(
+                sourceImage: target.image,
+                onSave: { updated in
+                    if let pngData = updated.pngData() {
+                        saveLocalAssetImage(pngData, assetId: target.id)
+                    }
+                    editingTarget = nil
+                },
+                onCancel: { editingTarget = nil }
+            )
+            .environmentObject(authManager)
         }
     }
 
@@ -278,6 +337,40 @@ struct AssetLibraryView: View {
         guard !trimmed.isEmpty else { return }
         authManager.updateAssetFields(assetId: assetId, fields: ["name": trimmed]) { _ in
             refreshAssets()
+        }
+    }
+
+    private func startEditing(_ asset: LibraryAsset) {
+        actionErrorMessage = nil
+        guard let assetId = asset.backingAssetId, let image = localAssetImage(for: assetId) else {
+            actionErrorMessage = "Couldn't open \"\(asset.name)\" for editing."
+            return
+        }
+        editingTarget = AssetEditingTarget(id: assetId, image: image)
+    }
+
+    /// Works for bundled assets too (they have `asset.image` but no
+    /// `backingAssetId`) - always creates a brand-new user AssetItem, so
+    /// there's no "write to a bundled file" problem to avoid. Opens the
+    /// new copy for editing immediately, since the whole point of
+    /// duplicating (per the user's own request) is to edit it
+    /// differently right away while the original stays untouched.
+    private func duplicateAsset(_ asset: LibraryAsset) {
+        actionErrorMessage = nil
+        guard let image = asset.image, let pngData = image.pngData() else {
+            actionErrorMessage = "Couldn't duplicate \"\(asset.name)\"."
+            return
+        }
+        authManager.saveAsset(AssetItem(name: "\(asset.name) copy")) { result in
+            switch result {
+            case .success(let saved):
+                guard let newId = saved.id else { return }
+                saveLocalAssetImage(pngData, assetId: newId)
+                refreshAssets()
+                editingTarget = AssetEditingTarget(id: newId, image: image)
+            case .failure(let error):
+                actionErrorMessage = "Couldn't duplicate: \(error.localizedDescription)"
+            }
         }
     }
 
