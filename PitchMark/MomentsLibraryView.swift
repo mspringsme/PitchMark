@@ -69,6 +69,7 @@ struct MomentsLibraryView: View {
     @State private var momentPendingAction: Moment? = nil
     @State private var showMomentActionsDialog = false
     @State private var momentForPlayback: Moment? = nil
+    @State private var duplicateErrorMessage: String? = nil
 
     @State private var videoPickerSelection: PhotosPickerItem? = nil
     @State private var isImportingVideo = false
@@ -100,6 +101,11 @@ struct MomentsLibraryView: View {
                     }
                     if let importVideoErrorMessage {
                         Text(importVideoErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                    if let duplicateErrorMessage {
+                        Text(duplicateErrorMessage)
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
@@ -198,6 +204,19 @@ struct MomentsLibraryView: View {
             }
             Button("Edit / View Details") {
                 selectedMomentForDetail = momentPendingAction
+            }
+            if let moment = momentPendingAction {
+                Button("Duplicate") {
+                    duplicateMoment(moment, fromOriginal: false)
+                }
+                // Only offered when an edited file actually exists -
+                // otherwise "current" and "original" are the same file,
+                // and a second, identical option would just be confusing.
+                if let id = moment.id, let editedURL = localMomentEditedVideoURL(for: id), FileManager.default.fileExists(atPath: editedURL.path) {
+                    Button("Duplicate to Original") {
+                        duplicateMoment(moment, fromOriginal: true)
+                    }
+                }
             }
             Button("Cancel", role: .cancel) {
                 momentPendingAction = nil
@@ -395,6 +414,54 @@ struct MomentsLibraryView: View {
                 isImportingVideo = false
                 videoPickerSelection = nil
                 saveRecordedMoment(from: transfer.url, duration: seconds, capturedPhotos: [])
+            }
+        }
+    }
+
+    /// `fromOriginal: false` copies whatever's currently playing back
+    /// (the edited file if one exists, else the original - via
+    /// `resolvedMomentVideoURL`, same source every other editor in this
+    /// app treats as "the current state"); `fromOriginal: true` copies
+    /// the untouched original instead, discarding any trim/overlays/
+    /// speed changes baked into an edited file - a way to start fresh
+    /// editing again while leaving the current Moment exactly as it is.
+    /// Metadata is deliberately NOT cloned (title/favorite/game info/
+    /// photos/overlays/speed keyframes) - only player/team context
+    /// carries over, matching "capture now, create later": the new
+    /// Moment starts as plain, undecorated footage, same as any other
+    /// freshly-added one.
+    private func duplicateMoment(_ moment: Moment, fromOriginal: Bool) {
+        duplicateErrorMessage = nil
+        guard let id = moment.id else { return }
+        let sourceURL = fromOriginal ? localMomentVideoURL(for: id) : resolvedMomentVideoURL(for: id)
+        guard let sourceURL, FileManager.default.fileExists(atPath: sourceURL.path) else {
+            duplicateErrorMessage = "Couldn't duplicate: video file not found."
+            return
+        }
+
+        Task {
+            let asset = AVURLAsset(url: sourceURL)
+            let loadedDuration = try? await asset.load(.duration)
+            let seconds = loadedDuration?.seconds.isFinite == true ? loadedDuration!.seconds : moment.durationSeconds
+
+            await MainActor.run {
+                let newMoment = Moment(
+                    teamId: moment.teamId,
+                    playerId: moment.playerId,
+                    playerName: moment.playerName,
+                    durationSeconds: seconds
+                )
+                authManager.saveMoment(newMoment) { result in
+                    switch result {
+                    case .success(let saved):
+                        if let newId = saved.id {
+                            saveLocalMomentVideo(from: sourceURL, momentId: newId)
+                        }
+                        refreshMoments()
+                    case .failure(let error):
+                        duplicateErrorMessage = "Couldn't duplicate: \(error.localizedDescription)"
+                    }
+                }
             }
         }
     }
