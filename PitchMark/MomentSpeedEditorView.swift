@@ -261,7 +261,7 @@ struct MomentSpeedEditorView: View {
                     Slider(
                         value: Binding(
                             get: { keyframes[index].speed },
-                            set: { keyframes[index].speed = $0 }
+                            set: { keyframes[index].speed = snappedSpeed($0) }
                         ),
                         in: 0.25...4,
                         onEditingChanged: { editing in
@@ -275,6 +275,18 @@ struct MomentSpeedEditorView: View {
                 }
             }
         }
+    }
+
+    /// "Snap to every 0.25x while still allowing in-between speeds" -
+    /// a magnetic assist, not a hard `step` (which would remove
+    /// in-between values entirely): within `tolerance` of a 0.25
+    /// multiple, round to it; otherwise pass the dragged value through
+    /// unchanged, so a precise drag can still land on e.g. 1.4x.
+    private func snappedSpeed(_ raw: Double) -> Double {
+        let step = 0.25
+        let tolerance = 0.03
+        let nearest = (raw / step).rounded() * step
+        return abs(raw - nearest) <= tolerance ? nearest : raw
     }
 
     private func labelForSpeed(_ speed: Double) -> String {

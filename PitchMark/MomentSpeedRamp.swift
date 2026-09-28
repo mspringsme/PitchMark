@@ -109,15 +109,18 @@ func sourceTimeToCompositeTime(_ sourceTime: Double, ranges: [(start: Double, en
     return composite
 }
 
-/// Copies the source's video+audio into a composition unmodified, then
-/// retimes each non-1x range via `scaleTimeRange`, **in reverse
-/// chronological order** - required, not a style choice.
-/// `scaleTimeRange` shifts everything after the range it touches, so
-/// processing left-to-right would invalidate every later range's
-/// already-computed `(start, end)` before it's used; processing
-/// right-to-left means a range's own boundaries are still untouched at
-/// the moment it's used, since only ranges strictly after it (already
-/// handled) have moved.
+/// Builds each range as its own insert-then-scale-immediately step,
+/// writing forward at a cursor this function fully owns - not "insert
+/// the whole video once, then scale sub-ranges of that one segment."
+/// That first approach needed reverse-order processing to keep each
+/// range's original-timeline coordinates valid, and turned out fragile
+/// once 2+ ranges actually needed scaling in the same export (a real
+/// on-device export failure, "the operation could not be completed").
+/// This shape has no such fragility: at the moment any range is
+/// inserted+scaled, `cursor` is the frontier of everything built so
+/// far - nothing else in the composition occupies that position yet,
+/// so there's no boundary-adjacency-with-other-scaled-segments
+/// reasoning required at all, in either direction.
 func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], completion: @escaping (Result<AVMutableComposition, Error>) -> Void) {
     DispatchQueue.global(qos: .userInitiated).async {
         let sourceAsset = AVURLAsset(url: sourceURL)
@@ -133,41 +136,52 @@ func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], com
             DispatchQueue.main.async { completion(.failure(SpeedRampError.compositionFailed)) }
             return
         }
+        // A composition track does NOT inherit the source track's
+        // preferredTransform automatically - it defaults to identity.
+        // Since there's no AVMutableVideoComposition/layerInstruction
+        // here (unlike OverlayExporter, this file only retimes, it
+        // doesn't need to composite CALayers), AVPlayerItem and
+        // AVAssetExportSession fall back to reading this track's own
+        // transform directly - without this line a portrait-recorded
+        // video plays/exports in its raw, unrotated encoding.
+        compVideoTrack.preferredTransform = sourceVideoTrack.preferredTransform
 
-        var compAudioTrack: AVMutableCompositionTrack?
+        let compAudioTrack: AVMutableCompositionTrack? = sourceAudioTrack != nil
+            ? composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+            : nil
+
+        let ranges = speedRanges(keyframes: keyframes, totalDuration: totalDuration)
+        var cursor = CMTime.zero
+
         do {
-            try compVideoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: sourceAsset.duration), of: sourceVideoTrack, at: .zero)
-            // A composition track does NOT inherit the source track's
-            // preferredTransform automatically - it defaults to identity.
-            // Since there's no AVMutableVideoComposition/layerInstruction
-            // here (unlike OverlayExporter, this file only retimes, it
-            // doesn't need to composite CALayers), AVPlayerItem and
-            // AVAssetExportSession fall back to reading this track's own
-            // transform directly - without this line a portrait-recorded
-            // video plays/exports in its raw, unrotated encoding.
-            compVideoTrack.preferredTransform = sourceVideoTrack.preferredTransform
-            if let sourceAudioTrack {
-                let audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-                try audioTrack?.insertTimeRange(CMTimeRange(start: .zero, duration: sourceAsset.duration), of: sourceAudioTrack, at: .zero)
-                compAudioTrack = audioTrack
+            for range in ranges {
+                let sourceRange = CMTimeRange(
+                    start: CMTime(seconds: range.start, preferredTimescale: 600),
+                    duration: CMTime(seconds: range.end - range.start, preferredTimescale: 600)
+                )
+                guard sourceRange.duration > .zero else { continue }
+
+                try compVideoTrack.insertTimeRange(sourceRange, of: sourceVideoTrack, at: cursor)
+                if let sourceAudioTrack, let compAudioTrack {
+                    try compAudioTrack.insertTimeRange(sourceRange, of: sourceAudioTrack, at: cursor)
+                }
+
+                if range.speed != 1.0 {
+                    // scaleTimeRange doesn't throw - it silently no-ops on
+                    // an invalid range, which can't happen here since
+                    // `insertedRange` is exactly what was just inserted.
+                    let insertedRange = CMTimeRange(start: cursor, duration: sourceRange.duration)
+                    let scaledDuration = CMTime(seconds: (range.end - range.start) / range.speed, preferredTimescale: 600)
+                    compVideoTrack.scaleTimeRange(insertedRange, toDuration: scaledDuration)
+                    compAudioTrack?.scaleTimeRange(insertedRange, toDuration: scaledDuration)
+                    cursor = CMTimeAdd(cursor, scaledDuration)
+                } else {
+                    cursor = CMTimeAdd(cursor, sourceRange.duration)
+                }
             }
         } catch {
             DispatchQueue.main.async { completion(.failure(error)) }
             return
-        }
-
-        // scaleTimeRange doesn't throw - it silently no-ops on an invalid
-        // range, which is why range.end > range.start is guarded above.
-        let ranges = speedRanges(keyframes: keyframes, totalDuration: totalDuration)
-        for range in ranges.reversed() {
-            guard range.speed != 1.0, range.end > range.start else { continue }
-            let timeRange = CMTimeRange(
-                start: CMTime(seconds: range.start, preferredTimescale: 600),
-                duration: CMTime(seconds: range.end - range.start, preferredTimescale: 600)
-            )
-            let newDuration = CMTime(seconds: (range.end - range.start) / range.speed, preferredTimescale: 600)
-            compVideoTrack.scaleTimeRange(timeRange, toDuration: newDuration)
-            compAudioTrack?.scaleTimeRange(timeRange, toDuration: newDuration)
         }
 
         DispatchQueue.main.async { completion(.success(composition)) }
