@@ -66,6 +66,10 @@ struct MomentsLibraryView: View {
     @State private var selectedMomentForDetail: Moment? = nil
     @State private var isSaving = false
 
+    @State private var momentPendingAction: Moment? = nil
+    @State private var showMomentActionsDialog = false
+    @State private var momentForPlayback: Moment? = nil
+
     @State private var videoPickerSelection: PhotosPickerItem? = nil
     @State private var isImportingVideo = false
     @State private var importVideoErrorMessage: String? = nil
@@ -112,7 +116,8 @@ struct MomentsLibraryView: View {
                     } else {
                         ForEach(moments) { moment in
                             Button {
-                                selectedMomentForDetail = moment
+                                momentPendingAction = moment
+                                showMomentActionsDialog = true
                             } label: {
                                 momentRow(moment)
                             }
@@ -173,6 +178,30 @@ struct MomentsLibraryView: View {
         }
         .sheet(item: $selectedMomentForDetail, onDismiss: { refreshMoments() }) { moment in
             MomentDetailView(moment: moment, allMoments: moments)
+        }
+        .fullScreenCover(item: $momentForPlayback) { moment in
+            if let id = moment.id, let url = resolvedMomentVideoURL(for: id) {
+                MomentPlaybackView(videoURL: url)
+            }
+        }
+        // Tapping a row asks Play-or-Edit rather than jumping straight
+        // into MomentDetailView - Play is a dedicated, landscape-capable
+        // full-bleed viewer (MomentPlaybackView) with none of
+        // MomentDetailView's editing chrome.
+        .confirmationDialog(
+            momentPendingAction?.displayTitle ?? "Moment",
+            isPresented: $showMomentActionsDialog,
+            titleVisibility: .visible
+        ) {
+            Button("Play") {
+                momentForPlayback = momentPendingAction
+            }
+            Button("Edit / View Details") {
+                selectedMomentForDetail = momentPendingAction
+            }
+            Button("Cancel", role: .cancel) {
+                momentPendingAction = nil
+            }
         }
         .appConfirmationDialog(
             isPresented: $showCameraDeniedDialog,
