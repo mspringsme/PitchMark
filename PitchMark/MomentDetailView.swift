@@ -54,6 +54,8 @@ struct MomentDetailView: View {
 
     @State private var showOverlayEditor = false
     @State private var overlayEditorAssets: [LibraryAsset] = []
+
+    @State private var showSpeedEditor = false
     /// Created once and reused, never rebuilt inline in the view body -
     /// on-device testing showed the video "flash the first frame, only
     /// play about a second" when it was constructed inline
@@ -101,6 +103,7 @@ struct MomentDetailView: View {
                     nameSection
                     playbackSection
                     trimSection
+                    speedSection
                     overlaysSection
                     gameInfoSection
                     photosSection
@@ -152,6 +155,18 @@ struct MomentDetailView: View {
                     videoURL: url,
                     libraryAssets: overlayEditorAssets,
                     initialOverlays: moment.overlays ?? [],
+                    onExported: { reloadPlayer() }
+                )
+                    .environmentObject(authManager)
+                    .ignoresSafeArea()
+            }
+        }
+        .fullScreenCover(isPresented: $showSpeedEditor) {
+            if let url = resolvedMomentVideoURL(for: momentId) {
+                MomentSpeedEditorView(
+                    momentId: momentId,
+                    videoURL: url,
+                    initialKeyframes: moment.speedKeyframes ?? [],
                     onExported: { reloadPlayer() }
                 )
                     .environmentObject(authManager)
@@ -213,6 +228,17 @@ struct MomentDetailView: View {
     }
 
     @ViewBuilder
+    private var speedSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Speed")
+                .font(.headline)
+
+            Button("Edit Speed") {
+                showSpeedEditor = true
+            }
+        }
+    }
+
     private var overlaysSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Overlays")

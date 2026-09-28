@@ -50,6 +50,8 @@ struct Moment: Identifiable, Codable {
     /// reason every other field added after Phase 6 is: existing saved
     /// Moment documents have no "overlays" key.
     var overlays: [OverlayItem]? = nil
+    /// 2026-09-28 speed ramp editor - same Optional reasoning as `overlays`.
+    var speedKeyframes: [SpeedKeyframe]? = nil
 
     init(
         createdAt: Date = Date(),
@@ -63,7 +65,8 @@ struct Moment: Identifiable, Codable {
         inning: Int? = nil,
         gameInfoUpdatedAt: Date? = nil,
         photoCount: Int = 0,
-        overlays: [OverlayItem]? = nil
+        overlays: [OverlayItem]? = nil,
+        speedKeyframes: [SpeedKeyframe]? = nil
     ) {
         self.createdAt = createdAt
         self.teamId = teamId
@@ -77,6 +80,7 @@ struct Moment: Identifiable, Codable {
         self.gameInfoUpdatedAt = gameInfoUpdatedAt
         self.photoCount = photoCount
         self.overlays = overlays
+        self.speedKeyframes = speedKeyframes
     }
 
     /// The user-set title if there is one, else the tagged player's name,
@@ -247,6 +251,31 @@ extension AuthManager {
 
         do {
             let encoded = try Firestore.Encoder().encode(OverlaysFieldWrapper(overlays: overlays))
+            Firestore.firestore()
+                .collection("users").document(user.uid)
+                .collection("moments").document(momentId)
+                .updateData(encoded) { error in
+                    completion(error)
+                }
+        } catch {
+            completion(error)
+        }
+    }
+
+    /// Same shape as `updateMomentOverlays` - an array of Codable structs
+    /// needs the same Firestore.Encoder wrapper trick.
+    func updateMomentSpeedKeyframes(momentId: String, keyframes: [SpeedKeyframe], completion: @escaping (Error?) -> Void) {
+        guard let user = user, !momentId.isEmpty else {
+            completion(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+
+        struct SpeedKeyframesFieldWrapper: Encodable {
+            var speedKeyframes: [SpeedKeyframe]
+        }
+
+        do {
+            let encoded = try Firestore.Encoder().encode(SpeedKeyframesFieldWrapper(speedKeyframes: keyframes))
             Firestore.firestore()
                 .collection("users").document(user.uid)
                 .collection("moments").document(momentId)
