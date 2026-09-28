@@ -94,6 +94,9 @@ struct AssetLibraryView: View {
     @State private var editingTarget: AssetEditingTarget? = nil
     @State private var actionErrorMessage: String? = nil
 
+    @State private var assetPendingAction: LibraryAsset? = nil
+    @State private var showActionsDialog = false
+
     var body: some View {
         NavigationView {
             List {
@@ -129,48 +132,23 @@ struct AssetLibraryView: View {
 
                 Section("Library") {
                     ForEach(libraryAssets) { asset in
-                        assetRow(asset)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if asset.isDeletable {
-                                    Button(role: .destructive) {
-                                        assetPendingDelete = asset
-                                        showDeleteDialog = true
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                                if asset.isRenamable {
-                                    Button {
-                                        renamingAsset = asset
-                                        renameText = asset.name
-                                    } label: {
-                                        Label("Rename", systemImage: "pencil")
-                                    }
-                                    .tint(.blue)
-                                }
-                                // Editing overwrites the asset's own file in
-                                // place, so it only makes sense for a real
-                                // user asset with somewhere writable to
-                                // overwrite - not a bundled one. Duplicate
-                                // has no such restriction: it always creates
-                                // a brand-new user asset, so it's offered
-                                // for bundled assets too (the way to turn a
-                                // bundled starter into a customizable copy).
-                                if asset.isDeletable {
-                                    Button {
-                                        startEditing(asset)
-                                    } label: {
-                                        Label("Edit", systemImage: "crop")
-                                    }
-                                    .tint(.orange)
-                                }
-                                Button {
-                                    duplicateAsset(asset)
+                        Button {
+                            assetPendingAction = asset
+                            showActionsDialog = true
+                        } label: {
+                            assetRow(asset)
+                        }
+                        .buttonStyle(.plain)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            if asset.isDeletable {
+                                Button(role: .destructive) {
+                                    assetPendingDelete = asset
+                                    showDeleteDialog = true
                                 } label: {
-                                    Label("Duplicate", systemImage: "plus.square.on.square")
+                                    Label("Delete", systemImage: "trash")
                                 }
-                                .tint(.indigo)
                             }
+                        }
                     }
 
                     if let deleteErrorMessage {
@@ -202,6 +180,37 @@ struct AssetLibraryView: View {
             TextField("Name", text: $renameText)
             Button("Save") { commitRename() }
             Button("Cancel", role: .cancel) { renamingAsset = nil }
+        }
+        // Tapping a row is the entry point for everything except Delete
+        // (which stays a swipe action, deliberately, so it's never one
+        // tap away by accident). A 3-option-plus-Cancel sheet doesn't fit
+        // appConfirmationDialog's primary/secondary shape, same reasoning
+        // as MomentsLibraryView's own delete-flow dialog.
+        .confirmationDialog(
+            assetPendingAction?.name ?? "Asset",
+            isPresented: $showActionsDialog,
+            titleVisibility: .visible
+        ) {
+            if let asset = assetPendingAction {
+                if asset.isRenamable {
+                    Button("Rename") {
+                        renamingAsset = asset
+                        renameText = asset.name
+                    }
+                }
+                // Editing overwrites the asset's own file in place, so it
+                // only makes sense for a real user asset with somewhere
+                // writable to overwrite - not a bundled one.
+                if asset.isDeletable {
+                    Button("Edit") { startEditing(asset) }
+                }
+                // Duplicate has no such restriction: it always creates a
+                // brand-new user asset, so it's offered for bundled
+                // assets too (the way to turn a bundled starter into a
+                // customizable copy).
+                Button("Duplicate") { duplicateAsset(asset) }
+            }
+            Button("Cancel", role: .cancel) { assetPendingAction = nil }
         }
         .appConfirmationDialog(
             isPresented: $showDeleteDialog,
