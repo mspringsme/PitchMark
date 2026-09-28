@@ -183,6 +183,7 @@ struct MomentDetailView: View {
                     videoURL: url,
                     initialAudioOverlays: moment.audioOverlays ?? [],
                     initialOriginalVolume: moment.originalAudioVolume ?? 1.0,
+                    initialOriginalVolumeKeyframes: moment.originalVolumeKeyframes ?? [],
                     onExported: { reloadPlayer() }
                 )
                     .environmentObject(authManager)

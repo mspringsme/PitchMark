@@ -57,6 +57,10 @@ struct Moment: Identifiable, Codable {
     var audioOverlays: [AudioOverlayItem]? = nil
     /// nil/1.0 = unchanged, 0 = muted. Same Optional reasoning.
     var originalAudioVolume: Double? = nil
+    /// 2026-09-28 - lets the original track's volume vary over time
+    /// instead of staying flat. Nil/empty means "flat `originalAudioVolume`,
+    /// unchanged" - same Optional reasoning as every other field here.
+    var originalVolumeKeyframes: [VolumeKeyframe]? = nil
 
     init(
         createdAt: Date = Date(),
@@ -73,7 +77,8 @@ struct Moment: Identifiable, Codable {
         overlays: [OverlayItem]? = nil,
         speedKeyframes: [SpeedKeyframe]? = nil,
         audioOverlays: [AudioOverlayItem]? = nil,
-        originalAudioVolume: Double? = nil
+        originalAudioVolume: Double? = nil,
+        originalVolumeKeyframes: [VolumeKeyframe]? = nil
     ) {
         self.createdAt = createdAt
         self.teamId = teamId
@@ -90,6 +95,7 @@ struct Moment: Identifiable, Codable {
         self.speedKeyframes = speedKeyframes
         self.audioOverlays = audioOverlays
         self.originalAudioVolume = originalAudioVolume
+        self.originalVolumeKeyframes = originalVolumeKeyframes
     }
 
     /// The user-set title if there is one, else the tagged player's name,
@@ -335,6 +341,32 @@ extension AuthManager {
 
         do {
             let encoded = try Firestore.Encoder().encode(AudioOverlaysFieldWrapper(audioOverlays: audioOverlays))
+            Firestore.firestore()
+                .collection("users").document(user.uid)
+                .collection("moments").document(momentId)
+                .updateData(encoded) { error in
+                    completion(error)
+                }
+        } catch {
+            completion(error)
+        }
+    }
+
+    /// Same shape as `updateMomentAudioOverlays` - `originalVolumeKeyframes`
+    /// is also an array of Codable structs, not a primitive
+    /// `updateMomentFields` can carry directly.
+    func updateMomentOriginalVolumeKeyframes(momentId: String, keyframes: [VolumeKeyframe], completion: @escaping (Error?) -> Void) {
+        guard let user = user, !momentId.isEmpty else {
+            completion(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+
+        struct OriginalVolumeKeyframesFieldWrapper: Encodable {
+            var originalVolumeKeyframes: [VolumeKeyframe]
+        }
+
+        do {
+            let encoded = try Firestore.Encoder().encode(OriginalVolumeKeyframesFieldWrapper(originalVolumeKeyframes: keyframes))
             Firestore.firestore()
                 .collection("users").document(user.uid)
                 .collection("moments").document(momentId)

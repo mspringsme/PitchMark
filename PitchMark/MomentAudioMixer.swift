@@ -26,6 +26,26 @@ enum AudioMixError: Error {
     case exportFailed
 }
 
+/// Feeds a VolumeKeyframe list into a track's mix automation.
+/// AVMutableAudioMixInputParameters.setVolume(_:at:) is itself a step
+/// function - the volume set at a given time holds until the next
+/// setVolume call - so this needs no interpolation math of its own, just
+/// an explicit point at time zero (seeded from the first keyframe, or
+/// the flat/legacy value if there are none) so playback before the
+/// first keyframe is never left at the API's own default rather than a
+/// value the editor actually showed.
+private func applyVolumeAutomation(_ params: AVMutableAudioMixInputParameters, flatVolume: Double, keyframes: [VolumeKeyframe]) {
+    let sorted = keyframes.sorted { $0.time < $1.time }
+    guard let first = sorted.first else {
+        params.setVolume(Float(flatVolume), at: .zero)
+        return
+    }
+    params.setVolume(Float(first.volume), at: .zero)
+    for keyframe in sorted where keyframe.time > 0 {
+        params.setVolume(Float(keyframe.volume), at: CMTime(seconds: keyframe.time, preferredTimescale: 600))
+    }
+}
+
 /// Builds the video (unmodified, transform carried over explicitly) +
 /// original-audio-at-its-own-volume + one additional audio track per
 /// overlay (inserted at its own `startTime`, clipped so it never extends
@@ -37,6 +57,7 @@ func buildAudioMixedComposition(
     sourceURL: URL,
     audioOverlays: [AudioOverlayItem],
     originalVolume: Double,
+    originalVolumeKeyframes: [VolumeKeyframe],
     resolveAudioURL: @escaping (String) -> URL?,
     completion: @escaping (Result<(composition: AVMutableComposition, audioMix: AVMutableAudioMix), Error>) -> Void
 ) {
@@ -67,7 +88,7 @@ func buildAudioMixedComposition(
                let compOriginalAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
                 try compOriginalAudioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: totalDuration), of: sourceAudioTrack, at: .zero)
                 let params = AVMutableAudioMixInputParameters(track: compOriginalAudioTrack)
-                params.setVolume(Float(originalVolume), at: .zero)
+                applyVolumeAutomation(params, flatVolume: originalVolume, keyframes: originalVolumeKeyframes)
                 audioMixParams.append(params)
             }
 
@@ -85,7 +106,7 @@ func buildAudioMixedComposition(
 
                 try compOverlayTrack.insertTimeRange(CMTimeRange(start: .zero, duration: insertDuration), of: overlaySourceTrack, at: startTime)
                 let params = AVMutableAudioMixInputParameters(track: compOverlayTrack)
-                params.setVolume(Float(overlay.volume), at: .zero)
+                applyVolumeAutomation(params, flatVolume: overlay.volume, keyframes: overlay.volumeKeyframes ?? [])
                 audioMixParams.append(params)
             }
         } catch {
@@ -107,6 +128,7 @@ func exportAudioMixedMoment(
     sourceURL: URL,
     audioOverlays: [AudioOverlayItem],
     originalVolume: Double,
+    originalVolumeKeyframes: [VolumeKeyframe],
     resolveAudioURL: @escaping (String) -> URL?,
     completion: @escaping (Result<URL, Error>) -> Void
 ) {
@@ -114,6 +136,7 @@ func exportAudioMixedMoment(
         sourceURL: sourceURL,
         audioOverlays: audioOverlays,
         originalVolume: originalVolume,
+        originalVolumeKeyframes: originalVolumeKeyframes,
         resolveAudioURL: resolveAudioURL
     ) { result in
         switch result {
