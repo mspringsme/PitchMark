@@ -10,6 +10,13 @@
 //  only, tap opens a menu" feedback already applied to the image
 //  library).
 //
+//  Works from `[LibraryAudioAsset]` (AudioAssetItem.swift), not
+//  `[AudioAssetItem]` directly, so bundled default sounds (added later
+//  the same day) show up identically to user-recorded ones - `Rename`
+//  and swipe-to-delete are gated on `isRenamable`/`isDeletable`, false
+//  for anything bundled, same as AssetLibraryView's own bundled Circle/
+//  Arrow handling.
+//
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
 //
@@ -18,7 +25,7 @@ import SwiftUI
 import AVFoundation
 
 struct AudioAssetLibraryView: View {
-    var onPick: ((AudioAssetItem) -> Void)? = nil
+    var onPick: ((LibraryAudioAsset) -> Void)? = nil
     /// true when hosted inside `AssetLibraryHubView`'s own NavigationView
     /// + segmented switcher - skips this view's own NavigationView/title/
     /// Done button so there's only ever one nav bar on screen. false (the
@@ -29,17 +36,17 @@ struct AudioAssetLibraryView: View {
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
 
-    @State private var audioAssets: [AudioAssetItem] = []
+    @State private var audioAssets: [LibraryAudioAsset] = []
     @State private var showRecorder = false
     @State private var showMicDeniedDialog = false
 
-    @State private var assetPendingAction: AudioAssetItem? = nil
+    @State private var assetPendingAction: LibraryAudioAsset? = nil
     @State private var showAudioActionsDialog = false
 
-    @State private var renamingAsset: AudioAssetItem? = nil
+    @State private var renamingAsset: LibraryAudioAsset? = nil
     @State private var renameText = ""
 
-    @State private var assetPendingDelete: AudioAssetItem? = nil
+    @State private var assetPendingDelete: LibraryAudioAsset? = nil
     @State private var showDeleteDialog = false
     @State private var deleteErrorMessage: String? = nil
 
@@ -95,9 +102,11 @@ struct AudioAssetLibraryView: View {
                 Button(playingAssetId == asset.id ? "Stop" : "Play") {
                     togglePreview(asset)
                 }
-                Button("Rename") {
-                    renamingAsset = asset
-                    renameText = asset.name
+                if asset.isRenamable {
+                    Button("Rename") {
+                        renamingAsset = asset
+                        renameText = asset.name
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {
@@ -147,11 +156,13 @@ struct AudioAssetLibraryView: View {
                     ForEach(audioAssets) { asset in
                         assetRow(asset)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    assetPendingDelete = asset
-                                    showDeleteDialog = true
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+                                if asset.isDeletable {
+                                    Button(role: .destructive) {
+                                        assetPendingDelete = asset
+                                        showDeleteDialog = true
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
                                 }
                             }
                     }
@@ -167,7 +178,7 @@ struct AudioAssetLibraryView: View {
     }
 
     @ViewBuilder
-    private func assetRow(_ asset: AudioAssetItem) -> some View {
+    private func assetRow(_ asset: LibraryAudioAsset) -> some View {
         Button {
             if let onPick {
                 onPick(asset)
@@ -189,6 +200,11 @@ struct AudioAssetLibraryView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if !asset.isDeletable {
+                    Text("Bundled")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.vertical, 2)
             .contentShape(Rectangle())
@@ -212,29 +228,29 @@ struct AudioAssetLibraryView: View {
     }
 
     private func refreshAssets() {
-        authManager.loadAudioAssets { audioAssets = $0 }
+        authManager.loadLibraryAudioAssets { audioAssets = $0 }
     }
 
-    private func togglePreview(_ asset: AudioAssetItem) {
+    private func togglePreview(_ asset: LibraryAudioAsset) {
         if playingAssetId == asset.id {
             previewPlayer?.stop()
             previewPlayer = nil
             playingAssetId = nil
             return
         }
-        guard let id = asset.id, let url = localAudioAssetURL(for: id) else { return }
+        guard let url = asset.fileURL else { return }
         do {
             let player = try AVAudioPlayer(contentsOf: url)
             player.play()
             previewPlayer = player
-            playingAssetId = id
+            playingAssetId = asset.id
         } catch {
             debugLog("❌ audio preview failed:", error.localizedDescription)
         }
     }
 
     private func commitRename() {
-        guard let asset = renamingAsset, let assetId = asset.id else {
+        guard let asset = renamingAsset, let assetId = asset.backingAssetId else {
             renamingAsset = nil
             return
         }
@@ -247,7 +263,7 @@ struct AudioAssetLibraryView: View {
     }
 
     private func deletePendingAsset() {
-        guard let asset = assetPendingDelete, let assetId = asset.id else { return }
+        guard let asset = assetPendingDelete, let assetId = asset.backingAssetId else { return }
         assetPendingDelete = nil
         deleteErrorMessage = nil
         authManager.deleteAudioAsset(assetId: assetId) { error in

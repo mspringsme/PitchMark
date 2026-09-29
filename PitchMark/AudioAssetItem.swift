@@ -4,11 +4,17 @@
 //
 //  2026-09-28: user-created audio library assets - local .m4a storage +
 //  Firestore metadata-only sync, mirroring AssetItem.swift's exact
-//  pattern (which itself mirrors Moment.swift's). Unlike the image
-//  library, there are no bundled defaults - no equivalent "ship a couple
-//  of generic audio clips" makes sense here, so there's no LibraryAsset-
-//  style bundled/user-created unification either; every AudioAssetItem
-//  is a real Firestore-backed document.
+//  pattern (which itself mirrors Moment.swift's).
+//
+//  2026-09-28 (later same day): bundled default sound effects were added
+//  - a licensed CC0 clip (see BundledAudio/ and
+//  ~/Documents/Art Created/PitchMarkAudio/license-log.csv for sourcing)
+//  bundled straight into the app, the audio equivalent of AssetItem's
+//  Circle/Arrow. `BundledAudioAsset`/`LibraryAudioAsset` mirror
+//  AssetItem.swift's `BundledAsset`/`LibraryAsset` shape exactly, so
+//  every place that plays or mixes audio (MomentAudioEditorView,
+//  MomentAudioMixer) resolves a clip's file through one `fileURL`
+//  regardless of whether it's bundled or user-created.
 //
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
@@ -64,6 +70,69 @@ func saveLocalAudioAsset(from sourceURL: URL, assetId: String) -> Bool {
 func removeLocalAudioAsset(assetId: String) {
     guard let url = localAudioAssetURL(for: assetId) else { return }
     try? FileManager.default.removeItem(at: url)
+}
+
+// MARK: - Bundled default audio assets (no Firestore, not deletable)
+
+struct BundledAudioAsset: Identifiable {
+    let id: String
+    let name: String
+    /// Filename (with extension) under the BundledAudio/ resource folder.
+    let resourceFileName: String
+    /// Known up front rather than probed at runtime - this is a fixed
+    /// bundled file, the same reasoning AudioAssetItem stores a
+    /// user-recorded clip's duration instead of re-measuring it each time.
+    let durationSeconds: Double
+}
+
+let bundledAudioAssets: [BundledAudioAsset] = [
+    BundledAudioAsset(id: "bundled-arcade-start-jump", name: "Arcade Start", resourceFileName: "ArcadeStartJump.wav", durationSeconds: 0.95),
+]
+
+func bundledAudioAssetURL(for asset: BundledAudioAsset) -> URL? {
+    let fileName = asset.resourceFileName as NSString
+    return Bundle.main.url(forResource: fileName.deletingPathExtension, withExtension: fileName.pathExtension)
+}
+
+// MARK: - Unified library presentation (mirrors AssetItem.swift's LibraryAsset)
+
+/// Presents bundled and user-created audio identically - to the picker
+/// UI and to the mixer alike, via one `fileURL` - so neither has to
+/// branch on where a clip came from.
+struct LibraryAudioAsset: Identifiable {
+    let id: String
+    var name: String
+    let durationSeconds: Double
+    let isRenamable: Bool
+    let isDeletable: Bool
+    /// nil for bundled assets - there's no AudioAssetItem/Firestore doc to edit.
+    let backingAssetId: String?
+    let fileURL: URL?
+
+    static func bundled(_ asset: BundledAudioAsset) -> LibraryAudioAsset {
+        LibraryAudioAsset(
+            id: asset.id,
+            name: asset.name,
+            durationSeconds: asset.durationSeconds,
+            isRenamable: false,
+            isDeletable: false,
+            backingAssetId: nil,
+            fileURL: bundledAudioAssetURL(for: asset)
+        )
+    }
+
+    static func userCreated(_ asset: AudioAssetItem) -> LibraryAudioAsset? {
+        guard let id = asset.id else { return nil }
+        return LibraryAudioAsset(
+            id: id,
+            name: asset.name,
+            durationSeconds: asset.durationSeconds,
+            isRenamable: true,
+            isDeletable: true,
+            backingAssetId: id,
+            fileURL: localAudioAssetURL(for: id)
+        )
+    }
 }
 
 // MARK: - AuthManager persistence
@@ -127,6 +196,15 @@ extension AuthManager {
                 } ?? []
                 completion(assets)
             }
+    }
+
+    /// Bundled defaults + user-created clips, unified - the picker/hub
+    /// UI and MomentAudioEditorView should load through this, not
+    /// `loadAudioAssets` directly, so bundled sounds are always included.
+    func loadLibraryAudioAssets(completion: @escaping ([LibraryAudioAsset]) -> Void) {
+        loadAudioAssets { assets in
+            completion(bundledAudioAssets.map(LibraryAudioAsset.bundled) + assets.compactMap(LibraryAudioAsset.userCreated))
+        }
     }
 
     func deleteAudioAsset(assetId: String, completion: @escaping (Error?) -> Void) {

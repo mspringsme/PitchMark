@@ -87,7 +87,7 @@ struct MomentAudioEditorView: View {
     @State private var originalWaveformPeaks: [Float] = []
 
     @State private var audioOverlays: [AudioOverlayItem]
-    @State private var audioAssetsById: [String: AudioAssetItem] = [:]
+    @State private var audioAssetsById: [String: LibraryAudioAsset] = [:]
     /// Keyed by asset id, not overlay id, so two placed clips referencing
     /// the same library asset share one decode. Populated lazily -
     /// missing key means "not requested yet," not "silence."
@@ -521,8 +521,8 @@ struct MomentAudioEditorView: View {
         )
     }
 
-    private func addOverlay(for asset: AudioAssetItem) {
-        guard let id = asset.id else { return }
+    private func addOverlay(for asset: LibraryAudioAsset) {
+        let id = asset.id
         audioAssetsById[id] = asset
         loadWaveformIfNeeded(for: id)
         let overlay = AudioOverlayItem(assetId: id, startTime: currentTime, volume: 1.0)
@@ -536,7 +536,7 @@ struct MomentAudioEditorView: View {
     /// failure too) means "tried, nothing to show," so this never
     /// re-triggers a decode that already ran.
     private func loadWaveformIfNeeded(for assetId: String) {
-        guard overlayWaveformPeaksByAssetId[assetId] == nil, let url = localAudioAssetURL(for: assetId) else { return }
+        guard overlayWaveformPeaksByAssetId[assetId] == nil, let url = audioAssetsById[assetId]?.fileURL else { return }
         extractWaveformPeaks(from: url, bucketCount: waveformBucketCount) { result in
             switch result {
             case .success(let peaks):
@@ -665,9 +665,9 @@ struct MomentAudioEditorView: View {
             let loadedDuration = try? await asset.load(.duration)
             await MainActor.run {
                 totalDuration = loadedDuration?.seconds.isFinite == true ? loadedDuration!.seconds : 0
-                authManager.loadAudioAssets { assets in
+                authManager.loadLibraryAudioAssets { assets in
                     for asset in assets {
-                        if let id = asset.id { audioAssetsById[id] = asset }
+                        audioAssetsById[asset.id] = asset
                     }
                     // Only the assets already placed as overlays need a
                     // waveform up front - the rest load lazily from
@@ -731,7 +731,7 @@ struct MomentAudioEditorView: View {
     }
 
     private func resolveAudioURL(_ assetId: String) -> URL? {
-        localAudioAssetURL(for: assetId)
+        audioAssetsById[assetId]?.fileURL
     }
 
     /// Rebuilds the mixed composition and swaps it in, preserving
