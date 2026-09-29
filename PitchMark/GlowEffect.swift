@@ -44,6 +44,16 @@ struct GlowRenderParams {
 }
 
 enum GlowEffect {
+    /// A concrete (non-Optional) sRGB space, reused for both the shared
+    /// context's working space and every `createCGImage` output below -
+    /// one source of truth rather than boxing an `Optional<CGColorSpace>`
+    /// into `Any` for the context's options dictionary (which risks the
+    /// options lookup silently not finding what it expects) and letting
+    /// `createCGImage` calls each re-derive it separately. `CGColorSpace(name:)`
+    /// returning nil for sRGB is not realistically reachable, but the
+    /// guard keeps this a real `CGColorSpace`, never an implicit force-unwrap.
+    static let colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+
     /// Created once, reused for every glow render - preview can call
     /// this every frame of a pulsing overlay, and constructing a
     /// CIContext (compiling the Metal/GPU pipeline) is too expensive to
@@ -51,10 +61,7 @@ enum GlowEffect {
     /// which creates a `CIContext()` fresh per one-off call - fine for
     /// something that runs once per photo import, wrong for something
     /// that can run 30 times a second.
-    static let sharedContext: CIContext = {
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
-        return CIContext(options: [.workingColorSpace: colorSpace as Any])
-    }()
+    static let sharedContext = CIContext(options: [.workingColorSpace: colorSpace])
 
     /// Hard cap independent of the UI slider or whatever a pulse might
     /// scale a radius up to - keeps a large/pulsed radius from ever
@@ -96,9 +103,10 @@ enum GlowEffect {
     /// reduce opacity) -> add a very low-amplitude, glow-shape-masked
     /// noise layer to break up 8-bit banding after re-compression ->
     /// expand the extent by the blur radius so nothing clips -> render
-    /// through `sharedContext` at half-float (`.RGBAh`) so compositing
-    /// stays float until whatever consumes the returned CGImage finally
-    /// quantizes it at encode/display time.
+    /// through `sharedContext` to a plain 8-bit CGImage (every filter
+    /// above still runs at full internal Core Image precision regardless
+    /// of this final output format - see the format-choice comment at
+    /// the bottom of this function for why it isn't half-float).
     static func render(sourceImage: CGImage, params: GlowRenderParams, referenceSize: CGFloat) -> CGImage? {
         let intensity = min(max(params.intensity, 0), 1)
         guard intensity > 0 else { return nil }
@@ -167,11 +175,24 @@ enum GlowEffect {
             finalImage = finalImage.transformed(by: CGAffineTransform(scaleX: 1 / workingScale, y: 1 / workingScale))
         }
 
+        // .RGBA8, not the half-float .RGBAh this originally used: every
+        // Core Image filter above still runs at full internal precision
+        // regardless of the *output* format asked for here, so this
+        // doesn't lose the "stay in float while compositing" intent -
+        // but the CGImage this produces gets consumed as plain
+        // CALayer.contents by both SwiftUI's Image and, more
+        // importantly, AVVideoCompositionCoreAnimationTool's offline
+        // export compositor, and half-float CGImage content is not
+        // reliably supported there. createCGImage silently returning
+        // nil for that combination - not a crash, not an error, just no
+        // glow layer ever added - is the likely cause of a real bug:
+        // the glow rendering correctly in the live preview but never
+        // appearing in an exported video ("doesn't bake in").
         return sharedContext.createCGImage(
             finalImage,
             from: finalImage.extent,
-            format: .RGBAh,
-            colorSpace: sharedContext.workingColorSpace
+            format: .RGBA8,
+            colorSpace: colorSpace
         )
     }
 }
