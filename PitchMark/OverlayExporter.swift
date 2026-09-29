@@ -205,6 +205,89 @@ func exportMomentWithOverlays(
             opacityAnimation.fillMode = .removed
             opacityAnimation.isRemovedOnCompletion = false
             layer.add(opacityAnimation, forKey: "opacity")
+
+            // Glow, added *below* the main layer (added to parentLayer
+            // first) so it renders behind it - see GlowSettings.swift/
+            // GlowEffect.swift. Reuses this same position/opacity
+            // animation timing; only contents (and, for a pulsing glow,
+            // bounds.size - see below) differ from the main layer.
+            if let glowSettings = item.glow, glowSettings.isEnabled {
+                let glowLayer = CALayer()
+                glowLayer.compositingFilter = "screenBlendMode"
+                glowLayer.opacity = 0
+                glowLayer.position = layer.position
+                parentLayer.insertSublayer(glowLayer, below: layer)
+
+                if glowSettings.pulse.isEnabled {
+                    // A "contents" CAKeyframeAnimation can only jump
+                    // between CGImages (calculationMode .discrete below -
+                    // there's no such thing as Core Animation
+                    // interpolating between two bitmaps), so unlike
+                    // position/transform this needs *enough* samples to
+                    // look smooth rather than visibly stepping, not just
+                    // "no worse than 1/30s." Scales with the pulse's own
+                    // speed - at least 6 samples per cycle - floored at
+                    // 8/s for a slow pulse (no point sampling faster than
+                    // that) and capped at the same 1/30s position uses
+                    // for a fast one (no point sampling faster than the
+                    // video's own frame rate). Re-rendering a Core Image
+                    // blur is far more expensive than sampling a
+                    // keyframe value, so this still meaningfully bounds
+                    // cost for the common (slower) pulse speeds even
+                    // though it can't reduce it for a fast one.
+                    let glowSampleInterval = 1.0 / min(max(glowSettings.pulse.speed * 6, 8), 1 / exportSampleInterval)
+                    let (glowTimes, _) = sampledTransforms(for: item, sampleInterval: glowSampleInterval)
+                    let glowSamples: [(time: Double, size: CGSize, image: CGImage)] = glowTimes.compactMap { sampleTime in
+                        guard let params = resolvedGlow(glowSettings, at: sampleTime),
+                              let cgGlow = GlowEffect.render(sourceImage: cgImage, params: params, referenceSize: overlayBaseSize) else {
+                            return nil
+                        }
+                        let ratio = CGFloat(cgGlow.width) / CGFloat(max(cgImage.width, 1))
+                        return (sampleTime, CGSize(width: overlayBaseSize * ratio, height: overlayBaseSize * ratio), cgGlow)
+                    }
+
+                    // If the pulse dips to nothing at some sampled
+                    // moments (very high amount + low base intensity),
+                    // those samples simply drop out here - the
+                    // remaining ones still animate correctly, just
+                    // without a frame at that exact instant.
+                    if !glowSamples.isEmpty {
+                        let glowKeyTimes = glowSamples.map { NSNumber(value: ($0.time - item.startTime) / animDuration) }
+
+                        let boundsAnimation = CAKeyframeAnimation(keyPath: "bounds")
+                        boundsAnimation.values = glowSamples.map { NSValue(cgRect: CGRect(origin: .zero, size: $0.size)) }
+                        boundsAnimation.keyTimes = glowKeyTimes
+                        boundsAnimation.calculationMode = .linear
+                        boundsAnimation.beginTime = beginTime
+                        boundsAnimation.duration = animDuration
+                        boundsAnimation.fillMode = .removed
+                        boundsAnimation.isRemovedOnCompletion = false
+                        glowLayer.add(boundsAnimation, forKey: "bounds")
+
+                        let contentsAnimation = CAKeyframeAnimation(keyPath: "contents")
+                        contentsAnimation.values = glowSamples.map { $0.image }
+                        contentsAnimation.keyTimes = glowKeyTimes
+                        contentsAnimation.calculationMode = .discrete
+                        contentsAnimation.beginTime = beginTime
+                        contentsAnimation.duration = animDuration
+                        contentsAnimation.fillMode = .removed
+                        contentsAnimation.isRemovedOnCompletion = false
+                        glowLayer.add(contentsAnimation, forKey: "contents")
+
+                        glowLayer.add(positionAnimation, forKey: "position")
+                        glowLayer.add(opacityAnimation, forKey: "opacity")
+                    }
+                } else if let params = resolvedGlow(glowSettings, at: item.startTime),
+                          let cgGlow = GlowEffect.render(sourceImage: cgImage, params: params, referenceSize: overlayBaseSize) {
+                    // Static glow - render once, no contents animation.
+                    let ratio = CGFloat(cgGlow.width) / CGFloat(max(cgImage.width, 1))
+                    let size = overlayBaseSize * ratio
+                    glowLayer.bounds = CGRect(x: 0, y: 0, width: size, height: size)
+                    glowLayer.contents = cgGlow
+                    glowLayer.add(positionAnimation, forKey: "position")
+                    glowLayer.add(opacityAnimation, forKey: "opacity")
+                }
+            }
         }
 
         videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parentLayer)

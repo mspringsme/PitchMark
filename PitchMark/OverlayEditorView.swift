@@ -329,30 +329,55 @@ struct OverlayEditorView: View {
                 : baseTransform
 
             let baseSize = overlayBaseSizeFraction * min(videoRect.width, videoRect.height)
+            let centerX = videoRect.minX + liveTransform.position.x * videoRect.width
+            let centerY = videoRect.minY + liveTransform.position.y * videoRect.height
 
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .frame(width: baseSize, height: baseSize)
-                .opacity(liveTransform.opacity)
-                .rotationEffect(.radians(liveTransform.rotation))
-                .scaleEffect(liveTransform.scale)
-                .overlay {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.yellow, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
-                            .rotationEffect(.radians(liveTransform.rotation))
-                            .scaleEffect(liveTransform.scale)
+            ZStack {
+                // Glow, rendered behind the overlay itself - see
+                // GlowEffect.swift for why this needs no whole-frame
+                // Core Image pipeline: it only ever depends on the
+                // overlay's own image, never the video underneath, so it
+                // composites via the same screen-blend feature SwiftUI
+                // already exposes rather than a rewritten preview path.
+                // `currentTime` here is the synced AVPlayer's own
+                // position, not wall-clock, so a pulsing glow already
+                // reads "frame time" for free.
+                if let glowParams = resolvedGlow(item.glow, at: currentTime),
+                   let sourceCG = image.cgImage,
+                   let glowCG = GlowEffect.render(sourceImage: sourceCG, params: glowParams, referenceSize: baseSize) {
+                    let glowSizeRatio = CGFloat(glowCG.width) / CGFloat(max(sourceCG.width, 1))
+                    Image(decorative: glowCG, scale: 1)
+                        .resizable()
+                        .frame(width: baseSize * glowSizeRatio, height: baseSize * glowSizeRatio)
+                        .opacity(liveTransform.opacity)
+                        .rotationEffect(.radians(liveTransform.rotation))
+                        .scaleEffect(liveTransform.scale)
+                        .blendMode(.screen)
+                        .position(x: centerX, y: centerY)
+                        .allowsHitTesting(false)
+                }
+
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: baseSize, height: baseSize)
+                    .opacity(liveTransform.opacity)
+                    .rotationEffect(.radians(liveTransform.rotation))
+                    .scaleEffect(liveTransform.scale)
+                    .overlay {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(Color.yellow, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                                .rotationEffect(.radians(liveTransform.rotation))
+                                .scaleEffect(liveTransform.scale)
+                        }
                     }
-                }
-                .position(
-                    x: videoRect.minX + liveTransform.position.x * videoRect.width,
-                    y: videoRect.minY + liveTransform.position.y * videoRect.height
-                )
-                .onTapGesture {
-                    selectOverlay(item.id)
-                }
-                .gesture(dragGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
+                    .position(x: centerX, y: centerY)
+                    .onTapGesture {
+                        selectOverlay(item.id)
+                    }
+                    .gesture(dragGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
+            }
         }
     }
 
@@ -475,9 +500,98 @@ struct OverlayEditorView: View {
                     format: formattedTime,
                     onEditingChanged: { editing in if !editing { persistOverlays() } }
                 )
+
+                Divider()
+
+                glowSection(index: index)
             }
             .padding(.horizontal)
             .padding(.top, 4)
+        }
+    }
+
+    /// Binds directly into `overlays[index].glow`, substituting a fresh
+    /// `GlowSettings()` for a nil value on read - the same "materialize
+    /// a default on first touch" shape `overlayVolumeKeyframesBinding`
+    /// uses in MomentAudioEditorView for an analogous Optional-field
+    /// binding. Setting doesn't persist by itself - matches how Start/
+    /// End's direct `$overlays[index].foo` bindings work: the slider's
+    /// own binding updates local state (and so the live preview) on
+    /// every drag tick, while `labeledSlider`'s `onEditingChanged`
+    /// defers the actual Firestore write to release.
+    private func glowBinding(index: Int) -> Binding<GlowSettings> {
+        Binding(
+            get: { overlays[index].glow ?? GlowSettings() },
+            set: { overlays[index].glow = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private func glowSection(index: Int) -> some View {
+        let glow = glowBinding(index: index)
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Glow")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { glow.wrappedValue.isEnabled },
+                    set: { glow.wrappedValue.isEnabled = $0; persistOverlays() }
+                ))
+                .labelsHidden()
+            }
+
+            if glow.wrappedValue.isEnabled {
+                HStack {
+                    Text("Color")
+                        .font(.caption)
+                        .frame(width: 44, alignment: .leading)
+                    ColorPicker("", selection: Binding(
+                        get: { glow.wrappedValue.color.color },
+                        set: { glow.wrappedValue.color = GlowColor(color: $0); persistOverlays() }
+                    ))
+                    .labelsHidden()
+                    Spacer()
+                }
+
+                labeledSlider(
+                    "Intensity", value: glow.intensity, range: 0...1,
+                    format: { String(format: "%.0f%%", $0 * 100) },
+                    onEditingChanged: { editing in if !editing { persistOverlays() } }
+                )
+                labeledSlider(
+                    "Radius", value: glow.radius, range: 0...40,
+                    format: { String(format: "%.0fpt", $0) },
+                    onEditingChanged: { editing in if !editing { persistOverlays() } }
+                )
+
+                HStack {
+                    Text("Pulse")
+                        .font(.caption)
+                        .frame(width: 44, alignment: .leading)
+                    Spacer()
+                    Toggle("", isOn: Binding(
+                        get: { glow.wrappedValue.pulse.isEnabled },
+                        set: { glow.wrappedValue.pulse.isEnabled = $0; persistOverlays() }
+                    ))
+                    .labelsHidden()
+                }
+
+                if glow.wrappedValue.pulse.isEnabled {
+                    labeledSlider(
+                        "Speed", value: glow.pulse.speed, range: 0.1...5,
+                        format: { String(format: "%.1f/s", $0) },
+                        onEditingChanged: { editing in if !editing { persistOverlays() } }
+                    )
+                    labeledSlider(
+                        "Amount", value: glow.pulse.amount, range: 0...1,
+                        format: { String(format: "%.0f%%", $0 * 100) },
+                        onEditingChanged: { editing in if !editing { persistOverlays() } }
+                    )
+                }
+            }
         }
     }
 
