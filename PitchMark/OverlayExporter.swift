@@ -269,7 +269,9 @@ func exportMomentWithOverlays(
                     // those samples simply drop out here - the
                     // remaining ones still animate correctly, just
                     // without a frame at that exact instant.
-                    if !glowSamples.isEmpty {
+                    if glowSamples.isEmpty {
+                        debugLog("⚠️ pulsing glow produced no samples for overlay \(item.id) - source \(cgImage.width)x\(cgImage.height)px")
+                    } else {
                         let glowKeyTimes = glowSamples.map { NSNumber(value: ($0.time - item.startTime) / animDuration) }
 
                         let boundsAnimation = CAKeyframeAnimation(keyPath: "bounds")
@@ -304,6 +306,15 @@ func exportMomentWithOverlays(
                     glowLayer.contents = cgGlow
                     glowLayer.add(positionAnimation, forKey: "position")
                     glowLayer.add(opacityAnimation, forKey: "opacity")
+                } else {
+                    // GlowEffect.render returned nil (or resolvedGlow
+                    // did) - the glow silently never renders otherwise,
+                    // which is exactly how the last glow-export bug
+                    // ("doesn't bake in") went unnoticed until reported.
+                    // Logged, not just swallowed, so a future case like
+                    // this shows up in the console instead of only a
+                    // missing pixel in the exported file.
+                    debugLog("⚠️ static glow produced no image for overlay \(item.id) - source \(cgImage.width)x\(cgImage.height)px, radius \(glowSettings.radius)pt, referenceSize \(overlayBaseSize)pt")
                 }
             }
         }

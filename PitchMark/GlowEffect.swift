@@ -65,8 +65,14 @@ enum GlowEffect {
 
     /// Hard cap independent of the UI slider or whatever a pulse might
     /// scale a radius up to - keeps a large/pulsed radius from ever
-    /// triggering a pathologically expensive blur.
+    /// triggering a pathologically expensive blur. In UI points, applied
+    /// before the point-to-pixel conversion below.
     static let maxRadius: Double = 60
+
+    /// A second cap, applied *after* converting to the source image's
+    /// own pixel space - see the comment at that conversion for why
+    /// `maxRadius` alone isn't enough. In source pixels.
+    static let maxPixelRadius: Double = 120
 
     /// Long-side cap for the resolution this actually renders at,
     /// independent of the source image's real pixel size or the video's
@@ -115,10 +121,28 @@ enum GlowEffect {
         let sourceExtent = sourceCI.extent
         guard sourceExtent.width > 0, sourceExtent.height > 0, referenceSize > 0 else { return nil }
 
-        // Points -> this source image's own pixel space.
+        // Points -> this source image's own pixel space. `maxRadius`
+        // bounds the *point* value, but a source image's own pixel size
+        // is arbitrary - a Smart Cutout asset (per the spec, downsized
+        // to as much as ~1024px) is far larger in raw pixels than a
+        // small bundled shape, and `pixelsPerPoint` scales directly with
+        // that. Capping only the point value before this multiplication
+        // left the *pixel* radius effectively unbounded: a large cutout
+        // at a typical small on-screen referenceSize could multiply an
+        // already-capped 60pt radius into several hundred pixels, which
+        // cascades into an enormous padded output image a few lines down
+        // (`expandInset` scales with this radius, then the whole image
+        // scales back up by `1/workingScale`) - expensive and slow
+        // enough to plausibly fail `createCGImage` outright during an
+        // export already under memory/CPU pressure from video encoding,
+        // while a small bundled asset never gets close to those numbers.
+        // Real bug, reported by the user as "glow doesn't bake in... on
+        // cutout assets" specifically - `maxPixelRadius` bounds the
+        // worst case regardless of source size or referenceSize.
         let sourcePixelSize = max(sourceExtent.width, sourceExtent.height)
         let pixelsPerPoint = sourcePixelSize / referenceSize
-        let radius = min(max(params.radius, 0), maxRadius) * pixelsPerPoint
+        let rawRadius = min(max(params.radius, 0), maxRadius) * pixelsPerPoint
+        let radius = min(rawRadius, maxPixelRadius)
         guard radius > 0 else { return nil }
 
         let longSide = sourcePixelSize
