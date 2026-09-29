@@ -223,7 +223,7 @@ struct OverlayEditorView: View {
     /// how tall that category's own content is (Glow's, especially, with
     /// pulse enabled) - content that doesn't fit scrolls within this
     /// budget instead of growing the panel and shrinking the video.
-    private let controlPanelHeight: CGFloat = 80
+    private let controlPanelHeight: CGFloat = 100
 
     /// 2026-09-30 - the video previously had no floor at all: it got
     /// whatever was left after every control below it took its own
@@ -234,12 +234,14 @@ struct OverlayEditorView: View {
     /// screen's own measured height, so the video always gets the rest -
     /// not a competing "also flexible" sibling whose actual share
     /// depended on how SwiftUI happened to resolve several flexible
-    /// views at once.
-    private let bottomAreaFraction: CGFloat = 0.2
+    /// views at once. Raised from 0.2 to 0.25 same day, per the user -
+    /// 20% was cramping the Glow tab specifically (Radius/Pulse getting
+    /// cut off at the bottom edge in a follow-up screenshot).
+    private let bottomAreaFraction: CGFloat = 0.25
     /// Floor so the controls stay usable on a short screen even though
-    /// 20% of it would be cramped - on any iPhone this session has
-    /// targeted, 20% alone already exceeds this, so it rarely binds.
-    private let minimumBottomAreaHeight: CGFloat = 200
+    /// 25% of it would be cramped - on any iPhone this session has
+    /// targeted, 25% alone already exceeds this, so it rarely binds.
+    private let minimumBottomAreaHeight: CGFloat = 210
 
     init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem], onExported: @escaping () -> Void = {}) {
         self.momentId = momentId
@@ -253,6 +255,16 @@ struct OverlayEditorView: View {
     var body: some View {
         GeometryReader { screenGeometry in
             let bottomHeight = max(screenGeometry.size.height * bottomAreaFraction, minimumBottomAreaHeight)
+            // The whole screen ignores the safe area (full-bleed video),
+            // but a GeometryReader still reports the device's real safe
+            // area insets even though this view extends into that
+            // region - reading it here lets the controls clear the home
+            // indicator instead of sitting flush against it, where a
+            // swipe-up-to-home gesture would compete with them for the
+            // same touches. Reserved *within* bottomHeight (see
+            // bottomControlsArea's own padding below), not added on top
+            // of it, so the video's own share doesn't shrink further.
+            let bottomSafeInset = screenGeometry.safeAreaInsets.bottom
 
             VStack(spacing: 0) {
                 GeometryReader { geometry in
@@ -273,6 +285,7 @@ struct OverlayEditorView: View {
                 .background(Color.black)
 
                 bottomControlsArea
+                    .padding(.bottom, bottomSafeInset)
                     .frame(height: bottomHeight)
             }
         }
@@ -521,7 +534,31 @@ struct OverlayEditorView: View {
     /// down to a sliver of the screen.
     private var bottomControlsArea: some View {
         VStack(spacing: 4) {
-            transportControls
+            // Ruler only now - the play button used to be its own row
+            // below this (transportControls), and the "Selected Overlay"
+            // panel had its own separate header row above its tabs; both
+            // merged into playbackHeaderRow below, per the user's own
+            // request ("place [play] in same hstack as trash bin") -
+            // two rows became one.
+            OverlayTimelineView(
+                overlays: $overlays,
+                duration: duration,
+                currentTime: Binding(
+                    get: { currentTime },
+                    set: { newValue in
+                        currentTime = newValue
+                        player.seek(to: CMTime(seconds: newValue, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                    }
+                ),
+                selectedOverlayID: $selectedOverlayID,
+                selectedKeyframe: $selectedKeyframe,
+                showTracks: selectedOverlayID == nil,
+                onCommit: persistOverlays
+            )
+            .padding(.horizontal)
+            .padding(.top, 4)
+
+            playbackHeaderRow
 
             if selectedOverlayID != nil {
                 selectedOverlayPanel
@@ -534,12 +571,45 @@ struct OverlayEditorView: View {
         }
     }
 
+    /// Play/pause always shows here now, regardless of selection - the
+    /// "Selected Overlay" label and its trash button only join it when
+    /// an overlay is actually selected, sharing the one row instead of
+    /// stacking a second one just for delete.
+    private var playbackHeaderRow: some View {
+        HStack {
+            Button {
+                togglePlayback()
+            } label: {
+                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 24))
+            }
+            .buttonStyle(.plain)
+
+            if selectedOverlayID != nil {
+                Text("Selected Overlay")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    removeSelectedOverlay()
+                } label: {
+                    Image(systemName: "trash.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(.white, .red)
+                }
+            } else {
+                Spacer()
+            }
+        }
+        .padding(.horizontal)
+    }
+
     /// The selected overlay's controls, one category at a time (see
-    /// `selectedControlCategory`'s doc comment for why): delete (always
-    /// visible, not gated behind a category), then a segmented switcher
-    /// over Position (Scale/Rotate - auto-keyframed at the current
-    /// playhead, same as the drag gesture), Timing (Start/End, direct
-    /// fields, no keyframe involved), and Glow. All of these replaced a
+    /// `selectedControlCategory`'s doc comment for why): a segmented
+    /// switcher over Position (Scale/Rotate - auto-keyframed at the
+    /// current playhead, same as the drag gesture), Timing (Start/End,
+    /// direct fields, no keyframe involved), and Glow. Delete lives in
+    /// `playbackHeaderRow` above, not here. All of these replaced a
     /// small-target gesture (pinch/rotate on the canvas, drag handles on
     /// the timeline) the user found hard to control by touch on a small
     /// portrait screen.
@@ -548,20 +618,6 @@ struct OverlayEditorView: View {
         if let index = overlays.firstIndex(where: { $0.id == selectedOverlayID }) {
             let item = overlays[index]
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Selected Overlay")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        removeSelectedOverlay()
-                    } label: {
-                        Image(systemName: "trash.circle.fill")
-                            .font(.system(size: 22))
-                            .foregroundStyle(.white, .red)
-                    }
-                }
-
                 Picker("", selection: $selectedControlCategory) {
                     ForEach(OverlayControlCategory.allCases) { category in
                         Label(category.rawValue, systemImage: category.systemImage)
@@ -739,39 +795,6 @@ struct OverlayEditorView: View {
     private func formattedTime(_ seconds: Double) -> String {
         let total = Int(seconds.rounded())
         return String(format: "%d:%02d", total / 60, total % 60)
-    }
-
-    private var transportControls: some View {
-        VStack(spacing: 4) {
-            OverlayTimelineView(
-                overlays: $overlays,
-                duration: duration,
-                currentTime: Binding(
-                    get: { currentTime },
-                    set: { newValue in
-                        currentTime = newValue
-                        player.seek(to: CMTime(seconds: newValue, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-                    }
-                ),
-                selectedOverlayID: $selectedOverlayID,
-                selectedKeyframe: $selectedKeyframe,
-                // Tracks/keyframe markers hidden while an overlay's own
-                // panel is showing at the same time - see showTracks's
-                // doc comment in OverlayTimelineView.swift.
-                showTracks: selectedOverlayID == nil,
-                onCommit: persistOverlays
-            )
-
-            Button {
-                togglePlayback()
-            } label: {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 24))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal)
-        .padding(.top, 4)
     }
 
     private func togglePlayback() {
