@@ -410,10 +410,12 @@ struct MomentSpeedEditorView: View {
                     try FileManager.default.copyItem(at: tempURL, to: destination)
                     try? FileManager.default.removeItem(at: tempURL)
                     authManager.refreshMomentDuration(momentId: momentId, videoURL: destination)
-                    // The audio-mix base (if any) now misses this
-                    // retime - see Moment.swift's
-                    // localMomentAudioBaseVideoURL doc comment.
+                    // The audio-mix and overlay-bake bases (if either
+                    // exists) now miss this retime - see Moment.swift's
+                    // localMomentAudioBaseVideoURL/localMomentOverlayBaseVideoURL
+                    // doc comments.
                     invalidateMomentAudioBase(momentId: momentId)
+                    invalidateMomentOverlayBase(momentId: momentId)
                     onExported()
                     dismiss()
                 } catch {

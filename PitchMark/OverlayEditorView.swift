@@ -28,6 +28,18 @@
 //  moved to sliders in `selectedOverlayPanel`, which edit the same
 //  transform-at-the-current-playhead via the same upsertKeyframe path.
 //
+//  2026-09-29: `startExport()` now bakes onto a frozen snapshot
+//  (`ensureOverlayBase()`/`localMomentOverlayBaseVideoURL`) instead of a
+//  fresh `resolvedMomentVideoURL` lookup - fixes the same ghost-content
+//  bug class `MomentAudioEditorView` had: once this editor had exported
+//  even once, `resolvedMomentVideoURL` *was* that prior export's own
+//  output, so moving or deleting an overlay left its old position
+//  permanently burned into that prior bake while a fresh copy
+//  composited on top. Never affected the live preview - overlays are
+//  drawn as plain SwiftUI views on top of whatever's already playing,
+//  never re-derived from a possibly-baked file - only export did.
+//
+
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
 //
@@ -588,16 +600,20 @@ struct OverlayEditorView: View {
         }
     }
 
-    /// Burns the current `overlays` into whatever video is currently
-    /// playing (`resolvedMomentVideoURL` - so this composites on top of
-    /// any prior trim, matching how `MomentTrimEditor` already treats the
-    /// edited slot as an evolving committed derivative, not a one-shot
-    /// diff off the original). On success, copies the result into that
-    /// same slot so every existing consumer (playback, share, save-to-
+    /// Burns the current `overlays` into the frozen overlay-bake base
+    /// (`ensureOverlayBase()` - see `localMomentOverlayBaseVideoURL`'s
+    /// doc comment for why this is never a fresh `resolvedMomentVideoURL`
+    /// lookup), which composites on top of any prior trim/speed edit
+    /// exactly once, the first time this editor exports on this Moment,
+    /// then stays fixed so every later export re-bakes the *current*
+    /// overlay list from that same clean source instead of stacking on
+    /// a previous bake. On success, copies the result into the edited
+    /// slot so every existing consumer (playback, share, save-to-
     /// Camera-Roll) picks it up automatically, then calls `onExported`
     /// and dismisses.
     private func startExport() {
-        guard !momentId.isEmpty, let sourceURL = resolvedMomentVideoURL(for: momentId) else { return }
+        guard !momentId.isEmpty else { return }
+        let sourceURL = ensureOverlayBase()
         if isPlaying { togglePlayback() }
         exportErrorMessage = nil
         isExporting = true
@@ -632,5 +648,21 @@ struct OverlayEditorView: View {
                 exportErrorMessage = "Export failed: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Snapshots `videoURL` into the frozen overlay-bake base the first
+    /// time this editor exports on a Moment (the base file persists
+    /// between sessions - see `localMomentOverlayBaseVideoURL`). Every
+    /// later export reads from that snapshot, never from a fresh
+    /// `resolvedMomentVideoURL` lookup again - see `startExport()`'s doc
+    /// comment for why.
+    private func ensureOverlayBase() -> URL {
+        guard let baseURL = localMomentOverlayBaseVideoURL(for: momentId) else {
+            return videoURL
+        }
+        if !FileManager.default.fileExists(atPath: baseURL.path) {
+            try? FileManager.default.copyItem(at: videoURL, to: baseURL)
+        }
+        return FileManager.default.fileExists(atPath: baseURL.path) ? baseURL : videoURL
     }
 }

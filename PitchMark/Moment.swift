@@ -203,6 +203,40 @@ func invalidateMomentAudioBase(momentId: String) {
     try? FileManager.default.removeItem(at: url)
 }
 
+/// The video `OverlayEditorView` always bakes overlays onto -
+/// snapshotted once, the first time that editor exports on this
+/// Moment, from whatever `resolvedMomentVideoURL` was at that moment.
+/// Exact same reasoning and same bug class as
+/// `localMomentAudioBaseVideoURL` above, just for visual overlays
+/// instead of audio: `OverlayEditorView.startExport()` used to
+/// re-fetch `resolvedMomentVideoURL` fresh at export time, which - once
+/// this editor had exported even once for a Moment - *is* a prior
+/// overlay bake's own output. Moving or deleting a placed overlay after
+/// that left its old position permanently burned into that prior
+/// export's pixels (impossible to erase) while a fresh copy of the
+/// current overlay list got composited on top, so a moved overlay
+/// "ghosted" at both positions. (The live preview never had this bug -
+/// it draws overlays as plain SwiftUI views on top of whatever's
+/// already playing, never re-deriving from a possibly-baked file - only
+/// export did.)
+///
+/// Invalidated by `invalidateMomentOverlayBase` whenever Trim/Speed/
+/// Audio produce a new edited file, so the next overlay export
+/// re-snapshots a fresh base instead of baking onto pixels that are
+/// missing that newer edit entirely.
+func localMomentOverlayBaseVideoURL(for momentId: String) -> URL? {
+    guard !momentId.isEmpty, let directory = momentsDirectory() else { return nil }
+    return directory.appendingPathComponent("\(momentId)-overlay-base.mov")
+}
+
+/// Deletes the overlay-bake base snapshot, if any. Call this whenever a
+/// non-overlay edit (Trim/Speed/Audio) commits a new edited file - same
+/// reasoning as `invalidateMomentAudioBase`, mirrored for overlays.
+func invalidateMomentOverlayBase(momentId: String) {
+    guard let url = localMomentOverlayBaseVideoURL(for: momentId) else { return }
+    try? FileManager.default.removeItem(at: url)
+}
+
 // MARK: - Local photo storage (same directory convention as video)
 
 func localMomentPhotoURL(momentId: String, index: Int) -> URL? {
@@ -459,6 +493,7 @@ func removeAllLocalMomentFiles(momentId: String, photoCount: Int) {
         try? FileManager.default.removeItem(at: edited)
     }
     invalidateMomentAudioBase(momentId: momentId)
+    invalidateMomentOverlayBase(momentId: momentId)
     for index in 0..<max(photoCount, 0) {
         if let photoURL = localMomentPhotoURL(momentId: momentId, index: index) {
             try? FileManager.default.removeItem(at: photoURL)

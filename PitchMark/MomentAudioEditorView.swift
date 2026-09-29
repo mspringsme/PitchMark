@@ -940,6 +940,10 @@ struct MomentAudioEditorView: View {
                     try? FileManager.default.removeItem(at: destination)
                     try FileManager.default.copyItem(at: tempURL, to: destination)
                     try? FileManager.default.removeItem(at: tempURL)
+                    // The overlay-bake base (if any) now misses this
+                    // audio mix - see Moment.swift's
+                    // localMomentOverlayBaseVideoURL doc comment.
+                    invalidateMomentOverlayBase(momentId: momentId)
                     onExported()
                     dismiss()
                 } catch {

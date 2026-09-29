@@ -395,9 +395,12 @@ struct MomentDetailView: View {
             try FileManager.default.copyItem(at: URL(fileURLWithPath: editedPath), to: destination)
             reloadPlayer()
             authManager.refreshMomentDuration(momentId: momentId, videoURL: destination)
-            // The audio-mix base (if any) now misses this trim - see
-            // Moment.swift's localMomentAudioBaseVideoURL doc comment.
+            // The audio-mix and overlay-bake bases (if either exists)
+            // now miss this trim - see Moment.swift's
+            // localMomentAudioBaseVideoURL/localMomentOverlayBaseVideoURL
+            // doc comments.
             invalidateMomentAudioBase(momentId: momentId)
+            invalidateMomentOverlayBase(momentId: momentId)
         } catch {
             trimErrorMessage = "Couldn't save the trimmed video: \(error.localizedDescription)"
         }
