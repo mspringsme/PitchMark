@@ -257,7 +257,26 @@ enum GlowEffect {
         // `outputImage`'s actual pixel size against the source's own -
         // see this function's "Deliberately NOT scaled back up" comment
         // above for why those two are no longer interchangeable.
-        let sizeRatio = expandedExtent.width / max(workingExtent.width, 1)
+        //
+        // Long side, not `.width` specifically (a real bug this used to
+        // have): both callers apply `sizeRatio` uniformly to a *square*
+        // target size, matching how `contentsGravity = .resizeAspect`
+        // scales a non-square image to fit a square frame - by its long
+        // side, whichever axis that is. Padding adds the same absolute
+        // inset to every side, which is a much smaller *relative*
+        // increase on an already-long axis than a short one - for a
+        // tall cutout (a standing/crouching player, height > width),
+        // using `.width` alone understated the true expansion ratio, so
+        // the glow layer ended up barely bigger than the main layer -
+        // any halo had nowhere to bloom into and only showed as a
+        // sliver wherever the source's own alpha already had some slack
+        // (e.g. the square's corners around a rounded silhouette).
+        // Square bundled assets have no long/short distinction, so this
+        // never affected them - exactly matching the user's report that
+        // glow "worked" for bundled shapes but not cutouts.
+        let workingLongSide = max(workingExtent.width, workingExtent.height)
+        let expandedLongSide = max(expandedExtent.width, expandedExtent.height)
+        let sizeRatio = expandedLongSide / max(workingLongSide, 1)
         return GlowRenderResult(image: outputImage, sizeRatio: sizeRatio)
     }
 }
