@@ -150,6 +150,24 @@ final class PlayerLayerContainerUIView: UIView {
     }
 }
 
+/// Which group of per-overlay controls `selectedOverlayPanel` shows -
+/// see `OverlayEditorView.selectedControlCategory`'s doc comment.
+private enum OverlayControlCategory: String, CaseIterable, Identifiable {
+    case transform = "Position"
+    case timing = "Timing"
+    case glow = "Glow"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .transform: return "arrow.up.and.down.and.arrow.left.and.right"
+        case .timing: return "clock"
+        case .glow: return "sparkles"
+        }
+    }
+}
+
 struct OverlayEditorView: View {
     let momentId: String
     let videoURL: URL
@@ -186,9 +204,26 @@ struct OverlayEditorView: View {
     @State private var scaleSliderValue: Double = 1
     @State private var rotationDegrees: Double = 0
 
+    /// 2026-09-30 - which category of per-overlay controls
+    /// `selectedOverlayPanel` currently shows. Before this, Position/
+    /// Timing/Glow all stacked at once below the video, and the video
+    /// shrank to whatever was left as that stack grew (Glow's controls
+    /// especially) - reported by the user as making an overlay hard to
+    /// edit precisely. Showing one category at a time in a fixed-height
+    /// budget (`controlPanelHeight`) keeps the control area's height
+    /// constant regardless of category or content, so the video's own
+    /// share of the screen no longer shrinks as more controls exist.
+    @State private var selectedControlCategory: OverlayControlCategory = .transform
+
     /// Minimum start/end span for an overlay - also the smallest visible
     /// duration `selectedOverlayPanel`'s Start/End sliders will allow.
     private let minimumSpan: Double = 0.15
+
+    /// Fixed regardless of which category is showing, and regardless of
+    /// how tall that category's own content is (Glow's, especially, with
+    /// pulse enabled) - content that doesn't fit scrolls within this
+    /// budget instead of growing the panel and shrinking the video.
+    private let controlPanelHeight: CGFloat = 170
 
     init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem], onExported: @escaping () -> Void = {}) {
         self.momentId = momentId
@@ -215,6 +250,7 @@ struct OverlayEditorView: View {
                     }
                 }
             }
+            .frame(maxHeight: .infinity)
             .background(Color.black)
 
             transportControls
@@ -230,7 +266,10 @@ struct OverlayEditorView: View {
             .padding(.vertical, 8)
         }
         .background(Color(.systemBackground).ignoresSafeArea())
-        .onChange(of: selectedOverlayID) { _, _ in syncSliders() }
+        .onChange(of: selectedOverlayID) { _, _ in
+            syncSliders()
+            selectedControlCategory = .transform
+        }
         .onChange(of: currentTime) { _, _ in syncSliders() }
         // A plain `.toolbar` renders nothing here - this view has no
         // NavigationView/NavigationStack to host a nav bar, since it's
@@ -453,12 +492,15 @@ struct OverlayEditorView: View {
         persistOverlays()
     }
 
-    /// The selected overlay's controls: delete, Scale/Rotation (auto-
-    /// keyframed at the current playhead, same as the drag gesture) and
-    /// Start/End (direct fields on the overlay, no keyframe involved).
-    /// All four replaced a small-target gesture (pinch/rotate on the
-    /// canvas, drag handles on the timeline) that the user found hard to
-    /// control by touch on a small portrait screen.
+    /// The selected overlay's controls, one category at a time (see
+    /// `selectedControlCategory`'s doc comment for why): delete (always
+    /// visible, not gated behind a category), then a segmented switcher
+    /// over Position (Scale/Rotate - auto-keyframed at the current
+    /// playhead, same as the drag gesture), Timing (Start/End, direct
+    /// fields, no keyframe involved), and Glow. All of these replaced a
+    /// small-target gesture (pinch/rotate on the canvas, drag handles on
+    /// the timeline) the user found hard to control by touch on a small
+    /// portrait screen.
     @ViewBuilder
     private var selectedOverlayPanel: some View {
         if let index = overlays.firstIndex(where: { $0.id == selectedOverlayID }) {
@@ -478,35 +520,64 @@ struct OverlayEditorView: View {
                     }
                 }
 
-                labeledSlider(
-                    "Scale", value: $scaleSliderValue, range: 0.2...5,
-                    format: { String(format: "%.1fx", $0) },
-                    onEditingChanged: { editing in if !editing { commitScaleRotation() } }
-                )
-                labeledSlider(
-                    "Rotate", value: $rotationDegrees, range: -180...180,
-                    format: { String(format: "%.0f°", $0) },
-                    onEditingChanged: { editing in if !editing { commitScaleRotation() } }
-                )
-                labeledSlider(
-                    "Start", value: $overlays[index].startTime,
-                    range: 0...max(item.endTime - minimumSpan, 0),
-                    format: formattedTime,
-                    onEditingChanged: { editing in if !editing { persistOverlays() } }
-                )
-                labeledSlider(
-                    "End", value: $overlays[index].endTime,
-                    range: min(item.startTime + minimumSpan, duration)...max(duration, minimumSpan),
-                    format: formattedTime,
-                    onEditingChanged: { editing in if !editing { persistOverlays() } }
-                )
+                Picker("", selection: $selectedControlCategory) {
+                    ForEach(OverlayControlCategory.allCases) { category in
+                        Label(category.rawValue, systemImage: category.systemImage)
+                            .tag(category)
+                    }
+                }
+                .pickerStyle(.segmented)
 
-                Divider()
-
-                glowSection(index: index)
+                // Fixed height regardless of category or content - the
+                // point of this redesign. A category shorter than the
+                // budget just leaves empty space below it rather than
+                // shrinking the video when a taller one (Glow) is picked.
+                ScrollView {
+                    switch selectedControlCategory {
+                    case .transform:
+                        transformControls
+                    case .timing:
+                        timingControls(index: index, item: item)
+                    case .glow:
+                        glowSection(index: index)
+                    }
+                }
+                .frame(height: controlPanelHeight)
             }
             .padding(.horizontal)
             .padding(.top, 4)
+        }
+    }
+
+    private var transformControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            labeledSlider(
+                "Scale", value: $scaleSliderValue, range: 0.2...5,
+                format: { String(format: "%.1fx", $0) },
+                onEditingChanged: { editing in if !editing { commitScaleRotation() } }
+            )
+            labeledSlider(
+                "Rotate", value: $rotationDegrees, range: -180...180,
+                format: { String(format: "%.0f°", $0) },
+                onEditingChanged: { editing in if !editing { commitScaleRotation() } }
+            )
+        }
+    }
+
+    private func timingControls(index: Int, item: OverlayItem) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            labeledSlider(
+                "Start", value: $overlays[index].startTime,
+                range: 0...max(item.endTime - minimumSpan, 0),
+                format: formattedTime,
+                onEditingChanged: { editing in if !editing { persistOverlays() } }
+            )
+            labeledSlider(
+                "End", value: $overlays[index].endTime,
+                range: min(item.startTime + minimumSpan, duration)...max(duration, minimumSpan),
+                format: formattedTime,
+                onEditingChanged: { editing in if !editing { persistOverlays() } }
+            )
         }
     }
 
