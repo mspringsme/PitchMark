@@ -146,6 +146,18 @@ func exportMomentWithOverlays(
             let layer = CALayer()
             layer.bounds = CGRect(x: 0, y: 0, width: overlayBaseSize, height: overlayBaseSize)
             layer.contents = cgImage
+            // CALayer.contentsGravity defaults to .resize - stretch the
+            // image to exactly fill `bounds`, ignoring its own aspect
+            // ratio - not .resizeAspect (fit within bounds, preserving
+            // aspect ratio, letterboxed on the shorter axis), which is
+            // what the live preview's `.scaledToFit()` already does for
+            // this same square baseSize frame (OverlayEditorView.swift).
+            // A non-square overlay (any Smart Cutout that isn't a square
+            // crop, e.g. a standing or crouching player) looked correct
+            // in preview and was silently stretched to fill the square
+            // only at export time - reported by the user with a
+            // screenshot showing exactly this distortion.
+            layer.contentsGravity = .resizeAspect
             // Model value while no animation is active - Core Animation's
             // ordinary default (no custom fillMode/isRemovedOnCompletion)
             // reverts to this both before beginTime and after
@@ -214,6 +226,12 @@ func exportMomentWithOverlays(
             if let glowSettings = item.glow, glowSettings.isEnabled {
                 let glowLayer = CALayer()
                 glowLayer.compositingFilter = "screenBlendMode"
+                // Same fix as the main layer above - the glow image
+                // GlowEffect.render produces isn't necessarily square
+                // either (it pads the source's own extent, whatever
+                // shape that is), and glowLayer's own bounds below are
+                // computed as a square regardless.
+                glowLayer.contentsGravity = .resizeAspect
                 glowLayer.opacity = 0
                 glowLayer.position = layer.position
                 parentLayer.insertSublayer(glowLayer, below: layer)

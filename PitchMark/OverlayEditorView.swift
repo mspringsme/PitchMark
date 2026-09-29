@@ -395,9 +395,19 @@ struct OverlayEditorView: View {
                 if let glowParams = resolvedGlow(item.glow, at: currentTime),
                    let sourceCG = image.cgImage,
                    let glowCG = GlowEffect.render(sourceImage: sourceCG, params: glowParams, referenceSize: baseSize) {
+                    // GlowEffect.render pads the source's own extent
+                    // equally on each side, so a non-square source (any
+                    // Smart Cutout that isn't a square crop) produces a
+                    // non-square glow image too - `.scaledToFit()` here
+                    // is required, not decorative, or a non-square glow
+                    // stretches to fill this square frame exactly the
+                    // way the main overlay image did before it had the
+                    // same modifier (see the export-side fix for the
+                    // user-reported version of this).
                     let glowSizeRatio = CGFloat(glowCG.width) / CGFloat(max(sourceCG.width, 1))
                     Image(decorative: glowCG, scale: 1)
                         .resizable()
+                        .scaledToFit()
                         .frame(width: baseSize * glowSizeRatio, height: baseSize * glowSizeRatio)
                         .opacity(liveTransform.opacity)
                         .rotationEffect(.radians(liveTransform.rotation))
