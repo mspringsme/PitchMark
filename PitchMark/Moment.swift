@@ -229,6 +229,37 @@ func localMomentOverlayBaseVideoURL(for momentId: String) -> URL? {
     return directory.appendingPathComponent("\(momentId)-overlay-base.mov")
 }
 
+/// Resolves (creating on first use) the frozen overlay-bake base file -
+/// `sourceVideoURL` is only consulted the moment the base doesn't exist
+/// yet; every later call returns the existing base regardless of what
+/// `sourceVideoURL` newly resolves to. Free function rather than a
+/// method on `OverlayEditorView` so its `init` can call it with its raw
+/// parameters before `self` is fully initialized - `OverlayEditorView`
+/// needs the resolved base for its very first `AVPlayer(url:)`, not
+/// just at export time.
+///
+/// 2026-09-30: `OverlayEditorView`'s live preview used to construct its
+/// `AVPlayer` straight from the incoming `videoURL` - `resolvedMomentVideoURL`,
+/// which *is* a prior overlay export's own output once one exists for a
+/// Moment. Overlays are drawn as plain SwiftUI views on top of whatever's
+/// playing, so re-opening this editor after any earlier export showed the
+/// old overlay positions burned into the playing video's pixels *underneath*
+/// a fresh, editable copy of the same overlays - moving one looked like it
+/// left a duplicate behind, since the baked-in copy couldn't be moved.
+/// Reported by the user as "the editing of added assets is glitchy." Same
+/// bug class `startExport()` was already protected against (see
+/// `localMomentOverlayBaseVideoURL`'s doc comment above) - the preview
+/// player just wasn't pointed at the same frozen base yet.
+func overlayBaseVideoURL(momentId: String, sourceVideoURL: URL) -> URL {
+    guard let baseURL = localMomentOverlayBaseVideoURL(for: momentId) else {
+        return sourceVideoURL
+    }
+    if !FileManager.default.fileExists(atPath: baseURL.path) {
+        try? FileManager.default.copyItem(at: sourceVideoURL, to: baseURL)
+    }
+    return FileManager.default.fileExists(atPath: baseURL.path) ? baseURL : sourceVideoURL
+}
+
 /// Deletes the overlay-bake base snapshot, if any. Call this whenever a
 /// non-overlay edit (Trim/Speed/Audio) commits a new edited file - same
 /// reasoning as `invalidateMomentAudioBase`, mirrored for overlays.

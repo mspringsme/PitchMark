@@ -28,16 +28,23 @@
 //  moved to sliders in `selectedOverlayPanel`, which edit the same
 //  transform-at-the-current-playhead via the same upsertKeyframe path.
 //
-//  2026-09-29: `startExport()` now bakes onto a frozen snapshot
-//  (`ensureOverlayBase()`/`localMomentOverlayBaseVideoURL`) instead of a
-//  fresh `resolvedMomentVideoURL` lookup - fixes the same ghost-content
-//  bug class `MomentAudioEditorView` had: once this editor had exported
-//  even once, `resolvedMomentVideoURL` *was* that prior export's own
-//  output, so moving or deleting an overlay left its old position
-//  permanently burned into that prior bake while a fresh copy
-//  composited on top. Never affected the live preview - overlays are
-//  drawn as plain SwiftUI views on top of whatever's already playing,
-//  never re-derived from a possibly-baked file - only export did.
+//  2026-09-29: `startExport()` bakes onto a frozen snapshot
+//  (`overlayBaseVideoURL` in Moment.swift) instead of a fresh
+//  `resolvedMomentVideoURL` lookup - fixes the same ghost-content bug
+//  class `MomentAudioEditorView` had: once this editor had exported even
+//  once, `resolvedMomentVideoURL` *was* that prior export's own output,
+//  so moving or deleting an overlay left its old position permanently
+//  burned into that prior bake while a fresh copy composited on top.
+//
+//  2026-09-30: the live preview had the exact same bug, missed by the
+//  fix above - `player` was still constructed straight from the incoming
+//  `videoURL` (i.e. `resolvedMomentVideoURL`), so re-opening this editor
+//  after any prior export played a video with the *old* overlay
+//  positions already burned into its pixels, underneath a fresh, live,
+//  draggable copy of the same overlays. Moving one looked like it left a
+//  duplicate behind. Reported by the user as "the editing of added
+//  assets is glitchy." Fixed by pointing the player at `previewBaseURL`
+//  (the same frozen base `startExport()` already used) instead.
 //
 
 //  Deliberately kept out of the Pitchmark Display target's
@@ -169,6 +176,11 @@ private enum OverlayControlCategory: String, CaseIterable, Identifiable {
 struct OverlayEditorView: View {
     let momentId: String
     let videoURL: URL
+    /// The frozen overlay-bake base (`overlayBaseVideoURL` in
+    /// Moment.swift) both the live preview player and `startExport()`
+    /// use - never `videoURL` directly once a prior export exists for
+    /// this Moment. See that function's doc comment for why.
+    private let previewBaseURL: URL
     let libraryAssets: [LibraryAsset]
     /// Called after a successful export, before this screen dismisses -
     /// wired by MomentDetailView to reload its own player so it picks up
@@ -244,9 +256,11 @@ struct OverlayEditorView: View {
     init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem], onExported: @escaping () -> Void = {}) {
         self.momentId = momentId
         self.videoURL = videoURL
+        let baseURL = overlayBaseVideoURL(momentId: momentId, sourceVideoURL: videoURL)
+        self.previewBaseURL = baseURL
         self.libraryAssets = libraryAssets
         self.onExported = onExported
-        _player = State(initialValue: AVPlayer(url: videoURL))
+        _player = State(initialValue: AVPlayer(url: baseURL))
         _overlays = State(initialValue: initialOverlays)
     }
 
@@ -746,7 +760,7 @@ struct OverlayEditorView: View {
     }
 
     private func setUpPlayer() {
-        let asset = AVURLAsset(url: videoURL)
+        let asset = AVURLAsset(url: previewBaseURL)
         Task {
             let loadedDuration = try? await asset.load(.duration)
             let tracks = try? await asset.loadTracks(withMediaType: .video)
@@ -807,9 +821,9 @@ struct OverlayEditorView: View {
         }
     }
 
-    /// Burns the current `overlays` into the frozen overlay-bake base
-    /// (`ensureOverlayBase()` - see `localMomentOverlayBaseVideoURL`'s
-    /// doc comment for why this is never a fresh `resolvedMomentVideoURL`
+    /// Burns the current `overlays` into `previewBaseURL` (the frozen
+    /// overlay-bake base - see `overlayBaseVideoURL`'s doc comment in
+    /// Moment.swift for why this is never a fresh `resolvedMomentVideoURL`
     /// lookup), which composites on top of any prior trim/speed edit
     /// exactly once, the first time this editor exports on this Moment,
     /// then stays fixed so every later export re-bakes the *current*
@@ -820,7 +834,7 @@ struct OverlayEditorView: View {
     /// and dismisses.
     private func startExport() {
         guard !momentId.isEmpty else { return }
-        let sourceURL = ensureOverlayBase()
+        let sourceURL = previewBaseURL
         if isPlaying { togglePlayback() }
         exportErrorMessage = nil
         isExporting = true
@@ -857,19 +871,4 @@ struct OverlayEditorView: View {
         }
     }
 
-    /// Snapshots `videoURL` into the frozen overlay-bake base the first
-    /// time this editor exports on a Moment (the base file persists
-    /// between sessions - see `localMomentOverlayBaseVideoURL`). Every
-    /// later export reads from that snapshot, never from a fresh
-    /// `resolvedMomentVideoURL` lookup again - see `startExport()`'s doc
-    /// comment for why.
-    private func ensureOverlayBase() -> URL {
-        guard let baseURL = localMomentOverlayBaseVideoURL(for: momentId) else {
-            return videoURL
-        }
-        if !FileManager.default.fileExists(atPath: baseURL.path) {
-            try? FileManager.default.copyItem(at: videoURL, to: baseURL)
-        }
-        return FileManager.default.fileExists(atPath: baseURL.path) ? baseURL : videoURL
-    }
 }
