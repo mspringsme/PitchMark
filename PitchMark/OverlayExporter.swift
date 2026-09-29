@@ -231,7 +231,34 @@ func exportMomentWithOverlays(
             // prior silent-export-failure bugs actually lived.
             if let glowSettings = item.glow, glowSettings.isEnabled {
                 let glowLayer = CALayer()
-                glowLayer.compositingFilter = "screenBlendMode"
+                // 2026-09-30: deliberately NOT `compositingFilter =
+                // "screenBlendMode"` (what this used to be) - that's a
+                // semi-private CoreAnimation mechanism (a bare string
+                // resolved internally to a Core Image filter name,
+                // never in Apple's public CALayer docs) used nowhere
+                // else in this codebase, and after three separate
+                // image-generation fixes (pixel format, radius units,
+                // output resolution) none actually resolved the user's
+                // repeated "glow doesn't bake in" report, filtered
+                // Xcode console output confirmed GlowEffect.render was
+                // succeeding every time (no "produced no samples"
+                // debugLog line ever fired) - meaning the glow CGImage
+                // and its keyframe animation were being created and
+                // attached correctly, and the failure was entirely in
+                // how this layer composited, not in the image itself.
+                // `compositingFilter` is the one non-standard mechanism
+                // in this whole pipeline; plain default ("normal"/
+                // source-over alpha, using the glow image's own real
+                // alpha channel) is guaranteed-supported everywhere,
+                // on-screen and in AVVideoCompositionCoreAnimationTool's
+                // offline compositor alike. Trades away "screen" blending's
+                // brightening-through-dark-footage look for something
+                // that reliably renders at all - a translucent colored
+                // halo instead of a true additive glow; revisit if the
+                // user wants closer visual parity with the live preview
+                // (which still uses SwiftUI's fully public
+                // `.blendMode(.screen)` and is unaffected by this).
+                //
                 // Same fix as the main layer above - the glow image
                 // GlowEffect.render produces isn't necessarily square
                 // either (it pads the source's own extent, whatever

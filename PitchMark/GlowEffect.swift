@@ -16,9 +16,13 @@
 //  export - see the approved plan for why that's unnecessary here): the
 //  glow only ever needs the overlay's own alpha channel, never the
 //  video frame, so it's rendered once as a standalone image and each
-//  renderer composites it using whatever blend-mode feature it already
-//  has - SwiftUI's `.blendMode(.screen)` for preview,
-//  `CALayer.compositingFilter` for export.
+//  renderer composites it using its own alpha - SwiftUI's
+//  `.blendMode(.screen)` for preview; export used to try
+//  `CALayer.compositingFilter = "screenBlendMode"` for a matching look,
+//  but that's semi-private and apparently doesn't apply inside
+//  AVVideoCompositionCoreAnimationTool's offline compositor - see
+//  OverlayExporter.swift's glow block for why it's plain alpha
+//  compositing there now instead.
 //
 //  Stays in Core Image's native premultiplied-alpha convention
 //  throughout - every filter below operates on premultiplied RGBA and
