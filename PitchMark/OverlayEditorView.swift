@@ -223,7 +223,23 @@ struct OverlayEditorView: View {
     /// how tall that category's own content is (Glow's, especially, with
     /// pulse enabled) - content that doesn't fit scrolls within this
     /// budget instead of growing the panel and shrinking the video.
-    private let controlPanelHeight: CGFloat = 170
+    private let controlPanelHeight: CGFloat = 80
+
+    /// 2026-09-30 - the video previously had no floor at all: it got
+    /// whatever was left after every control below it took its own
+    /// intrinsic height, and that could shrink to a sliver of the screen
+    /// (reported by the user with a screenshot showing the video at
+    /// roughly 40% of the screen). This and `minimumBottomAreaHeight`
+    /// instead compute the bottom controls' height explicitly from the
+    /// screen's own measured height, so the video always gets the rest -
+    /// not a competing "also flexible" sibling whose actual share
+    /// depended on how SwiftUI happened to resolve several flexible
+    /// views at once.
+    private let bottomAreaFraction: CGFloat = 0.2
+    /// Floor so the controls stay usable on a short screen even though
+    /// 20% of it would be cramped - on any iPhone this session has
+    /// targeted, 20% alone already exceeds this, so it rarely binds.
+    private let minimumBottomAreaHeight: CGFloat = 200
 
     init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem], onExported: @escaping () -> Void = {}) {
         self.momentId = momentId
@@ -235,35 +251,30 @@ struct OverlayEditorView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            GeometryReader { geometry in
-                ZStack {
-                    PlayerContainerView(player: player)
-                        .onTapGesture {
-                            selectedOverlayID = nil
-                            selectedKeyframe = nil
-                        }
+        GeometryReader { screenGeometry in
+            let bottomHeight = max(screenGeometry.size.height * bottomAreaFraction, minimumBottomAreaHeight)
 
-                    let videoRect = videoDisplayRect(containerSize: geometry.size, naturalSize: naturalSize)
-                    ForEach(visibleOverlays(), id: \.item.id) { entry in
-                        overlayView(for: entry.item, transform: entry.transform, in: videoRect, videoRectSize: videoRect.size)
+            VStack(spacing: 0) {
+                GeometryReader { geometry in
+                    ZStack {
+                        PlayerContainerView(player: player)
+                            .onTapGesture {
+                                selectedOverlayID = nil
+                                selectedKeyframe = nil
+                            }
+
+                        let videoRect = videoDisplayRect(containerSize: geometry.size, naturalSize: naturalSize)
+                        ForEach(visibleOverlays(), id: \.item.id) { entry in
+                            overlayView(for: entry.item, transform: entry.transform, in: videoRect, videoRectSize: videoRect.size)
+                        }
                     }
                 }
+                .frame(height: max(screenGeometry.size.height - bottomHeight, 0))
+                .background(Color.black)
+
+                bottomControlsArea
+                    .frame(height: bottomHeight)
             }
-            .frame(maxHeight: .infinity)
-            .background(Color.black)
-
-            transportControls
-
-            // Sits directly above the asset strip rather than floating
-            // over the video - keeps every selected-overlay control clear
-            // of the video area and out of the way of the drag gesture.
-            selectedOverlayPanel
-
-            AssetThumbnailStrip(assets: libraryAssets) { asset in
-                addOverlay(for: asset)
-            }
-            .padding(.vertical, 8)
         }
         .background(Color(.systemBackground).ignoresSafeArea())
         .onChange(of: selectedOverlayID) { _, _ in
@@ -492,6 +503,27 @@ struct OverlayEditorView: View {
         persistOverlays()
     }
 
+    /// Everything below the video, fit into the fixed `bottomHeight`
+    /// `body` computes. Mutually exclusive: editing an already-placed
+    /// overlay's controls and browsing the library to add a *new* one
+    /// aren't needed at the same instant, and showing both stacked at
+    /// once (the pre-2026-09-30 shape) was most of what pushed the video
+    /// down to a sliver of the screen.
+    private var bottomControlsArea: some View {
+        VStack(spacing: 4) {
+            transportControls
+
+            if selectedOverlayID != nil {
+                selectedOverlayPanel
+            } else {
+                AssetThumbnailStrip(assets: libraryAssets) { asset in
+                    addOverlay(for: asset)
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
     /// The selected overlay's controls, one category at a time (see
     /// `selectedControlCategory`'s doc comment for why): delete (always
     /// visible, not gated behind a category), then a segmented switcher
@@ -713,6 +745,10 @@ struct OverlayEditorView: View {
                 ),
                 selectedOverlayID: $selectedOverlayID,
                 selectedKeyframe: $selectedKeyframe,
+                // Tracks/keyframe markers hidden while an overlay's own
+                // panel is showing at the same time - see showTracks's
+                // doc comment in OverlayTimelineView.swift.
+                showTracks: selectedOverlayID == nil,
                 onCommit: persistOverlays
             )
 
@@ -720,12 +756,12 @@ struct OverlayEditorView: View {
                 togglePlayback()
             } label: {
                 Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 32))
+                    .font(.system(size: 24))
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal)
-        .padding(.top, 8)
+        .padding(.top, 4)
     }
 
     private func togglePlayback() {

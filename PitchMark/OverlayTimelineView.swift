@@ -54,16 +54,31 @@ struct OverlayTimelineView: View {
     @Binding var currentTime: Double
     @Binding var selectedOverlayID: UUID?
     @Binding var selectedKeyframe: SelectedKeyframe?
+    /// 2026-09-30 - `OverlayEditorView` passes `false` while an overlay
+    /// is selected for editing, to fit inside its fixed bottom-20%
+    /// budget: the ruler (scrubbing) always shows, but the per-overlay
+    /// track rows and keyframe-retime slider don't, since that same
+    /// selected overlay's own panel (Position/Timing/Glow tabs) is
+    /// showing at the same time and space is tight. Keyframes are still
+    /// fully created by dragging the overlay on the canvas at different
+    /// times either way - this only hides the secondary "tap a marker on
+    /// the timeline to retime it precisely" path while that panel is up.
+    var showTracks: Bool = true
     let onCommit: () -> Void
 
-    private let trackHeight: CGFloat = 40
-    private let maxTracksHeight: CGFloat = 160
+    private let trackHeight: CGFloat = 32
+    /// 2026-09-30 - shrunk from 160: this view now has to fit, together
+    /// with the play button and the selected-overlay controls, inside
+    /// OverlayEditorView's whole bottom 20% of the screen (see that
+    /// file's `bottomAreaFraction`) rather than taking whatever space it
+    /// wanted. A track this tall still shows ~2 rows before scrolling.
+    private let maxTracksHeight: CGFloat = 70
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             rulerRow
 
-            if !overlays.isEmpty {
+            if showTracks, !overlays.isEmpty {
                 ScrollView {
                     VStack(spacing: 6) {
                         ForEach(overlays) { item in
@@ -74,7 +89,7 @@ struct OverlayTimelineView: View {
                 .frame(maxHeight: maxTracksHeight)
             }
 
-            if let selectedKeyframe {
+            if showTracks, let selectedKeyframe {
                 keyframeDetailRow(selectedKeyframe)
             }
         }
