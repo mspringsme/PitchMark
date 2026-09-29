@@ -155,7 +155,6 @@ final class PlayerLayerContainerUIView: UIView {
 private enum OverlayControlCategory: String, CaseIterable, Identifiable {
     case transform = "Position"
     case timing = "Timing"
-    case glow = "Glow"
 
     var id: String { rawValue }
 
@@ -163,7 +162,6 @@ private enum OverlayControlCategory: String, CaseIterable, Identifiable {
         switch self {
         case .transform: return "arrow.up.and.down.and.arrow.left.and.right"
         case .timing: return "clock"
-        case .glow: return "sparkles"
         }
     }
 }
@@ -407,7 +405,7 @@ struct OverlayEditorView: View {
                 // reads "frame time" for free.
                 if let glowParams = resolvedGlow(item.glow, at: currentTime),
                    let sourceCG = image.cgImage,
-                   let glowCG = GlowEffect.render(sourceImage: sourceCG, params: glowParams, referenceSize: baseSize) {
+                   let glowCG = GlowEffect.render(sourceImage: sourceCG, params: glowParams) {
                     // GlowEffect.render pads the source's own extent
                     // equally on each side, so a non-square source (any
                     // Smart Cutout that isn't a square crop) produces a
@@ -572,9 +570,13 @@ struct OverlayEditorView: View {
     }
 
     /// Play/pause always shows here now, regardless of selection - the
-    /// "Selected Overlay" label and its trash button only join it when
-    /// an overlay is actually selected, sharing the one row instead of
-    /// stacking a second one just for delete.
+    /// "Selected Overlay" label, Glow toggle, and trash button only join
+    /// it when an overlay is actually selected, sharing the one row
+    /// instead of stacking more just for a couple of small controls.
+    /// Glow moved in here (2026-09-30) once it dropped from a whole tab
+    /// full of sliders down to a single on/off switch - one icon button
+    /// fits this row fine and frees the segmented Picker below back down
+    /// to just Position/Timing.
     private var playbackHeaderRow: some View {
         HStack {
             Button {
@@ -585,11 +587,21 @@ struct OverlayEditorView: View {
             }
             .buttonStyle(.plain)
 
-            if selectedOverlayID != nil {
+            if let index = overlays.firstIndex(where: { $0.id == selectedOverlayID }) {
                 Text("Selected Overlay")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
+                let glowOn = glowBinding(index: index)
+                Button {
+                    glowOn.wrappedValue.toggle()
+                } label: {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 20))
+                        .foregroundStyle(glowOn.wrappedValue ? .yellow : .secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(glowOn.wrappedValue ? "Turn off glow" : "Turn on glow")
                 Button {
                     removeSelectedOverlay()
                 } label: {
@@ -636,8 +648,6 @@ struct OverlayEditorView: View {
                         transformControls
                     case .timing:
                         timingControls(index: index, item: item)
-                    case .glow:
-                        glowSection(index: index)
                     }
                 }
                 .frame(height: controlPanelHeight)
@@ -679,103 +689,32 @@ struct OverlayEditorView: View {
         }
     }
 
-    /// Binds directly into `overlays[index].glow`, substituting a fresh
-    /// `GlowSettings()` for a nil value on read - the same "materialize
-    /// a default on first touch" shape `overlayVolumeKeyframesBinding`
-    /// uses in MomentAudioEditorView for an analogous Optional-field
-    /// binding. Setting doesn't persist by itself - matches how Start/
-    /// End's direct `$overlays[index].foo` bindings work: the slider's
-    /// own binding updates local state (and so the live preview) on
-    /// every drag tick, while `labeledSlider`'s `onEditingChanged`
-    /// defers the actual Firestore write to release.
+    /// Binds directly into `overlays[index].glow?.isEnabled`,
+    /// materializing a fresh `GlowSettings(isEnabled: true)` on first
+    /// enable (an `Optional` field, so most overlays start with `glow ==
+    /// nil`, not a `GlowSettings(isEnabled: false)`). Persists on every
+    /// toggle rather than deferring to an `onEditingChanged` release -
+    /// there's no drag/slider in play here, a tap is the whole gesture.
     /// Unlike the native `$overlays[index].startTime`-style projections
     /// this panel's other sliders use, a hand-rolled `Binding(get:set:)`
     /// has no built-in bounds safety - `overlays[index]` traps if `index`
     /// goes stale. That happens exactly when it matters most: deleting
     /// the selected overlay (the trash button, `removeSelectedOverlay()`)
     /// shrinks `overlays` and clears `selectedOverlayID` in the same
-    /// state update, and if any Glow control still holds this closure
+    /// state update, and if the Glow toggle still held this closure
     /// mid-teardown - SwiftUI can re-invoke a Binding's get/set while
     /// reconciling the view tree for a state change, not only cleanly
     /// after it - an unguarded index crashed with "Index out of range."
     /// Real bug, reported by the user, fixed here (2026-09-30).
-    private func glowBinding(index: Int) -> Binding<GlowSettings> {
+    private func glowBinding(index: Int) -> Binding<Bool> {
         Binding(
-            get: { overlays.indices.contains(index) ? (overlays[index].glow ?? GlowSettings()) : GlowSettings() },
+            get: { overlays.indices.contains(index) ? (overlays[index].glow?.isEnabled ?? false) : false },
             set: { newValue in
                 guard overlays.indices.contains(index) else { return }
-                overlays[index].glow = newValue
+                overlays[index].glow = GlowSettings(isEnabled: newValue)
+                persistOverlays()
             }
         )
-    }
-
-    @ViewBuilder
-    private func glowSection(index: Int) -> some View {
-        let glow = glowBinding(index: index)
-
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Glow")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { glow.wrappedValue.isEnabled },
-                    set: { glow.wrappedValue.isEnabled = $0; persistOverlays() }
-                ))
-                .labelsHidden()
-            }
-
-            if glow.wrappedValue.isEnabled {
-                HStack {
-                    Text("Color")
-                        .font(.caption)
-                        .frame(width: 44, alignment: .leading)
-                    ColorPicker("", selection: Binding(
-                        get: { glow.wrappedValue.color.color },
-                        set: { glow.wrappedValue.color = GlowColor(color: $0); persistOverlays() }
-                    ))
-                    .labelsHidden()
-                    Spacer()
-                }
-
-                labeledSlider(
-                    "Intensity", value: glow.intensity, range: 0...1,
-                    format: { String(format: "%.0f%%", $0 * 100) },
-                    onEditingChanged: { editing in if !editing { persistOverlays() } }
-                )
-                labeledSlider(
-                    "Radius", value: glow.radius, range: 0...40,
-                    format: { String(format: "%.0fpt", $0) },
-                    onEditingChanged: { editing in if !editing { persistOverlays() } }
-                )
-
-                HStack {
-                    Text("Pulse")
-                        .font(.caption)
-                        .frame(width: 44, alignment: .leading)
-                    Spacer()
-                    Toggle("", isOn: Binding(
-                        get: { glow.wrappedValue.pulse.isEnabled },
-                        set: { glow.wrappedValue.pulse.isEnabled = $0; persistOverlays() }
-                    ))
-                    .labelsHidden()
-                }
-
-                if glow.wrappedValue.pulse.isEnabled {
-                    labeledSlider(
-                        "Speed", value: glow.pulse.speed, range: 0.1...5,
-                        format: { String(format: "%.1f/s", $0) },
-                        onEditingChanged: { editing in if !editing { persistOverlays() } }
-                    )
-                    labeledSlider(
-                        "Amount", value: glow.pulse.amount, range: 0...1,
-                        format: { String(format: "%.0f%%", $0 * 100) },
-                        onEditingChanged: { editing in if !editing { persistOverlays() } }
-                    )
-                }
-            }
-        }
     }
 
     @ViewBuilder

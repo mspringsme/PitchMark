@@ -29,6 +29,18 @@
 //  existing plain overlay images already use as `layer.contents`) get
 //  exactly the input they expect.
 //
+//  2026-09-30: `params.radius` used to be a UI-authored value in points,
+//  requiring a caller-supplied `referenceSize` to convert into the
+//  source image's own pixel space before blurring, plus two separate
+//  caps (one on the point value, one on the converted pixel value) to
+//  stay sane across a huge range of source image sizes. Both the
+//  points-vs-pixels conversion and the two-cap scheme were each the
+//  root of a real, separately-reported silent-export-failure bug. Now
+//  that glow has no user-adjustable radius (GlowSettings.swift), the
+//  radius is defined directly as a fraction of the source image's own
+//  pixel size - there is no other unit to convert to or from, and
+//  nothing external to fall out of sync with.
+//
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
 //
@@ -38,9 +50,8 @@ import CoreImage.CIFilterBuiltins
 import CoreGraphics
 
 struct GlowRenderParams {
-    var color: CIColor
-    var intensity: Double   // 0...1
-    var radius: Double      // points
+    var intensity: Double        // 0...1
+    var radiusFraction: Double   // 0...1 - fraction of the source's own longest pixel dimension
 }
 
 enum GlowEffect {
@@ -55,24 +66,19 @@ enum GlowEffect {
     static let colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
 
     /// Created once, reused for every glow render - preview can call
-    /// this every frame of a pulsing overlay, and constructing a
+    /// this every frame of a shimmering overlay, and constructing a
     /// CIContext (compiling the Metal/GPU pipeline) is too expensive to
     /// repeat that often. Unlike AssetCreationFlow.swift's Smart Cutout,
     /// which creates a `CIContext()` fresh per one-off call - fine for
     /// something that runs once per photo import, wrong for something
-    /// that can run 30 times a second.
+    /// that can run several times a second.
     static let sharedContext = CIContext(options: [.workingColorSpace: colorSpace])
 
-    /// Hard cap independent of the UI slider or whatever a pulse might
-    /// scale a radius up to - keeps a large/pulsed radius from ever
-    /// triggering a pathologically expensive blur. In UI points, applied
-    /// before the point-to-pixel conversion below.
-    static let maxRadius: Double = 60
-
-    /// A second cap, applied *after* converting to the source image's
-    /// own pixel space - see the comment at that conversion for why
-    /// `maxRadius` alone isn't enough. In source pixels.
-    static let maxPixelRadius: Double = 120
+    /// The one glow color every enabled overlay gets, now that color is
+    /// no longer a per-overlay setting - a warm gold-white reads as an
+    /// actual "glow"/sparkle rather than a plain soft-focus highlight a
+    /// neutral white can look like against bright footage.
+    static let color = CIColor(red: 1.0, green: 0.92, blue: 0.62, alpha: 1)
 
     /// Long-side cap for the resolution this actually renders at,
     /// independent of the source image's real pixel size or the video's
@@ -82,67 +88,41 @@ enum GlowEffect {
     static let maxWorkingDimension: CGFloat = 512
 
     /// Renders a standalone glow "halo" image for `sourceImage` (an
-    /// overlay's own asset image) at `params`. `referenceSize` is the
-    /// point size the overlay is actually rendered at (`baseSize` in
-    /// `OverlayEditorView`, `overlayBaseSize` in `OverlayExporter`) *at
-    /// its own scale = 1* - `params.radius` is defined in those same UI
-    /// points (what the Glow slider shows), not in the source asset's
-    /// own raw pixel dimensions, which can be arbitrary (a 2000x2000
-    /// bundled PNG shown at 60pt would make a "12pt" radius invisible if
-    /// blurred directly in source-pixel space). This converts the
-    /// point-based radius into the source image's own pixel space before
-    /// any blur runs; the caller's own `.scaleEffect` (applied to both
-    /// the glow and the main overlay image identically) then scales the
-    /// already-correct-looking glow right along with the overlay, so a
-    /// scaled-up overlay gets a proportionally scaled-up glow for free.
+    /// overlay's own asset image) at `params`. `params.radiusFraction`
+    /// is relative to `sourceImage`'s own longest pixel dimension, so no
+    /// external size/unit is needed to make sense of it - the caller's
+    /// own `.scaleEffect` (applied to both the glow and the main overlay
+    /// image identically) then scales the already-correct-looking glow
+    /// right along with the overlay, so a scaled-up overlay gets a
+    /// proportionally scaled-up glow for free.
     ///
     /// Returns nil when there's nothing to render (zero radius/intensity
-    /// after capping, or a degenerate source) - callers should skip
+    /// after clamping, or a degenerate source) - callers should skip
     /// adding a glow layer entirely rather than composite a no-op result.
     ///
-    /// Pipeline: mask a solid `params.color` fill by the source's own
-    /// alpha (a tinted silhouette matching its shape) -> blur it with
-    /// two stacked CIGaussianBlur passes at different radii, screen-
-    /// blended together for a softer inner+outer falloff than one blur
-    /// - -> scale by intensity (a CIColorMatrix multiplying every
-    /// premultiplied channel uniformly, the correct premultiplied way to
-    /// reduce opacity) -> add a very low-amplitude, glow-shape-masked
-    /// noise layer to break up 8-bit banding after re-compression ->
-    /// expand the extent by the blur radius so nothing clips -> render
-    /// through `sharedContext` to a plain 8-bit CGImage (every filter
-    /// above still runs at full internal Core Image precision regardless
-    /// of this final output format - see the format-choice comment at
-    /// the bottom of this function for why it isn't half-float).
-    static func render(sourceImage: CGImage, params: GlowRenderParams, referenceSize: CGFloat) -> CGImage? {
+    /// Pipeline: mask a solid `color` fill by the source's own alpha (a
+    /// tinted silhouette matching its shape) -> blur it with two stacked
+    /// CIGaussianBlur passes at different radii, screen-blended together
+    /// for a softer inner+outer falloff than one blur -> scale by
+    /// intensity (a CIColorMatrix multiplying every premultiplied
+    /// channel uniformly, the correct premultiplied way to reduce
+    /// opacity) -> add a very low-amplitude, glow-shape-masked noise
+    /// layer to break up 8-bit banding after re-compression -> expand
+    /// the extent by the blur radius so nothing clips -> render through
+    /// `sharedContext` to a plain 8-bit CGImage (every filter above
+    /// still runs at full internal Core Image precision regardless of
+    /// this final output format - see the format-choice comment at the
+    /// bottom of this function for why it isn't half-float).
+    static func render(sourceImage: CGImage, params: GlowRenderParams) -> CGImage? {
         let intensity = min(max(params.intensity, 0), 1)
         guard intensity > 0 else { return nil }
 
         var sourceCI = CIImage(cgImage: sourceImage)
         let sourceExtent = sourceCI.extent
-        guard sourceExtent.width > 0, sourceExtent.height > 0, referenceSize > 0 else { return nil }
+        guard sourceExtent.width > 0, sourceExtent.height > 0 else { return nil }
 
-        // Points -> this source image's own pixel space. `maxRadius`
-        // bounds the *point* value, but a source image's own pixel size
-        // is arbitrary - a Smart Cutout asset (per the spec, downsized
-        // to as much as ~1024px) is far larger in raw pixels than a
-        // small bundled shape, and `pixelsPerPoint` scales directly with
-        // that. Capping only the point value before this multiplication
-        // left the *pixel* radius effectively unbounded: a large cutout
-        // at a typical small on-screen referenceSize could multiply an
-        // already-capped 60pt radius into several hundred pixels, which
-        // cascades into an enormous padded output image a few lines down
-        // (`expandInset` scales with this radius, then the whole image
-        // scales back up by `1/workingScale`) - expensive and slow
-        // enough to plausibly fail `createCGImage` outright during an
-        // export already under memory/CPU pressure from video encoding,
-        // while a small bundled asset never gets close to those numbers.
-        // Real bug, reported by the user as "glow doesn't bake in... on
-        // cutout assets" specifically - `maxPixelRadius` bounds the
-        // worst case regardless of source size or referenceSize.
         let sourcePixelSize = max(sourceExtent.width, sourceExtent.height)
-        let pixelsPerPoint = sourcePixelSize / referenceSize
-        let rawRadius = min(max(params.radius, 0), maxRadius) * pixelsPerPoint
-        let radius = min(rawRadius, maxPixelRadius)
+        let radius = min(max(params.radiusFraction, 0), 1) * sourcePixelSize
         guard radius > 0 else { return nil }
 
         let longSide = sourcePixelSize
@@ -153,7 +133,7 @@ enum GlowEffect {
         let workingExtent = sourceCI.extent
         let workingRadius = radius * workingScale
 
-        let colorFill = CIImage(color: params.color).cropped(to: workingExtent)
+        let colorFill = CIImage(color: color).cropped(to: workingExtent)
         let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: workingExtent)
         let silhouette = colorFill.applyingFilter("CIBlendWithAlphaMask", parameters: [
             kCIInputBackgroundImageKey: clear,

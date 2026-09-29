@@ -221,8 +221,14 @@ func exportMomentWithOverlays(
             // Glow, added *below* the main layer (added to parentLayer
             // first) so it renders behind it - see GlowSettings.swift/
             // GlowEffect.swift. Reuses this same position/opacity
-            // animation timing; only contents (and, for a pulsing glow,
-            // bounds.size - see below) differ from the main layer.
+            // animation timing; only contents/bounds differ from the
+            // main layer, animated below. 2026-09-30: glow no longer has
+            // a per-overlay on/off pulse toggle - GlowLook's built-in
+            // shimmer is always part of the look once glow is enabled at
+            // all, so there's now exactly one code path here instead of
+            // a static-vs-pulsing branch. That also removes the "static"
+            // branch entirely, which is where both of this feature's
+            // prior silent-export-failure bugs actually lived.
             if let glowSettings = item.glow, glowSettings.isEnabled {
                 let glowLayer = CALayer()
                 glowLayer.compositingFilter = "screenBlendMode"
@@ -236,85 +242,63 @@ func exportMomentWithOverlays(
                 glowLayer.position = layer.position
                 parentLayer.insertSublayer(glowLayer, below: layer)
 
-                if glowSettings.pulse.isEnabled {
-                    // A "contents" CAKeyframeAnimation can only jump
-                    // between CGImages (calculationMode .discrete below -
-                    // there's no such thing as Core Animation
-                    // interpolating between two bitmaps), so unlike
-                    // position/transform this needs *enough* samples to
-                    // look smooth rather than visibly stepping, not just
-                    // "no worse than 1/30s." Scales with the pulse's own
-                    // speed - at least 6 samples per cycle - floored at
-                    // 8/s for a slow pulse (no point sampling faster than
-                    // that) and capped at the same 1/30s position uses
-                    // for a fast one (no point sampling faster than the
-                    // video's own frame rate). Re-rendering a Core Image
-                    // blur is far more expensive than sampling a
-                    // keyframe value, so this still meaningfully bounds
-                    // cost for the common (slower) pulse speeds even
-                    // though it can't reduce it for a fast one.
-                    let glowSampleInterval = 1.0 / min(max(glowSettings.pulse.speed * 6, 8), 1 / exportSampleInterval)
-                    let (glowTimes, _) = sampledTransforms(for: item, sampleInterval: glowSampleInterval)
-                    let glowSamples: [(time: Double, size: CGSize, image: CGImage)] = glowTimes.compactMap { sampleTime in
-                        guard let params = resolvedGlow(glowSettings, at: sampleTime),
-                              let cgGlow = GlowEffect.render(sourceImage: cgImage, params: params, referenceSize: overlayBaseSize) else {
-                            return nil
-                        }
-                        let ratio = CGFloat(cgGlow.width) / CGFloat(max(cgImage.width, 1))
-                        return (sampleTime, CGSize(width: overlayBaseSize * ratio, height: overlayBaseSize * ratio), cgGlow)
+                // A "contents" CAKeyframeAnimation can only jump between
+                // CGImages (calculationMode .discrete below - there's no
+                // such thing as Core Animation interpolating between two
+                // bitmaps), so unlike position/transform this needs
+                // *enough* samples to look smooth rather than visibly
+                // stepping, not just "no worse than 1/30s." Scales with
+                // GlowLook's own fixed pulse speed - at least 6 samples
+                // per cycle - floored at 8/s (no point sampling slower
+                // than that) and capped at the same 1/30s position uses
+                // (no point sampling faster than the video's own frame
+                // rate). Re-rendering a Core Image blur is far more
+                // expensive than sampling a keyframe value, so this
+                // still meaningfully bounds cost.
+                let glowSampleInterval = 1.0 / min(max(GlowLook.pulseSpeed * 6, 8), 1 / exportSampleInterval)
+                let (glowTimes, _) = sampledTransforms(for: item, sampleInterval: glowSampleInterval)
+                let glowSamples: [(time: Double, size: CGSize, image: CGImage)] = glowTimes.compactMap { sampleTime in
+                    guard let params = resolvedGlow(glowSettings, at: sampleTime),
+                          let cgGlow = GlowEffect.render(sourceImage: cgImage, params: params) else {
+                        return nil
                     }
-
-                    // If the pulse dips to nothing at some sampled
-                    // moments (very high amount + low base intensity),
-                    // those samples simply drop out here - the
-                    // remaining ones still animate correctly, just
-                    // without a frame at that exact instant.
-                    if glowSamples.isEmpty {
-                        debugLog("⚠️ pulsing glow produced no samples for overlay \(item.id) - source \(cgImage.width)x\(cgImage.height)px")
-                    } else {
-                        let glowKeyTimes = glowSamples.map { NSNumber(value: ($0.time - item.startTime) / animDuration) }
-
-                        let boundsAnimation = CAKeyframeAnimation(keyPath: "bounds")
-                        boundsAnimation.values = glowSamples.map { NSValue(cgRect: CGRect(origin: .zero, size: $0.size)) }
-                        boundsAnimation.keyTimes = glowKeyTimes
-                        boundsAnimation.calculationMode = .linear
-                        boundsAnimation.beginTime = beginTime
-                        boundsAnimation.duration = animDuration
-                        boundsAnimation.fillMode = .removed
-                        boundsAnimation.isRemovedOnCompletion = false
-                        glowLayer.add(boundsAnimation, forKey: "bounds")
-
-                        let contentsAnimation = CAKeyframeAnimation(keyPath: "contents")
-                        contentsAnimation.values = glowSamples.map { $0.image }
-                        contentsAnimation.keyTimes = glowKeyTimes
-                        contentsAnimation.calculationMode = .discrete
-                        contentsAnimation.beginTime = beginTime
-                        contentsAnimation.duration = animDuration
-                        contentsAnimation.fillMode = .removed
-                        contentsAnimation.isRemovedOnCompletion = false
-                        glowLayer.add(contentsAnimation, forKey: "contents")
-
-                        glowLayer.add(positionAnimation, forKey: "position")
-                        glowLayer.add(opacityAnimation, forKey: "opacity")
-                    }
-                } else if let params = resolvedGlow(glowSettings, at: item.startTime),
-                          let cgGlow = GlowEffect.render(sourceImage: cgImage, params: params, referenceSize: overlayBaseSize) {
-                    // Static glow - render once, no contents animation.
                     let ratio = CGFloat(cgGlow.width) / CGFloat(max(cgImage.width, 1))
-                    let size = overlayBaseSize * ratio
-                    glowLayer.bounds = CGRect(x: 0, y: 0, width: size, height: size)
-                    glowLayer.contents = cgGlow
+                    return (sampleTime, CGSize(width: overlayBaseSize * ratio, height: overlayBaseSize * ratio), cgGlow)
+                }
+
+                // If every sample failed to render, the glow silently
+                // never appears otherwise - exactly how the last two
+                // glow-export bugs ("doesn't bake in") went unnoticed
+                // until reported. Logged, not just swallowed, so a
+                // future case like this shows up in the console instead
+                // of only a missing pixel in the exported file.
+                if glowSamples.isEmpty {
+                    debugLog("⚠️ glow produced no samples for overlay \(item.id) - source \(cgImage.width)x\(cgImage.height)px")
+                } else {
+                    let glowKeyTimes = glowSamples.map { NSNumber(value: ($0.time - item.startTime) / animDuration) }
+
+                    let boundsAnimation = CAKeyframeAnimation(keyPath: "bounds")
+                    boundsAnimation.values = glowSamples.map { NSValue(cgRect: CGRect(origin: .zero, size: $0.size)) }
+                    boundsAnimation.keyTimes = glowKeyTimes
+                    boundsAnimation.calculationMode = .linear
+                    boundsAnimation.beginTime = beginTime
+                    boundsAnimation.duration = animDuration
+                    boundsAnimation.fillMode = .removed
+                    boundsAnimation.isRemovedOnCompletion = false
+                    glowLayer.add(boundsAnimation, forKey: "bounds")
+
+                    let contentsAnimation = CAKeyframeAnimation(keyPath: "contents")
+                    contentsAnimation.values = glowSamples.map { $0.image }
+                    contentsAnimation.keyTimes = glowKeyTimes
+                    contentsAnimation.calculationMode = .discrete
+                    contentsAnimation.beginTime = beginTime
+                    contentsAnimation.duration = animDuration
+                    contentsAnimation.fillMode = .removed
+                    contentsAnimation.isRemovedOnCompletion = false
+                    glowLayer.add(contentsAnimation, forKey: "contents")
+
                     glowLayer.add(positionAnimation, forKey: "position")
                     glowLayer.add(opacityAnimation, forKey: "opacity")
-                } else {
-                    // GlowEffect.render returned nil (or resolvedGlow
-                    // did) - the glow silently never renders otherwise,
-                    // which is exactly how the last glow-export bug
-                    // ("doesn't bake in") went unnoticed until reported.
-                    // Logged, not just swallowed, so a future case like
-                    // this shows up in the console instead of only a
-                    // missing pixel in the exported file.
-                    debugLog("⚠️ static glow produced no image for overlay \(item.id) - source \(cgImage.width)x\(cgImage.height)px, radius \(glowSettings.radius)pt, referenceSize \(overlayBaseSize)pt")
                 }
             }
         }
