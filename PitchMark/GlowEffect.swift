@@ -54,6 +54,22 @@ struct GlowRenderParams {
     var radiusFraction: Double   // 0...1 - fraction of the source's own longest pixel dimension
 }
 
+/// `image` may be rendered at a *smaller* pixel resolution than
+/// `sourceImage` (see `maxWorkingDimension`) - `sizeRatio` is the
+/// intended display size relative to the source's own extent (padded
+/// canvas / source canvas, e.g. ~1.3), computed directly from the
+/// padding math rather than by comparing `image`'s actual pixel
+/// dimensions against the source's - those two are no longer
+/// comparable 1:1 once the output resolution is capped independently
+/// of the source's size. Callers size the glow layer/view as
+/// `mainOverlaySize * sizeRatio`, then let normal CALayer/SwiftUI image
+/// scaling stretch the (possibly lower-res) `image` to fit - free for a
+/// glow, since it's inherently soft.
+struct GlowRenderResult {
+    var image: CGImage
+    var sizeRatio: CGFloat
+}
+
 enum GlowEffect {
     /// A concrete (non-Optional) sRGB space, reused for both the shared
     /// context's working space and every `createCGImage` output below -
@@ -113,7 +129,7 @@ enum GlowEffect {
     /// still runs at full internal Core Image precision regardless of
     /// this final output format - see the format-choice comment at the
     /// bottom of this function for why it isn't half-float).
-    static func render(sourceImage: CGImage, params: GlowRenderParams) -> CGImage? {
+    static func render(sourceImage: CGImage, params: GlowRenderParams) -> GlowRenderResult? {
         let intensity = min(max(params.intensity, 0), 1)
         guard intensity > 0 else { return nil }
 
@@ -174,10 +190,41 @@ enum GlowEffect {
 
         let expandInset = workingRadius * 2.5
         let expandedExtent = workingExtent.insetBy(dx: -expandInset, dy: -expandInset)
-        var finalImage = glow.cropped(to: expandedExtent)
-        if workingScale < 1 {
-            finalImage = finalImage.transformed(by: CGAffineTransform(scaleX: 1 / workingScale, y: 1 / workingScale))
-        }
+        let finalImage = glow.cropped(to: expandedExtent)
+
+        // Deliberately NOT scaled back up to the source's own
+        // resolution here (this function used to do that, via
+        // `finalImage.transformed(by: 1/workingScale)`) - `sizeRatio`
+        // below already tells callers the *intended* display size, and
+        // a CALayer/SwiftUI Image scales lower-res `contents` up to fit
+        // for free, invisibly for something this soft. Scaling back up
+        // only mattered for a naive caller that inferred display size
+        // by comparing `image.width` against the source's own width -
+        // both callers now use `sizeRatio` instead (see its doc comment).
+        //
+        // This matters far more than it looks: a *static* glow is one
+        // image, so the old upscale only cost one large allocation. A
+        // *pulsing* glow (every enabled glow, now that it's always
+        // animated - GlowSettings.swift) needs export to hold dozens of
+        // full-resolution samples simultaneously in one
+        // CAKeyframeAnimation.values array for its whole duration - for
+        // a large Smart Cutout or shape-cropped photo (up to 1024px per
+        // the asset spec), that upscale made each sample ~1.3x1024px,
+        // multiplied by ~8-30 samples/second for however many seconds
+        // the overlay spans - hundreds of megabytes held at once by
+        // AVVideoCompositionCoreAnimationTool's offline compositor,
+        // which the live preview never does (it renders and discards
+        // one glow image at a time as the playhead moves). Bundled
+        // placeholder assets are tiny, so they never approached this and
+        // always "worked"; a real user-created asset's export silently
+        // dropped the glow entirely - the same silent-nil failure shape
+        // as this feature's two previous bugs, just triggered by array
+        // memory pressure instead of a single oversized allocation or an
+        // unsupported pixel format. Reported by the user as glow still
+        // not baking in "on user created assets" after both those fixes
+        // already shipped. Capping the *output* resolution the same way
+        // `maxWorkingDimension` already caps the *blur computation*
+        // keeps every sample small regardless of source size.
 
         // .RGBA8, not the half-float .RGBAh this originally used: every
         // Core Image filter above still runs at full internal precision
@@ -192,11 +239,21 @@ enum GlowEffect {
         // glow layer ever added - is the likely cause of a real bug:
         // the glow rendering correctly in the live preview but never
         // appearing in an exported video ("doesn't bake in").
-        return sharedContext.createCGImage(
+        guard let outputImage = sharedContext.createCGImage(
             finalImage,
             from: finalImage.extent,
             format: .RGBA8,
             colorSpace: colorSpace
-        )
+        ) else { return nil }
+
+        // Scale-invariant by construction - `workingExtent`/`expandInset`
+        // are both already in the same (possibly downscaled) working
+        // space, so their ratio equals what it would be at full source
+        // resolution too. Computed from geometry, never from comparing
+        // `outputImage`'s actual pixel size against the source's own -
+        // see this function's "Deliberately NOT scaled back up" comment
+        // above for why those two are no longer interchangeable.
+        let sizeRatio = expandedExtent.width / max(workingExtent.width, 1)
+        return GlowRenderResult(image: outputImage, sizeRatio: sizeRatio)
     }
 }

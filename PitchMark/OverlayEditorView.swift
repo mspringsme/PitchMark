@@ -419,7 +419,7 @@ struct OverlayEditorView: View {
                 // reads "frame time" for free.
                 if let glowParams = resolvedGlow(item.glow, at: currentTime),
                    let sourceCG = image.cgImage,
-                   let glowCG = GlowEffect.render(sourceImage: sourceCG, params: glowParams) {
+                   let glowResult = GlowEffect.render(sourceImage: sourceCG, params: glowParams) {
                     // GlowEffect.render pads the source's own extent
                     // equally on each side, so a non-square source (any
                     // Smart Cutout that isn't a square crop) produces a
@@ -429,8 +429,8 @@ struct OverlayEditorView: View {
                     // way the main overlay image did before it had the
                     // same modifier (see the export-side fix for the
                     // user-reported version of this).
-                    let glowSizeRatio = CGFloat(glowCG.width) / CGFloat(max(sourceCG.width, 1))
-                    Image(decorative: glowCG, scale: 1)
+                    let glowSizeRatio = glowResult.sizeRatio
+                    Image(decorative: glowResult.image, scale: 1)
                         .resizable()
                         .scaledToFit()
                         .frame(width: baseSize * glowSizeRatio, height: baseSize * glowSizeRatio)

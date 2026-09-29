@@ -259,11 +259,11 @@ func exportMomentWithOverlays(
                 let (glowTimes, _) = sampledTransforms(for: item, sampleInterval: glowSampleInterval)
                 let glowSamples: [(time: Double, size: CGSize, image: CGImage)] = glowTimes.compactMap { sampleTime in
                     guard let params = resolvedGlow(glowSettings, at: sampleTime),
-                          let cgGlow = GlowEffect.render(sourceImage: cgImage, params: params) else {
+                          let glowResult = GlowEffect.render(sourceImage: cgImage, params: params) else {
                         return nil
                     }
-                    let ratio = CGFloat(cgGlow.width) / CGFloat(max(cgImage.width, 1))
-                    return (sampleTime, CGSize(width: overlayBaseSize * ratio, height: overlayBaseSize * ratio), cgGlow)
+                    let side = overlayBaseSize * glowResult.sizeRatio
+                    return (sampleTime, CGSize(width: side, height: side), glowResult.image)
                 }
 
                 // If every sample failed to render, the glow silently
