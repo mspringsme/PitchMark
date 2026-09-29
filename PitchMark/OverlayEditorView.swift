@@ -519,10 +519,24 @@ struct OverlayEditorView: View {
     /// own binding updates local state (and so the live preview) on
     /// every drag tick, while `labeledSlider`'s `onEditingChanged`
     /// defers the actual Firestore write to release.
+    /// Unlike the native `$overlays[index].startTime`-style projections
+    /// this panel's other sliders use, a hand-rolled `Binding(get:set:)`
+    /// has no built-in bounds safety - `overlays[index]` traps if `index`
+    /// goes stale. That happens exactly when it matters most: deleting
+    /// the selected overlay (the trash button, `removeSelectedOverlay()`)
+    /// shrinks `overlays` and clears `selectedOverlayID` in the same
+    /// state update, and if any Glow control still holds this closure
+    /// mid-teardown - SwiftUI can re-invoke a Binding's get/set while
+    /// reconciling the view tree for a state change, not only cleanly
+    /// after it - an unguarded index crashed with "Index out of range."
+    /// Real bug, reported by the user, fixed here (2026-09-30).
     private func glowBinding(index: Int) -> Binding<GlowSettings> {
         Binding(
-            get: { overlays[index].glow ?? GlowSettings() },
-            set: { overlays[index].glow = $0 }
+            get: { overlays.indices.contains(index) ? (overlays[index].glow ?? GlowSettings()) : GlowSettings() },
+            set: { newValue in
+                guard overlays.indices.contains(index) else { return }
+                overlays[index].glow = newValue
+            }
         )
     }
 
