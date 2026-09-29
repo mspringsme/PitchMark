@@ -393,7 +393,8 @@ struct MomentAudioEditorView: View {
 
     private func overlayBar(_ overlay: AudioOverlayItem, trackWidth: CGFloat) -> some View {
         let assetDuration = audioAssetsById[overlay.assetId]?.durationSeconds ?? 1
-        let endTime = min(overlay.startTime + assetDuration, max(totalDuration, overlay.startTime))
+        let trimmedDuration = trimmedDuration(for: overlay, assetDuration: assetDuration)
+        let endTime = min(overlay.startTime + trimmedDuration, max(totalDuration, overlay.startTime))
         let x = timeToX(time: overlay.startTime, duration: totalDuration, trackWidth: trackWidth)
         let endX = timeToX(time: endTime, duration: totalDuration, trackWidth: trackWidth)
         let blockWidth = max(endX - x, 4)
@@ -415,7 +416,8 @@ struct MomentAudioEditorView: View {
             let overlay = audioOverlays[index]
             let name = audioAssetsById[overlay.assetId]?.name ?? "Audio"
             let assetDuration = audioAssetsById[overlay.assetId]?.durationSeconds ?? 1
-            let clipEnd = max(overlay.startTime + assetDuration, overlay.startTime + 0.01)
+            let trimmed = trimmedDuration(for: overlay, assetDuration: assetDuration)
+            let clipEnd = max(overlay.startTime + trimmed, overlay.startTime + 0.01)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -455,6 +457,50 @@ struct MomentAudioEditorView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
+                    Text("Trim")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text("Start")
+                            .font(.caption2)
+                            .frame(width: 44, alignment: .leading)
+                        Slider(
+                            value: Binding(
+                                get: { audioOverlays[index].trimStart },
+                                set: { audioOverlays[index].trimStart = $0 }
+                            ),
+                            in: 0...max(assetDuration, 0.01),
+                            onEditingChanged: { editing in
+                                if !editing { commitTrimAndFade(index, assetDuration: assetDuration) }
+                            }
+                        )
+                        Text(formattedTime(audioOverlays[index].trimStart))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                    HStack {
+                        Text("End")
+                            .font(.caption2)
+                            .frame(width: 44, alignment: .leading)
+                        Slider(
+                            value: Binding(
+                                get: { audioOverlays[index].trimEnd ?? assetDuration },
+                                set: { audioOverlays[index].trimEnd = $0 }
+                            ),
+                            in: 0...max(assetDuration, 0.01),
+                            onEditingChanged: { editing in
+                                if !editing { commitTrimAndFade(index, assetDuration: assetDuration) }
+                            }
+                        )
+                        Text(formattedTime(audioOverlays[index].trimEnd ?? assetDuration))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
                     Text("Volume")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -462,9 +508,20 @@ struct MomentAudioEditorView: View {
                     // This clip's own waveform - separate from the
                     // original track's, extracted from its own asset
                     // file and only shown while this overlay is
-                    // selected (see loadWaveformIfNeeded).
+                    // selected (see loadWaveformIfNeeded) - sliced down
+                    // to the trimmed portion so it lines up with the
+                    // VolumeKeyframeStrip layered on top, which is
+                    // already scaled to that same trimmed range.
                     ZStack {
-                        WaveformView(peaks: overlayWaveformPeaksByAssetId[overlay.assetId] ?? [], color: Color.purple.opacity(0.55))
+                        WaveformView(
+                            peaks: slicedWaveform(
+                                overlayWaveformPeaksByAssetId[overlay.assetId] ?? [],
+                                trimStart: audioOverlays[index].trimStart,
+                                trimEnd: audioOverlays[index].trimEnd ?? assetDuration,
+                                assetDuration: assetDuration
+                            ),
+                            color: Color.purple.opacity(0.55)
+                        )
                         if !(audioOverlays[index].volumeKeyframes ?? []).isEmpty {
                             VolumeKeyframeStrip(
                                 rangeStart: overlay.startTime,
@@ -510,8 +567,71 @@ struct MomentAudioEditorView: View {
                             .font(.caption)
                     }
                 }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Fade")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Text("In")
+                            .font(.caption2)
+                            .frame(width: 44, alignment: .leading)
+                        Slider(
+                            value: Binding(
+                                get: { audioOverlays[index].fadeInSeconds },
+                                set: { audioOverlays[index].fadeInSeconds = $0 }
+                            ),
+                            in: 0...max(assetDuration / 2, 0.01),
+                            onEditingChanged: { editing in
+                                if !editing { commitTrimAndFade(index, assetDuration: assetDuration) }
+                            }
+                        )
+                        Text(formattedTime(audioOverlays[index].fadeInSeconds))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                    HStack {
+                        Text("Out")
+                            .font(.caption2)
+                            .frame(width: 44, alignment: .leading)
+                        Slider(
+                            value: Binding(
+                                get: { audioOverlays[index].fadeOutSeconds },
+                                set: { audioOverlays[index].fadeOutSeconds = $0 }
+                            ),
+                            in: 0...max(assetDuration / 2, 0.01),
+                            onEditingChanged: { editing in
+                                if !editing { commitTrimAndFade(index, assetDuration: assetDuration) }
+                            }
+                        )
+                        Text(formattedTime(audioOverlays[index].fadeOutSeconds))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                }
             }
         }
+    }
+
+    /// Runs both trim and fade through `normalizedTrimAndFade` together
+    /// so the two never disagree (e.g. a fade left too long after the
+    /// user just shortened the trim) - the same clamp the mixer applies
+    /// at export time, so what's previewed is exactly what gets baked in.
+    private func commitTrimAndFade(_ index: Int, assetDuration: Double) {
+        let normalized = normalizedTrimAndFade(
+            trimStart: audioOverlays[index].trimStart,
+            trimEnd: audioOverlays[index].trimEnd,
+            fadeIn: audioOverlays[index].fadeInSeconds,
+            fadeOut: audioOverlays[index].fadeOutSeconds,
+            assetDuration: assetDuration
+        )
+        audioOverlays[index].trimStart = normalized.trimStart
+        audioOverlays[index].trimEnd = normalized.trimEnd
+        audioOverlays[index].fadeInSeconds = normalized.fadeIn
+        audioOverlays[index].fadeOutSeconds = normalized.fadeOut
+        persistOverlays()
     }
 
     private func overlayVolumeKeyframesBinding(_ index: Int) -> Binding<[VolumeKeyframe]> {
@@ -653,6 +773,35 @@ struct MomentAudioEditorView: View {
     private func formattedTime(_ seconds: Double) -> String {
         let total = Int(seconds.rounded())
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    /// This overlay's actual playing length after trim - what the
+    /// timeline bar's width, the waveform's visible slice, and the
+    /// volume-keyframe range should all reflect, not the full source
+    /// asset's own duration.
+    private func trimmedDuration(for overlay: AudioOverlayItem, assetDuration: Double) -> Double {
+        let normalized = normalizedTrimAndFade(
+            trimStart: overlay.trimStart,
+            trimEnd: overlay.trimEnd,
+            fadeIn: overlay.fadeInSeconds,
+            fadeOut: overlay.fadeOutSeconds,
+            assetDuration: assetDuration
+        )
+        return normalized.trimEnd - normalized.trimStart
+    }
+
+    /// Slices a full-asset waveform down to just the trimmed portion
+    /// that actually plays, so the displayed shape matches the
+    /// VolumeKeyframeStrip layered on top of it (which is already scaled
+    /// to the trimmed range) instead of showing the whole file stretched
+    /// across a width meant to represent a narrower slice.
+    private func slicedWaveform(_ peaks: [Float], trimStart: Double, trimEnd: Double, assetDuration: Double) -> [Float] {
+        guard assetDuration > 0, !peaks.isEmpty else { return peaks }
+        let startFraction = min(max(trimStart / assetDuration, 0), 1)
+        let endFraction = min(max(trimEnd / assetDuration, 0), 1)
+        let startIndex = min(max(Int((startFraction * Double(peaks.count)).rounded()), 0), peaks.count)
+        let endIndex = min(max(Int((endFraction * Double(peaks.count)).rounded()), startIndex), peaks.count)
+        return Array(peaks[startIndex..<endIndex])
     }
 
     // MARK: Playback

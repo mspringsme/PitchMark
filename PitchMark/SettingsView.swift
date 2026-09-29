@@ -999,6 +999,10 @@ struct SettingsView: View {
                     sectionCard {
                         storeSection
                     }
+
+                    sectionCard {
+                        soundCreditsSection
+                    }
                 }
                 .padding(.top, 4)
             }
@@ -1931,6 +1935,38 @@ struct SettingsView: View {
                 }
             }
 
+        }
+    }
+
+    /// 2026-09-29 - the bundled sound pack's courtesy attribution list.
+    /// Plain capsule row, deliberately without storeSection's glow
+    /// treatment (that's specific to Store branding).
+    private var soundCreditsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            NavigationLink {
+                SoundCreditsView()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "quote.bubble")
+                        .font(.subheadline.weight(.semibold))
+                    Text("sound credits")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .foregroundColor(.black)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule().fill(Color.black.opacity(0.06))
+                )
+                .overlay(
+                    Capsule().stroke(Color.black, lineWidth: 1)
+                )
+            }
+            .padding(.horizontal)
         }
     }
 

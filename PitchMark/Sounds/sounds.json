@@ -1,0 +1,103 @@
+[
+  {
+    "id": "sfx_arcade_start",
+    "name": "8-Bit Arcade Start",
+    "category": "sfx",
+    "filename": "sfx_arcade_start.m4a",
+    "duration": 0.95,
+    "author": "FartBiscuit1700",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/FartBiscuit1700/sounds/368691/"
+  },
+  {
+    "id": "sfx_trombone_fail",
+    "name": "Sad Trombone Fail",
+    "category": "sfx",
+    "filename": "sfx_trombone_fail.m4a",
+    "duration": 5.3,
+    "author": "kirbydx",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/kirbydx/sounds/175409/"
+  },
+  {
+    "id": "sfx_crowd_cheer",
+    "name": "Crowd Cheer",
+    "category": "sfx",
+    "filename": "sfx_crowd_cheer.m4a",
+    "duration": 8.5,
+    "author": "Gauraa",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/Gauraa/sounds/184833/",
+    "attributionUncertain": true
+  },
+  {
+    "id": "sfx_cartoon_pop",
+    "name": "Cartoon Pop",
+    "category": "sfx",
+    "filename": "sfx_cartoon_pop.m4a",
+    "duration": 0.17,
+    "author": "unfa",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/unfa/sounds/245646/"
+  },
+  {
+    "id": "sfx_small_crowd",
+    "name": "Small Crowd Cheer",
+    "category": "sfx",
+    "filename": "sfx_small_crowd.m4a",
+    "duration": 6.7,
+    "author": "moxobna",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/moxobna/sounds/32260/"
+  },
+  {
+    "id": "sfx_cricket_chirp",
+    "name": "Cricket Chirp",
+    "category": "sfx",
+    "filename": "sfx_cricket_chirp.m4a",
+    "duration": 1.25,
+    "author": "Sojan",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/Sojan/sounds/400663/"
+  },
+  {
+    "id": "sfx_airhorn",
+    "name": "Airhorn",
+    "category": "sfx",
+    "filename": "sfx_airhorn.m4a",
+    "duration": 1.61,
+    "author": "jacksonacademyashmore",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/jacksonacademyashmore/sounds/414208/"
+  },
+  {
+    "id": "sfx_crowd_applause",
+    "name": "Crowd Applause",
+    "category": "sfx",
+    "filename": "sfx_crowd_applause.m4a",
+    "duration": 2.89,
+    "author": "Nox_Sound",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/Nox_Sound/sounds/752710/"
+  },
+  {
+    "id": "sfx_bat_swoosh",
+    "name": "Bat Swoosh",
+    "category": "sfx",
+    "filename": "sfx_bat_swoosh.m4a",
+    "duration": 0.93,
+    "author": "MrGungus",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/MrGungus/sounds/766542/"
+  },
+  {
+    "id": "music_upbeat_loop",
+    "name": "Upbeat Loop",
+    "category": "music",
+    "filename": "music_upbeat_loop.m4a",
+    "duration": 59.1,
+    "author": "Seth_Makes_Sounds",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://freesound.org/people/Seth_Makes_Sounds/sounds/696111/"
+  }
+]

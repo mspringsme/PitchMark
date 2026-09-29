@@ -6,15 +6,21 @@
 //  Firestore metadata-only sync, mirroring AssetItem.swift's exact
 //  pattern (which itself mirrors Moment.swift's).
 //
-//  2026-09-28 (later same day): bundled default sound effects were added
-//  - a licensed CC0 clip (see BundledAudio/ and
-//  ~/Documents/Art Created/PitchMarkAudio/license-log.csv for sourcing)
-//  bundled straight into the app, the audio equivalent of AssetItem's
-//  Circle/Arrow. `BundledAudioAsset`/`LibraryAudioAsset` mirror
-//  AssetItem.swift's `BundledAsset`/`LibraryAsset` shape exactly, so
-//  every place that plays or mixes audio (MomentAudioEditorView,
-//  MomentAudioMixer) resolves a clip's file through one `fileURL`
-//  regardless of whether it's bundled or user-created.
+//  2026-09-28 (later same day): one bundled default sound effect was
+//  added as a placeholder/proof of concept.
+//
+//  2026-09-29: superseded by a real bundled sound pack (9 sfx + 1 music
+//  loop, all CC0 from Freesound.org - see
+//  ~/Documents/Art Created/PitchMarkAudio/license-log.csv for sourcing,
+//  merged into Sounds/sounds.json's author/license/sourceURL fields).
+//  Files live under Sounds/sfx/ and Sounds/music/; `bundledAudioAssets`
+//  is decoded from Sounds/sounds.json rather than hardcoded, so adding
+//  another sound later needs only a new file + manifest entry, no Swift
+//  change. `BundledAudioAsset`/`LibraryAudioAsset` mirror AssetItem.swift's
+//  `BundledAsset`/`LibraryAsset` shape, so every place that plays or
+//  mixes audio (MomentAudioEditorView, MomentAudioMixer) resolves a
+//  clip's file through one `fileURL` regardless of whether it's bundled
+//  or user-created.
 //
 //  Deliberately kept out of the Pitchmark Display target's
 //  membershipExceptions; Display has no use for this.
@@ -77,17 +83,61 @@ func removeLocalAudioAsset(assetId: String) {
 struct BundledAudioAsset: Identifiable {
     let id: String
     let name: String
-    /// Filename (with extension) under the BundledAudio/ resource folder.
+    /// "sfx" or "music" - drives AudioAssetLibraryView's grouped sections.
+    let category: String
+    /// Filename (with extension) under the bundled Sounds/ resource folder.
     let resourceFileName: String
     /// Known up front rather than probed at runtime - this is a fixed
     /// bundled file, the same reasoning AudioAssetItem stores a
     /// user-recorded clip's duration instead of re-measuring it each time.
     let durationSeconds: Double
+    /// Sourcing, for SoundCreditsView - nil for anything not present in
+    /// the manifest (shouldn't happen for a properly logged sound, but
+    /// Optional rather than assumed so a manifest gap fails soft).
+    let author: String?
+    let license: String?
+    let sourceURL: String?
 }
 
-let bundledAudioAssets: [BundledAudioAsset] = [
-    BundledAudioAsset(id: "bundled-arcade-start-jump", name: "Arcade Start", resourceFileName: "ArcadeStartJump.wav", durationSeconds: 0.95),
-]
+/// Raw shape of the bundled Sounds/sounds.json manifest - one entry per
+/// clip. `author`/`license`/`sourceURL` are merged in from
+/// ~/Documents/Art Created/PitchMarkAudio/license-log.csv (outside the
+/// repo) at pack-assembly time, not re-derived at runtime.
+private struct BundledSoundManifestEntry: Codable {
+    let id: String
+    let name: String
+    let category: String
+    let filename: String
+    let duration: Double
+    let author: String?
+    let license: String?
+    let sourceURL: String?
+}
+
+/// Loaded once from the bundled manifest. Adding a new bundled sound
+/// going forward means dropping the file under Sounds/sfx or
+/// Sounds/music and adding one entry to sounds.json - no Swift code
+/// change needed. Ids are prefixed so they never collide with a
+/// Firestore-assigned user AudioAssetItem id.
+let bundledAudioAssets: [BundledAudioAsset] = {
+    guard let url = Bundle.main.url(forResource: "sounds", withExtension: "json"),
+          let data = try? Data(contentsOf: url),
+          let entries = try? JSONDecoder().decode([BundledSoundManifestEntry].self, from: data) else {
+        return []
+    }
+    return entries.map { entry in
+        BundledAudioAsset(
+            id: "bundled-\(entry.id)",
+            name: entry.name,
+            category: entry.category,
+            resourceFileName: entry.filename,
+            durationSeconds: entry.duration,
+            author: entry.author,
+            license: entry.license,
+            sourceURL: entry.sourceURL
+        )
+    }
+}()
 
 func bundledAudioAssetURL(for asset: BundledAudioAsset) -> URL? {
     let fileName = asset.resourceFileName as NSString
@@ -108,6 +158,9 @@ struct LibraryAudioAsset: Identifiable {
     /// nil for bundled assets - there's no AudioAssetItem/Firestore doc to edit.
     let backingAssetId: String?
     let fileURL: URL?
+    /// nil for user-created clips (not categorized); "sfx"/"music" for
+    /// bundled ones - drives AudioAssetLibraryView's grouped sections.
+    let category: String?
 
     static func bundled(_ asset: BundledAudioAsset) -> LibraryAudioAsset {
         LibraryAudioAsset(
@@ -117,7 +170,8 @@ struct LibraryAudioAsset: Identifiable {
             isRenamable: false,
             isDeletable: false,
             backingAssetId: nil,
-            fileURL: bundledAudioAssetURL(for: asset)
+            fileURL: bundledAudioAssetURL(for: asset),
+            category: asset.category
         )
     }
 
@@ -130,7 +184,8 @@ struct LibraryAudioAsset: Identifiable {
             isRenamable: true,
             isDeletable: true,
             backingAssetId: id,
-            fileURL: localAudioAssetURL(for: id)
+            fileURL: localAudioAssetURL(for: id),
+            category: nil
         )
     }
 }

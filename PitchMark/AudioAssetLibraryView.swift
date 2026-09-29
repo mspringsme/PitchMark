@@ -147,25 +147,25 @@ struct AudioAssetLibraryView: View {
                 }
             }
 
-            Section("Library") {
-                if audioAssets.isEmpty {
-                    Text("No audio yet. Record one above.")
+            if !sfxAssets.isEmpty {
+                Section("SFX") {
+                    assetRows(sfxAssets)
+                }
+            }
+
+            if !musicAssets.isEmpty {
+                Section("Music") {
+                    assetRows(musicAssets)
+                }
+            }
+
+            Section("My Recordings") {
+                if myRecordings.isEmpty {
+                    Text("No recordings yet. Record one above.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(audioAssets) { asset in
-                        assetRow(asset)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                if asset.isDeletable {
-                                    Button(role: .destructive) {
-                                        assetPendingDelete = asset
-                                        showDeleteDialog = true
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
-                            }
-                    }
+                    assetRows(myRecordings)
                 }
 
                 if let deleteErrorMessage {
@@ -174,6 +174,29 @@ struct AudioAssetLibraryView: View {
                         .foregroundStyle(.red)
                 }
             }
+        }
+    }
+
+    /// Bundled clips are grouped by category (from the manifest);
+    /// user-recorded ones (no category) get their own section - same
+    /// row/dialog/swipe-delete behavior in every section, just grouped.
+    private var sfxAssets: [LibraryAudioAsset] { audioAssets.filter { $0.category == "sfx" } }
+    private var musicAssets: [LibraryAudioAsset] { audioAssets.filter { $0.category == "music" } }
+    private var myRecordings: [LibraryAudioAsset] { audioAssets.filter { $0.category == nil } }
+
+    private func assetRows(_ assets: [LibraryAudioAsset]) -> some View {
+        ForEach(assets) { asset in
+            assetRow(asset)
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    if asset.isDeletable {
+                        Button(role: .destructive) {
+                            assetPendingDelete = asset
+                            showDeleteDialog = true
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+                }
         }
     }
 
