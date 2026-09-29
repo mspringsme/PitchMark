@@ -135,3 +135,23 @@ func debugLog(_ items: Any..., separator: String = " ", terminator: String = "\n
     Swift.print(items.map { String(describing: $0) }.joined(separator: separator), terminator: terminator)
 #endif
 }
+
+/// `error.localizedDescription` alone is often just a generic wrapper
+/// string ("The operation could not be completed.") for AVFoundation
+/// failures - the actual cause usually sits one level down, in the
+/// NSError's own `domain`/`code` or an `NSUnderlyingErrorKey` chain that
+/// `localizedDescription` doesn't surface. Use this in a `debugLog` call
+/// at any export/composition failure site instead of just the bare
+/// error, so a future report ("export failed, red error") comes with
+/// something more actionable in the console than the same generic text
+/// already shown on screen.
+func debugErrorDetail(_ error: Error) -> String {
+    let nsError = error as NSError
+    var parts = ["\(nsError.domain) #\(nsError.code): \(nsError.localizedDescription)"]
+    var underlying: Error? = nsError.userInfo[NSUnderlyingErrorKey] as? Error
+    while let current = underlying as NSError? {
+        parts.append("<- \(current.domain) #\(current.code): \(current.localizedDescription)")
+        underlying = current.userInfo[NSUnderlyingErrorKey] as? Error
+    }
+    return parts.joined(separator: " ")
+}

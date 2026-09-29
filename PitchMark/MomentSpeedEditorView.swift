@@ -353,6 +353,7 @@ struct MomentSpeedEditorView: View {
                 player.play()
                 isPlayingComposite = true
             case .failure(let error):
+                debugLog("❌ buildSpeedRampedComposition (preview) failed:", debugErrorDetail(error))
                 previewErrorMessage = "Couldn't preview: \(error.localizedDescription)"
             }
         }
@@ -422,7 +423,7 @@ struct MomentSpeedEditorView: View {
                     exportErrorMessage = "Couldn't save the exported video: \(error.localizedDescription)"
                 }
             case .failure(let error):
-                debugLog("❌ exportSpeedRampedMoment failed:", error.localizedDescription)
+                debugLog("❌ exportSpeedRampedMoment failed:", debugErrorDetail(error))
                 exportErrorMessage = "Export failed: \(error.localizedDescription)"
             }
         }
