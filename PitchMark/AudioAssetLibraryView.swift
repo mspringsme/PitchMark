@@ -4,11 +4,14 @@
 //
 //  2026-09-28: mirrors AssetLibraryView.swift's list/rename/delete
 //  structure for audio instead of images, plus a "picker mode" (onPick
-//  set) MomentAudioEditorView's "Add Audio" flow uses - tapping an asset
-//  adds it directly instead of opening the tap-menu dialog every other
-//  library screen in this app uses (per the same "swipe stays Delete-
-//  only, tap opens a menu" feedback already applied to the image
-//  library).
+//  set) MomentAudioEditorView's "Add Audio" flow uses.
+//
+//  2026-09-30: picker mode used to add an asset immediately on tap, with
+//  no way to hear it first. Now every mode routes through the same
+//  tap-opens-a-dialog convention this app already uses elsewhere (per
+//  the "swipe stays Delete-only, tap opens a menu" feedback) - Play is
+//  always offered, and picker mode adds one more explicit option, Add,
+//  so previewing and committing are two separate steps instead of one.
 //
 //  Works from `[LibraryAudioAsset]` (AudioAssetItem.swift), not
 //  `[AudioAssetItem]` directly, so bundled default sounds (added later
@@ -101,6 +104,18 @@ struct AudioAssetLibraryView: View {
             if let asset = assetPendingAction {
                 Button(playingAssetId == asset.id ? "Stop" : "Play") {
                     togglePreview(asset)
+                }
+                // Picker mode (Add Audio from MomentAudioEditorView) -
+                // 2026-09-30: tapping a row used to add it immediately
+                // with no way to hear it first. Routing through this
+                // same dialog (already used for non-picker mode) lets
+                // Play run first; tapping Add is now the explicit
+                // second step that actually commits it.
+                if let onPick {
+                    Button("Add") {
+                        onPick(asset)
+                        dismiss()
+                    }
                 }
                 if asset.isRenamable {
                     Button("Rename") {
@@ -203,13 +218,11 @@ struct AudioAssetLibraryView: View {
     @ViewBuilder
     private func assetRow(_ asset: LibraryAudioAsset) -> some View {
         Button {
-            if let onPick {
-                onPick(asset)
-                dismiss()
-            } else {
-                assetPendingAction = asset
-                showAudioActionsDialog = true
-            }
+            // Same dialog either way now (see the confirmationDialog's
+            // own comment) - picker mode used to add on tap immediately,
+            // with no way to hear the sound first.
+            assetPendingAction = asset
+            showAudioActionsDialog = true
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: playingAssetId == asset.id ? "waveform.circle.fill" : "waveform.circle")
