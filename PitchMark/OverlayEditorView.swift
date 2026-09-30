@@ -592,7 +592,6 @@ struct OverlayEditorView: View {
     @ViewBuilder
     private var selectedOverlayPanel: some View {
         if let index = overlays.firstIndex(where: { $0.id == selectedOverlayID }) {
-            let item = overlays[index]
             VStack(alignment: .leading, spacing: 6) {
                 Picker("", selection: $selectedControlCategory) {
                     ForEach(OverlayControlCategory.allCases) { category in
@@ -611,7 +610,7 @@ struct OverlayEditorView: View {
                     case .transform:
                         transformControls
                     case .timing:
-                        timingControls(index: index, item: item)
+                        timingControls(index: index)
                     }
                 }
                 .frame(height: controlPanelHeight)
@@ -636,19 +635,42 @@ struct OverlayEditorView: View {
         }
     }
 
-    private func timingControls(index: Int, item: OverlayItem) -> some View {
+    /// Both sliders share `0...duration` rather than each being bounded
+    /// by the *other's own current value* (what this used to do -
+    /// Start capped at `endTime - minimumSpan`, End floored at
+    /// `startTime + minimumSpan`). That seemed like the obvious way to
+    /// enforce a minimum span, but both ranges were recomputed on every
+    /// single frame of an active drag from `item`, a fresh snapshot of
+    /// the *other* slider's live, in-progress value - so dragging Start
+    /// up continuously shrank End's own valid range, and when End's
+    /// current value fell outside its newly-shrunk range, SwiftUI's
+    /// `Slider` visibly clamped (and wrote back through the binding)
+    /// its displayed position to the new bound - so it looked like
+    /// dragging one slider dragged the other toward it, and vice versa.
+    /// Real bug, reported by the user (2026-09-30).
+    ///
+    /// Fixed by decoupling the two during an active drag - each slider
+    /// can move freely across the whole clip, even briefly past the
+    /// other's position (the overlay just isn't visible for that
+    /// instant, since `isVisible(at:)` requires `startTime <= endTime`)
+    /// - and the `minimumSpan` constraint is enforced only once, on
+    /// release, by `commitStartTime`/`commitEndTime` nudging the
+    /// *other* value if needed. Same tradeoff a native trim UI (Photos,
+    /// this app's own `MomentTrimEditor`) already makes: handles can
+    /// cross during a drag, correctness is only guaranteed at rest.
+    private func timingControls(index: Int) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             labeledSlider(
                 "Start", value: $overlays[index].startTime,
-                range: 0...max(item.endTime - minimumSpan, 0),
+                range: 0...max(duration, minimumSpan),
                 format: formattedTime,
-                onEditingChanged: { editing in if !editing { persistOverlays() } }
+                onEditingChanged: { editing in if !editing { commitStartTime(index: index) } }
             )
             labeledSlider(
                 "End", value: $overlays[index].endTime,
-                range: min(item.startTime + minimumSpan, duration)...max(duration, minimumSpan),
+                range: 0...max(duration, minimumSpan),
                 format: formattedTime,
-                onEditingChanged: { editing in if !editing { persistOverlays() } }
+                onEditingChanged: { editing in if !editing { commitEndTime(index: index) } }
             )
         }
     }
@@ -731,6 +753,31 @@ struct OverlayEditorView: View {
         let item = OverlayItem(assetID: asset.id, startTime: startTime, endTime: clipDuration, keyframes: [keyframe])
         overlays.append(item)
         selectOverlay(item.id)
+        persistOverlays()
+    }
+
+    /// Commit path for the Start slider's `onEditingChanged` (release) -
+    /// see `timingControls`'s doc comment for why this, not a
+    /// continuously-recomputed range, is where `minimumSpan` gets
+    /// enforced. If Start was dragged past (or too close to) the
+    /// current End, push End forward just enough to restore the
+    /// minimum span rather than leaving an invalid/zero-width range.
+    private func commitStartTime(index: Int) {
+        guard overlays.indices.contains(index) else { return }
+        if overlays[index].startTime > overlays[index].endTime - minimumSpan {
+            overlays[index].endTime = min(overlays[index].startTime + minimumSpan, duration)
+        }
+        persistOverlays()
+    }
+
+    /// Commit path for the End slider's `onEditingChanged` (release) -
+    /// mirrors `commitStartTime`, nudging Start backward instead when
+    /// End was dragged past (or too close to) it.
+    private func commitEndTime(index: Int) {
+        guard overlays.indices.contains(index) else { return }
+        if overlays[index].endTime < overlays[index].startTime + minimumSpan {
+            overlays[index].startTime = max(overlays[index].endTime - minimumSpan, 0)
+        }
         persistOverlays()
     }
 
