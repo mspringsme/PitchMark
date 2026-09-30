@@ -131,7 +131,20 @@ func sourceTimeToCompositeTime(_ sourceTime: Double, ranges: [(start: Double, en
 /// `timeRange.end` fresh before every insert means neither track can
 /// ever end up with an insert that overlaps or gaps its own prior
 /// content, regardless of how the two tracks' rounding diverges.
-func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], completion: @escaping (Result<AVMutableComposition, Error>) -> Void) {
+/// `buildSpeedRampedComposition`'s result: the composition plus the
+/// *source* video track's own `naturalSize`/`preferredTransform`,
+/// captured directly from the real asset track rather than left for a
+/// caller to re-derive later from the composition track. `exportSpeedRampedMoment`
+/// needs this for its `AVMutableVideoComposition` - see that function
+/// for why re-deriving it from `compVideoTrack` instead (what this used
+/// to do) was fragile enough to matter.
+struct SpeedRampedComposition {
+    var composition: AVMutableComposition
+    var renderSize: CGSize
+    var transform: CGAffineTransform
+}
+
+func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], completion: @escaping (Result<SpeedRampedComposition, Error>) -> Void) {
     DispatchQueue.global(qos: .userInitiated).async {
         let sourceAsset = AVURLAsset(url: sourceURL)
         guard let sourceVideoTrack = sourceAsset.tracks(withMediaType: .video).first else {
@@ -140,6 +153,9 @@ func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], com
         }
         let sourceAudioTrack = sourceAsset.tracks(withMediaType: .audio).first
         let totalDuration = sourceAsset.duration.seconds
+        let sourceTransform = sourceVideoTrack.preferredTransform
+        let sourceTransformedSize = sourceVideoTrack.naturalSize.applying(sourceTransform)
+        let sourceRenderSize = CGSize(width: abs(sourceTransformedSize.width), height: abs(sourceTransformedSize.height))
 
         let composition = AVMutableComposition()
         guard let compVideoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
@@ -224,7 +240,9 @@ func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], com
             return
         }
 
-        DispatchQueue.main.async { completion(.success(composition)) }
+        DispatchQueue.main.async {
+            completion(.success(SpeedRampedComposition(composition: composition, renderSize: sourceRenderSize, transform: sourceTransform)))
+        }
     }
 }
 
@@ -237,16 +255,37 @@ func exportSpeedRampedMoment(sourceURL: URL, keyframes: [SpeedKeyframe], complet
         switch result {
         case .failure(let error):
             completion(.failure(error))
-        case .success(let composition):
-            guard let compVideoTrack = composition.tracks(withMediaType: .video).first else {
+        case .success(let ramped):
+            guard let compVideoTrack = ramped.composition.tracks(withMediaType: .video).first else {
                 completion(.failure(SpeedRampError.compositionFailed))
                 return
             }
-
+            // `ramped.renderSize`/`.transform` came from the *source*
+            // video track directly (captured inside
+            // buildSpeedRampedComposition, before anything touched the
+            // composition) rather than being re-derived here from
+            // `compVideoTrack.naturalSize`/`.preferredTransform` after
+            // the fact - what this originally did. A composition
+            // track's own `naturalSize` isn't guaranteed to reliably
+            // reflect what's been inserted into it the way
+            // `preferredTransform` (set explicitly, one line up in
+            // buildSpeedRampedComposition) is - if it ever came out
+            // zero for some source file's particular characteristics,
+            // the old code's `if renderSize.width > 0, ... { ... }`
+            // guard would silently skip assigning `videoComposition`
+            // altogether, resurrecting the exact bug this was meant to
+            // fix but now only for whatever files hit that path - a
+            // real, plausible explanation for "works for a fresh
+            // recording, fails once the video's been through a prior
+            // Trim" (Trim's output comes from Apple's own
+            // UIVideoEditorController, a re-encode with no guarantee of
+            // matching a fresh camera recording's characteristics).
+            // Reading directly from the source track removes the
+            // composition-track-metadata question entirely.
             let outputURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension("mov")
-            guard let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetHighestQuality) else {
+            guard let exportSession = AVAssetExportSession(asset: ramped.composition, presetName: AVAssetExportPresetHighestQuality) else {
                 completion(.failure(SpeedRampError.exportFailed))
                 return
             }
@@ -257,19 +296,17 @@ func exportSpeedRampedMoment(sourceURL: URL, keyframes: [SpeedKeyframe], complet
             // to decide on its own how to repackage a composition whose
             // video track has scaleTimeRange-retimed segments, and it
             // reliably failed with AVFoundationErrorDomain -11800 /
-            // NSOSStatusErrorDomain -16364 (per the user's own console
-            // output) even for the simplest possible case - one scaled
-            // segment. That error pair is commonly tied to timestamp
-            // inconsistency at the muxer, and real device-recorded H.264/
-            // HEVC footage commonly uses B-frames (decode order !=
-            // presentation order); retiming a segment boundary without
-            // forcing genuine frame-accurate recomposition is a known
-            // way to corrupt that reordering. An explicit video
-            // composition (even a trivial single-instruction one, like
-            // OverlayExporter.swift already builds for its own export)
-            // forces AVAssetExportSession to actually decode and
-            // re-render every frame instead of attempting any more
-            // fragile segment-level copy. Same
+            // NSOSStatusErrorDomain -16364. That error pair is commonly
+            // tied to timestamp inconsistency at the muxer, and real
+            // device-recorded H.264/HEVC footage commonly uses B-frames
+            // (decode order != presentation order); retiming a segment
+            // boundary without forcing genuine frame-accurate
+            // recomposition is a known way to corrupt that reordering.
+            // An explicit video composition (even a trivial
+            // single-instruction one, like OverlayExporter.swift already
+            // builds for its own export) forces AVAssetExportSession to
+            // actually decode and re-render every frame instead of
+            // attempting any more fragile segment-level copy. Same
             // preferredTransform-via-explicit-setTransform technique as
             // OverlayExporter - a layer instruction does NOT inherit its
             // track's preferredTransform automatically, only AVPlayerItem
@@ -277,22 +314,28 @@ func exportSpeedRampedMoment(sourceURL: URL, keyframes: [SpeedKeyframe], complet
             // over this same composition, no video composition needed)
             // never had this problem and stayed rotated correctly even
             // before this fix.
-            let transform = compVideoTrack.preferredTransform
-            let transformedSize = compVideoTrack.naturalSize.applying(transform)
-            let renderSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
-            if renderSize.width > 0, renderSize.height > 0 {
-                let instruction = AVMutableVideoCompositionInstruction()
-                instruction.timeRange = CMTimeRange(start: .zero, duration: composition.duration)
-                let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compVideoTrack)
-                layerInstruction.setTransform(transform, at: .zero)
-                instruction.layerInstructions = [layerInstruction]
-
-                let videoComposition = AVMutableVideoComposition()
-                videoComposition.renderSize = renderSize
-                videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
-                videoComposition.instructions = [instruction]
-                exportSession.videoComposition = videoComposition
+            guard ramped.renderSize.width > 0, ramped.renderSize.height > 0 else {
+                // A real video file's own track should never report a
+                // zero natural size - if this guard ever actually fires,
+                // something upstream is badly wrong. Fail loudly with a
+                // specific error rather than silently falling back to
+                // the no-videoComposition path this whole fix exists to
+                // avoid.
+                completion(.failure(SpeedRampError.compositionFailed))
+                return
             }
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: .zero, duration: ramped.composition.duration)
+            let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compVideoTrack)
+            layerInstruction.setTransform(ramped.transform, at: .zero)
+            instruction.layerInstructions = [layerInstruction]
+
+            let videoComposition = AVMutableVideoComposition()
+            videoComposition.renderSize = ramped.renderSize
+            videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+            videoComposition.instructions = [instruction]
+            exportSession.videoComposition = videoComposition
+
             exportSession.exportAsynchronously {
                 if exportSession.status == .completed {
                     completion(.success(outputURL))

@@ -335,9 +335,9 @@ struct MomentSpeedEditorView: View {
         buildSpeedRampedComposition(sourceURL: videoURL, keyframes: keyframes) { result in
             isBuildingPreview = false
             switch result {
-            case .success(let composition):
+            case .success(let ramped):
                 let compositeTime = sourceTimeToCompositeTime(currentSourceTime, ranges: ranges)
-                let item = AVPlayerItem(asset: composition)
+                let item = AVPlayerItem(asset: ramped.composition)
                 if let compositeEndObserver {
                     NotificationCenter.default.removeObserver(compositeEndObserver)
                 }
