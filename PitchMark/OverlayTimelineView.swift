@@ -58,8 +58,8 @@ struct OverlayTimelineView: View {
     /// is selected for editing, to fit inside its fixed bottom-20%
     /// budget: the ruler (scrubbing) always shows, but the per-overlay
     /// track rows and keyframe-retime slider don't, since that same
-    /// selected overlay's own panel (Position/Timing/Glow tabs) is
-    /// showing at the same time and space is tight. Keyframes are still
+    /// selected overlay's own panel (Position/Timing tabs) is showing
+    /// at the same time and space is tight. Keyframes are still
     /// fully created by dragging the overlay on the canvas at different
     /// times either way - this only hides the secondary "tap a marker on
     /// the timeline to retime it precisely" path while that panel is up.

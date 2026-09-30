@@ -67,19 +67,13 @@ struct OverlayItem: Identifiable, Codable {
     var startTime: Double
     var endTime: Double
     var keyframes: [OverlayKeyframe]
-    /// 2026-09-29 - Optional for the same reason every field added
-    /// after this struct's first ship is: existing saved Moment
-    /// documents have no "glow" key. Nil/disabled means "no glow,
-    /// unchanged" (see GlowSettings.swift).
-    var glow: GlowSettings? = nil
 
-    init(id: UUID = UUID(), assetID: String, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = [], glow: GlowSettings? = nil) {
+    init(id: UUID = UUID(), assetID: String, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = []) {
         self.id = id
         self.assetID = assetID
         self.startTime = startTime
         self.endTime = endTime
         self.keyframes = keyframes
-        self.glow = glow
     }
 
     /// Whether this overlay should be rendered at all at `time` - outside

@@ -215,14 +215,14 @@ struct OverlayEditorView: View {
     @State private var rotationDegrees: Double = 0
 
     /// 2026-09-30 - which category of per-overlay controls
-    /// `selectedOverlayPanel` currently shows. Before this, Position/
-    /// Timing/Glow all stacked at once below the video, and the video
-    /// shrank to whatever was left as that stack grew (Glow's controls
-    /// especially) - reported by the user as making an overlay hard to
-    /// edit precisely. Showing one category at a time in a fixed-height
-    /// budget (`controlPanelHeight`) keeps the control area's height
-    /// constant regardless of category or content, so the video's own
-    /// share of the screen no longer shrinks as more controls exist.
+    /// `selectedOverlayPanel` currently shows. Before this, every
+    /// category's controls stacked at once below the video, and the
+    /// video shrank to whatever was left as that stack grew - reported
+    /// by the user as making an overlay hard to edit precisely. Showing
+    /// one category at a time in a fixed-height budget
+    /// (`controlPanelHeight`) keeps the control area's height constant
+    /// regardless of category or content, so the video's own share of
+    /// the screen no longer shrinks as more controls exist.
     @State private var selectedControlCategory: OverlayControlCategory = .transform
 
     /// Minimum start/end span for an overlay - also the smallest visible
@@ -230,9 +230,9 @@ struct OverlayEditorView: View {
     private let minimumSpan: Double = 0.15
 
     /// Fixed regardless of which category is showing, and regardless of
-    /// how tall that category's own content is (Glow's, especially, with
-    /// pulse enabled) - content that doesn't fit scrolls within this
-    /// budget instead of growing the panel and shrinking the video.
+    /// how tall that category's own content is - content that doesn't
+    /// fit scrolls within this budget instead of growing the panel and
+    /// shrinking the video.
     private let controlPanelHeight: CGFloat = 100
 
     /// 2026-09-30 - the video previously had no floor at all: it got
@@ -245,8 +245,8 @@ struct OverlayEditorView: View {
     /// not a competing "also flexible" sibling whose actual share
     /// depended on how SwiftUI happened to resolve several flexible
     /// views at once. Raised from 0.2 to 0.25 same day, per the user -
-    /// 20% was cramping the Glow tab specifically (Radius/Pulse getting
-    /// cut off at the bottom edge in a follow-up screenshot).
+    /// 20% was cramping the control panel (content getting cut off at
+    /// the bottom edge in a follow-up screenshot).
     private let bottomAreaFraction: CGFloat = 0.25
     /// Floor so the controls stay usable on a short screen even though
     /// 25% of it would be cramped - on any iPhone this session has
@@ -407,62 +407,26 @@ struct OverlayEditorView: View {
             let centerX = videoRect.minX + liveTransform.position.x * videoRect.width
             let centerY = videoRect.minY + liveTransform.position.y * videoRect.height
 
-            ZStack {
-                // Glow, rendered behind the overlay itself - see
-                // GlowEffect.swift for why this needs no whole-frame
-                // Core Image pipeline: it only ever depends on the
-                // overlay's own image, never the video underneath, so it
-                // composites via the same screen-blend feature SwiftUI
-                // already exposes rather than a rewritten preview path.
-                // `currentTime` here is the synced AVPlayer's own
-                // position, not wall-clock, so a pulsing glow already
-                // reads "frame time" for free.
-                if let glowParams = resolvedGlow(item.glow, at: currentTime),
-                   let sourceCG = image.cgImage,
-                   let glowResult = GlowEffect.render(sourceImage: sourceCG, params: glowParams) {
-                    // GlowEffect.render pads the source's own extent
-                    // equally on each side, so a non-square source (any
-                    // Smart Cutout that isn't a square crop) produces a
-                    // non-square glow image too - `.scaledToFit()` here
-                    // is required, not decorative, or a non-square glow
-                    // stretches to fill this square frame exactly the
-                    // way the main overlay image did before it had the
-                    // same modifier (see the export-side fix for the
-                    // user-reported version of this).
-                    let glowSizeRatio = glowResult.sizeRatio
-                    Image(decorative: glowResult.image, scale: 1)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: baseSize * glowSizeRatio, height: baseSize * glowSizeRatio)
-                        .opacity(liveTransform.opacity)
-                        .rotationEffect(.radians(liveTransform.rotation))
-                        .scaleEffect(liveTransform.scale)
-                        .blendMode(.screen)
-                        .position(x: centerX, y: centerY)
-                        .allowsHitTesting(false)
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: baseSize, height: baseSize)
+                .opacity(liveTransform.opacity)
+                .rotationEffect(.radians(liveTransform.rotation))
+                .scaleEffect(liveTransform.scale)
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.yellow, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                            .rotationEffect(.radians(liveTransform.rotation))
+                            .scaleEffect(liveTransform.scale)
+                    }
                 }
-
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: baseSize, height: baseSize)
-                    .opacity(liveTransform.opacity)
-                    .rotationEffect(.radians(liveTransform.rotation))
-                    .scaleEffect(liveTransform.scale)
-                    .overlay {
-                        if isSelected {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(Color.yellow, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
-                                .rotationEffect(.radians(liveTransform.rotation))
-                                .scaleEffect(liveTransform.scale)
-                        }
-                    }
-                    .position(x: centerX, y: centerY)
-                    .onTapGesture {
-                        selectOverlay(item.id)
-                    }
-                    .gesture(dragGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
-            }
+                .position(x: centerX, y: centerY)
+                .onTapGesture {
+                    selectOverlay(item.id)
+                }
+                .gesture(dragGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
         }
     }
 
@@ -584,13 +548,9 @@ struct OverlayEditorView: View {
     }
 
     /// Play/pause always shows here now, regardless of selection - the
-    /// "Selected Overlay" label, Glow toggle, and trash button only join
-    /// it when an overlay is actually selected, sharing the one row
-    /// instead of stacking more just for a couple of small controls.
-    /// Glow moved in here (2026-09-30) once it dropped from a whole tab
-    /// full of sliders down to a single on/off switch - one icon button
-    /// fits this row fine and frees the segmented Picker below back down
-    /// to just Position/Timing.
+    /// "Selected Overlay" label and trash button only join it when an
+    /// overlay is actually selected, sharing the one row instead of
+    /// stacking a second one just for delete.
     private var playbackHeaderRow: some View {
         HStack {
             Button {
@@ -601,21 +561,11 @@ struct OverlayEditorView: View {
             }
             .buttonStyle(.plain)
 
-            if let index = overlays.firstIndex(where: { $0.id == selectedOverlayID }) {
+            if selectedOverlayID != nil {
                 Text("Selected Overlay")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                let glowOn = glowBinding(index: index)
-                Button {
-                    glowOn.wrappedValue.toggle()
-                } label: {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 20))
-                        .foregroundStyle(glowOn.wrappedValue ? .yellow : .secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(glowOn.wrappedValue ? "Turn off glow" : "Turn on glow")
                 Button {
                     removeSelectedOverlay()
                 } label: {
@@ -633,8 +583,8 @@ struct OverlayEditorView: View {
     /// The selected overlay's controls, one category at a time (see
     /// `selectedControlCategory`'s doc comment for why): a segmented
     /// switcher over Position (Scale/Rotate - auto-keyframed at the
-    /// current playhead, same as the drag gesture), Timing (Start/End,
-    /// direct fields, no keyframe involved), and Glow. Delete lives in
+    /// current playhead, same as the drag gesture) and Timing
+    /// (Start/End, direct fields, no keyframe involved). Delete lives in
     /// `playbackHeaderRow` above, not here. All of these replaced a
     /// small-target gesture (pinch/rotate on the canvas, drag handles on
     /// the timeline) the user found hard to control by touch on a small
@@ -655,7 +605,7 @@ struct OverlayEditorView: View {
                 // Fixed height regardless of category or content - the
                 // point of this redesign. A category shorter than the
                 // budget just leaves empty space below it rather than
-                // shrinking the video when a taller one (Glow) is picked.
+                // shrinking the video when a taller one is picked.
                 ScrollView {
                     switch selectedControlCategory {
                     case .transform:
@@ -701,34 +651,6 @@ struct OverlayEditorView: View {
                 onEditingChanged: { editing in if !editing { persistOverlays() } }
             )
         }
-    }
-
-    /// Binds directly into `overlays[index].glow?.isEnabled`,
-    /// materializing a fresh `GlowSettings(isEnabled: true)` on first
-    /// enable (an `Optional` field, so most overlays start with `glow ==
-    /// nil`, not a `GlowSettings(isEnabled: false)`). Persists on every
-    /// toggle rather than deferring to an `onEditingChanged` release -
-    /// there's no drag/slider in play here, a tap is the whole gesture.
-    /// Unlike the native `$overlays[index].startTime`-style projections
-    /// this panel's other sliders use, a hand-rolled `Binding(get:set:)`
-    /// has no built-in bounds safety - `overlays[index]` traps if `index`
-    /// goes stale. That happens exactly when it matters most: deleting
-    /// the selected overlay (the trash button, `removeSelectedOverlay()`)
-    /// shrinks `overlays` and clears `selectedOverlayID` in the same
-    /// state update, and if the Glow toggle still held this closure
-    /// mid-teardown - SwiftUI can re-invoke a Binding's get/set while
-    /// reconciling the view tree for a state change, not only cleanly
-    /// after it - an unguarded index crashed with "Index out of range."
-    /// Real bug, reported by the user, fixed here (2026-09-30).
-    private func glowBinding(index: Int) -> Binding<Bool> {
-        Binding(
-            get: { overlays.indices.contains(index) ? (overlays[index].glow?.isEnabled ?? false) : false },
-            set: { newValue in
-                guard overlays.indices.contains(index) else { return }
-                overlays[index].glow = GlowSettings(isEnabled: newValue)
-                persistOverlays()
-            }
-        )
     }
 
     @ViewBuilder
