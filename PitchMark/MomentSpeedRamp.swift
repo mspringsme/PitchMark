@@ -110,17 +110,27 @@ func sourceTimeToCompositeTime(_ sourceTime: Double, ranges: [(start: Double, en
 }
 
 /// Builds each range as its own insert-then-scale-immediately step,
-/// writing forward at a cursor this function fully owns - not "insert
+/// writing forward at each track's own actual frontier - not "insert
 /// the whole video once, then scale sub-ranges of that one segment."
 /// That first approach needed reverse-order processing to keep each
 /// range's original-timeline coordinates valid, and turned out fragile
 /// once 2+ ranges actually needed scaling in the same export (a real
 /// on-device export failure, "the operation could not be completed").
-/// This shape has no such fragility: at the moment any range is
-/// inserted+scaled, `cursor` is the frontier of everything built so
-/// far - nothing else in the composition occupies that position yet,
-/// so there's no boundary-adjacency-with-other-scaled-segments
-/// reasoning required at all, in either direction.
+///
+/// 2026-09-30: "each track's own actual frontier," not a single shared
+/// `cursor` this function advanced by its own arithmetic (what this used
+/// to do) - `scaleTimeRange` rounds internally to each track's own
+/// native timescale, so asking the video and audio composition tracks
+/// to scale to the "same" nominal duration doesn't guarantee they land
+/// on the exact same actual `CMTime`. A shared cursor assumed they
+/// always would; that held for one speed segment but compounded with
+/// more (another real on-device failure, "when trying to add speed
+/// points" - AVFoundationErrorDomain -11800 / NSOSStatusErrorDomain
+/// -16364, a pair commonly associated with audio/video timestamp
+/// inconsistency at the final mux pass). Querying each track's own
+/// `timeRange.end` fresh before every insert means neither track can
+/// ever end up with an insert that overlaps or gaps its own prior
+/// content, regardless of how the two tracks' rounding diverges.
 func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], completion: @escaping (Result<AVMutableComposition, Error>) -> Void) {
     DispatchQueue.global(qos: .userInitiated).async {
         let sourceAsset = AVURLAsset(url: sourceURL)
@@ -151,7 +161,6 @@ func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], com
             : nil
 
         let ranges = speedRanges(keyframes: keyframes, totalDuration: totalDuration)
-        var cursor = CMTime.zero
 
         do {
             for range in ranges {
@@ -161,22 +170,53 @@ func buildSpeedRampedComposition(sourceURL: URL, keyframes: [SpeedKeyframe], com
                 )
                 guard sourceRange.duration > .zero else { continue }
 
-                try compVideoTrack.insertTimeRange(sourceRange, of: sourceVideoTrack, at: cursor)
-                if let sourceAudioTrack, let compAudioTrack {
-                    try compAudioTrack.insertTimeRange(sourceRange, of: sourceAudioTrack, at: cursor)
+                // Each track's own actual end, queried fresh every
+                // range - not a single shared cursor advanced by my own
+                // arithmetic (`CMTimeAdd(cursor, scaledDuration)`), which
+                // is what this used to do. `scaleTimeRange` rounds
+                // internally to each track's own native timescale -
+                // video quantizes to its frame boundaries, audio to its
+                // sample-rate boundaries - so asking both tracks to
+                // scale to the "same" nominal `scaledDuration` does not
+                // guarantee they land on the exact same actual CMTime.
+                // A shared cursor assumed they always would; with only
+                // one speed segment that assumption's error was too
+                // small to matter, but it compounds with every
+                // additional segment ("when trying to add speed
+                // points"), and eventually the audio track's next
+                // insert lands at a position that no longer matches
+                // where its own real content actually ends - an
+                // overlapping or gapped insert within one track, which
+                // is invalid composition structure. AVAssetExportSession
+                // doesn't catch that at insert time (insertTimeRange/
+                // scaleTimeRange don't throw for it here) - it only
+                // surfaces once the actual encode pass tries to mux
+                // audio and video whose timing no longer lines up,
+                // which matches this reporting as a failure from
+                // `exportAsynchronously`'s callback, not from this
+                // function's own try/catch, and matches the specific
+                // error pair (AVFoundationErrorDomain -11800 /
+                // NSOSStatusErrorDomain -16364) that's commonly
+                // associated with exactly this class of audio/video
+                // timestamp inconsistency in AVFoundation's muxer.
+                let videoInsertAt = compVideoTrack.timeRange.end
+                try compVideoTrack.insertTimeRange(sourceRange, of: sourceVideoTrack, at: videoInsertAt)
+
+                let audioInsertAt = compAudioTrack?.timeRange.end
+                if let sourceAudioTrack, let compAudioTrack, let audioInsertAt {
+                    try compAudioTrack.insertTimeRange(sourceRange, of: sourceAudioTrack, at: audioInsertAt)
                 }
 
                 if range.speed != 1.0 {
                     // scaleTimeRange doesn't throw - it silently no-ops on
                     // an invalid range, which can't happen here since
-                    // `insertedRange` is exactly what was just inserted.
-                    let insertedRange = CMTimeRange(start: cursor, duration: sourceRange.duration)
+                    // each range below is exactly what was just inserted
+                    // into that same track.
                     let scaledDuration = CMTime(seconds: (range.end - range.start) / range.speed, preferredTimescale: 600)
-                    compVideoTrack.scaleTimeRange(insertedRange, toDuration: scaledDuration)
-                    compAudioTrack?.scaleTimeRange(insertedRange, toDuration: scaledDuration)
-                    cursor = CMTimeAdd(cursor, scaledDuration)
-                } else {
-                    cursor = CMTimeAdd(cursor, sourceRange.duration)
+                    compVideoTrack.scaleTimeRange(CMTimeRange(start: videoInsertAt, duration: sourceRange.duration), toDuration: scaledDuration)
+                    if let compAudioTrack, let audioInsertAt {
+                        compAudioTrack.scaleTimeRange(CMTimeRange(start: audioInsertAt, duration: sourceRange.duration), toDuration: scaledDuration)
+                    }
                 }
             }
         } catch {
