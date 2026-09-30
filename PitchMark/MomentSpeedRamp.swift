@@ -238,6 +238,11 @@ func exportSpeedRampedMoment(sourceURL: URL, keyframes: [SpeedKeyframe], complet
         case .failure(let error):
             completion(.failure(error))
         case .success(let composition):
+            guard let compVideoTrack = composition.tracks(withMediaType: .video).first else {
+                completion(.failure(SpeedRampError.compositionFailed))
+                return
+            }
+
             let outputURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension("mov")
@@ -247,6 +252,47 @@ func exportSpeedRampedMoment(sourceURL: URL, keyframes: [SpeedKeyframe], complet
             }
             exportSession.outputURL = outputURL
             exportSession.outputFileType = .mov
+            // 2026-09-30: explicit AVMutableVideoComposition, previously
+            // missing entirely - without one, AVAssetExportSession has
+            // to decide on its own how to repackage a composition whose
+            // video track has scaleTimeRange-retimed segments, and it
+            // reliably failed with AVFoundationErrorDomain -11800 /
+            // NSOSStatusErrorDomain -16364 (per the user's own console
+            // output) even for the simplest possible case - one scaled
+            // segment. That error pair is commonly tied to timestamp
+            // inconsistency at the muxer, and real device-recorded H.264/
+            // HEVC footage commonly uses B-frames (decode order !=
+            // presentation order); retiming a segment boundary without
+            // forcing genuine frame-accurate recomposition is a known
+            // way to corrupt that reordering. An explicit video
+            // composition (even a trivial single-instruction one, like
+            // OverlayExporter.swift already builds for its own export)
+            // forces AVAssetExportSession to actually decode and
+            // re-render every frame instead of attempting any more
+            // fragile segment-level copy. Same
+            // preferredTransform-via-explicit-setTransform technique as
+            // OverlayExporter - a layer instruction does NOT inherit its
+            // track's preferredTransform automatically, only AVPlayerItem
+            // does, which is why the live preview (a plain AVPlayerItem
+            // over this same composition, no video composition needed)
+            // never had this problem and stayed rotated correctly even
+            // before this fix.
+            let transform = compVideoTrack.preferredTransform
+            let transformedSize = compVideoTrack.naturalSize.applying(transform)
+            let renderSize = CGSize(width: abs(transformedSize.width), height: abs(transformedSize.height))
+            if renderSize.width > 0, renderSize.height > 0 {
+                let instruction = AVMutableVideoCompositionInstruction()
+                instruction.timeRange = CMTimeRange(start: .zero, duration: composition.duration)
+                let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compVideoTrack)
+                layerInstruction.setTransform(transform, at: .zero)
+                instruction.layerInstructions = [layerInstruction]
+
+                let videoComposition = AVMutableVideoComposition()
+                videoComposition.renderSize = renderSize
+                videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
+                videoComposition.instructions = [instruction]
+                exportSession.videoComposition = videoComposition
+            }
             exportSession.exportAsynchronously {
                 if exportSession.status == .completed {
                     completion(.success(outputURL))
