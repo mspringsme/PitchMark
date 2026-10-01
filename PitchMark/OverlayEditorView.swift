@@ -406,12 +406,19 @@ struct OverlayEditorView: View {
             let baseSize = overlayBaseSizeFraction * min(videoRect.width, videoRect.height)
             let centerX = videoRect.minX + liveTransform.position.x * videoRect.width
             let centerY = videoRect.minY + liveTransform.position.y * videoRect.height
+            // `currentTime` is the synced AVPlayer's own position, not
+            // wall-clock, so this already reads "frame time" for free -
+            // same reasoning the (now-removed) glow pulse used.
+            let fadeOpacity = liveTransform.opacity * fadeOpacityMultiplier(
+                time: currentTime, startTime: item.startTime, endTime: item.endTime,
+                fadeInEnabled: item.fadeInEnabled ?? false, fadeOutEnabled: item.fadeOutEnabled ?? false
+            )
 
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
                 .frame(width: baseSize, height: baseSize)
-                .opacity(liveTransform.opacity)
+                .opacity(fadeOpacity)
                 .rotationEffect(.radians(liveTransform.rotation))
                 .scaleEffect(liveTransform.scale)
                 .overlay {
@@ -672,6 +679,26 @@ struct OverlayEditorView: View {
                 format: formattedTime,
                 onEditingChanged: { editing in if !editing { commitEndTime(index: index) } }
             )
+            HStack(spacing: 20) {
+                Toggle("Fade In", isOn: Binding(
+                    get: { overlays.indices.contains(index) ? (overlays[index].fadeInEnabled ?? false) : false },
+                    set: { newValue in
+                        guard overlays.indices.contains(index) else { return }
+                        overlays[index].fadeInEnabled = newValue
+                        persistOverlays()
+                    }
+                ))
+                Toggle("Fade Out", isOn: Binding(
+                    get: { overlays.indices.contains(index) ? (overlays[index].fadeOutEnabled ?? false) : false },
+                    set: { newValue in
+                        guard overlays.indices.contains(index) else { return }
+                        overlays[index].fadeOutEnabled = newValue
+                        persistOverlays()
+                    }
+                ))
+            }
+            .font(.caption)
+            .toggleStyle(.switch)
         }
     }
 

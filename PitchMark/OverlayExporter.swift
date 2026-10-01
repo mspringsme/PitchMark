@@ -209,7 +209,13 @@ func exportMomentWithOverlays(
             layer.add(transformAnimation, forKey: "transform")
 
             let opacityAnimation = CAKeyframeAnimation(keyPath: "opacity")
-            opacityAnimation.values = transforms.map { NSNumber(value: $0.opacity) }
+            opacityAnimation.values = zip(times, transforms).map { sampleTime, t in
+                let fade = fadeOpacityMultiplier(
+                    time: sampleTime, startTime: item.startTime, endTime: item.endTime,
+                    fadeInEnabled: item.fadeInEnabled ?? false, fadeOutEnabled: item.fadeOutEnabled ?? false
+                )
+                return NSNumber(value: t.opacity * fade)
+            }
             opacityAnimation.keyTimes = keyTimes
             opacityAnimation.calculationMode = .linear
             opacityAnimation.beginTime = beginTime

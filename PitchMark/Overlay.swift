@@ -67,13 +67,21 @@ struct OverlayItem: Identifiable, Codable {
     var startTime: Double
     var endTime: Double
     var keyframes: [OverlayKeyframe]
+    /// 2026-09-30 - Optional for the same reason every field added after
+    /// this struct's first ship is: existing saved Moment documents
+    /// have no "fadeInEnabled"/"fadeOutEnabled" key. nil means "off",
+    /// same as false - there's no third state.
+    var fadeInEnabled: Bool? = nil
+    var fadeOutEnabled: Bool? = nil
 
-    init(id: UUID = UUID(), assetID: String, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = []) {
+    init(id: UUID = UUID(), assetID: String, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = [], fadeInEnabled: Bool? = nil, fadeOutEnabled: Bool? = nil) {
         self.id = id
         self.assetID = assetID
         self.startTime = startTime
         self.endTime = endTime
         self.keyframes = keyframes
+        self.fadeInEnabled = fadeInEnabled
+        self.fadeOutEnabled = fadeOutEnabled
     }
 
     /// Whether this overlay should be rendered at all at `time` - outside
@@ -152,4 +160,57 @@ struct OverlayItem: Identifiable, Codable {
 
         keyframes.sort { $0.time < $1.time }
     }
+}
+
+/// Fixed duration for a "quick" fade, in seconds - deliberately not a
+/// user-adjustable value. Fade in/out are on/off toggles per overlay
+/// (`OverlayItem.fadeInEnabled`/`fadeOutEnabled`), not a duration
+/// slider - matches the Glow feature's earlier simplification to
+/// on/off-with-fixed-internal-parameters rather than exposing more
+/// controls than the user asked for.
+let quickFadeDuration: Double = 0.3
+
+/// Multiplies an already-keyframe-interpolated opacity (whatever
+/// `OverlayItem.transform(at:)` produced) by a fade-in/fade-out
+/// envelope. Pure and standalone-verifiable, same discipline as every
+/// other timing function in this feature - both the live preview
+/// (`OverlayEditorView`) and the export compositor
+/// (`OverlayExporter.swift`) call this at the same sampled times they
+/// already use for everything else, so a fade can't disagree between
+/// the two.
+///
+/// If both fades are enabled and the overlay's own `startTime...endTime`
+/// span is shorter than `2 * quickFadeDuration`, both scale down
+/// proportionally so they meet in the middle rather than overlapping -
+/// same shape as `AudioOverlay.swift`'s `normalizedTrimAndFade` scaling
+/// fadeIn/fadeOut down when they'd exceed the trimmed clip's own
+/// duration.
+func fadeOpacityMultiplier(time: Double, startTime: Double, endTime: Double, fadeInEnabled: Bool, fadeOutEnabled: Bool) -> Double {
+    guard fadeInEnabled || fadeOutEnabled else { return 1 }
+    let span = endTime - startTime
+    guard span > 0 else { return 1 }
+
+    var fadeIn = fadeInEnabled ? quickFadeDuration : 0
+    var fadeOut = fadeOutEnabled ? quickFadeDuration : 0
+    let total = fadeIn + fadeOut
+    if total > span {
+        let scale = span / total
+        fadeIn *= scale
+        fadeOut *= scale
+    }
+
+    var multiplier = 1.0
+    if fadeIn > 0 {
+        let elapsed = time - startTime
+        if elapsed < fadeIn {
+            multiplier = min(multiplier, max(elapsed / fadeIn, 0))
+        }
+    }
+    if fadeOut > 0 {
+        let remaining = endTime - time
+        if remaining < fadeOut {
+            multiplier = min(multiplier, max(remaining / fadeOut, 0))
+        }
+    }
+    return multiplier
 }
