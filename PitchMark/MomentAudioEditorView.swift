@@ -101,6 +101,10 @@ struct MomentAudioEditorView: View {
 
     @State private var isBuildingPreview = false
     @State private var previewErrorMessage: String? = nil
+    /// Bumped at the start of every `rebuildPreview()` call and captured
+    /// by that call's own closure - see `rebuildPreview()`'s doc comment
+    /// for the race this guards against.
+    @State private var previewRebuildGeneration = 0
     @State private var isExporting = false
     @State private var exportErrorMessage: String? = nil
 
@@ -887,11 +891,37 @@ struct MomentAudioEditorView: View {
     /// playback position/state across the swap - called after every
     /// committed edit (slider release, add, delete), never on every
     /// intermediate drag tick.
+    /// Rebuilds the live preview from scratch - called on every commit
+    /// from either audio section (a volume point added/dragged, a clip
+    /// moved/trimmed, etc.), not just once per editing session.
+    ///
+    /// `buildAudioMixedComposition` runs on a background queue and takes
+    /// a real, variable amount of time (asset/track loading isn't
+    /// instant). Adding several volume points in quick succession - the
+    /// natural way to shape a ramp - starts several of these overlapping,
+    /// and plain `DispatchQueue.global` gives no ordering guarantee
+    /// between them: an *earlier* (now-stale) rebuild's completion can
+    /// land *after* a *later* one's and silently win, since each
+    /// completion unconditionally calls `player.replaceCurrentItem`.
+    /// That stale result is missing whatever was added after it started
+    /// building - exactly "volume changes aren't taking effect when
+    /// adding multiple changes," reported by the user (2026-09-30),
+    /// since a single change never races against anything and always
+    /// looked fine.
+    ///
+    /// `previewRebuildGeneration` is bumped here and the new value
+    /// captured by this call's own closure; the completion only applies
+    /// its result if the generation is still current - a newer
+    /// `rebuildPreview()` call bumping it past that point means a fresher
+    /// rebuild is already in flight (or already landed), and this one's
+    /// result is stale and gets dropped instead of overwriting it.
     private func rebuildPreview() {
         isBuildingPreview = true
         previewErrorMessage = nil
         let wasPlaying = isPlaying
         let seekTime = currentTime
+        previewRebuildGeneration += 1
+        let generation = previewRebuildGeneration
 
         buildAudioMixedComposition(
             sourceURL: audioBaseURL ?? videoURL,
@@ -900,6 +930,7 @@ struct MomentAudioEditorView: View {
             originalVolumeKeyframes: originalVolumeKeyframes,
             resolveAudioURL: resolveAudioURL
         ) { result in
+            guard generation == previewRebuildGeneration else { return }
             isBuildingPreview = false
             switch result {
             case .success(let built):
