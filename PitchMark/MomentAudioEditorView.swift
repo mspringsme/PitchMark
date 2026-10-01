@@ -85,6 +85,8 @@ struct MomentAudioEditorView: View {
     @State private var originalVolumeKeyframes: [VolumeKeyframe]
     @State private var selectedOriginalKeyframeID: UUID? = nil
     @State private var originalWaveformPeaks: [Float] = []
+    @State private var originalMuteRegions: [MuteRegion]
+    @State private var selectedMuteRegionID: UUID? = nil
 
     @State private var audioOverlays: [AudioOverlayItem]
     @State private var audioAssetsById: [String: LibraryAudioAsset] = [:]
@@ -114,6 +116,7 @@ struct MomentAudioEditorView: View {
         initialAudioOverlays: [AudioOverlayItem],
         initialOriginalVolume: Double,
         initialOriginalVolumeKeyframes: [VolumeKeyframe] = [],
+        initialOriginalMuteRegions: [MuteRegion] = [],
         onExported: @escaping () -> Void = {}
     ) {
         self.momentId = momentId
@@ -122,6 +125,7 @@ struct MomentAudioEditorView: View {
         _audioOverlays = State(initialValue: initialAudioOverlays)
         _originalVolume = State(initialValue: initialOriginalVolume)
         _originalVolumeKeyframes = State(initialValue: initialOriginalVolumeKeyframes)
+        _originalMuteRegions = State(initialValue: initialOriginalMuteRegions)
     }
 
     var body: some View {
@@ -293,13 +297,22 @@ struct MomentAudioEditorView: View {
             // or volume points.
             ZStack {
                 WaveformView(peaks: originalWaveformPeaks, color: Color.accentColor.opacity(0.5))
+                if !originalMuteRegions.isEmpty {
+                    MuteRegionStrip(
+                        rangeStart: 0,
+                        rangeEnd: max(totalDuration, 0.01),
+                        regions: originalMuteRegions,
+                        selectedID: selectedMuteRegionID,
+                        onSelect: { selectedMuteRegionID = $0; selectedOriginalKeyframeID = nil }
+                    )
+                }
                 if !originalVolumeKeyframes.isEmpty {
                     VolumeKeyframeStrip(
                         rangeStart: 0,
                         rangeEnd: max(totalDuration, 0.01),
                         keyframes: originalVolumeKeyframes,
                         selectedID: selectedOriginalKeyframeID,
-                        onSelect: { selectedOriginalKeyframeID = $0 }
+                        onSelect: { selectedOriginalKeyframeID = $0; selectedMuteRegionID = nil }
                     )
                 }
             }
@@ -337,7 +350,160 @@ struct MomentAudioEditorView: View {
                 Label("Add Volume Point", systemImage: "plus.circle.fill")
                     .font(.caption)
             }
+
+            Divider()
+
+            HStack {
+                Text("Mute Sections")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    addMuteRegion()
+                } label: {
+                    Label("Add Mute Section", systemImage: "speaker.slash.circle.fill")
+                        .font(.caption)
+                }
+            }
+
+            muteRegionDetailRow
         }
+    }
+
+    /// A newly-added region starts at the current playhead, spans a
+    /// short default 1.5s (clamped to the clip's own remaining length),
+    /// fully muted (`muteLevel: 0`) with a quick default fade on each
+    /// side so it never clicks/pops - same "quick, fixed default, user
+    /// adjusts after" shape the visual overlay fade feature settled on.
+    private func addMuteRegion() {
+        let start = min(max(currentTime, 0), max(totalDuration, 0.01))
+        let end = min(start + 1.5, max(totalDuration, 0.01))
+        let region = MuteRegion(startTime: start, endTime: max(end, start + 0.01))
+        originalMuteRegions.append(region)
+        originalMuteRegions.sort { $0.startTime < $1.startTime }
+        selectedMuteRegionID = region.id
+        selectedOriginalKeyframeID = nil
+        persistOriginalMuteRegions()
+    }
+
+    /// Minimum span enforced on a mute region's Start/End, same role
+    /// `minimumSpan` plays for a visual overlay's own Start/End
+    /// (OverlayEditorView) - small enough to be imperceptible as a
+    /// floor, large enough that a region can never collapse to nothing.
+    private let minimumMuteRegionSpan: Double = 0.1
+
+    /// Start/End use the same fixed, non-interdependent range
+    /// (`0...totalDuration` for both) with the minimum-span constraint
+    /// enforced only on commit - not each other's live value - for the
+    /// exact reason OverlayEditorView's own Start/End sliders were
+    /// fixed to this shape: a range that depends on the *other*
+    /// slider's live, in-progress value makes SwiftUI visibly clamp
+    /// (and look like it's dragging) the other slider mid-gesture. See
+    /// [[feedback-swiftui-slider-interdependent-range]].
+    @ViewBuilder
+    private var muteRegionDetailRow: some View {
+        if let id = selectedMuteRegionID, let index = originalMuteRegions.firstIndex(where: { $0.id == id }) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Selected Mute Section")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(role: .destructive) {
+                        originalMuteRegions.remove(at: index)
+                        selectedMuteRegionID = nil
+                        persistOriginalMuteRegions()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                            .font(.caption2)
+                    }
+                }
+
+                muteRegionSlider(
+                    "Start", value: Binding(
+                        get: { originalMuteRegions.indices.contains(index) ? originalMuteRegions[index].startTime : 0 },
+                        set: { if originalMuteRegions.indices.contains(index) { originalMuteRegions[index].startTime = $0 } }
+                    ),
+                    range: 0...max(totalDuration, 0.01), format: formattedTime,
+                    onEditingChanged: { editing in if !editing { commitMuteRegionStart(index) } }
+                )
+                muteRegionSlider(
+                    "End", value: Binding(
+                        get: { originalMuteRegions.indices.contains(index) ? originalMuteRegions[index].endTime : 0 },
+                        set: { if originalMuteRegions.indices.contains(index) { originalMuteRegions[index].endTime = $0 } }
+                    ),
+                    range: 0...max(totalDuration, 0.01), format: formattedTime,
+                    onEditingChanged: { editing in if !editing { commitMuteRegionEnd(index) } }
+                )
+                muteRegionSlider(
+                    "Level", value: Binding(
+                        get: { originalMuteRegions.indices.contains(index) ? originalMuteRegions[index].muteLevel : 0 },
+                        set: { if originalMuteRegions.indices.contains(index) { originalMuteRegions[index].muteLevel = $0 } }
+                    ),
+                    range: 0...1, format: { String(format: "%.0f%%", $0 * 100) },
+                    onEditingChanged: { editing in if !editing { persistOriginalMuteRegions() } }
+                )
+                muteRegionSlider(
+                    "Fade In", value: Binding(
+                        get: { originalMuteRegions.indices.contains(index) ? originalMuteRegions[index].fadeInSeconds : 0 },
+                        set: { if originalMuteRegions.indices.contains(index) { originalMuteRegions[index].fadeInSeconds = $0 } }
+                    ),
+                    range: 0...2, format: formattedTime,
+                    onEditingChanged: { editing in if !editing { persistOriginalMuteRegions() } }
+                )
+                muteRegionSlider(
+                    "Fade Out", value: Binding(
+                        get: { originalMuteRegions.indices.contains(index) ? originalMuteRegions[index].fadeOutSeconds : 0 },
+                        set: { if originalMuteRegions.indices.contains(index) { originalMuteRegions[index].fadeOutSeconds = $0 } }
+                    ),
+                    range: 0...2, format: formattedTime,
+                    onEditingChanged: { editing in if !editing { persistOriginalMuteRegions() } }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func muteRegionSlider(_ label: String, value: Binding<Double>, range: ClosedRange<Double>, format: (Double) -> String, onEditingChanged: @escaping (Bool) -> Void) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption2)
+                .frame(width: 52, alignment: .leading)
+            Slider(value: value, in: range, onEditingChanged: onEditingChanged)
+            Text(format(value.wrappedValue))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+    }
+
+    /// Commit path for Start's release - mirrors OverlayEditorView's
+    /// commitStartTime: if Start was dragged past (or too close to) the
+    /// current End, push End forward just enough to restore the
+    /// minimum span, rather than leaving an invalid/zero-width region.
+    private func commitMuteRegionStart(_ index: Int) {
+        guard originalMuteRegions.indices.contains(index) else { return }
+        if originalMuteRegions[index].startTime > originalMuteRegions[index].endTime - minimumMuteRegionSpan {
+            originalMuteRegions[index].endTime = min(originalMuteRegions[index].startTime + minimumMuteRegionSpan, max(totalDuration, 0.01))
+        }
+        persistOriginalMuteRegions()
+    }
+
+    /// Commit path for End's release - mirrors commitMuteRegionStart,
+    /// nudging Start backward instead when End was dragged past (or too
+    /// close to) it.
+    private func commitMuteRegionEnd(_ index: Int) {
+        guard originalMuteRegions.indices.contains(index) else { return }
+        if originalMuteRegions[index].endTime < originalMuteRegions[index].startTime + minimumMuteRegionSpan {
+            originalMuteRegions[index].startTime = max(originalMuteRegions[index].endTime - minimumMuteRegionSpan, 0)
+        }
+        persistOriginalMuteRegions()
+    }
+
+    private func persistOriginalMuteRegions() {
+        guard !momentId.isEmpty else { return }
+        authManager.updateMomentOriginalMuteRegions(momentId: momentId, regions: originalMuteRegions) { _ in }
+        rebuildPreview()
     }
 
     private func toggleMute() {
@@ -731,6 +897,43 @@ struct MomentAudioEditorView: View {
         }
     }
 
+    /// Renders "mute a section" regions as bars over the original
+    /// track's waveform - same ZStack/GeometryReader shape as
+    /// `VolumeKeyframeStrip` (a sibling layer, not nested inside it),
+    /// but spanning a range rather than marking a point, closer to
+    /// `overlayBar`'s own bar style for a placed audio clip.
+    private struct MuteRegionStrip: View {
+        let rangeStart: Double
+        let rangeEnd: Double
+        let regions: [MuteRegion]
+        let selectedID: UUID?
+        let onSelect: (UUID) -> Void
+
+        var body: some View {
+            GeometryReader { geometry in
+                let width = geometry.size.width
+                let span = max(rangeEnd - rangeStart, 0.01)
+                ForEach(regions) { region in
+                    bar(region, trackWidth: width, span: span)
+                }
+            }
+            .frame(height: 32)
+        }
+
+        private func bar(_ region: MuteRegion, trackWidth: CGFloat, span: Double) -> some View {
+            let x = timeToX(time: region.startTime - rangeStart, duration: span, trackWidth: trackWidth)
+            let endX = timeToX(time: region.endTime - rangeStart, duration: span, trackWidth: trackWidth)
+            let blockWidth = max(endX - x, 4)
+            let isSelected = region.id == selectedID
+
+            return RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(isSelected ? Color.red.opacity(0.6) : Color.red.opacity(0.3))
+                .frame(width: blockWidth, height: 24)
+                .position(x: x + blockWidth / 2, y: 16)
+                .onTapGesture { onSelect(region.id) }
+        }
+    }
+
     @ViewBuilder
     private func volumeKeyframeDetailRow(keyframes: Binding<[VolumeKeyframe]>, selectedID: Binding<UUID?>, onCommit: @escaping () -> Void) -> some View {
         if let id = selectedID.wrappedValue, let index = keyframes.wrappedValue.firstIndex(where: { $0.id == id }) {
@@ -928,6 +1131,7 @@ struct MomentAudioEditorView: View {
             audioOverlays: audioOverlays,
             originalVolume: originalVolume,
             originalVolumeKeyframes: originalVolumeKeyframes,
+            originalMuteRegions: originalMuteRegions,
             resolveAudioURL: resolveAudioURL
         ) { result in
             guard generation == previewRebuildGeneration else { return }
@@ -958,6 +1162,7 @@ struct MomentAudioEditorView: View {
             audioOverlays: audioOverlays,
             originalVolume: originalVolume,
             originalVolumeKeyframes: originalVolumeKeyframes,
+            originalMuteRegions: originalMuteRegions,
             resolveAudioURL: resolveAudioURL
         ) { result in
             isExporting = false

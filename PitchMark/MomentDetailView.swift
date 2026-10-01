@@ -184,6 +184,7 @@ struct MomentDetailView: View {
                     initialAudioOverlays: moment.audioOverlays ?? [],
                     initialOriginalVolume: moment.originalAudioVolume ?? 1.0,
                     initialOriginalVolumeKeyframes: moment.originalVolumeKeyframes ?? [],
+                    initialOriginalMuteRegions: moment.originalMuteRegions ?? [],
                     onExported: { reloadPlayer() }
                 )
                     .environmentObject(authManager)

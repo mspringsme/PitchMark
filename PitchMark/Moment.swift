@@ -61,6 +61,10 @@ struct Moment: Identifiable, Codable {
     /// instead of staying flat. Nil/empty means "flat `originalAudioVolume`,
     /// unchanged" - same Optional reasoning as every other field here.
     var originalVolumeKeyframes: [VolumeKeyframe]? = nil
+    /// 2026-09-30 - "mute a section" regions on the original track, each
+    /// with its own duck level and fade in/out. Nil/empty means "no
+    /// regions" - same Optional reasoning as every other field here.
+    var originalMuteRegions: [MuteRegion]? = nil
 
     init(
         createdAt: Date = Date(),
@@ -78,7 +82,8 @@ struct Moment: Identifiable, Codable {
         speedKeyframes: [SpeedKeyframe]? = nil,
         audioOverlays: [AudioOverlayItem]? = nil,
         originalAudioVolume: Double? = nil,
-        originalVolumeKeyframes: [VolumeKeyframe]? = nil
+        originalVolumeKeyframes: [VolumeKeyframe]? = nil,
+        originalMuteRegions: [MuteRegion]? = nil
     ) {
         self.createdAt = createdAt
         self.teamId = teamId
@@ -96,6 +101,7 @@ struct Moment: Identifiable, Codable {
         self.audioOverlays = audioOverlays
         self.originalAudioVolume = originalAudioVolume
         self.originalVolumeKeyframes = originalVolumeKeyframes
+        self.originalMuteRegions = originalMuteRegions
     }
 
     /// The user-set title if there is one, else the tagged player's name,
@@ -471,6 +477,31 @@ extension AuthManager {
 
         do {
             let encoded = try Firestore.Encoder().encode(OriginalVolumeKeyframesFieldWrapper(originalVolumeKeyframes: keyframes))
+            Firestore.firestore()
+                .collection("users").document(user.uid)
+                .collection("moments").document(momentId)
+                .updateData(encoded) { error in
+                    completion(error)
+                }
+        } catch {
+            completion(error)
+        }
+    }
+
+    /// Same shape as `updateMomentOriginalVolumeKeyframes` -
+    /// `originalMuteRegions` is also an array of Codable structs.
+    func updateMomentOriginalMuteRegions(momentId: String, regions: [MuteRegion], completion: @escaping (Error?) -> Void) {
+        guard let user = user, !momentId.isEmpty else {
+            completion(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
+            return
+        }
+
+        struct OriginalMuteRegionsFieldWrapper: Encodable {
+            var originalMuteRegions: [MuteRegion]
+        }
+
+        do {
+            let encoded = try Firestore.Encoder().encode(OriginalMuteRegionsFieldWrapper(originalMuteRegions: regions))
             Firestore.firestore()
                 .collection("users").document(user.uid)
                 .collection("moments").document(momentId)

@@ -123,3 +123,92 @@ func normalizedTrimAndFade(
 
     return (resolvedTrimStart, resolvedTrimEnd, resolvedFadeIn, resolvedFadeOut)
 }
+
+/// 2026-09-30: a "mute a section" region on the original audio track -
+/// a draggable/resizable range with its own duck level and independent
+/// fade in/out, so the duck doesn't click/pop at its edges. Unlike
+/// `AudioOverlayItem`'s fade (always a fade *to/from silence at the
+/// clip's own start/end*), a mute region sits *inside* the timeline and
+/// needs a fade on *both* sides around a held "floor" level in the
+/// middle - genuinely different shape, not reusable as-is, which is why
+/// this is its own type rather than another `VolumeKeyframe` pair (a
+/// step function can't express the smooth fade either, same reasoning
+/// AudioOverlayItem's own fade fields already established).
+struct MuteRegion: Identifiable, Codable, Equatable {
+    let id: UUID
+    var startTime: Double
+    var endTime: Double
+    /// 0...1 - the volume level held during the region's "floor" (between
+    /// its fade-in and fade-out). 0 = full silence ("mute"); a UI label
+    /// of "Mute Level" still applies at values above 0 - it's a duck
+    /// amount, not strictly binary.
+    var muteLevel: Double
+    var fadeInSeconds: Double
+    var fadeOutSeconds: Double
+
+    init(id: UUID = UUID(), startTime: Double, endTime: Double, muteLevel: Double = 0, fadeInSeconds: Double = 0.2, fadeOutSeconds: Double = 0.2) {
+        self.id = id
+        self.startTime = startTime
+        self.endTime = endTime
+        self.muteLevel = muteLevel
+        self.fadeInSeconds = fadeInSeconds
+        self.fadeOutSeconds = fadeOutSeconds
+    }
+}
+
+/// This region's own effect on volume at `time`, as a multiplier (1 =
+/// no effect, 0 = full silence) - outside `[startTime, endTime]` it's
+/// always 1. If both fades are enabled and the region's own span is
+/// shorter than `fadeInSeconds + fadeOutSeconds`, both scale down to
+/// meet in the middle - same shape as `normalizedTrimAndFade` and
+/// `fadeOpacityMultiplier` (Overlay.swift) use for the identical
+/// "two fades that might overlap in a short span" situation.
+func muteRegionMultiplier(time: Double, region: MuteRegion) -> Double {
+    guard time >= region.startTime, time <= region.endTime else { return 1 }
+    let span = region.endTime - region.startTime
+    guard span > 0 else { return 1 }
+
+    var fadeIn = max(region.fadeInSeconds, 0)
+    var fadeOut = max(region.fadeOutSeconds, 0)
+    let total = fadeIn + fadeOut
+    if total > span && total > 0 {
+        let scale = span / total
+        fadeIn *= scale
+        fadeOut *= scale
+    }
+
+    let level = min(max(region.muteLevel, 0), 1)
+    if fadeIn > 0 {
+        let elapsed = time - region.startTime
+        if elapsed < fadeIn {
+            let fraction = elapsed / fadeIn
+            return 1 - (1 - level) * fraction
+        }
+    }
+    if fadeOut > 0 {
+        let remaining = region.endTime - time
+        if remaining < fadeOut {
+            let fraction = remaining / fadeOut
+            return 1 - (1 - level) * fraction
+        }
+    }
+    return level
+}
+
+/// The original track's combined volume at `time`: the existing
+/// step-keyframe volume (`volumeAt`), multiplied by every mute region's
+/// own envelope - regions compose multiplicatively (two overlapping
+/// regions duck harder together, never un-duck each other), and a
+/// region ducks whatever the keyframe curve already specifies there
+/// rather than overriding it outright, so a mute region layered on top
+/// of an already-ducked section behaves predictably. Pure and
+/// standalone-verifiable, same discipline as every other per-time
+/// function in this feature - both the live preview and export mixer
+/// sample this at the same points so they can't disagree.
+func combinedOriginalVolume(at time: Double, flat: Double, keyframes: [VolumeKeyframe], muteRegions: [MuteRegion]) -> Double {
+    var volume = volumeAt(time, keyframes: keyframes, flat: flat)
+    for region in muteRegions {
+        volume *= muteRegionMultiplier(time: time, region: region)
+    }
+    return volume
+}

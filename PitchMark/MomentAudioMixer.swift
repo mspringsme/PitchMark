@@ -55,6 +55,53 @@ private func applyVolumeAutomation(_ params: AVMutableAudioMixInputParameters, f
     }
 }
 
+/// Sample interval for the original track's combined automation when
+/// mute regions are present - fine enough that a fade (typically a few
+/// tenths of a second) sounds smooth as a sequence of discrete
+/// `setVolume` steps, without emitting an unreasonable number of points
+/// across a longer clip.
+private let originalVolumeSampleInterval: Double = 0.05
+
+/// Applies the original track's volume automation, folding in "mute a
+/// section" regions when there are any. Delegates to the plain
+/// `applyVolumeAutomation(_:flatVolume:keyframes:)` overload unchanged
+/// when there are none - zero behavior change for the common case.
+///
+/// Unlike a placed clip's fade (a smooth `setVolumeRamp` spliced around
+/// a few step points - clean because the fade only ever touches the
+/// clip's own start/end), a mute region can sit anywhere inside the
+/// timeline, any number of times, each with its own fade in/out around
+/// a held floor - composing that exactly as a minimal sequence of
+/// `setVolume`/`setVolumeRamp` calls would need to reason about every
+/// possible overlap between mute regions and existing volume keyframes.
+/// Far simpler and much less error-prone: sample the already-correct,
+/// already-standalone-verified pure function `combinedOriginalVolume`
+/// at a fixed fine interval and emit one `setVolume` step per sample -
+/// the same "resample a continuous function into discrete automation
+/// points" approach this codebase already trusts elsewhere (e.g.
+/// `OverlayExporter`'s keyframe sampling).
+private func applyOriginalVolumeAutomation(
+    _ params: AVMutableAudioMixInputParameters,
+    flatVolume: Double,
+    keyframes: [VolumeKeyframe],
+    muteRegions: [MuteRegion],
+    totalDuration: Double
+) {
+    guard !muteRegions.isEmpty, totalDuration > 0 else {
+        applyVolumeAutomation(params, flatVolume: flatVolume, keyframes: keyframes)
+        return
+    }
+
+    var time = 0.0
+    while time < totalDuration {
+        let volume = combinedOriginalVolume(at: time, flat: flatVolume, keyframes: keyframes, muteRegions: muteRegions)
+        params.setVolume(Float(volume), at: CMTime(seconds: time, preferredTimescale: 600))
+        time += originalVolumeSampleInterval
+    }
+    let finalVolume = combinedOriginalVolume(at: totalDuration, flat: flatVolume, keyframes: keyframes, muteRegions: muteRegions)
+    params.setVolume(Float(finalVolume), at: CMTime(seconds: totalDuration, preferredTimescale: 600))
+}
+
 /// Overload used for a placed overlay clip, which - unlike the original
 /// track - can have a fade in/out. `setVolume(_:at:)` is a step function
 /// and cannot express a smooth ramp, so a fade needs
@@ -128,6 +175,7 @@ func buildAudioMixedComposition(
     audioOverlays: [AudioOverlayItem],
     originalVolume: Double,
     originalVolumeKeyframes: [VolumeKeyframe],
+    originalMuteRegions: [MuteRegion],
     resolveAudioURL: @escaping (String) -> URL?,
     completion: @escaping (Result<(composition: AVMutableComposition, audioMix: AVMutableAudioMix), Error>) -> Void
 ) {
@@ -158,7 +206,10 @@ func buildAudioMixedComposition(
                let compOriginalAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
                 try compOriginalAudioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: totalDuration), of: sourceAudioTrack, at: .zero)
                 let params = AVMutableAudioMixInputParameters(track: compOriginalAudioTrack)
-                applyVolumeAutomation(params, flatVolume: originalVolume, keyframes: originalVolumeKeyframes)
+                applyOriginalVolumeAutomation(
+                    params, flatVolume: originalVolume, keyframes: originalVolumeKeyframes,
+                    muteRegions: originalMuteRegions, totalDuration: totalDuration.seconds
+                )
                 audioMixParams.append(params)
             }
 
@@ -236,6 +287,7 @@ func exportAudioMixedMoment(
     audioOverlays: [AudioOverlayItem],
     originalVolume: Double,
     originalVolumeKeyframes: [VolumeKeyframe],
+    originalMuteRegions: [MuteRegion],
     resolveAudioURL: @escaping (String) -> URL?,
     completion: @escaping (Result<URL, Error>) -> Void
 ) {
@@ -244,6 +296,7 @@ func exportAudioMixedMoment(
         audioOverlays: audioOverlays,
         originalVolume: originalVolume,
         originalVolumeKeyframes: originalVolumeKeyframes,
+        originalMuteRegions: originalMuteRegions,
         resolveAudioURL: resolveAudioURL
     ) { result in
         switch result {
