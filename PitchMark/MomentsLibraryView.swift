@@ -81,6 +81,10 @@ struct MomentsLibraryView: View {
     @State private var showCameraDeniedDialog = false
     @State private var selectedMomentForDetail: Moment? = nil
     @State private var isSaving = false
+    /// Default-on; persisted so the user's choice carries across launches.
+    /// Read by `saveRecordedMoment` to decide whether to ask
+    /// `MomentLocationTagger` for a city name before saving.
+    @AppStorage("momentsTagLocationEnabled") private var tagLocation = true
 
     @State private var momentPendingAction: Moment? = nil
     @State private var showMomentActionsDialog = false
@@ -93,6 +97,7 @@ struct MomentsLibraryView: View {
         case folders
     }
     @State private var libraryTab: MomentsLibraryTab = .folders
+    @State private var showCreateFolder = false
 
     @State private var mediaPickerSelections: [PhotosPickerItem] = []
     @State private var isImportingMedia = false
@@ -121,8 +126,25 @@ struct MomentsLibraryView: View {
         NavigationView {
             VStack(spacing: 0) {
                 VStack(spacing: 10) {
-                    recordButton
-                    importVideoButton
+                    HStack(spacing: 10) {
+                        recordButton
+                        importVideoButton
+                        assetsButton
+                    }
+
+                    Button {
+                        tagLocation.toggle()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: tagLocation ? "checkmark.square.fill" : "square")
+                                .foregroundStyle(tagLocation ? Color.pitchMarkActiveGray : Color.secondary)
+                            Text("Tag Moments with the nearest city")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     if let player = contextPlayer {
                         Text("New Moments will be tagged with \(player.name).")
@@ -147,11 +169,27 @@ struct MomentsLibraryView: View {
                     }
 
                     if !isSelectingForReel {
-                        Picker("", selection: $libraryTab) {
-                            Text("All").tag(MomentsLibraryTab.all)
-                            Text("Folders").tag(MomentsLibraryTab.folders)
+                        HStack(spacing: 24) {
+                            CapsuleSegmentedControl(
+                                options: [("All", MomentsLibraryTab.all), ("Folders", MomentsLibraryTab.folders)],
+                                selection: $libraryTab
+                            )
+
+                            Button {
+                                showCreateFolder = true
+                            } label: {
+                                Image(systemName: "folder.badge.plus")
+                                    .font(.title3)
+                            }
+                            .disabled(libraryTab != .folders)
+                            .foregroundStyle(libraryTab == .folders ? Color.pitchMarkActiveGray : Color.secondary)
+                            .opacity(libraryTab == .folders ? 1 : 0.4)
                         }
-                        .pickerStyle(.segmented)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 8)
+                        .padding(.bottom, 16)
+
+                        Divider()
                     }
                 }
                 .padding(.horizontal)
@@ -180,7 +218,8 @@ struct MomentsLibraryView: View {
                                 momentPendingAction = moment
                                 showMomentActionsDialog = true
                             },
-                            onMomentsNeedRefresh: refreshMoments
+                            onMomentsNeedRefresh: refreshMoments,
+                            showCreateFolder: $showCreateFolder
                         )
                         .environmentObject(authManager)
                     }
@@ -189,17 +228,11 @@ struct MomentsLibraryView: View {
             .navigationTitle("Moments")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if isSelectingForReel {
+                if isSelectingForReel {
+                    ToolbarItem(placement: .topBarLeading) {
                         Button("Cancel") {
                             isSelectingForReel = false
                             selectedMomentIdsForReel = []
-                        }
-                    } else {
-                        Button {
-                            showAssetLibrary = true
-                        } label: {
-                            Image(systemName: "square.stack.3d.up")
                         }
                     }
                 }
@@ -395,14 +428,15 @@ struct MomentsLibraryView: View {
                 }
             }
         } label: {
-            HStack {
+            HStack(spacing: 4) {
                 Image(systemName: "video.fill")
-                Text(isSaving ? "Saving…" : "Record a Moment")
+                Image(systemName: "slash")
+                Image(systemName: "camera.fill")
             }
             .font(.headline)
             .frame(maxWidth: .infinity)
             .padding()
-            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Color.pitchMarkActiveGray, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .foregroundStyle(.white)
         }
         .buttonStyle(.plain)
@@ -417,7 +451,7 @@ struct MomentsLibraryView: View {
         PhotosPicker(selection: $mediaPickerSelections, matching: .any(of: [.images, .videos])) {
             HStack {
                 Image(systemName: "square.and.arrow.down")
-                Text(isImportingMedia ? "Importing…" : "Import from Photos")
+                Text(isImportingMedia ? "Importing…" : "Import")
             }
             .font(.subheadline.weight(.semibold))
             .frame(maxWidth: .infinity)
@@ -426,6 +460,22 @@ struct MomentsLibraryView: View {
         }
         .buttonStyle(.plain)
         .disabled(isImportingMedia)
+    }
+
+    private var assetsButton: some View {
+        Button {
+            showAssetLibrary = true
+        } label: {
+            HStack {
+                Image(systemName: "square.3.layers.3d.down.right")
+                Text("Assets")
+            }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
     }
 
     private func isMomentSelectedForReel(_ moment: Moment) -> Bool {
@@ -674,30 +724,42 @@ struct MomentsLibraryView: View {
 
     private func saveRecordedMoment(from tempURL: URL, duration: Double?, capturedPhotos: [Data], momentKind: MomentKind? = nil, completion: @escaping () -> Void = {}) {
         isSaving = true
-        let moment = Moment(
-            createdAt: Date(),
-            teamId: contextTeamId,
-            playerId: contextPlayer?.id,
-            playerName: contextPlayer?.name,
-            durationSeconds: duration,
-            photoCount: capturedPhotos.count,
-            momentKind: momentKind
-        )
-        authManager.saveMoment(moment) { result in
-            isSaving = false
-            defer { completion() }
-            switch result {
-            case .success(let saved):
-                if let id = saved.id {
-                    saveLocalMomentVideo(from: tempURL, momentId: id)
-                    for (index, data) in capturedPhotos.enumerated() {
-                        saveLocalMomentPhoto(data, momentId: id, index: index)
+
+        func finishSaving(cityName: String?) {
+            let moment = Moment(
+                createdAt: Date(),
+                teamId: contextTeamId,
+                playerId: contextPlayer?.id,
+                playerName: contextPlayer?.name,
+                durationSeconds: duration,
+                photoCount: capturedPhotos.count,
+                momentKind: momentKind,
+                cityName: cityName
+            )
+            authManager.saveMoment(moment) { result in
+                isSaving = false
+                defer { completion() }
+                switch result {
+                case .success(let saved):
+                    if let id = saved.id {
+                        saveLocalMomentVideo(from: tempURL, momentId: id)
+                        for (index, data) in capturedPhotos.enumerated() {
+                            saveLocalMomentPhoto(data, momentId: id, index: index)
+                        }
                     }
+                    refreshMoments()
+                case .failure(let error):
+                    debugLog("❌ saveMoment failed:", error.localizedDescription)
                 }
-                refreshMoments()
-            case .failure(let error):
-                debugLog("❌ saveMoment failed:", error.localizedDescription)
             }
+        }
+
+        if tagLocation {
+            MomentLocationTagger.shared.fetchCityName { city in
+                finishSaving(cityName: city)
+            }
+        } else {
+            finishSaving(cityName: nil)
         }
     }
 }

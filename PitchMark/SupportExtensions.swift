@@ -6,6 +6,18 @@ extension View {
         dynamicTypeSize(.medium)
     }
 
+    /// The rounded-rectangle "card" look shared by Moment grid cells and
+    /// Folder/Bucket tiles - a thin border around the whole tile
+    /// (thumbnail + text together), not just the thumbnail's own corners.
+    func momentCardStyle() -> some View {
+        background(Color(.systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color(.systemGray4), lineWidth: 1)
+            )
+    }
+
     func appConfirmationDialog(
         isPresented: Binding<Bool>,
         title: String,
@@ -121,6 +133,48 @@ private struct AppConfirmationDialogModifier: ViewModifier {
     private func dismissSecondary() {
         isPresented = false
         secondaryAction?()
+    }
+}
+
+extension Color {
+    /// The app's neutral "active/selected" color for controls that would
+    /// otherwise default to the system blue link/accent color - e.g. the
+    /// capsule selectors and the Moments record button. Use this instead of
+    /// `Color.accentColor` / `.blue` for new UI unless specifically told to
+    /// use the accent color.
+    static let pitchMarkActiveGray = Color(white: 0.3)
+}
+
+/// A compact alternative to `.pickerStyle(.segmented)` that hugs its content
+/// instead of stretching to the container width, for spots where the default
+/// segmented look reads as visually bland against the rest of the screen.
+struct CapsuleSegmentedControl<Value: Hashable>: View {
+    let options: [(title: String, value: Value)]
+    @Binding var selection: Value
+    var segmentMinWidth: CGFloat = 84
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(options, id: \.value) { option in
+                Button {
+                    selection = option.value
+                } label: {
+                    Text(option.title)
+                        .font(.subheadline.weight(.semibold))
+                        .frame(minWidth: segmentMinWidth)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(selection == option.value ? Color.white : Color.primary)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(selection == option.value ? Color.pitchMarkActiveGray : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(Capsule(style: .continuous).fill(Color(.systemGray5)))
+        .overlay(Capsule(style: .continuous).stroke(Color(.systemGray4), lineWidth: 1))
     }
 }
 

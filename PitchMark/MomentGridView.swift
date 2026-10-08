@@ -48,6 +48,17 @@ func formattedMomentDuration(_ seconds: Double) -> String {
     return String(format: "%d:%02d", total / 60, total % 60)
 }
 
+/// The time-range options the grid's header capsule lets you jump to. A
+/// `nil` selection (not a case here) means "no filter" - show every bucket
+/// stacked, same as the grid's original always-on behavior.
+enum MomentTimeFilter: String, CaseIterable, Identifiable {
+    case today = "Today"
+    case thisWeek = "This Week"
+    case thisMonth = "This Month"
+    case older = "Older"
+    var id: String { rawValue }
+}
+
 /// A scrolling thumbnail grid of `moments`, sectioned under sticky
 /// relative-time headers. `moments` is expected pre-sorted newest-first
 /// (as `loadMoments` already returns it) - sections fall out of that
@@ -60,6 +71,8 @@ struct MomentGridView: View {
     var emptyMessage: String = "No Moments yet."
     let onTap: (Moment) -> Void
 
+    @State private var selectedTimeFilter: MomentTimeFilter? = nil
+
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 10)]
 
     private struct TimeSection {
@@ -69,6 +82,10 @@ struct MomentGridView: View {
 
     private var sections: [TimeSection] {
         let now = Date()
+        if let selectedTimeFilter {
+            let filtered = moments.filter { timeSectionTitle(for: $0.createdAt, now: now) == selectedTimeFilter.rawValue }
+            return [TimeSection(title: selectedTimeFilter.rawValue, moments: filtered)]
+        }
         var order: [String] = []
         var grouped: [String: [Moment]] = [:]
         for moment in moments {
@@ -89,35 +106,58 @@ struct MomentGridView: View {
                 .foregroundStyle(.secondary)
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(.secondarySystemBackground))
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14, pinnedViews: [.sectionHeaders]) {
                     ForEach(sections, id: \.title) { section in
                         Section {
-                            LazyVGrid(columns: columns, spacing: 10) {
-                                ForEach(section.moments) { moment in
-                                    MomentGridCell(
-                                        moment: moment,
-                                        isSelecting: isSelecting,
-                                        isSelected: selectedMomentIds.contains(moment.id ?? "")
-                                    )
-                                    .onTapGesture { onTap(moment) }
+                            if section.moments.isEmpty {
+                                Text("No Moments in \(section.title).")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal)
+                            } else {
+                                LazyVGrid(columns: columns, spacing: 10) {
+                                    ForEach(section.moments) { moment in
+                                        MomentGridCell(
+                                            moment: moment,
+                                            isSelecting: isSelecting,
+                                            isSelected: selectedMomentIds.contains(moment.id ?? "")
+                                        )
+                                        .onTapGesture { onTap(moment) }
+                                    }
                                 }
+                                .padding(.horizontal)
+                            }
+                        } header: {
+                            Menu {
+                                Button("All Time") { selectedTimeFilter = nil }
+                                ForEach(MomentTimeFilter.allCases) { filter in
+                                    Button(filter.rawValue) { selectedTimeFilter = filter }
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(section.title)
+                                        .font(.subheadline.weight(.semibold))
+                                    Image(systemName: "chevron.down")
+                                        .font(.caption2.weight(.semibold))
+                                }
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 6)
+                                .background(Capsule(style: .continuous).fill(Color(.secondarySystemBackground)))
                             }
                             .padding(.horizontal)
-                        } header: {
-                            Text(section.title)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal)
-                                .padding(.vertical, 4)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(.background)
+                            .padding(.vertical, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.secondarySystemBackground))
                         }
                     }
                 }
                 .padding(.vertical, 8)
             }
+            .background(Color(.secondarySystemBackground))
         }
     }
 }
@@ -134,8 +174,8 @@ struct MomentCollectionTile: View {
     @State private var thumbnail: UIImage? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+        VStack(alignment: .leading, spacing: 0) {
+            Rectangle()
                 .fill(Color(.secondarySystemBackground))
                 .aspectRatio(1.3, contentMode: .fit)
                 .overlay {
@@ -146,18 +186,24 @@ struct MomentCollectionTile: View {
                     } else {
                         Image(systemName: "folder.fill")
                             .font(.largeTitle)
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(Color.pitchMarkActiveGray)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            Text(name)
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .foregroundStyle(.primary)
-            Text("\(count) Moment\(count == 1 ? "" : "s")")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+                .clipped()
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Text("\(count) Moment\(count == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .momentCardStyle()
         .contentShape(Rectangle())
         .onAppear {
             guard thumbnail == nil, let representativeMoment else { return }
@@ -174,9 +220,9 @@ private struct MomentGridCell: View {
     @State private var thumbnail: UIImage? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topTrailing) {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                Rectangle()
                     .fill(Color(.secondarySystemBackground))
                     .aspectRatio(1, contentMode: .fit)
                     .overlay {
@@ -190,7 +236,7 @@ private struct MomentGridCell: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .clipped()
 
                 if moment.isFavorite == true {
                     Image(systemName: "heart.fill")
@@ -238,11 +284,23 @@ private struct MomentGridCell: View {
                 }
             }
 
-            Text(moment.displayTitle)
-                .font(.caption2)
-                .lineLimit(1)
-                .foregroundStyle(.primary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(moment.displayTitle)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+
+                if let cityName = moment.cityName {
+                    Text(cityName)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .momentCardStyle()
         .contentShape(Rectangle())
         .onAppear {
             guard thumbnail == nil else { return }

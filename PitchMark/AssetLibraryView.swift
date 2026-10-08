@@ -437,12 +437,11 @@ struct AssetLibraryHubView: View {
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                Picker("Asset Kind", selection: $selectedKind) {
-                    ForEach(Kind.allCases) { kind in
-                        Text(kind.rawValue).tag(kind)
-                    }
-                }
-                .pickerStyle(.segmented)
+                CapsuleSegmentedControl(
+                    options: Kind.allCases.map { ($0.rawValue, $0) },
+                    selection: $selectedKind
+                )
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal)
                 .padding(.top, 8)
 

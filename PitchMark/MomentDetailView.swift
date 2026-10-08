@@ -14,11 +14,38 @@
 import SwiftUI
 import AVKit
 import PhotosUI
-import FirebaseFirestore
 
 private struct FullScreenPhoto: Identifiable {
     let id: Int
     let image: UIImage
+}
+
+/// The tile look shared by every single-title action button on this
+/// screen (Trim/Speed/Zoom/etc., Add Photos, Combine Photos + Video) -
+/// one definition so they all read as the same kind of control.
+/// `fillWidth: false` lets a short-text button (like "Photos") hug its
+/// own content instead of stretching to match its row's widest sibling.
+private struct ActionTileStyle: ViewModifier {
+    var fillWidth: Bool = true
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(Color.primary)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: fillWidth ? .infinity : nil, minHeight: 44)
+            .background(Color.pitchMarkActiveGray.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.pitchMarkActiveGray.opacity(0.4), lineWidth: 1)
+            )
+    }
+}
+
+private extension View {
+    func actionTileStyle(fillWidth: Bool = true) -> some View {
+        modifier(ActionTileStyle(fillWidth: fillWidth))
+    }
 }
 
 struct MomentDetailView: View {
@@ -35,8 +62,9 @@ struct MomentDetailView: View {
     /// `AuthManager.loadMoment`'s for the bug this fixes.
     @State private var moment: Moment
     /// All the user's Moments, newest first (already loaded by
-    /// MomentsLibraryView) - used only to suggest "Copy from N min ago"
-    /// when this Moment has no game info yet.
+    /// MomentsLibraryView) - passed through to MomentPhotoGalleryPickerView
+    /// so the "From Moments Library" photo source can offer every other
+    /// Moment to pick a photo from.
     let allMoments: [Moment]
 
     @EnvironmentObject var authManager: AuthManager
@@ -44,10 +72,6 @@ struct MomentDetailView: View {
 
     @State private var isFavorite: Bool
     @State private var title: String
-    @State private var opponent: String
-    @State private var score: String
-    @State private var inningText: String
-    @State private var gameInfoUpdatedAt: Date?
 
     @State private var photoCount: Int
     @State private var photoSelections: [PhotosPickerItem] = []
@@ -97,16 +121,18 @@ struct MomentDetailView: View {
     /// the same URL, discarding playback position back to frame 0. Only
     /// reloaded explicitly, when the underlying file actually changes.
     @State private var player: AVPlayer? = nil
+    /// Lets the preview expand to full screen from right here in the
+    /// edit screen - with every editor a fullScreenCover of its own,
+    /// the user is repeatedly bounced back to this screen to check an
+    /// edit, and previously had no way to see it full screen without
+    /// leaving to re-open the Moment from the library.
+    @State private var showFullScreenPlayback = false
 
     init(moment: Moment, allMoments: [Moment]) {
         _moment = State(initialValue: moment)
         self.allMoments = allMoments
         _isFavorite = State(initialValue: moment.isFavorite ?? false)
         _title = State(initialValue: moment.title ?? "")
-        _opponent = State(initialValue: moment.opponent ?? "")
-        _score = State(initialValue: moment.score ?? "")
-        _inningText = State(initialValue: moment.inning.map(String.init) ?? "")
-        _gameInfoUpdatedAt = State(initialValue: moment.gameInfoUpdatedAt)
         _photoCount = State(initialValue: moment.photoCount ?? 0)
         _fadeInEnabled = State(initialValue: moment.fadeInEnabled ?? false)
         _fadeOutEnabled = State(initialValue: moment.fadeOutEnabled ?? false)
@@ -114,43 +140,16 @@ struct MomentDetailView: View {
 
     private var momentId: String { moment.id ?? "" }
 
-    private var displayTitle: String {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty ? (moment.playerName ?? "Moment") : trimmed
-    }
-
-    private var copySuggestion: (source: Moment, minutesAgo: Int)? {
-        guard opponent.isEmpty, score.isEmpty, inningText.isEmpty else { return nil }
-        guard let source = allMoments.first(where: {
-            $0.id != moment.id && ($0.opponent != nil || $0.score != nil || $0.inning != nil)
-        }) else { return nil }
-        let referenceDate = source.gameInfoUpdatedAt ?? source.createdAt
-        let minutes = max(0, Int(Date().timeIntervalSince(referenceDate) / 60))
-        return (source, minutes)
-    }
-
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    nameSection
                     playbackSection
-                    trimSection
-                    speedSection
+                    editActionsSection
                     photosSection
-                    zoomSection
-                    cropSection
-                    freezeSection
-                    filterSection
-                    overlaysSection
-                    markupSection
-                    audioSection
-                    fadeSection
-                    gameInfoSection
                 }
                 .padding()
             }
-            .navigationTitle(displayTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -160,6 +159,26 @@ struct MomentDetailView: View {
                         Image(systemName: isFavorite ? "heart.fill" : "heart")
                             .foregroundStyle(isFavorite ? Color.red : Color.secondary)
                     }
+                }
+                // Replaces a separate "Name" field below the video -
+                // tapping where the title normally reads is intuitive
+                // enough to edit it, and freeing that row gives the
+                // video preview above the buttons more room. Wrapped in
+                // its own outlined rectangle (rather than reading as
+                // plain nav-bar text) so it's visually obvious it's
+                // tappable, not just a label.
+                ToolbarItem(placement: .principal) {
+                    TextField(moment.playerName ?? "Moment", text: $title)
+                        .font(.subheadline.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                        .onSubmit { commitTitle() }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 14)
+                        .background(Color.pitchMarkActiveGray.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color.pitchMarkActiveGray.opacity(0.4), lineWidth: 1)
+                        )
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
@@ -198,6 +217,11 @@ struct MomentDetailView: View {
                 photosPendingLibraryPrompt = []
             }
         )
+        .fullScreenCover(isPresented: $showFullScreenPlayback) {
+            if let url = resolvedMomentPlaybackURL(for: momentId) {
+                MomentPlaybackView(videoURL: url)
+            }
+        }
         .fullScreenCover(isPresented: $showTrimEditor) {
             if let path = resolvedMomentVideoURL(for: momentId)?.path {
                 MomentTrimEditor(videoPath: path) { editedPath in
@@ -338,31 +362,77 @@ struct MomentDetailView: View {
             VideoPlayer(player: player)
                 .frame(height: 220)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    Button {
+                        showFullScreenPlayback = true
+                    } label: {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(.black.opacity(0.5), in: Circle())
+                    }
+                    .padding(8)
+                }
         }
         Text(moment.createdAt.formatted(date: .abbreviated, time: .shortened))
             .font(.caption)
             .foregroundStyle(.secondary)
     }
 
-    @ViewBuilder
-    private var nameSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Name")
-                .font(.headline)
-            TextField(moment.playerName ?? "Moment", text: $title)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { commitTitle() }
-        }
+
+    /// All the one-tap-into-an-editor actions, as single-title buttons
+    /// in a grid instead of each getting its own full-width row - nine
+    /// of these stacked vertically (the old layout) pushed Game Info
+    /// well below the fold. Fade and Photos keep their own sections
+    /// below since they carry inline controls (toggles / thumbnails),
+    /// not just a single action.
+    private var editActionColumns: [GridItem] {
+        [
+            GridItem(.flexible(minimum: 140), spacing: 10),
+            GridItem(.flexible(minimum: 140), spacing: 10)
+        ]
     }
 
-    @ViewBuilder
-    private var trimSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Trim")
-                .font(.headline)
+    private var cropCaption: String? {
+        guard let aspect = moment.cropSettings?.aspect, aspect != .original else { return nil }
+        return aspect.displayName
+    }
 
-            Button("Trim Video") {
-                startTrimEditor()
+    private var filterCaption: String? {
+        moment.filterPreset?.displayName
+    }
+
+    private var markupCaption: String? {
+        guard let count = moment.markupOverlays?.count, count > 0 else { return nil }
+        return "\(count) added"
+    }
+
+    private var editActionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: editActionColumns, spacing: 10) {
+                editActionButton("Trim") { startTrimEditor() }
+                editActionButton("Speed") { showSpeedEditor = true }
+                editActionButton("Zoom") { showZoomEditor = true }
+                editActionButton("Crop", caption: cropCaption) { showCropEditor = true }
+                editActionButton("Freeze Frame", caption: moment.freezeFrame != nil ? "Applied" : nil) {
+                    showFreezeEditor = true
+                }
+                editActionButton("Filters", caption: filterCaption) { showFilterEditor = true }
+                editActionButton("Overlays") {
+                    authManager.loadLibraryAssets { assets in
+                        overlayEditorAssets = assets
+                        showOverlayEditor = true
+                    }
+                }
+                editActionButton("Markup", caption: markupCaption) { showMarkupEditor = true }
+                editActionButton("Audio") { showAudioEditor = true }
+                fadeGridCell
+            }
+
+            if isApplyingFade {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
             }
 
             if let trimErrorMessage {
@@ -370,156 +440,6 @@ struct MomentDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var speedSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Speed")
-                .font(.headline)
-
-            Button("Edit Speed") {
-                showSpeedEditor = true
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var zoomSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Zoom")
-                .font(.headline)
-
-            Button("Edit Zoom") {
-                showZoomEditor = true
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var cropSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Crop")
-                .font(.headline)
-
-            if let aspect = moment.cropSettings?.aspect, aspect != .original {
-                Text("Current: \(aspect.displayName)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button("Edit Crop") {
-                showCropEditor = true
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var freezeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Freeze Frame")
-                .font(.headline)
-
-            if moment.freezeFrame != nil {
-                Text("A freeze frame is applied.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button("Edit Freeze Frame") {
-                showFreezeEditor = true
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Filters")
-                .font(.headline)
-
-            if let preset = moment.filterPreset {
-                Text("Current: \(preset.displayName)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button("Edit Filters") {
-                showFilterEditor = true
-            }
-        }
-    }
-
-    private var overlaysSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Overlays")
-                .font(.headline)
-
-            Button("Preview Overlays") {
-                authManager.loadLibraryAssets { assets in
-                    overlayEditorAssets = assets
-                    showOverlayEditor = true
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var markupSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Markup")
-                .font(.headline)
-
-            if let count = moment.markupOverlays?.count, count > 0 {
-                Text("\(count) markup\(count == 1 ? "" : "s") added.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button("Edit Markup") {
-                showMarkupEditor = true
-            }
-        }
-    }
-
-    private var audioSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Audio")
-                .font(.headline)
-
-            Button("Edit Audio") {
-                showAudioEditor = true
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var fadeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Fade")
-                .font(.headline)
-
-            Toggle("Fade In", isOn: $fadeInEnabled)
-            Toggle("Fade Out", isOn: $fadeOutEnabled)
-
-            Button {
-                applyFade()
-            } label: {
-                if isApplyingFade {
-                    ProgressView()
-                } else {
-                    Text("Apply Fade")
-                }
-            }
-            // Deliberately NOT also disabled when both toggles are off -
-            // that's exactly the state needed to remove a previously-
-            // applied fade (re-bake from the pre-fade base with neither
-            // fade active). Disabling the button there (what this used
-            // to do) made an applied fade permanent - reported by the
-            // user as "unable to remove a fade in or out after Apply
-            // Fade."
-            .disabled(isApplyingFade)
 
             if let fadeErrorMessage {
                 Text(fadeErrorMessage)
@@ -530,86 +450,123 @@ struct MomentDetailView: View {
     }
 
     @ViewBuilder
-    private var gameInfoSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Game Info")
-                .font(.headline)
-
-            if let suggestion = copySuggestion {
-                Button {
-                    applyCopySuggestion(suggestion.source)
-                } label: {
-                    Text("Copy from \(suggestion.source.playerName ?? "last Moment"), \(suggestion.minutesAgo) min ago")
-                        .font(.caption)
-                        .foregroundStyle(Color.accentColor)
+    private func editActionButton(_ title: String, caption: String? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                if let caption {
+                    Text(caption)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .buttonStyle(.plain)
             }
+            .actionTileStyle()
+        }
+        .buttonStyle(.plain)
+    }
 
-            TextField("Opponent", text: $opponent)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { commitGameInfo() }
-
-            HStack {
-                TextField("Score (e.g. 4-2)", text: $score)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { commitGameInfo() }
-                TextField("Inning", text: $inningText)
-                    .textFieldStyle(.roundedBorder)
-                    .keyboardType(.numberPad)
-                    .frame(width: 90)
-                    .onSubmit { commitGameInfo() }
+    /// Fade In and Fade Out share a single grid cell (the tenth, next to
+    /// Audio) rather than getting their own labeled section - there's no
+    /// third state or extra chrome to justify a header, just two small
+    /// toggles. Each applies on tap rather than waiting for a separate
+    /// "Apply" button - there's no state where flipping one of these and
+    /// not exporting makes sense. Deliberately NOT disabled just because
+    /// both are off: that's exactly the state needed to remove a
+    /// previously-applied fade (re-bake from the pre-fade base with
+    /// neither fade active). Disabling that case once made an applied
+    /// fade permanent - reported by the user as "unable to remove a fade
+    /// in or out after Apply Fade."
+    private var fadeGridCell: some View {
+        HStack(spacing: 4) {
+            fadeToggleButton("Fade In", isOn: fadeInEnabled) {
+                fadeInEnabled.toggle()
+                applyFade()
             }
-
-            Button("Update") { commitGameInfo() }
-
-            if let gameInfoUpdatedAt {
-                Text("Last updated \(gameInfoUpdatedAt.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            fadeToggleButton("Fade Out", isOn: fadeOutEnabled) {
+                fadeOutEnabled.toggle()
+                applyFade()
             }
         }
     }
 
     @ViewBuilder
+    private func fadeToggleButton(_ title: String, isOn: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Text(title)
+                    .font(.caption2.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if isOn {
+                    Image(systemName: "checkmark")
+                        .font(.caption2)
+                }
+            }
+            .foregroundStyle(isOn ? Color.white : Color.primary)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(
+                isOn ? Color.pitchMarkActiveGray : Color.pitchMarkActiveGray.opacity(0.12),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.pitchMarkActiveGray.opacity(0.4), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isApplyingFade)
+    }
+
+    @ViewBuilder
     private var photosSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Photos")
-                    .font(.headline)
-                Spacer()
-                // Two distinct sources, two distinct entry points - the
-                // phone's camera roll (system PhotosPicker) and
-                // PitchMark's own Moments catalog (MomentPhotoGalleryPickerView)
-                // have no overlap, so picking "the wrong one" isn't
-                // possible by construction.
-                Menu {
-                    // A `PhotosPicker` used directly as a Menu row never
-                    // presents anything when tapped - Menu converts its
-                    // content into native UIMenu actions, which
-                    // PhotosPicker's own sheet-presentation logic doesn't
-                    // hook into (it needs to live in the plain SwiftUI
-                    // view tree, the way it does below). A plain Button
-                    // that flips `showSystemPhotoPicker` instead, paired
-                    // with the `.photosPicker(isPresented:...)` modifier
-                    // further down, is the supported way to trigger it
-                    // from inside a Menu.
-                    Button {
-                        showSystemPhotoPicker = true
-                    } label: {
-                        Label("From Photos Library", systemImage: "photo.on.rectangle")
-                    }
-                    Button {
-                        showMomentGalleryPicker = true
-                    } label: {
-                        Label("From Moments Library", systemImage: "rectangle.stack")
-                    }
+            Text("Photos")
+                .font(.headline)
+
+            // Two distinct sources, two distinct entry points - the
+            // phone's camera roll (system PhotosPicker) and PitchMark's
+            // own Moments catalog (MomentPhotoGalleryPickerView) have no
+            // overlap, so picking "the wrong one" isn't possible by
+            // construction.
+            Menu {
+                // A `PhotosPicker` used directly as a Menu row never
+                // presents anything when tapped - Menu converts its
+                // content into native UIMenu actions, which
+                // PhotosPicker's own sheet-presentation logic doesn't
+                // hook into (it needs to live in the plain SwiftUI
+                // view tree, the way it does below). A plain Button
+                // that flips `showSystemPhotoPicker` instead, paired
+                // with the `.photosPicker(isPresented:...)` modifier
+                // further down, is the supported way to trigger it
+                // from inside a Menu.
+                Button {
+                    showSystemPhotoPicker = true
                 } label: {
-                    Image(systemName: "plus.circle.fill")
+                    Label("From Photos Library", systemImage: "photo.on.rectangle")
                 }
+                Button {
+                    showMomentGalleryPicker = true
+                } label: {
+                    Label("From Moments Library", systemImage: "rectangle.stack")
+                }
+            } label: {
+                Label("Photos", systemImage: "plus.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .actionTileStyle(fillWidth: false)
             }
 
             if photoCount > 0 {
+                // `showsIndicators: false` plus horizontal scroll means
+                // this only ever scrolls once the thumbnails overflow
+                // the screen width - a row that fits needs no scrolling
+                // at all, exactly as it already behaves.
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(0..<photoCount, id: \.self) { index in
@@ -618,12 +575,22 @@ struct MomentDetailView: View {
                     }
                 }
 
-                Button("Combine Photos + Video") {
+                Button {
                     showSlideshowEditor = true
+                } label: {
+                    Text("Combine Photos + Video")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .actionTileStyle(fillWidth: false)
                 }
-                .font(.caption)
+                .buttonStyle(.plain)
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -806,23 +773,6 @@ struct MomentDetailView: View {
     private func commitTitle() {
         let trimmed = title.trimmingCharacters(in: .whitespaces)
         authManager.updateMomentFields(momentId: momentId, fields: ["title": trimmed.isEmpty ? NSNull() : trimmed]) { _ in }
-    }
-
-    private func applyCopySuggestion(_ source: Moment) {
-        opponent = source.opponent ?? ""
-        score = source.score ?? ""
-        inningText = source.inning.map(String.init) ?? ""
-        commitGameInfo()
-    }
-
-    private func commitGameInfo() {
-        let now = Date()
-        gameInfoUpdatedAt = now
-        var fields: [String: Any] = ["gameInfoUpdatedAt": Timestamp(date: now)]
-        fields["opponent"] = opponent.isEmpty ? NSNull() : opponent
-        fields["score"] = score.isEmpty ? NSNull() : score
-        fields["inning"] = Int(inningText) ?? NSNull()
-        authManager.updateMomentFields(momentId: momentId, fields: fields) { _ in }
     }
 
     private func addPhotos(_ items: [PhotosPickerItem]) {

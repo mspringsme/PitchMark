@@ -39,8 +39,6 @@ struct MomentFolderDetailView: View {
     @State private var selectedMomentIdsForReel: Set<String> = []
     @State private var showHighlightReelEditor = false
 
-    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 12)]
-
     private var directMoments: [Moment] {
         moments.filter { $0.momentFolderId == folder.id && $0.momentBucketId == nil }
     }
@@ -57,18 +55,19 @@ struct MomentFolderDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if !buckets.isEmpty {
-                    LazyVGrid(columns: columns, spacing: 12) {
+                    LazyVStack(spacing: 0) {
                         ForEach(buckets) { bucket in
                             NavigationLink {
                                 MomentBucketDetailView(bucket: bucket, moments: momentsInBucket(bucket), onOpenMoment: onOpenMoment, onMomentsNeedRefresh: onMomentsNeedRefresh)
                             } label: {
-                                MomentCollectionTile(
+                                MomentFolderRow(
                                     name: bucket.name,
                                     representativeMoment: momentsInBucket(bucket).first,
                                     count: momentsInBucket(bucket).count
                                 )
                             }
                             .buttonStyle(.plain)
+                            .background(Color(.systemBackground))
                             .contextMenu {
                                 Button("Rename") { bucketPendingRename = bucket }
                                 Button("Delete", role: .destructive) {
@@ -76,9 +75,11 @@ struct MomentFolderDetailView: View {
                                     showDeleteDialog = true
                                 }
                             }
+
+                            Divider()
+                                .padding(.leading, 120)
                         }
                     }
-                    .padding(.horizontal)
                 }
 
                 if let errorMessage {

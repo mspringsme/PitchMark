@@ -148,6 +148,12 @@ struct Moment: Identifiable, Codable {
     /// other field here; `AuthManager.updateMomentMarkupOverlays` is the
     /// only writer.
     var markupOverlays: [MarkupOverlay]? = nil
+    /// 2026-10-08 - the nearest city at capture time, only set when the
+    /// user opts in via MomentsLibraryView's "Tag Location" checkbox
+    /// (MomentLocationTagger resolves it). Nil means either tagging was
+    /// off or the location/geocode lookup failed - same Optional
+    /// reasoning as every other field here.
+    var cityName: String? = nil
 
     init(
         createdAt: Date = Date(),
@@ -178,7 +184,8 @@ struct Moment: Identifiable, Codable {
         momentKind: MomentKind? = nil,
         momentFolderId: String? = nil,
         momentBucketId: String? = nil,
-        markupOverlays: [MarkupOverlay]? = nil
+        markupOverlays: [MarkupOverlay]? = nil,
+        cityName: String? = nil
     ) {
         self.createdAt = createdAt
         self.teamId = teamId
@@ -209,6 +216,7 @@ struct Moment: Identifiable, Codable {
         self.momentFolderId = momentFolderId
         self.momentBucketId = momentBucketId
         self.markupOverlays = markupOverlays
+        self.cityName = cityName
     }
 
     /// The user-set title if there is one, else the tagged player's name,
