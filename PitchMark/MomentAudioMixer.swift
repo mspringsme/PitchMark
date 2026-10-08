@@ -114,7 +114,12 @@ private func applyOriginalVolumeAutomation(
 /// absolute composition-time space (see AudioOverlay.swift's header
 /// comment on `VolumeKeyframe`), so no per-clip time conversion is
 /// needed here.
-private func applyVolumeAutomation(
+///
+/// Internal, not private - AudioMixExporter.swift reuses this directly
+/// for its own placed clips (an audio mix's clips have the exact same
+/// trim/fade/volume-keyframe shape as a Moment's audio overlays, just
+/// with no original track to mix against).
+func applyVolumeAutomation(
     _ params: AVMutableAudioMixInputParameters,
     flatVolume: Double,
     keyframes: [VolumeKeyframe],
@@ -206,9 +211,31 @@ func buildAudioMixedComposition(
                let compOriginalAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
                 try compOriginalAudioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: totalDuration), of: sourceAudioTrack, at: .zero)
                 let params = AVMutableAudioMixInputParameters(track: compOriginalAudioTrack)
+                // `insertTimeRange` inserts only the overlap between the
+                // requested range and the source track's own real
+                // content - if `sourceAudioTrack` is even a hair shorter
+                // than `totalDuration` (routine: a video's audio and
+                // video tracks almost never land on exactly the same
+                // real duration after any non-trivial export, since
+                // audio quantizes to fixed-size encoder frames on a
+                // completely different grid than video frames - Freeze's
+                // multi-segment composition-building is more likely than
+                // a single-range exporter to accumulate enough of this
+                // skew to matter), `compOriginalAudioTrack`'s actual
+                // inserted duration can end up shorter than the nominal
+                // `totalDuration` below would assume. Sampling/setting a
+                // volume point AT a time the track doesn't actually
+                // reach raises an uncaught NSException from
+                // `setVolume(_:at:)` - not a Swift error, not catchable,
+                // silently kills the export. Using the track's own real
+                // `timeRange.duration` here instead of the nominal asset
+                // duration is the same "real state over nominal value"
+                // discipline `MomentFreezeExporter.swift`'s
+                // `holdEndCursor` fix just applied, for the identical
+                // reason.
                 applyOriginalVolumeAutomation(
                     params, flatVolume: originalVolume, keyframes: originalVolumeKeyframes,
-                    muteRegions: originalMuteRegions, totalDuration: totalDuration.seconds
+                    muteRegions: originalMuteRegions, totalDuration: compOriginalAudioTrack.timeRange.duration.seconds
                 )
                 audioMixParams.append(params)
             }

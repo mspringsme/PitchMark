@@ -169,13 +169,13 @@ struct FamilyView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(moments) { moment in
-                    let hasLocalFile = moment.id.flatMap(resolvedMomentVideoURL(for:)).map {
+                    let hasLocalFile = moment.id.flatMap(resolvedMomentPlaybackURL(for:)).map {
                         FileManager.default.fileExists(atPath: $0.path)
                     } ?? false
 
                     Button {
                         showMomentPicker = false
-                        guard let id = moment.id, let url = resolvedMomentVideoURL(for: id) else { return }
+                        guard let id = moment.id, let url = resolvedMomentPlaybackURL(for: id) else { return }
                         activeShareItem = ShareSheetItem(items: [url])
                     } label: {
                         HStack {

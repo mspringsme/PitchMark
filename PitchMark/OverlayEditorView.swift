@@ -84,6 +84,48 @@ func videoDisplayRect(containerSize: CGSize, naturalSize: CGSize) -> CGRect {
     return CGRect(origin: origin, size: fitSize)
 }
 
+/// A live SwiftUI preview of `OverlayTextContent`'s two-line card -
+/// internal, not a private method on `OverlayEditorView`, so
+/// `MomentFreezeEditorView` can reuse the exact same look for its own
+/// callout preview rather than drawing a second, possibly-drifting
+/// version of the same template. Sized off `minDimension` (the shorter
+/// side of whatever frame the card is being previewed against) rather
+/// than a full `CGRect`, since a caller like the freeze editor has no
+/// "video rect" of its own to pass - just the preview area's size.
+/// `minimumScaleFactor`/`lineLimit` here mirror what `fittedFontSize`
+/// (OverlayExporter.swift) approximates for export, so a live preview
+/// and its eventual export shouldn't visibly disagree.
+func overlayTextCardPreview(
+    _ text: OverlayTextContent,
+    minDimension: CGFloat,
+    widthFraction: CGFloat = overlayTextWidthFraction,
+    heightFraction: CGFloat = overlayTextHeightFraction
+) -> some View {
+    let template = overlayTextTemplate(id: text.templateID)
+    let width = widthFraction * minDimension
+    let height = heightFraction * minDimension
+    let color = hexToColor(text.colorHex) ?? .white
+
+    return VStack(spacing: height * 0.08) {
+        Text(text.line1)
+            .font(.custom(template.boldFontName, size: height * 0.32))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .shadow(color: .black.opacity(Double(overlayTextShadowOpacity)), radius: overlayTextShadowRadius, x: overlayTextShadowOffset.width, y: overlayTextShadowOffset.height)
+        Rectangle()
+            .fill(color)
+            .frame(height: max(height * 0.02, overlayTextDividerMinHeight))
+        Text(text.line2)
+            .font(.custom(template.regularFontName, size: height * 0.22))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+            .shadow(color: .black.opacity(Double(overlayTextShadowOpacity)), radius: overlayTextShadowRadius, x: overlayTextShadowOffset.width, y: overlayTextShadowOffset.height)
+    }
+    .frame(width: width, height: height)
+}
+
 /// Combines a selected overlay's base transform (from `item.transform(at:
 /// currentTime)`, frozen while playback is paused for editing) with a
 /// drag gesture's live position delta *and* the Scale/Rotation sliders'
@@ -160,6 +202,7 @@ final class PlayerLayerContainerUIView: UIView {
 /// Which group of per-overlay controls `selectedOverlayPanel` shows -
 /// see `OverlayEditorView.selectedControlCategory`'s doc comment.
 private enum OverlayControlCategory: String, CaseIterable, Identifiable {
+    case text = "Text"
     case transform = "Position"
     case timing = "Timing"
 
@@ -167,6 +210,7 @@ private enum OverlayControlCategory: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .text: return "textformat"
         case .transform: return "arrow.up.and.down.and.arrow.left.and.right"
         case .timing: return "clock"
         }
@@ -304,7 +348,8 @@ struct OverlayEditorView: View {
         .background(Color(.systemBackground).ignoresSafeArea())
         .onChange(of: selectedOverlayID) { _, _ in
             syncSliders()
-            selectedControlCategory = .transform
+            let isText = overlays.first(where: { $0.id == selectedOverlayID })?.textContent != nil
+            selectedControlCategory = isText ? .text : .transform
         }
         .onChange(of: currentTime) { _, _ in syncSliders() }
         // A plain `.toolbar` renders nothing here - this view has no
@@ -391,7 +436,7 @@ struct OverlayEditorView: View {
 
     @ViewBuilder
     private func overlayView(for item: OverlayItem, transform baseTransform: OverlayTransform, in videoRect: CGRect, videoRectSize: CGSize) -> some View {
-        if videoRect != .zero, let asset = libraryAssets.first(where: { $0.id == item.assetID }), let image = asset.image {
+        if videoRect != .zero {
             let isSelected = item.id == selectedOverlayID
             // While selected, the drag gesture's live position delta and
             // the Scale/Rotation sliders' current values ride on top of
@@ -403,7 +448,6 @@ struct OverlayEditorView: View {
                 ? composeOverlayTransform(to: baseTransform, dragTranslation: dragTranslation, videoRectSize: videoRectSize, scale: scaleSliderValue, rotation: rotationDegrees * .pi / 180)
                 : baseTransform
 
-            let baseSize = overlayBaseSizeFraction * min(videoRect.width, videoRect.height)
             let centerX = videoRect.minX + liveTransform.position.x * videoRect.width
             let centerY = videoRect.minY + liveTransform.position.y * videoRect.height
             // `currentTime` is the synced AVPlayer's own position, not
@@ -414,26 +458,38 @@ struct OverlayEditorView: View {
                 fadeInEnabled: item.fadeInEnabled ?? false, fadeOutEnabled: item.fadeOutEnabled ?? false
             )
 
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .frame(width: baseSize, height: baseSize)
-                .opacity(fadeOpacity)
-                .rotationEffect(.radians(liveTransform.rotation))
-                .scaleEffect(liveTransform.scale)
-                .overlay {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.yellow, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
-                            .rotationEffect(.radians(liveTransform.rotation))
-                            .scaleEffect(liveTransform.scale)
-                    }
+            // Content differs (a text card vs. a library image), but
+            // every modifier below it - opacity/rotation/scale/selection
+            // outline/position/tap/drag - is identical and shared,
+            // exactly what "text is just another kind of overlay item"
+            // (the user's own confirmed direction) means in practice.
+            Group {
+                if let textContent = item.textContent {
+                    overlayTextCardPreview(textContent, minDimension: min(videoRect.width, videoRect.height))
+                } else if let asset = libraryAssets.first(where: { $0.id == item.assetID }), let image = asset.image {
+                    let baseSize = overlayBaseSizeFraction * min(videoRect.width, videoRect.height)
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: baseSize, height: baseSize)
                 }
-                .position(x: centerX, y: centerY)
-                .onTapGesture {
-                    selectOverlay(item.id)
+            }
+            .opacity(fadeOpacity)
+            .rotationEffect(.radians(liveTransform.rotation))
+            .scaleEffect(liveTransform.scale)
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.yellow, style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                        .rotationEffect(.radians(liveTransform.rotation))
+                        .scaleEffect(liveTransform.scale)
                 }
-                .gesture(dragGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
+            }
+            .position(x: centerX, y: centerY)
+            .onTapGesture {
+                selectOverlay(item.id)
+            }
+            .gesture(dragGesture(for: item, isSelected: isSelected, baseTransform: baseTransform, videoRectSize: videoRectSize))
         }
     }
 
@@ -546,8 +602,11 @@ struct OverlayEditorView: View {
             if selectedOverlayID != nil {
                 selectedOverlayPanel
             } else {
-                AssetThumbnailStrip(assets: libraryAssets) { asset in
-                    addOverlay(for: asset)
+                VStack(alignment: .leading, spacing: 6) {
+                    addTextRow
+                    AssetThumbnailStrip(assets: libraryAssets) { asset in
+                        addOverlay(for: asset)
+                    }
                 }
                 .padding(.vertical, 4)
             }
@@ -599,9 +658,14 @@ struct OverlayEditorView: View {
     @ViewBuilder
     private var selectedOverlayPanel: some View {
         if let index = overlays.firstIndex(where: { $0.id == selectedOverlayID }) {
+            let isText = overlays[index].textContent != nil
+            // "Text" only shows as a tab for a text overlay - meaningless
+            // for an image one.
+            let categories = isText ? OverlayControlCategory.allCases : OverlayControlCategory.allCases.filter { $0 != .text }
+
             VStack(alignment: .leading, spacing: 6) {
                 Picker("", selection: $selectedControlCategory) {
-                    ForEach(OverlayControlCategory.allCases) { category in
+                    ForEach(categories) { category in
                         Label(category.rawValue, systemImage: category.systemImage)
                             .tag(category)
                     }
@@ -614,6 +678,8 @@ struct OverlayEditorView: View {
                 // shrinking the video when a taller one is picked.
                 ScrollView {
                     switch selectedControlCategory {
+                    case .text:
+                        textControls(index: index)
                     case .transform:
                         transformControls
                     case .timing:
@@ -624,6 +690,77 @@ struct OverlayEditorView: View {
             }
             .padding(.horizontal)
             .padding(.top, 4)
+        }
+    }
+
+    /// Line 1 (bold)/Line 2 (normal) text fields, an adjustable color,
+    /// and the 3-4 font templates - everything the user asked for a
+    /// fillable text overlay to carry. Edits a Binding directly into
+    /// `overlays[index].textContent` rather than going through the
+    /// drag-gesture/keyframe path position/scale/rotation use - text
+    /// content and color aren't animated over time the way a transform
+    /// is, so there's no keyframing to upsert here, just a direct
+    /// persisted edit on every change.
+    @ViewBuilder
+    private func textControls(index: Int) -> some View {
+        if overlays[index].textContent != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Bold line", text: Binding(
+                    get: { overlays[index].textContent?.line1 ?? "" },
+                    set: { overlays[index].textContent?.line1 = $0 }
+                ), onCommit: persistOverlays)
+                .textFieldStyle(.roundedBorder)
+                .font(.subheadline.weight(.bold))
+
+                TextField("Second line", text: Binding(
+                    get: { overlays[index].textContent?.line2 ?? "" },
+                    set: { overlays[index].textContent?.line2 = $0 }
+                ), onCommit: persistOverlays)
+                .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Text("Color")
+                        .font(.caption)
+                    ColorPicker("", selection: Binding(
+                        get: { hexToColor(overlays[index].textContent?.colorHex ?? "#FFFFFF") ?? .white },
+                        set: { newColor in
+                            overlays[index].textContent?.colorHex = colorToHex(newColor) ?? "#FFFFFF"
+                            persistOverlays()
+                        }
+                    ), supportsOpacity: false)
+                    .labelsHidden()
+                    Spacer()
+                }
+
+                HStack(spacing: 10) {
+                    ForEach(overlayTextTemplates) { template in
+                        let isSelected = overlays[index].textContent?.templateID == template.id
+                        Button {
+                            overlays[index].textContent?.templateID = template.id
+                            persistOverlays()
+                        } label: {
+                            Text("Aa")
+                                .font(.custom(template.boldFontName, size: 16))
+                                .frame(width: 40, height: 32)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(isSelected ? Color.accentColor.opacity(0.25) : Color(.systemGray5))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            // Committing on every keystroke's onCommit alone misses "tap
+            // away without pressing Return" - also persist whenever the
+            // whole panel disappears (selection changes, category
+            // switches away), same safety net `onDisappear` already
+            // gives other per-overlay state in this screen.
+            .onDisappear { persistOverlays() }
         }
     }
 
@@ -768,6 +905,43 @@ struct OverlayEditorView: View {
         player.pause()
     }
 
+    /// Row of the 3-4 font templates, each a tappable "Aa" preview in its
+    /// own bold font - tapping one adds a new fillable text card, same
+    /// "tap to add, centered, at the current playhead" shape
+    /// `AssetThumbnailStrip`'s image thumbnails already use.
+    private var addTextRow: some View {
+        HStack(spacing: 10) {
+            Text("Add Text")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(overlayTextTemplates) { template in
+                Button {
+                    addTextOverlay(templateID: template.id)
+                } label: {
+                    Text("Aa")
+                        .font(.custom(template.boldFontName, size: 16))
+                        .frame(width: 36, height: 28)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color(.systemGray5)))
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer()
+        }
+        .padding(.horizontal)
+    }
+
+    /// Mirrors `addOverlay(for:)` exactly, just seeding `textContent`
+    /// instead of a library `assetID`.
+    private func addTextOverlay(templateID: String) {
+        let clipDuration = duration > 0 ? duration : 5
+        let startTime = min(currentTime, clipDuration)
+        let keyframe = OverlayKeyframe(time: startTime, position: CGPoint(x: 0.5, y: 0.5), scale: 1, rotation: 0, opacity: 1)
+        let item = OverlayItem(assetID: "", startTime: startTime, endTime: clipDuration, keyframes: [keyframe], textContent: OverlayTextContent(templateID: templateID))
+        overlays.append(item)
+        selectOverlay(item.id)
+        persistOverlays()
+    }
+
     /// Tapping a library thumbnail adds one real overlay, centered, that
     /// "starts at the current playhead time" (the spec's own sanctioned
     /// fallback to dragging a thumbnail onto the video). Selecting it
@@ -851,10 +1025,12 @@ struct OverlayEditorView: View {
                     try? FileManager.default.removeItem(at: destination)
                     try FileManager.default.copyItem(at: tempURL, to: destination)
                     try? FileManager.default.removeItem(at: tempURL)
-                    // The audio-mix base (if any) now misses these
-                    // overlay pixels - see Moment.swift's
-                    // localMomentAudioBaseVideoURL doc comment.
-                    invalidateMomentAudioBase(momentId: momentId)
+                    // Every other frozen-base ring member now misses
+                    // these overlay pixels - see Moment.swift's
+                    // invalidateOtherFrozenBases doc comment.
+                    invalidateOtherFrozenBases(momentId: momentId, except: [.overlay])
+                    // See MomentAudioEditorView.swift's identical comment.
+                    refreshFadeIfNeeded(momentId: momentId, authManager: authManager) { onExported() }
                     onExported()
                     dismiss()
                 } catch {

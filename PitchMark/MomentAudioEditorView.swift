@@ -1176,10 +1176,22 @@ struct MomentAudioEditorView: View {
                     try? FileManager.default.removeItem(at: destination)
                     try FileManager.default.copyItem(at: tempURL, to: destination)
                     try? FileManager.default.removeItem(at: tempURL)
-                    // The overlay-bake base (if any) now misses this
-                    // audio mix - see Moment.swift's
-                    // localMomentOverlayBaseVideoURL doc comment.
-                    invalidateMomentOverlayBase(momentId: momentId)
+                    // Every other frozen-base ring member now misses
+                    // this audio mix - see Moment.swift's
+                    // invalidateOtherFrozenBases doc comment.
+                    invalidateOtherFrozenBases(momentId: momentId, except: [.audio])
+                    // The editor is about to dismiss - onExported() below
+                    // reloads the player immediately, but Fade's rebake
+                    // is async and lands later (a real Firestore round-trip
+                    // + AVFoundation export). Calling onExported() again
+                    // once it actually finishes is what makes the rebaked
+                    // fade actually show up without the user needing to
+                    // manually reopen Fade - the fix for "the only way to
+                    // get it to work is to reapply the fade" the user
+                    // reported (the rebake itself was already succeeding,
+                    // confirmed via refreshFadeIfNeeded's own logging -
+                    // nothing was ever re-displaying it).
+                    refreshFadeIfNeeded(momentId: momentId, authManager: authManager) { onExported() }
                     onExported()
                     dismiss()
                 } catch {

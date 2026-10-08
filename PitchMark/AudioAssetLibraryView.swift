@@ -42,6 +42,7 @@ struct AudioAssetLibraryView: View {
     @State private var audioAssets: [LibraryAudioAsset] = []
     @State private var showRecorder = false
     @State private var showMicDeniedDialog = false
+    @State private var showMixCreator = false
 
     @State private var assetPendingAction: LibraryAudioAsset? = nil
     @State private var showAudioActionsDialog = false
@@ -84,6 +85,10 @@ struct AudioAssetLibraryView: View {
                 onCancel: { showRecorder = false }
             )
             .environmentObject(authManager)
+        }
+        .sheet(isPresented: $showMixCreator) {
+            AudioMixCreatorView(onSaved: { refreshAssets() })
+                .environmentObject(authManager)
         }
         .appConfirmationDialog(
             isPresented: $showMicDeniedDialog,
@@ -158,6 +163,20 @@ struct AudioAssetLibraryView: View {
                     HStack {
                         Image(systemName: "mic.badge.plus")
                         Text("Record Audio")
+                    }
+                }
+
+                // Not offered in picker mode (onPick set) - picking a
+                // clip for a mix-in-progress shouldn't surface a nested
+                // "start another mix" option.
+                if onPick == nil {
+                    Button {
+                        showMixCreator = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "waveform.badge.plus")
+                            Text("Create Mix")
+                        }
                     }
                 }
             }

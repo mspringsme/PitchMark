@@ -1282,8 +1282,11 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.didFinish else { return }
             self.didFinish = true
-            let photos = url != nil ? self.capturedPhotos : []
-            self.onComplete?(url, duration, photos)
+            // Shutter photos are independent of whether a video was ever
+            // recorded - closing right after a few shutter taps with no
+            // video (url == nil) used to drop capturedPhotos on the floor
+            // here, silently discarding every photo the user just took.
+            self.onComplete?(url, duration, self.capturedPhotos)
         }
     }
 }

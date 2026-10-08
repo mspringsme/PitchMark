@@ -43,8 +43,11 @@ func templatePaletteColor(_ name: String) -> Color {
 
 private let pitchColorOverridesKey = "pitchColorOverrides"
 
-// Convert Color <-> Hex for persistence
-private func colorToHex(_ color: Color) -> String? {
+// Convert Color <-> Hex for persistence. Generic (not pitch-specific) -
+// kept `internal`, not `private`, so OverlayTextTemplate.swift can reuse
+// this instead of duplicating the same RGB<->hex math for text overlay
+// colors.
+func colorToHex(_ color: Color) -> String? {
     let ui = UIColor(color)
     var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
     guard ui.getRed(&r, green: &g, blue: &b, alpha: &a) else { return nil }
@@ -54,7 +57,7 @@ private func colorToHex(_ color: Color) -> String? {
     return String(format: "#%02X%02X%02X", ri, gi, bi)
 }
 
-private func hexToColor(_ hex: String) -> Color? {
+func hexToColor(_ hex: String) -> Color? {
     var s = hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
     if s.hasPrefix("#") { s.removeFirst() }
     guard s.count == 6, let val = Int(s, radix: 16) else { return nil }

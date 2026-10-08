@@ -30,6 +30,78 @@ import CoreGraphics
 /// silently changing proportion from device to device.
 let overlayBaseSizeFraction: CGFloat = 0.18
 
+/// A text overlay's base (scale = 1) footprint, as fractions of the
+/// video frame's shorter dimension - same role `overlayBaseSizeFraction`
+/// plays for an image overlay, just a wider-than-tall rectangle (a
+/// two-line card) instead of a square. Shared by the live preview and
+/// export for the same reason `overlayBaseSizeFraction` is.
+let overlayTextWidthFraction: CGFloat = 0.6
+let overlayTextHeightFraction: CGFloat = 0.22
+
+/// 2026-10-01 - divider thickness floor, in points. The prior
+/// `max(height * 0.02, 1)` could round down to a 1-2pt line at typical
+/// export render sizes - thin, high-contrast lines are exactly the kind
+/// of fine detail H.264/HEVC's 4:2:0 chroma subsampling struggles to
+/// preserve cleanly, so it baked into the exported video looking broken/
+/// dotted rather than solid. Reported by the user from a screenshot of
+/// the actual exported file. 3pt survives compression as a clean solid
+/// line.
+let overlayTextDividerMinHeight: CGFloat = 3
+
+/// 2026-10-01 - soft dark shadow behind each text line. Addresses the
+/// same compression-artifact report from the other side: a bright,
+/// fully saturated color transitioning directly to a busy background is
+/// close to worst-case for chroma subsampling (sharp luma/chroma edge,
+/// no gradual transition for the encoder to work with); a shadow gives
+/// it a softer, mid-tone buffer to encode instead; often the single
+/// biggest visual improvement for this artifact.
+///
+/// `overlayTextShadowOpacity` and `overlayTextShadowRadius`/`Offset`
+/// are used by the live preview's real SwiftUI `.shadow(...)` only.
+/// `OverlayExporter.swift` does NOT use CALayer's own `shadow*`
+/// properties despite the matching names/shapes suggesting it should -
+/// confirmed empirically that `AVVideoCompositionCoreAnimationTool`'s
+/// offline renderer silently ignores them entirely (a before/after
+/// export comparison came back byte-for-byte identical). It instead
+/// approximates the same look via `overlayTextShadowDuplicateOffsets` -
+/// a small cluster of duplicate dark text layers, offset and at reduced
+/// opacity, which relies only on ordinary layer positioning/opacity
+/// (proven reliable in this exact pipeline) rather than the inert
+/// shadow property.
+let overlayTextShadowOpacity: Float = 0.6
+let overlayTextShadowRadius: CGFloat = 2
+let overlayTextShadowOffset = CGSize(width: 0, height: 1)
+
+/// Offsets (in points, at scale 1x) for the duplicate dark text layers
+/// `OverlayExporter.swift`'s `buildTextCardLayer` stacks behind the real
+/// text - a small, mostly-downward cluster approximating
+/// `overlayTextShadowOffset`/`overlayTextShadowRadius`'s soft downward
+/// blur using only discrete layers rather than a true Gaussian blur.
+let overlayTextShadowDuplicateOffsets: [(CGFloat, CGFloat)] = [(0, 1), (1, 1), (-1, 1), (0, 2)]
+
+/// A fillable text card: a bold top line, a divider, and a normal-weight
+/// second line - the "standard fillable edit" the user asked for, with
+/// an adjustable color and a choice of `OverlayTextTemplate` (font
+/// pairing). Lives on `OverlayItem.textContent`, not a field of its own
+/// struct with position/timing/fade - see that property's doc comment
+/// for why one shared struct, not two parallel item types.
+struct OverlayTextContent: Codable, Equatable {
+    var templateID: String
+    var line1: String
+    var line2: String
+    /// Hex string ("#RRGGBB") via `colorToHex`/`hexToColor`
+    /// (Utilities.swift) - applies to both lines and the divider, one
+    /// adjustable color per the user's own request, not per-line.
+    var colorHex: String
+
+    init(templateID: String, line1: String = "TITLE", line2: String = "Subtitle", colorHex: String = "#FFFFFF") {
+        self.templateID = templateID
+        self.line1 = line1
+        self.line2 = line2
+        self.colorHex = colorHex
+    }
+}
+
 struct OverlayKeyframe: Identifiable, Codable, Equatable {
     let id: UUID
     var time: Double        // seconds, relative to the overlay item's own timeline
@@ -73,8 +145,19 @@ struct OverlayItem: Identifiable, Codable {
     /// same as false - there's no third state.
     var fadeInEnabled: Bool? = nil
     var fadeOutEnabled: Bool? = nil
+    /// 2026-10-01 - non-nil means this overlay is a fillable text card
+    /// (OverlayTextTemplate.swift) rather than an image asset; `assetID`
+    /// is simply unused/empty in that case rather than a second type
+    /// replacing it outright - every position/scale/rotation/timing/fade
+    /// field above applies identically to a text overlay, so keeping one
+    /// struct (not a parallel "TextOverlayItem") is what lets the
+    /// existing editor/export pipeline handle it for free. Optional for
+    /// the same reason every field here is - existing saved overlays
+    /// have no "textContent" key, and nil unambiguously means "this is
+    /// an image overlay," never a third state.
+    var textContent: OverlayTextContent? = nil
 
-    init(id: UUID = UUID(), assetID: String, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = [], fadeInEnabled: Bool? = nil, fadeOutEnabled: Bool? = nil) {
+    init(id: UUID = UUID(), assetID: String, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = [], fadeInEnabled: Bool? = nil, fadeOutEnabled: Bool? = nil, textContent: OverlayTextContent? = nil) {
         self.id = id
         self.assetID = assetID
         self.startTime = startTime
@@ -82,6 +165,7 @@ struct OverlayItem: Identifiable, Codable {
         self.keyframes = keyframes
         self.fadeInEnabled = fadeInEnabled
         self.fadeOutEnabled = fadeOutEnabled
+        self.textContent = textContent
     }
 
     /// Whether this overlay should be rendered at all at `time` - outside

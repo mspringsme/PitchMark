@@ -411,12 +411,20 @@ struct MomentSpeedEditorView: View {
                     try FileManager.default.copyItem(at: tempURL, to: destination)
                     try? FileManager.default.removeItem(at: tempURL)
                     authManager.refreshMomentDuration(momentId: momentId, videoURL: destination)
-                    // The audio-mix and overlay-bake bases (if either
-                    // exists) now miss this retime - see Moment.swift's
-                    // localMomentAudioBaseVideoURL/localMomentOverlayBaseVideoURL
-                    // doc comments.
-                    invalidateMomentAudioBase(momentId: momentId)
-                    invalidateMomentOverlayBase(momentId: momentId)
+                    // Every frozen-base ring member now misses this
+                    // retime - see Moment.swift's invalidateOtherFrozenBases
+                    // doc comment.
+                    invalidateOtherFrozenBases(momentId: momentId, except: [])
+                    // See MomentAudioEditorView.swift's identical comment -
+                    // onExported() must run again once this async rebake
+                    // actually lands, or the editor's own immediate
+                    // onExported() call below (which fires before the
+                    // rebake finishes) is the only reload that ever
+                    // happens.
+                    refreshFadeIfNeeded(momentId: momentId, authManager: authManager) { onExported() }
+                    remapAllTimeBasedFields(momentId: momentId, authManager: authManager) {
+                        sourceTimeToCompositeTime($0, ranges: ranges)
+                    }
                     onExported()
                     dismiss()
                 } catch {
@@ -428,4 +436,5 @@ struct MomentSpeedEditorView: View {
             }
         }
     }
+
 }
