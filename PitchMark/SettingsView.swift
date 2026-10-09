@@ -714,8 +714,8 @@ struct SettingsView: View {
         shareCode = ""
         codeShareSheetID = UUID()
 
-        // dismiss settings, then present after a small delay
-        dismiss()
+        // switch to Games, then present after a small delay
+        onSwitchToArea?(.games)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             showCodeShareSheet = true
         }
@@ -766,7 +766,7 @@ struct SettingsView: View {
                     )
                     self.inviteJoinText = ""
                     self.showInviteJoinSheet = false
-                    dismiss()
+                    self.onSwitchToArea?(.games)
 
                 case .failure(let err):
                     self.inviteJoinError = err.localizedDescription
@@ -826,7 +826,7 @@ struct SettingsView: View {
         defaults.set(ownerUid, forKey: PitchTrackerView.DefaultsKeys.activeGameOwnerUserId)
         defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
 
-        dismiss()
+        onSwitchToArea?(.games)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             NotificationCenter.default.post(
                 name: .gameOrSessionChosen,
@@ -1063,7 +1063,7 @@ struct SettingsView: View {
     /// unrenewed, or this device explicitly disconnects (see
     /// `LiveGameService.removeJoinedLiveSession`).
     private func rejoinLiveSession(_ session: JoinedLiveSession) {
-        dismiss()
+        onSwitchToArea?(.games)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             NotificationCenter.default.post(
                 name: .gameOrSessionChosen,
@@ -2400,12 +2400,6 @@ struct SettingsView: View {
                     .padding(.horizontal)
                     .background(.ultraThinMaterial)
                 }
-                .safeAreaInset(edge: .bottom) {
-                    HomeAreaTabBar(current: .home) { selected in
-                        onSwitchToArea?(selected)
-                        dismiss()
-                    }
-                }
             }
             .sheet(isPresented: $showInviteJoinSheet) {
                 inviteJoinSheetView
@@ -2643,7 +2637,7 @@ struct SettingsView: View {
                             NotificationCenter.default.post(name: .templateSelectionDidChange, object: nil, userInfo: nil)
                         }
 
-                        dismiss()
+                        onSwitchToArea?(.games)
                     }) {
                         Image(systemName: "xmark")
                             .imageScale(.medium)
@@ -2653,10 +2647,9 @@ struct SettingsView: View {
                     }
                     .animation(nil, value: storeGlowAngle)
                     .animation(nil, value: storeGlowPulse)
-                    .accessibilityLabel("Close Settings")
+                    .accessibilityLabel("Go to Games")
                 }
             }
-            .interactiveDismissDisabled(!hasActiveSessionSelection)
             .alert("Select Game First", isPresented: $showSelectSessionBeforeCloseAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -2744,7 +2737,7 @@ struct SettingsView: View {
                                 "ownerUserId": ownerUid
                             ]
                         )
-                        dismiss()
+                        onSwitchToArea?(.games)
                     },
                     onCancel: {
                         showGameChooser = false

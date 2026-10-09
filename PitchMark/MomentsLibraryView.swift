@@ -254,16 +254,18 @@ struct MomentsLibraryView: View {
                 }
                 if !isSelectingForReel {
                     ToolbarItem(placement: .topBarTrailing) {
+                        // When shown as a main TabView sibling, onSwitchToArea
+                        // switches back to Games; when shown as a sheet off
+                        // ParentGameShellView (onSwitchToArea nil there), fall
+                        // back to the ordinary sheet dismiss.
                         Button("Done") {
-                            dismiss()
+                            if let onSwitchToArea {
+                                onSwitchToArea(.games)
+                            } else {
+                                dismiss()
+                            }
                         }
                     }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                HomeAreaTabBar(current: .moments) { selected in
-                    onSwitchToArea?(selected)
-                    dismiss()
                 }
             }
         }

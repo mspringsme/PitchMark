@@ -163,10 +163,11 @@ struct PitchTrackerView: View {
     @State private var selectedPitch: String = ""
     @State private var selectedLocation: String = ""
     @State private var gameIsActive: Bool = false
-    @State private var showSettings = false
-    @State private var showMomentsSheet = false
-    @State private var showFamilySheet = false
-    @State private var pendingHomeAreaSwitch: HomeArea? = nil
+    /// Home/Moments/Family are TabView siblings of Games, not sheets - a
+    /// single selection replaces the old showSettings/showMomentsSheet/
+    /// showFamilySheet trio (and the onDismiss+asyncAfter(0.05) dance that
+    /// used to chain one sheet's dismissal into the next one's presentation).
+    @State private var activeHomeArea: HomeArea = .games
     @State private var showProfile = false
     @State private var templates: [PitchTemplate] = []
     @EnvironmentObject var authManager: AuthManager
@@ -518,7 +519,6 @@ struct PitchTrackerView: View {
     @State private var lastOutResetPreviousOuts: Int? = nil
 
     private func dismissAllTopLevelSheets() {
-        showSettings = false
         showGameSheet = false
         showCodeShareSheet = false
         showCodeAssignmentSheet = false
@@ -527,7 +527,7 @@ struct PitchTrackerView: View {
 
     private func presentExclusive(settings: Bool = false, game: Bool = false) {
         dismissAllTopLevelSheets()
-        if settings { showSettings = true }
+        if settings { activeHomeArea = .home }
         else if game { showGameSheet = true }
     }
 
@@ -2075,7 +2075,7 @@ struct PitchTrackerView: View {
 
         if !isOwnerForActiveGame {
             dismissAllTopLevelSheets()
-            showSettings = true
+            activeHomeArea = .home
         }
     }
 
@@ -5280,7 +5280,7 @@ struct PitchTrackerView: View {
             onCancel: {
                 pendingGameConfirmation = nil
                 DispatchQueue.main.async {
-                    showSettings = true
+                    activeHomeArea = .home
                 }
             }
         )
@@ -5322,7 +5322,7 @@ struct PitchTrackerView: View {
                 requireSignInForDemo("Sign in to add pitchers, games, and grid keys.")
                 return
             }
-            showSettings = true
+            activeHomeArea = .home
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 18, weight: .regular))
@@ -6751,7 +6751,7 @@ struct PitchTrackerView: View {
                     requireSignInForDemo("Sign in to add pitchers, games, and grid keys.")
                     return
                 }
-                showSettings = true
+                activeHomeArea = .home
             } label: {
                 Label("Settings", systemImage: "gearshape")
             }
@@ -8057,7 +8057,7 @@ struct PitchTrackerView: View {
             self.displayOnlyLiveId = nil
             self.displayOnlyLiveIdStorage = ""
             self.dismissAllTopLevelSheets()
-            self.showSettings = true
+            self.activeHomeArea = .home
         }
     }
 
@@ -8175,7 +8175,7 @@ struct PitchTrackerView: View {
         }
 
         if shouldForceSettingsOnLaunch() {
-            showSettings = true
+            activeHomeArea = .home
         }
 
         if isDisplayOnlyMode, !displayOnlyLiveIdStorage.isEmpty {
@@ -8229,7 +8229,7 @@ struct PitchTrackerView: View {
             activeGameOwnerUserId = nil
             activeLiveId = nil
             opponentName = nil
-            showSettings = true
+            activeHomeArea = .home
         }
         // ✅ Restore LIVE session if one was active
         var didRestoreLiveSession = false
@@ -8459,7 +8459,7 @@ struct PitchTrackerView: View {
         if newUserId != nil {
             isGame = false
             sessionManager.switchMode(to: .game)
-            showSettings = true
+            activeHomeArea = .home
         }
     }
 
@@ -8643,41 +8643,11 @@ struct PitchTrackerView: View {
         .dynamicTypeSize(.medium)
     }
 
-    @ViewBuilder private var homeAreaTabBar: some View {
-        HomeAreaTabBar(current: .games) { selectHomeArea($0) }
-    }
-
-    /// `.games` means "close whatever's open, show the tracker underneath" -
-    /// there's no sheet for it. The other three each own a `Bool`/`.sheet`
-    /// pair; if one is already open, defer to its `onDismiss` instead of
-    /// presenting on top of it (see `presentPendingHomeAreaIfNeeded`).
+    /// Home/Games/Moments/Family are now TabView siblings (see `body`'s
+    /// final `TabView(selection: $activeHomeArea)`), so switching areas is
+    /// just a selection change - no dismiss-then-reopen choreography needed.
     private func selectHomeArea(_ area: HomeArea) {
-        let aSheetIsOpen = showSettings || showMomentsSheet || showFamilySheet
-        guard !aSheetIsOpen else {
-            pendingHomeAreaSwitch = (area == .games) ? nil : area
-            showSettings = false
-            showMomentsSheet = false
-            showFamilySheet = false
-            return
-        }
-        switch area {
-        case .games:
-            break
-        case .home:
-            showSettings = true
-        case .moments:
-            showMomentsSheet = true
-        case .family:
-            showFamilySheet = true
-        }
-    }
-
-    private func presentPendingHomeAreaIfNeeded() {
-        guard let pending = pendingHomeAreaSwitch else { return }
-        pendingHomeAreaSwitch = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            self.selectHomeArea(pending)
-        }
+        activeHomeArea = area
     }
 
     @ViewBuilder private var gameStatsSheetView: some View {
@@ -9517,7 +9487,7 @@ struct PitchTrackerView: View {
         guard lastBackgroundAt > 0 else { return }
         let idleSeconds = Date().timeIntervalSince1970 - lastBackgroundAt
         if idleSeconds >= 15 * 60 {
-            showSettings = true
+            activeHomeArea = .home
         }
     }
 
@@ -9732,35 +9702,14 @@ struct PitchTrackerView: View {
             }
             .eraseToAnyView()
 
+        // Home/Moments/Family used to be sheets presented from here (with an
+        // onDismiss + asyncAfter(0.05) dance to chain one into the next).
+        // They're TabView siblings now - see body's final return - so this
+        // link is just a pass-through.
         let v8 = v7
-            .sheet(isPresented: $showSettings, onDismiss: { presentPendingHomeAreaIfNeeded() }) {
-                settingsSheetView
-                    .interactiveDismissDisabled({
-                        guard selectedGameId != nil else { return true }
-                        guard let currentUid = authManager.user?.uid else { return true }
-                        guard let ownerUid = activeGameOwnerUserId else { return false }
-                        return ownerUid != currentUid
-                    }())
-                    .fixedAppDynamicType()
-            }
             .eraseToAnyView()
 
         let v8b = v8
-            .sheet(isPresented: $showMomentsSheet, onDismiss: { presentPendingHomeAreaIfNeeded() }) {
-                MomentsLibraryView(
-                    onSwitchToArea: { selectHomeArea($0) }
-                )
-                .fixedAppDynamicType()
-            }
-            .sheet(isPresented: $showFamilySheet, onDismiss: { presentPendingHomeAreaIfNeeded() }) {
-                FamilyView(
-                    onSwitchToArea: { selectHomeArea($0) }
-                )
-                .fixedAppDynamicType()
-            }
-            .safeAreaInset(edge: .bottom) {
-                homeAreaTabBar
-            }
             .eraseToAnyView()
 
         let v9 = v8b
@@ -9802,7 +9751,7 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         // Keep alerts + the rest of your observers, then erase one last time
-        return AnyView(v9b
+        let gamesTabContent = AnyView(v9b
             .blur(radius: pendingGameConfirmation != nil ? 5 : 0)
             .allowsHitTesting(!showSessionConflictAlert)
             .appConfirmationDialog(
@@ -10132,6 +10081,33 @@ struct PitchTrackerView: View {
             }
             .eraseToAnyView()
         )
+
+        // Home/Games/Moments/Family as real TabView siblings - Games stays
+        // permanently mounted (so its live-session listeners, boot-once
+        // guard, and scenePhase handling above never tear down) while the
+        // other three are reached by selection instead of by sheet. This
+        // replaces the old HomeAreaTabBar + onDismiss/asyncAfter(0.05)
+        // sheet-chaining hack entirely.
+        return TabView(selection: $activeHomeArea) {
+            gamesTabContent
+                .tabItem { Label(HomeArea.games.title, systemImage: HomeArea.games.systemImage) }
+                .tag(HomeArea.games)
+
+            settingsSheetView
+                .fixedAppDynamicType()
+                .tabItem { Label(HomeArea.home.title, systemImage: HomeArea.home.systemImage) }
+                .tag(HomeArea.home)
+
+            MomentsLibraryView(onSwitchToArea: { selectHomeArea($0) })
+                .fixedAppDynamicType()
+                .tabItem { Label(HomeArea.moments.title, systemImage: HomeArea.moments.systemImage) }
+                .tag(HomeArea.moments)
+
+            FamilyView(onSwitchToArea: { selectHomeArea($0) })
+                .fixedAppDynamicType()
+                .tabItem { Label(HomeArea.family.title, systemImage: HomeArea.family.systemImage) }
+                .tag(HomeArea.family)
+        }
     }
     
     struct OwnerCalledPitchRecordContainer: View {

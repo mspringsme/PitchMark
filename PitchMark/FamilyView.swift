@@ -56,13 +56,17 @@ struct FamilyView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                HomeAreaTabBar(current: .family) { selected in
-                    onSwitchToArea?(selected)
-                    dismiss()
+                    // When shown as a main TabView sibling, onSwitchToArea
+                    // switches back to Games; when shown as a sheet off
+                    // ParentGameShellView (onSwitchToArea nil there), fall
+                    // back to the ordinary sheet dismiss.
+                    Button("Done") {
+                        if let onSwitchToArea {
+                            onSwitchToArea(.games)
+                        } else {
+                            dismiss()
+                        }
+                    }
                 }
             }
         }
