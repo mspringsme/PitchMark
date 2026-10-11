@@ -2372,12 +2372,6 @@ struct SettingsView: View {
                             myTeamsSection
                         }
 
-                        #if DEBUG
-                        sectionCard {
-                            DebugTeamsSection()
-                        }
-                        #endif
-
                         Color.clear.frame(height: 8)
                         Image("SoftballBaseballWtitle4")
                             .resizable()
