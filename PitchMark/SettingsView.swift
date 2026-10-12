@@ -2403,7 +2403,7 @@ struct SettingsView: View {
                 appSettingsSheetView
             }
             .sheet(item: $selectedTeamEntry) { entry in
-                ParentGameShellView(selection: entry)
+                TeamRosterView(selection: entry)
                     .environmentObject(authManager)
             }
             .fullScreenCover(isPresented: $showQRScanner) {

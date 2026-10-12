@@ -85,10 +85,29 @@ struct MomentsLibraryView: View {
     /// Read by `saveRecordedMoment` to decide whether to ask
     /// `MomentLocationTagger` for a city name before saving.
     @AppStorage("momentsTagLocationEnabled") private var tagLocation = true
+    /// Off by default - unlike location tagging, this triggers a Photos
+    /// permission prompt and writes a copy of every newly-recorded/
+    /// imported Moment's video into a dedicated "PitchMark" Photos album,
+    /// so it shouldn't turn on silently. Read by
+    /// `autoBackupMomentVideoToPhotosIfEnabled` (Moment.swift) via the
+    /// exact same UserDefaults key string - that's a plain free function,
+    /// not a View, so it can't use this `@AppStorage` property directly.
+    @AppStorage("momentsAutoBackupToPhotosEnabled") private var autoBackupToPhotos = false
+    @State private var showMomentsSettings = false
 
     @State private var momentPendingAction: Moment? = nil
     @State private var showMomentActionsDialog = false
     @State private var momentForPlayback: Moment? = nil
+    /// Tapping a Moment whose video never synced to this device (see
+    /// `momentVideoExistsLocally`'s doc comment, Moment.swift) shows this
+    /// instead of the normal Play/Edit/Duplicate/Move/Delete action sheet -
+    /// every one of those actions needs the local file, Delete most
+    /// dangerously: it would remove the Firestore record entirely (the
+    /// shared source of truth every device reads), orphaning the video
+    /// that's still sitting on whichever device actually has it, with
+    /// nothing left pointing to it anywhere.
+    @State private var momentPendingOtherDeviceNotice: Moment? = nil
+    @State private var showOtherDeviceNotice = false
     @State private var duplicateErrorMessage: String? = nil
     @State private var momentPendingMove: Moment? = nil
 
@@ -131,20 +150,6 @@ struct MomentsLibraryView: View {
                         importVideoButton
                         assetsButton
                     }
-
-                    Button {
-                        tagLocation.toggle()
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: tagLocation ? "checkmark.square.fill" : "square")
-                                .foregroundStyle(tagLocation ? Color.pitchMarkActiveGray : Color.secondary)
-                            Text("Tag Moments with the nearest city")
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     if let player = contextPlayer {
                         Text("New Moments will be tagged with \(player.name).")
@@ -204,10 +209,14 @@ struct MomentsLibraryView: View {
                             emptyMessage: "No Moments yet. Record one above.",
                             onTap: { moment in
                                 if isSelectingForReel {
+                                    guard let id = moment.id, momentVideoExistsLocally(for: id) else {
+                                        momentPendingOtherDeviceNotice = moment
+                                        showOtherDeviceNotice = true
+                                        return
+                                    }
                                     toggleReelSelection(moment)
                                 } else {
-                                    momentPendingAction = moment
-                                    showMomentActionsDialog = true
+                                    handleMomentTap(moment)
                                 }
                             }
                         )
@@ -215,8 +224,7 @@ struct MomentsLibraryView: View {
                         MomentFoldersView(
                             moments: moments,
                             onOpenMoment: { moment in
-                                momentPendingAction = moment
-                                showMomentActionsDialog = true
+                                handleMomentTap(moment)
                             },
                             onMomentsNeedRefresh: refreshMoments,
                             showCreateFolder: $showCreateFolder
@@ -233,6 +241,20 @@ struct MomentsLibraryView: View {
                         Button("Cancel") {
                             isSelectingForReel = false
                             selectedMomentIdsForReel = []
+                        }
+                    }
+                } else {
+                    // Moved here, out of the main screen's VStack where
+                    // they used to sit as always-visible checkboxes - the
+                    // user found them too small (plain .caption text
+                    // under a custom checkbox icon, not a native control)
+                    // and unnecessary to show every time the screen is
+                    // open, since both are set-once-and-forget toggles.
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            showMomentsSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
                         }
                     }
                 }
@@ -255,9 +277,8 @@ struct MomentsLibraryView: View {
                 if !isSelectingForReel {
                     ToolbarItem(placement: .topBarTrailing) {
                         // When shown as a main TabView sibling, onSwitchToArea
-                        // switches back to Games; when shown as a sheet off
-                        // ParentGameShellView (onSwitchToArea nil there), fall
-                        // back to the ordinary sheet dismiss.
+                        // switches back to Games; nil falls back to the
+                        // ordinary sheet dismiss.
                         Button("Done") {
                             if let onSwitchToArea {
                                 onSwitchToArea(.games)
@@ -302,6 +323,9 @@ struct MomentsLibraryView: View {
         .sheet(isPresented: $showAssetLibrary) {
             AssetLibraryHubView()
                 .environmentObject(authManager)
+        }
+        .sheet(isPresented: $showMomentsSettings) {
+            MomentsSettingsView(tagLocation: $tagLocation, autoBackupToPhotos: $autoBackupToPhotos)
         }
         .sheet(isPresented: $showCameraPicker) {
             // Shutter photos always become their own individual
@@ -385,6 +409,15 @@ struct MomentsLibraryView: View {
                 momentPendingAction = nil
             }
         }
+        .appConfirmationDialog(
+            isPresented: $showOtherDeviceNotice,
+            title: "On Another Device",
+            message: "\(momentPendingOtherDeviceNotice?.displayTitle ?? "This Moment") was recorded on another device signed into this account. Its video lives only on that device, so it can't be played, edited, moved, or deleted from here. Open PitchMark on the device it was recorded on to work with it.",
+            primaryTitle: "OK",
+            primaryAction: { momentPendingOtherDeviceNotice = nil },
+            secondaryTitle: "Cancel",
+            secondaryAction: { momentPendingOtherDeviceNotice = nil }
+        )
         .appConfirmationDialog(
             isPresented: $showCameraDeniedDialog,
             title: "Camera Access Needed",
@@ -483,6 +516,24 @@ struct MomentsLibraryView: View {
     private func isMomentSelectedForReel(_ moment: Moment) -> Bool {
         guard let id = moment.id else { return false }
         return selectedMomentIdsForReel.contains(id)
+    }
+
+    /// Single choke point for every "a Moment tile was tapped" path (the
+    /// "All" grid and every Folder/Bucket screen underneath
+    /// `MomentFoldersView`, which all funnel through this same
+    /// `onOpenMoment` closure) - shows the normal Play/Edit/Duplicate/
+    /// Move/Delete action sheet, unless the Moment's video never synced
+    /// to this device, in which case it shows `showOtherDeviceNotice`
+    /// instead and never reaches the action sheet (Delete included) at
+    /// all. See `momentPendingOtherDeviceNotice`'s doc comment above.
+    private func handleMomentTap(_ moment: Moment) {
+        guard let id = moment.id, momentVideoExistsLocally(for: id) else {
+            momentPendingOtherDeviceNotice = moment
+            showOtherDeviceNotice = true
+            return
+        }
+        momentPendingAction = moment
+        showMomentActionsDialog = true
     }
 
     private func toggleReelSelection(_ moment: Moment) {
@@ -713,7 +764,12 @@ struct MomentsLibraryView: View {
                     switch result {
                     case .success(let saved):
                         if let newId = saved.id {
-                            saveLocalMomentVideo(from: sourceURL, momentId: newId)
+                            // Never re-trigger the Photos auto-backup here -
+                            // see saveLocalMomentVideo's doc comment. A
+                            // duplicate's video was already backed up (if
+                            // the toggle was on) when its original Moment
+                            // was first created.
+                            saveLocalMomentVideo(from: sourceURL, momentId: newId, autoBackupToPhotos: false)
                         }
                         refreshMoments()
                     case .failure(let error):
@@ -762,6 +818,45 @@ struct MomentsLibraryView: View {
             }
         } else {
             finishSaving(cityName: nil)
+        }
+    }
+}
+
+/// The set-once-and-forget Moments toggles (location tagging, automatic
+/// Photos backup) - moved out of the main library screen's always-visible
+/// VStack, where they were small custom-drawn checkboxes under `.caption`
+/// text (reported by the user as too small, and as clutter that didn't
+/// need to be visible every time the screen opened). A native `Toggle` in
+/// a `Form` gets normal system sizing/contrast and standard Dynamic Type
+/// support for free, which a custom checkbox+Text button didn't.
+struct MomentsSettingsView: View {
+    @Binding var tagLocation: Bool
+    @Binding var autoBackupToPhotos: Bool
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    Toggle("Tag Moments with the nearest city", isOn: $tagLocation)
+                } footer: {
+                    Text("Uses your location only while recording or importing a Moment.")
+                }
+
+                Section {
+                    Toggle("Back up new Moments to Photos", isOn: $autoBackupToPhotos)
+                } footer: {
+                    Text("Automatically saves a copy of each newly recorded or imported Moment's video into a \"PitchMark\" album in your Photos library. Later edits aren't re-saved - use \"Save to Camera Roll\" on a specific Moment for that.")
+                }
+            }
+            .navigationTitle("Moments Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
         }
     }
 }

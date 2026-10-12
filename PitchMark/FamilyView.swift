@@ -20,8 +20,8 @@ private struct ShareSheetItem: Identifiable {
 }
 
 struct FamilyView: View {
-    /// From ParentGameShellView's currently-selected child, same as
-    /// MomentsLibraryView's contextPlayer - words the one-tap messages.
+    /// Same optional context MomentsLibraryView's contextPlayer takes -
+    /// words the one-tap messages when a caller has it.
     var contextPlayerName: String? = nil
     var onSwitchToArea: ((HomeArea) -> Void)? = nil
 
@@ -57,9 +57,8 @@ struct FamilyView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     // When shown as a main TabView sibling, onSwitchToArea
-                    // switches back to Games; when shown as a sheet off
-                    // ParentGameShellView (onSwitchToArea nil there), fall
-                    // back to the ordinary sheet dismiss.
+                    // switches back to Games; nil falls back to the
+                    // ordinary sheet dismiss.
                     Button("Done") {
                         if let onSwitchToArea {
                             onSwitchToArea(.games)
