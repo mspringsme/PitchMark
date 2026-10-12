@@ -854,27 +854,48 @@ struct SettingsView: View {
         let game: Game
     }
 
+    /// One full-width row for either a joined live session or a quick-launch
+    /// game. Vertical (not the old horizontal scroll strip) deliberately
+    /// leaves room to the right of the name/date for future per-game
+    /// metadata (score, record, etc.) without needing another redesign.
     @ViewBuilder
-    private func quickLaunchGameChip(_ item: QuickLaunchGame) -> some View {
-        let opponentName = item.game.opponent
-        let gameDateText = quickLaunchDateCaption(for: item.game)
+    private func gameRow(opponent: String, dateText: String?, isLive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                if isLive {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 6, height: 6)
+                        Text("LIVE")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.green)
+                    }
+                }
 
-        Button {
-            launchGame(item.game)
-        } label: {
-            VStack(spacing: 4) {
-                Text(opponentName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Text(gameDateText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(opponent)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let dateText {
+                        Text(dateText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .frame(minWidth: 120)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isLive ? Color.green.opacity(0.5) : Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -1022,7 +1043,7 @@ struct SettingsView: View {
     private var gamesOverviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Today's Games")
+                Text("Games")
                     .font(.headline)
                 Spacer()
                 Button {
@@ -1036,22 +1057,24 @@ struct SettingsView: View {
             .padding(.horizontal)
 
             if !joinedLiveSessions.isEmpty || !activeGames.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        // Live-joined games first - they're the ones with a
-                        // clock on them (owner can end the session any time).
-                        ForEach(joinedLiveSessions) { session in
-                            joinedLiveSessionChip(session)
-                        }
-
-                        let sorted = activeGames.sorted(by: { $0.date > $1.date })
-                        let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
-                        ForEach(quickGames) { item in
-                            quickLaunchGameChip(item)
+                VStack(spacing: 8) {
+                    // Live-joined games first - they're the ones with a
+                    // clock on them (owner can end the session any time).
+                    ForEach(joinedLiveSessions) { session in
+                        gameRow(opponent: session.opponent, dateText: nil, isLive: true) {
+                            rejoinLiveSession(session)
                         }
                     }
-                    .padding(.horizontal)
+
+                    let sorted = activeGames.sorted(by: { $0.date > $1.date })
+                    let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
+                    ForEach(quickGames) { item in
+                        gameRow(opponent: item.game.opponent, dateText: quickLaunchDateCaption(for: item.game), isLive: false) {
+                            launchGame(item.game)
+                        }
+                    }
                 }
+                .padding(.horizontal)
             }
         }
     }
@@ -1075,37 +1098,6 @@ struct SettingsView: View {
                 ]
             )
         }
-    }
-
-    @ViewBuilder
-    private func joinedLiveSessionChip(_ session: JoinedLiveSession) -> some View {
-        Button {
-            rejoinLiveSession(session)
-        } label: {
-            VStack(spacing: 4) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 6, height: 6)
-                    Text("LIVE")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.green)
-                }
-                Text(session.opponent)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(minWidth: 120)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.green.opacity(0.5), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
     }
 
     private var joinGameButtonLabel: some View {

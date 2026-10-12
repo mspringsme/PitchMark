@@ -2451,13 +2451,15 @@ struct PitchTrackerView: View {
         }
     }
 
-    private func loadAwayPitcherIds(awayTeamId: String?) {
+    private func loadAwayPitcherIds(awayTeamId: String?, completion: (() -> Void)? = nil) {
         guard let awayTeamId, !awayTeamId.isEmpty else {
             awayPitcherIds = []
+            completion?()
             return
         }
         authManager.loadTeamPlayers(teamId: awayTeamId) { players in
             self.awayPitcherIds = Set(players.compactMap { $0.pitcherId })
+            completion?()
         }
     }
 
@@ -2494,9 +2496,14 @@ struct PitchTrackerView: View {
             authManager.saveGame(games[index])
         }
         activeAwayTeamName = team.name
-        activeSide = .away
-        loadAwayPitcherIds(awayTeamId: teamId)
         refreshAwayRoster(awayTeamId: teamId)
+        // Don't flip to Them until the roster is actually loaded - doing it
+        // immediately left a brief window where the main screen (visible
+        // behind the sheet) showed Them's empty/disabled pitcher picker and
+        // swapped count colors before there was anything to pick.
+        loadAwayPitcherIds(awayTeamId: teamId) {
+            self.activeSide = .away
+        }
     }
 
     private func createAndSetOpponentTeam() {
@@ -5576,6 +5583,14 @@ struct PitchTrackerView: View {
         isGame && !isOwnerForActiveGame && (calledPitch != nil || isRecordingResult || activeCalledPitchId != nil)
     }
 
+    /// Same shape as `isParticipantCallInProgress` but for the owner - guards
+    /// the Us/Them switch the same way Scout already guards against a
+    /// participant switching mid-call, so flipping which roster the pitcher
+    /// picker draws from can't happen out from under an in-flight call.
+    private var isOwnerCallInProgress: Bool {
+        isGame && isOwnerForActiveGame && (calledPitch != nil || isRecordingResult || activeCalledPitchId != nil)
+    }
+
     private var scoutCanSave: Bool {
         guard scoutObservedResult != nil else { return false }
         if scoutObservedResult == .inPlay {
@@ -5820,12 +5835,15 @@ struct PitchTrackerView: View {
     private var usThemControl: some View {
         HStack(spacing: 8) {
             usThemButton(side: .away) {
+                guard !isOwnerCallInProgress else { return }
                 handleSelectAwaySide()
             }
             usThemButton(side: .home) {
+                guard !isOwnerCallInProgress else { return }
                 activeSide = .home
             }
         }
+        .opacity(isOwnerCallInProgress ? 0.45 : 1.0)
     }
 
     private func usThemButton(side: GameSide, action: @escaping () -> Void) -> some View {
