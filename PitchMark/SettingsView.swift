@@ -555,6 +555,9 @@ struct SettingsView: View {
     @State private var selectedTeamEntry: TeamEntrySelection? = nil
     @State private var newTeamNameForHome: String = ""
     @State private var showGameChooser = false
+    // Accordion: expanding one of Home's two collapsible sections closes
+    // the other. nil means both collapsed; .games is the default open one.
+    @State private var expandedHomeOverviewSection: HomeOverviewSection? = .games
     @State private var editorTemplate: PitchTemplate? = nil
     @State private var showAddPitcher = false
     @State private var newPitcherName: String = ""
@@ -927,58 +930,114 @@ struct SettingsView: View {
         .padding(.horizontal)
     }
 
+    private enum HomeOverviewSection {
+        case games
+        case teams
+    }
+
+    /// Shared collapsible-header row for Home's two accordion sections -
+    /// the title+chevron toggles expand/collapse (and auto-closes the other
+    /// section); the trailing icon button is a separate tap target for
+    /// whatever action that section already had (refresh, go to chooser).
+    private func collapsibleSectionHeader(
+        title: String,
+        section: HomeOverviewSection,
+        trailingSystemImage: String,
+        trailingAction: @escaping () -> Void
+    ) -> some View {
+        let isExpanded = expandedHomeOverviewSection == section
+        return HStack {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedHomeOverviewSection = isExpanded ? nil : section
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button(action: trailingAction) {
+                Image(systemName: trailingSystemImage)
+                    .font(.subheadline)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func teamRow(_ entry: (team: Team, membership: TeamMembership)) -> some View {
+        Button {
+            selectedTeamEntry = TeamEntrySelection(team: entry.team, membership: entry.membership)
+        } label: {
+            HStack(spacing: 10) {
+                Text(entry.team.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer()
+                Text(entry.membership.roles.map { $0.displayName }.joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder
     private var myTeamsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("My Teams & Players")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    refreshMyTeams()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.subheadline)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal)
+            collapsibleSectionHeader(
+                title: "Teams and Players",
+                section: .teams,
+                trailingSystemImage: "arrow.clockwise",
+                trailingAction: refreshMyTeams
+            )
 
-            if myTeams.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("You're not on any teams yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    HStack {
-                        TextField("Team name", text: $newTeamNameForHome)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Create a Team") {
-                            createTeamFromHome()
-                        }
-                        .disabled(newTeamNameForHome.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                }
-                .padding(.horizontal)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(myTeams, id: \.team.id) { entry in
-                        Button {
-                            selectedTeamEntry = TeamEntrySelection(team: entry.team, membership: entry.membership)
-                        } label: {
-                            HStack {
-                                Text(entry.team.name)
-                                    .font(.subheadline.weight(.semibold))
-                                Spacer()
-                                Text(entry.membership.roles.map { $0.displayName }.joined(separator: ", "))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+            if expandedHomeOverviewSection == .teams {
+                if myTeams.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("You're not on any teams yet.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            TextField("Team name", text: $newTeamNameForHome)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Create a Team") {
+                                createTeamFromHome()
                             }
-                            .contentShape(Rectangle())
+                            .disabled(newTeamNameForHome.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
-                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal)
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(myTeams, id: \.team.id) { entry in
+                            teamRow(entry)
+                        }
+                    }
+                    .padding(.horizontal)
                 }
-                .padding(.horizontal)
             }
         }
         .onAppear {
@@ -1042,21 +1101,14 @@ struct SettingsView: View {
     @ViewBuilder
     private var gamesOverviewSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Games")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    showGameChooser = true
-                } label: {
-                    Image(systemName: "arrowshape.right.circle.fill")
-                        .font(.subheadline)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal)
+            collapsibleSectionHeader(
+                title: "Games",
+                section: .games,
+                trailingSystemImage: "arrowshape.right.circle.fill",
+                trailingAction: { showGameChooser = true }
+            )
 
-            if !joinedLiveSessions.isEmpty || !activeGames.isEmpty {
+            if expandedHomeOverviewSection == .games, !joinedLiveSessions.isEmpty || !activeGames.isEmpty {
                 VStack(spacing: 8) {
                     // Live-joined games first - they're the ones with a
                     // clock on them (owner can end the session any time).
