@@ -62,8 +62,8 @@ enum GameSide: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .home: return "Home"
-        case .away: return "Away"
+        case .home: return "Us"
+        case .away: return "Them"
         }
     }
 }

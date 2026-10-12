@@ -70,7 +70,7 @@ struct ScrollableSelectionMenuButton<Item: Identifiable, Label: View>: View {
 }
 }
 
-private struct ScrollableSelectionSheet<Item: Identifiable>: View {
+struct ScrollableSelectionSheet<Item: Identifiable>: View {
     let title: String
     let items: [Item]
     let topActions: [SelectionSheetAction]

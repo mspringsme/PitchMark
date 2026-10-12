@@ -189,6 +189,7 @@ struct PitchTrackerView: View {
     @State private var showCameraUnavailableAlert = false
     @State private var showCameraPermissionAlert = false
     @State private var showQRScanner = false
+    @State private var showGridKeySheet = false
     @State private var showCallingPitchesPrompt = false
     @State private var promptedTrackingModeLiveIds: Set<String> = Set(UserDefaults.standard.array(forKey: DefaultsKeys.promptedTrackingModeLiveIds) as? [String] ?? [])
     @State private var pitchers: [Pitcher] = []
@@ -5272,130 +5273,145 @@ struct PitchTrackerView: View {
             }
 
             if !(isGame && !isOwnerForActiveGame) {
-                gridKeyPickerButton
+                topBarMenu
                     .layoutPriority(1)
             }
 
             Spacer(minLength: 4)
 
-            if !(isGame && !isOwnerForActiveGame) {
-                topInviteButton(isConnected: uiConnected) {
-                    triggerAssistantCodeLink()
-                }
-                .confirmationDialog(
-                    "",
-                    isPresented: $showCodeShareModePicker,
-                    titleVisibility: .hidden
-                ) {
-                    Button("Create Invite Link") {
-                        codeShareInitialTab = 0
-                        inviteSheetOpenedAt = Date()
-                        inviteSheetDismissArmed = true
-                        showCodeShareSheet = true
-                    }
-
-                    if let liveId = activeLiveId, !liveId.isEmpty {
-                        // Only the owner reaches this menu, and this tears down
-                        // the owner's whole session - so say so, and actually
-                        // end the room. It used to write `connection.connected
-                        // = false` and stop locally, which the partner ignored:
-                        // they stayed joined and kept recording into a room the
-                        // owner was no longer mirroring.
-                        Button("End Live Session", role: .destructive) {
-                            LiveGameService.shared.endLiveSession(liveId: liveId)
-                            // Deliberately does NOT clear
-                            // didAutoCreateLiveSessionForGameId. Doing so let
-                            // ensureAutoLiveSessionIfNeeded spin up a new room
-                            // and code on the very next called pitch, silently
-                            // undoing an explicitly destructive action and
-                            // leaving orphan joinCodes behind. Re-inviting has
-                            // its own path: CodeShareSheet's Generate button
-                            // calls createLiveGameAndJoinCode directly.
-                            //
-                            // Drop any call deferred while waiting for a room,
-                            // so it cannot surface in a session created later.
-                            deferredPendingPitch = nil
-                            endLiveSessionLocally(keepCurrentGame: isOwnerForActiveGame)
-                            showCodeShareModePicker = false
-                        }
-                    }
-
-                    Button("Cancel", role: .cancel) { }
-                }
+            if isGame && isOwnerForActiveGame {
+                usThemControl
             }
-
-            settingsButton
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
     }
 
-    private var gridKeyPickerButton: some View {
-        ScrollableSelectionMenuButton(
-            title: "Select Template",
-            items: visibleTemplates,
-            itemTitle: { $0.name },
-            isSelected: { $0.id == selectedTemplate?.id },
-            onSelect: { template in
-                applyTemplate(template)
+    /// Left side of the top bar - a single dropdown for the two things that
+    /// used to be separate always-visible controls (the Key/template picker
+    /// and Invite Assistant). The gear/Settings button that used to sit on
+    /// the right is gone entirely - the bottom Home tab already reaches the
+    /// same place (`settingsButton`'s action was just `activeHomeArea = .home`).
+    private var topBarMenu: some View {
+        Menu {
+            Button {
+                showGridKeySheet = true
+            } label: {
+                Label("Key", systemImage: "key.fill")
             }
-        ) {
-            let currentLabel = selectedTemplate?.name ?? "Select a template"
-            let keyPrefix = currentTrackingMode == .scout ? "Pitch Key: " : "Key: "
-            let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+            .disabled(visibleTemplates.isEmpty)
 
-            ZStack {
-                // Invisible widest label to reserve width and prevent size jumps
-                HStack(spacing: 6) {
-                    Text(keyPrefix + widestLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .allowsTightening(true)
-                    if !currentTemplateVersionLabel.isEmpty {
-                        Text(currentTemplateVersionLabel)
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                    }
-                }
-                .opacity(0)
-
-                // Visible current label
-                HStack(spacing: 6) {
-                    Text(keyPrefix + currentLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                        .allowsTightening(true)
-                        .foregroundStyle(Color.accentColor)
-                    if currentTrackingMode != .scout && !currentTemplateVersionLabel.isEmpty {
-                        Text(currentTemplateVersionLabel)
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .foregroundStyle(Color.gray)
-                            .background(Color.gray.opacity(0.15))
-                            .clipShape(Capsule())
-                            .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
-                    }
-                }
+            Button {
+                triggerAssistantCodeLink()
+            } label: {
+                Label("Invite Assistant", systemImage: "person.badge.plus")
             }
-            .frame(maxWidth: 150, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial)
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-            .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
-            .contentShape(Capsule())
-            .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
+        } label: {
+            topBarMenuLabel
         }
-        .disabled(visibleTemplates.isEmpty)
+        // Attached to the Menu itself (a stable view), not to anything
+        // inside its transient popover content - a .sheet/.confirmationDialog
+        // nested inside a Menu's own items is a known-fragile pattern in
+        // this codebase (see the "Menu loses scroll position" note in
+        // CLAUDE.md); this dialog fires from the Menu's own action closure
+        // via $showCodeShareModePicker instead, same as before.
+        .confirmationDialog(
+            "",
+            isPresented: $showCodeShareModePicker,
+            titleVisibility: .hidden
+        ) {
+            Button("Create Invite Link") {
+                codeShareInitialTab = 0
+                inviteSheetOpenedAt = Date()
+                inviteSheetDismissArmed = true
+                showCodeShareSheet = true
+            }
+
+            if let liveId = activeLiveId, !liveId.isEmpty {
+                // Only the owner reaches this menu, and this tears down
+                // the owner's whole session - so say so, and actually
+                // end the room. It used to write `connection.connected
+                // = false` and stop locally, which the partner ignored:
+                // they stayed joined and kept recording into a room the
+                // owner was no longer mirroring.
+                Button("End Live Session", role: .destructive) {
+                    LiveGameService.shared.endLiveSession(liveId: liveId)
+                    // Deliberately does NOT clear
+                    // didAutoCreateLiveSessionForGameId. Doing so let
+                    // ensureAutoLiveSessionIfNeeded spin up a new room
+                    // and code on the very next called pitch, silently
+                    // undoing an explicitly destructive action and
+                    // leaving orphan joinCodes behind. Re-inviting has
+                    // its own path: CodeShareSheet's Generate button
+                    // calls createLiveGameAndJoinCode directly.
+                    //
+                    // Drop any call deferred while waiting for a room,
+                    // so it cannot surface in a session created later.
+                    deferredPendingPitch = nil
+                    endLiveSessionLocally(keepCurrentGame: isOwnerForActiveGame)
+                    showCodeShareModePicker = false
+                }
+            }
+
+            Button("Cancel", role: .cancel) { }
+        }
+    }
+
+    private var topBarMenuLabel: some View {
+        let currentLabel = selectedTemplate?.name ?? "Select a template"
+        let keyPrefix = currentTrackingMode == .scout ? "Pitch Key: " : "Key: "
+        let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
+
+        return ZStack {
+            // Invisible widest label to reserve width and prevent size jumps
+            HStack(spacing: 6) {
+                Text(keyPrefix + widestLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .allowsTightening(true)
+                if !currentTemplateVersionLabel.isEmpty {
+                    Text(currentTemplateVersionLabel)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                }
+            }
+            .opacity(0)
+
+            // Visible current label
+            HStack(spacing: 6) {
+                Text(keyPrefix + currentLabel)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .allowsTightening(true)
+                    .foregroundStyle(Color.accentColor)
+                if currentTrackingMode != .scout && !currentTemplateVersionLabel.isEmpty {
+                    Text(currentTemplateVersionLabel)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .foregroundStyle(Color.gray)
+                        .background(Color.gray.opacity(0.15))
+                        .clipShape(Capsule())
+                        .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
+                }
+            }
+        }
+        .frame(maxWidth: 150, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .overlay(
+            Capsule()
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+        .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
+        .contentShape(Capsule())
+        .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
     }
 
     /// True while this device is a live-session participant (not the owner)
@@ -5530,10 +5546,6 @@ struct PitchTrackerView: View {
         let chipStripWidth: CGFloat = SZwidth
 
         return VStack(spacing: 8) {
-            if isGame && isOwnerForActiveGame {
-                homeAwayControl
-            }
-
             HStack(alignment: .top, spacing: 8) {
                 sidebarControlPanel
 
@@ -5556,23 +5568,6 @@ struct PitchTrackerView: View {
             }
         }
         .padding(.horizontal, 12)
-    }
-
-    private var settingsButton: some View {
-        Button {
-            if isDemoMode {
-                requireSignInForDemo("Sign in to add pitchers, games, and grid keys.")
-                return
-            }
-            activeHomeArea = .home
-        } label: {
-            Image(systemName: "gearshape")
-                .font(.system(size: 18, weight: .regular))
-                .foregroundStyle(.primary)
-                .frame(width: 40, height: 28)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Settings")
     }
 
     private var scoutInPlayOptions: [String] { ["Out", "1B", "2B", "3B", "HR"] }
@@ -5820,18 +5815,20 @@ struct PitchTrackerView: View {
     /// independent axis from Coach/Scout (tracking rigor). A participant
     /// always mirrors whatever side the owner is on, same as they already
     /// mirror the owner's selected pitcher, so this never shows for them.
-    private var homeAwayControl: some View {
+    /// Labeled Us/Them (matching the existing scoreboard vocabulary) - the
+    /// underlying GameSide cases stay .home/.away internally.
+    private var usThemControl: some View {
         HStack(spacing: 8) {
-            homeAwayButton(side: .away) {
+            usThemButton(side: .away) {
                 handleSelectAwaySide()
             }
-            homeAwayButton(side: .home) {
+            usThemButton(side: .home) {
                 activeSide = .home
             }
         }
     }
 
-    private func homeAwayButton(side: GameSide, action: @escaping () -> Void) -> some View {
+    private func usThemButton(side: GameSide, action: @escaping () -> Void) -> some View {
         let isSelected = activeSide == side
         return Button(action: action) {
             Text(side.displayName)
@@ -5883,33 +5880,6 @@ struct PitchTrackerView: View {
             .overlay(
                 Capsule()
                     .stroke(Color.white.opacity(0.25), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func topInviteButton(isConnected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Group {
-                if isConnected {
-                    Image(systemName: "link.icloud.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.green)
-                } else {
-                    Text("Invite Assistant")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial)
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -9973,6 +9943,19 @@ struct PitchTrackerView: View {
             .sheet(isPresented: $showSetOpponentSheet) {
                 setOpponentSheetView
                     .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showGridKeySheet) {
+                ScrollableSelectionSheet(
+                    title: "Select Template",
+                    items: visibleTemplates,
+                    topActions: [],
+                    itemTitle: { $0.name },
+                    isSelected: { $0.id == selectedTemplate?.id },
+                    onSelect: { template in
+                        applyTemplate(template)
+                    }
+                )
+                .fixedAppDynamicType()
             }
             .appConfirmationDialog(
                 isPresented: $showCallingPitchesPrompt,
