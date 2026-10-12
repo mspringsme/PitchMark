@@ -52,6 +52,22 @@ enum TrackingMode: String, Codable, CaseIterable {
     }
 }
 
+/// Which side's pitcher PitchTrackerView is currently tracking. Local/
+/// ephemeral per device - not written to Game, since different viewers of
+/// the same game may legitimately be looking at different sides, and it
+/// always resets to .home when a game is (re)chosen.
+enum GameSide: String, CaseIterable {
+    case home
+    case away
+
+    var displayName: String {
+        switch self {
+        case .home: return "Home"
+        case .away: return "Away"
+        }
+    }
+}
+
 struct Game: Identifiable, Codable {
     // Firestore doc id
     @DocumentID var id: String?
@@ -62,6 +78,10 @@ struct Game: Identifiable, Codable {
     var createdAt: Date = Date()
     var archivedAt: Date? = nil
     var teamId: String? = nil
+    // Which Team's roster is the opponent for this game, so PitchTrackerView
+    // can track the away pitcher's pitches to our batter alongside our own
+    // pitcher, switchable mid-game. Optional - most games never set this.
+    var awayTeamId: String? = nil
 
     // Lineup / participants
     var jerseyNumbers: [String] = []

@@ -189,8 +189,18 @@ struct PitchTrackerView: View {
     @State private var showCameraUnavailableAlert = false
     @State private var showCameraPermissionAlert = false
     @State private var showQRScanner = false
+    @State private var showCallingPitchesPrompt = false
+    @State private var promptedTrackingModeLiveIds: Set<String> = Set(UserDefaults.standard.array(forKey: DefaultsKeys.promptedTrackingModeLiveIds) as? [String] ?? [])
     @State private var pitchers: [Pitcher] = []
     @State private var selectedPitcherId: String? = nil
+    @State private var activeSide: GameSide = .home
+    @State private var awayPitcherIds: Set<String> = []
+    @State private var showSetOpponentSheet = false
+    @State private var opponentTeamCandidates: [(team: Team, membership: TeamMembership)] = []
+    @State private var newOpponentTeamName: String = ""
+    @State private var activeAwayTeamName: String = ""
+    @State private var awayRoster: [TeamPlayer] = []
+    @State private var newAwayPitcherName: String = ""
     @State private var isRecordingResult = false
     @State private var activeCalledPitchId: String? = nil
     @State private var deferredPendingPitch: Game.PendingPitch? = nil
@@ -392,6 +402,7 @@ struct PitchTrackerView: View {
         static let forceSettingsOnNextLaunch = "forceSettingsOnNextLaunch"
         static let lastProgressByGameId = "lastProgressByGameId"
         static let didShowDisplayOnboarding = "didShowDisplayOnboarding"
+        static let promptedTrackingModeLiveIds = "promptedTrackingModeLiveIds"
     }
 
     private struct LocalProgressSnapshot: Codable {
@@ -662,6 +673,11 @@ struct PitchTrackerView: View {
 
     private var canInitiateCall: Bool {
         return isGame && isOwnerForActiveGame
+    }
+
+    private func markTrackingModePrompted(forLiveId liveId: String) {
+        promptedTrackingModeLiveIds.insert(liveId)
+        UserDefaults.standard.set(Array(promptedTrackingModeLiveIds), forKey: DefaultsKeys.promptedTrackingModeLiveIds)
     }
 
     private func handleSetCalledPitch(_ newCall: PitchCall?) {
@@ -2420,6 +2436,211 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// `visiblePitchers` filtered to whichever side is currently active.
+    /// `awayPitcherIds` comes from the away Team's roster (TeamPlayer.pitcherId
+    /// values) loaded whenever the game's `awayTeamId` is set - a pitcher not
+    /// in that set is assumed to be ours (Home), matching today's behavior
+    /// for every game that never sets an away team at all.
+    private var sideFilteredPitchers: [Pitcher] {
+        switch activeSide {
+        case .home:
+            return visiblePitchers.filter { !awayPitcherIds.contains($0.id ?? "") }
+        case .away:
+            return visiblePitchers.filter { awayPitcherIds.contains($0.id ?? "") }
+        }
+    }
+
+    private func loadAwayPitcherIds(awayTeamId: String?) {
+        guard let awayTeamId, !awayTeamId.isEmpty else {
+            awayPitcherIds = []
+            return
+        }
+        authManager.loadTeamPlayers(teamId: awayTeamId) { players in
+            self.awayPitcherIds = Set(players.compactMap { $0.pitcherId })
+        }
+    }
+
+    /// Tapping Away for a game with no opponent roster yet opens setup
+    /// instead of silently switching to an empty picker.
+    private func handleSelectAwaySide() {
+        guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }),
+              let awayTeamId = game.awayTeamId, !awayTeamId.isEmpty else {
+            refreshOpponentTeamCandidates()
+            showSetOpponentSheet = true
+            return
+        }
+        if activeSide == .away {
+            // Already tracking Away - a second tap means "manage the
+            // roster" (add another pitcher, etc.) rather than a no-op.
+            refreshOpponentTeamCandidates()
+            showSetOpponentSheet = true
+        } else {
+            activeSide = .away
+        }
+    }
+
+    private func refreshOpponentTeamCandidates() {
+        authManager.loadMyTeams { teams, _ in
+            self.opponentTeamCandidates = teams
+        }
+    }
+
+    private func setOpponentTeam(_ team: Team) {
+        guard let gid = selectedGameId, let teamId = team.id,
+              let index = games.firstIndex(where: { $0.id == gid }) else { return }
+        games[index].awayTeamId = teamId
+        if !isDemoMode {
+            authManager.saveGame(games[index])
+        }
+        activeAwayTeamName = team.name
+        activeSide = .away
+        loadAwayPitcherIds(awayTeamId: teamId)
+        refreshAwayRoster(awayTeamId: teamId)
+    }
+
+    private func createAndSetOpponentTeam() {
+        let name = newOpponentTeamName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        authManager.createTeam(name: name) { result in
+            if case .success(let team) = result {
+                self.newOpponentTeamName = ""
+                self.setOpponentTeam(team)
+            }
+        }
+    }
+
+    private func refreshAwayRoster(awayTeamId: String) {
+        authManager.loadTeamPlayers(teamId: awayTeamId) { players in
+            self.awayRoster = players
+        }
+    }
+
+    /// Creates a real `Pitcher` doc and links it via `TeamPlayer.pitcherId`
+    /// in one step - nothing else in the app wires that link up today, and
+    /// an away pitcher with no linked Pitcher would never show up in
+    /// `sideFilteredPitchers` (it filters by `awayPitcherIds`, which only
+    /// ever contains linked ids).
+    private func addAwayPitcher() {
+        guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }),
+              let awayTeamId = game.awayTeamId, !awayTeamId.isEmpty else { return }
+        let name = newAwayPitcherName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        authManager.createPitcher(name: name, templateId: nil) { pitcher in
+            guard let pitcher, let pitcherId = pitcher.id else { return }
+            self.authManager.addTeamPlayer(teamId: awayTeamId, name: name, jerseyNumber: nil, pitcherId: pitcherId) { _ in
+                self.newAwayPitcherName = ""
+                self.loadAwayPitcherIds(awayTeamId: awayTeamId)
+                self.refreshAwayRoster(awayTeamId: awayTeamId)
+            }
+        }
+    }
+
+    private var pickOrCreateOpponentSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("New Opponent Roster")
+                    .font(.headline)
+                HStack {
+                    TextField("Opponent team name", text: $newOpponentTeamName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Create") {
+                        createAndSetOpponentTeam()
+                    }
+                    .disabled(newOpponentTeamName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+
+            if !opponentTeamCandidates.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Or Pick a Saved Team")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(opponentTeamCandidates, id: \.team.id) { entry in
+                            Button {
+                                setOpponentTeam(entry.team)
+                            } label: {
+                                Text(entry.team.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func awayRosterSection(teamName: String) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(teamName)
+                    .font(.title3.weight(.bold))
+                Text("Pitchers added here show up when you switch to Away.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pitchers")
+                    .font(.headline)
+                if awayRoster.isEmpty {
+                    Text("No pitchers yet - add one below.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(awayRoster, id: \.id) { player in
+                            Text(player.name)
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Add Pitcher")
+                    .font(.headline)
+                HStack {
+                    TextField("Name", text: $newAwayPitcherName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Add") {
+                        addAwayPitcher()
+                    }
+                    .disabled(newAwayPitcherName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
+    private var setOpponentSheetView: some View {
+        let currentAwayTeamId = selectedGameId.flatMap { gid in games.first(where: { $0.id == gid })?.awayTeamId }
+        let hasAwayTeam = currentAwayTeamId?.isEmpty == false
+
+        return NavigationView {
+            ScrollView {
+                Group {
+                    if hasAwayTeam {
+                        awayRosterSection(teamName: activeAwayTeamName.isEmpty ? "Opponent" : activeAwayTeamName)
+                    } else {
+                        pickOrCreateOpponentSection
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Set Opponent")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(hasAwayTeam ? "Done" : "Cancel") {
+                        showSetOpponentSheet = false
+                    }
+                }
+            }
+        }
+    }
+
     private var demoTemplate: PitchTemplate {
         let demoPitches = ["4 Seam", "Change"]
         let demoLocations = strikeGrid.map { "Strike \($0.label)" } + [
@@ -3042,6 +3263,20 @@ struct PitchTrackerView: View {
         activeGameOwnerUserId = ownerUid
         selectedGameId = gameId
         currentTrackingMode = games.first(where: { $0.id == gameId })?.trackingMode ?? .coach
+        activeSide = .home
+        if let awayTeamId = games.first(where: { $0.id == gameId })?.awayTeamId, !awayTeamId.isEmpty {
+            loadAwayPitcherIds(awayTeamId: awayTeamId)
+            refreshAwayRoster(awayTeamId: awayTeamId)
+            authManager.loadMyTeams { teams, _ in
+                if let match = teams.first(where: { $0.team.id == awayTeamId }) {
+                    self.activeAwayTeamName = match.team.name
+                }
+            }
+        } else {
+            awayPitcherIds = []
+            awayRoster = []
+            activeAwayTeamName = ""
+        }
         debugLog("🧭[PROG] chooseGame gid=\(gameId) owner=\(ownerUid)")
 
         isGame = true
@@ -4402,8 +4637,11 @@ struct PitchTrackerView: View {
             overlayTab = .progress
         } label: {
             HStack(spacing: 10) {
-                staticCountDots(prefix: "B", count: balls, maxCount: 3, filledColor: .red, shape: .circle)
-                staticCountDots(prefix: "S", count: strikes, maxCount: 2, filledColor: .green, shape: .circle)
+                // Swapped (not just a different color) when tracking Away,
+                // so the active side reads at a glance from the same two
+                // colors instead of introducing a third.
+                staticCountDots(prefix: "B", count: balls, maxCount: 3, filledColor: activeSide == .away ? .green : .red, shape: .circle)
+                staticCountDots(prefix: "S", count: strikes, maxCount: 2, filledColor: activeSide == .away ? .red : .green, shape: .circle)
                 staticCountDots(prefix: "O", count: outs, maxCount: 3, filledColor: .primary, shape: .square)
                     .scaleEffect(showOutsFlash ? 1.08 : 1.0)
                     .shadow(color: showOutsFlash ? Color.red.opacity(0.35) : .clear, radius: showOutsFlash ? 8 : 0, x: 0, y: 0)
@@ -5203,8 +5441,8 @@ struct PitchTrackerView: View {
 
     private var pitcherPickerButton: some View {
         let pitchersForMenu = isGame
-            ? visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
-            : visiblePitchers
+            ? sideFilteredPitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
+            : sideFilteredPitchers
         let isParticipantViewing = isLiveParticipantViewingGame
         return ScrollableSelectionMenuButton(
             title: "Select Pitcher",
@@ -5242,14 +5480,14 @@ struct PitchTrackerView: View {
                     .allowsTightening(true)
                     .frame(width: 66)
             }
-            .opacity((isParticipantViewing ? currentPitcher == nil : (visiblePitchers.isEmpty || !canSelectPitcherInGame)) ? 0.6 : 1.0)
+            .opacity((isParticipantViewing ? currentPitcher == nil : (sideFilteredPitchers.isEmpty || !canSelectPitcherInGame)) ? 0.6 : 1.0)
             .contentShape(Rectangle())
             .transaction { transaction in
                 transaction.animation = nil
             }
             .animation(nil, value: atBatPulse)
         }
-        .disabled(isParticipantViewing || visiblePitchers.isEmpty || !canSelectPitcherInGame)
+        .disabled(isParticipantViewing || sideFilteredPitchers.isEmpty || !canSelectPitcherInGame)
     }
 
     private func sessionConfirmationSheet(
@@ -5292,6 +5530,10 @@ struct PitchTrackerView: View {
         let chipStripWidth: CGFloat = SZwidth
 
         return VStack(spacing: 8) {
+            if isGame && isOwnerForActiveGame {
+                homeAwayControl
+            }
+
             HStack(alignment: .top, spacing: 8) {
                 sidebarControlPanel
 
@@ -5572,6 +5814,34 @@ struct PitchTrackerView: View {
                 .frame(height: topControlRowHeight)
         }
         .zIndex(10)
+    }
+
+    /// Owner-only switch for which side's pitcher is active - a parallel,
+    /// independent axis from Coach/Scout (tracking rigor). A participant
+    /// always mirrors whatever side the owner is on, same as they already
+    /// mirror the owner's selected pitcher, so this never shows for them.
+    private var homeAwayControl: some View {
+        HStack(spacing: 8) {
+            homeAwayButton(side: .away) {
+                handleSelectAwaySide()
+            }
+            homeAwayButton(side: .home) {
+                activeSide = .home
+            }
+        }
+    }
+
+    private func homeAwayButton(side: GameSide, action: @escaping () -> Void) -> some View {
+        let isSelected = activeSide == side
+        return Button(action: action) {
+            Text(side.displayName)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
+        }
+        .buttonStyle(.plain)
     }
 
     private func sidebarControlButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -9686,6 +9956,38 @@ struct PitchTrackerView: View {
                     UIApplication.shared.open(url)
                 },
                 secondaryTitle: "Cancel"
+            )
+            .onChange(of: activeLiveId) { _, newValue in
+                guard let liveId = newValue, !liveId.isEmpty, !isOwnerForActiveGame else { return }
+                guard !promptedTrackingModeLiveIds.contains(liveId) else { return }
+                showCallingPitchesPrompt = true
+            }
+            .onChange(of: activeSide) { _, newSide in
+                guard let pid = selectedPitcherId else { return }
+                let stillValid = (newSide == .away) ? awayPitcherIds.contains(pid) : !awayPitcherIds.contains(pid)
+                if !stillValid {
+                    selectedPitcherId = nil
+                    persistSelectedPitcherId(nil)
+                }
+            }
+            .sheet(isPresented: $showSetOpponentSheet) {
+                setOpponentSheetView
+                    .fixedAppDynamicType()
+            }
+            .appConfirmationDialog(
+                isPresented: $showCallingPitchesPrompt,
+                title: "Calling Pitches?",
+                message: "Are you calling pitches for this game, or just tracking what happens? You can switch anytime with the Coach/Scout control.",
+                primaryTitle: "I’m Calling Pitches",
+                primaryAction: {
+                    currentTrackingMode = .coach
+                    if let liveId = activeLiveId { markTrackingModePrompted(forLiveId: liveId) }
+                },
+                secondaryTitle: "Just Tracking",
+                secondaryAction: {
+                    currentTrackingMode = .scout
+                    if let liveId = activeLiveId { markTrackingModePrompted(forLiveId: liveId) }
+                }
             )
             .eraseToAnyView()
 
