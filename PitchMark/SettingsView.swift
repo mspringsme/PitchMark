@@ -2446,7 +2446,7 @@ struct SettingsView: View {
             .sheet(isPresented: $showAppSettingsSheet) {
                 appSettingsSheetView
             }
-            .sheet(item: $selectedTeamEntry) { entry in
+            .sheet(item: $selectedTeamEntry, onDismiss: { refreshMyTeams() }) { entry in
                 TeamRosterView(selection: entry)
                     .environmentObject(authManager)
             }
