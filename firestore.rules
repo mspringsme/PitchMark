@@ -212,7 +212,12 @@ service cloud.firestore {
         allow list: if false;
 
         allow create: if signedIn() && memberUid == uid() && request.resource.data.uid == uid();
-        allow update, delete: if signedIn() && isTeamCreator();
+        allow update: if signedIn() && isTeamCreator();
+        // A member can remove their own membership (Leave Team) without
+        // needing the creator to do it for them; the creator can still
+        // remove anyone's. Split from `update` on purpose - role changes
+        // stay creator-only, only self-removal is opened up.
+        allow delete: if signedIn() && (isTeamCreator() || memberUid == uid());
       }
 
       match /players/{playerId} {

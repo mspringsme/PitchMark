@@ -306,6 +306,24 @@ extension AuthManager {
         }
     }
 
+    /// Removes the signed-in user's own membership - the only team action a
+    /// non-creator member has. Leaves the team doc, its players, and every
+    /// other member untouched; firestore.rules permits a member to delete
+    /// only their own membership doc, never anyone else's.
+    func leaveTeam(teamId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+        teamsCollection().document(teamId).collection("members").document(user.uid).delete { error in
+            if let error {
+                completion(.failure(error))
+            } else {
+                completion(.success(()))
+            }
+        }
+    }
+
     func createTeamInviteToken(teamId: String, roles: [TeamRole], completion: @escaping (Result<String, Error>) -> Void) {
         guard let user = user else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))

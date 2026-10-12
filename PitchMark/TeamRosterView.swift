@@ -53,6 +53,7 @@ struct TeamRosterView: View {
     @State private var renameTeamText: String = ""
     @State private var showDeleteTeamDialog = false
     @State private var showCantDeleteTeamDialog = false
+    @State private var showLeaveTeamDialog = false
 
     /// Management rights (add/edit/delete) are gated on actually being the
     /// team's creator - matching exactly what firestore.rules enforces
@@ -110,6 +111,16 @@ struct TeamRosterView: View {
                             Image(systemName: "ellipsis.circle")
                         }
                     }
+                } else {
+                    // The only action available to a member who isn't the
+                    // creator - everything else (add/edit/delete players,
+                    // rename/delete the team) is owner-only, matching what
+                    // firestore.rules actually permits them to do.
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Leave Team", role: .destructive) {
+                            showLeaveTeamDialog = true
+                        }
+                    }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
@@ -165,6 +176,15 @@ struct TeamRosterView: View {
             primaryAction: { deletePendingPlayer() },
             secondaryTitle: "Cancel",
             secondaryAction: { playerPendingDelete = nil }
+        )
+        .appConfirmationDialog(
+            isPresented: $showLeaveTeamDialog,
+            title: "Leave \(teamName)?",
+            message: "You'll stop seeing this team on your Home screen. The team itself, its roster, and its other members are unaffected.",
+            primaryTitle: "Leave",
+            primaryRole: .destructive,
+            primaryAction: { leaveTeam() },
+            secondaryTitle: "Cancel"
         )
         .sheet(isPresented: $isRenamingTeam) {
             renameTeamSheet
@@ -326,6 +346,15 @@ struct TeamRosterView: View {
     private func deleteTeam() {
         guard let teamId = selection.team.id else { return }
         authManager.deleteTeam(teamId: teamId) { result in
+            if case .success = result {
+                dismiss()
+            }
+        }
+    }
+
+    private func leaveTeam() {
+        guard let teamId = selection.team.id else { return }
+        authManager.leaveTeam(teamId: teamId) { result in
             if case .success = result {
                 dismiss()
             }
