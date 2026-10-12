@@ -9,15 +9,17 @@
 //  either as the game's owner or as a live-session participant via a join
 //  code - never through a team row.
 //
-//  Coach-only edit/delete added for both the team itself and its players -
-//  tap a player row to edit it, swipe to delete it (deliberately two
-//  different gestures, so delete is never one accidental tap away, same
-//  reasoning AssetLibraryView already uses). Adding a player here links a
-//  real Pitcher doc (addTeamPlayerWithLinkedPitcher) so this roster
-//  actually feeds the pitcher picker in games, not just a name list.
+//  Owner-only (the team's actual creator, see isTeamOwner below) edit/delete
+//  added for both the team itself and its players - tap a player row to
+//  edit it, swipe to delete it (deliberately two different gestures, so
+//  delete is never one accidental tap away, same reasoning AssetLibraryView
+//  already uses). Adding a player here links a real Pitcher doc
+//  (addTeamPlayerWithLinkedPitcher) so this roster actually feeds the
+//  pitcher picker in games, not just a name list.
 //
 
 import SwiftUI
+import FirebaseAuth
 
 struct TeamEntrySelection: Identifiable {
     let team: Team
@@ -52,14 +54,25 @@ struct TeamRosterView: View {
     @State private var showDeleteTeamDialog = false
     @State private var showCantDeleteTeamDialog = false
 
-    private var isCoach: Bool { selection.membership.roles.contains(.coach) }
+    /// Management rights (add/edit/delete) are gated on actually being the
+    /// team's creator - matching exactly what firestore.rules enforces
+    /// (`isTeamCreator()`, which never looks at TeamRole at all) - not on
+    /// the `TeamRole` stored in this membership doc. Gating on role instead
+    /// was a real bug: a team you created can still show "Parent" on your
+    /// own membership (stale/leftover from earlier testing), which made a
+    /// team you own and could otherwise fully manage look read-only with no
+    /// way to edit or delete it.
+    private var isTeamOwner: Bool {
+        guard let uid = authManager.user?.uid else { return false }
+        return selection.team.createdByUid == uid
+    }
 
     var body: some View {
         NavigationView {
             List {
                 Section("Roster") {
                     if players.isEmpty {
-                        Text(isCoach ? "No players yet - add your first one below." : "No players on this roster yet.")
+                        Text(isTeamOwner ? "No players yet - add your first one below." : "No players on this roster yet.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
@@ -69,7 +82,7 @@ struct TeamRosterView: View {
                     }
                 }
 
-                if isCoach {
+                if isTeamOwner {
                     Section("Add Player") {
                         TextField("Name", text: $newPlayerName)
                         TextField("Jersey #", text: $newPlayerJersey)
@@ -89,7 +102,7 @@ struct TeamRosterView: View {
             .navigationTitle(teamName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if isCoach {
+                if isTeamOwner {
                     ToolbarItem(placement: .topBarLeading) {
                         Button {
                             showTeamActionsDialog = true
@@ -174,7 +187,7 @@ struct TeamRosterView: View {
             Spacer()
         }
 
-        if isCoach {
+        if isTeamOwner {
             Button {
                 editingPlayer = player
                 editPlayerName = player.name
