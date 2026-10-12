@@ -2523,23 +2523,19 @@ struct PitchTrackerView: View {
         }
     }
 
-    /// Creates a real `Pitcher` doc and links it via `TeamPlayer.pitcherId`
-    /// in one step - nothing else in the app wires that link up today, and
-    /// an away pitcher with no linked Pitcher would never show up in
-    /// `sideFilteredPitchers` (it filters by `awayPitcherIds`, which only
-    /// ever contains linked ids).
+    /// `sideFilteredPitchers` filters by `awayPitcherIds`, which only ever
+    /// contains linked ids - `addTeamPlayerWithLinkedPitcher` is what makes
+    /// an added away pitcher actually show up there.
     private func addAwayPitcher() {
         guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }),
               let awayTeamId = game.awayTeamId, !awayTeamId.isEmpty else { return }
         let name = newAwayPitcherName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
-        authManager.createPitcher(name: name, templateId: nil) { pitcher in
-            guard let pitcher, let pitcherId = pitcher.id else { return }
-            self.authManager.addTeamPlayer(teamId: awayTeamId, name: name, jerseyNumber: nil, pitcherId: pitcherId) { _ in
-                self.newAwayPitcherName = ""
-                self.loadAwayPitcherIds(awayTeamId: awayTeamId)
-                self.refreshAwayRoster(awayTeamId: awayTeamId)
-            }
+        authManager.addTeamPlayerWithLinkedPitcher(teamId: awayTeamId, name: name, jerseyNumber: nil) { result in
+            guard case .success = result else { return }
+            self.newAwayPitcherName = ""
+            self.loadAwayPitcherIds(awayTeamId: awayTeamId)
+            self.refreshAwayRoster(awayTeamId: awayTeamId)
         }
     }
 

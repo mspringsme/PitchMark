@@ -213,6 +213,99 @@ extension AuthManager {
         }
     }
 
+    /// Creates a real `Pitcher` doc and adds a `TeamPlayer` linked to it in
+    /// one step, so a player added to a roster this way actually shows up
+    /// anywhere pitchers are picked from - the plain `addTeamPlayer` above
+    /// (pitcherId: nil) does not.
+    func addTeamPlayerWithLinkedPitcher(
+        teamId: String,
+        name: String,
+        jerseyNumber: String?,
+        completion: @escaping (Result<TeamPlayer, Error>) -> Void
+    ) {
+        createPitcher(name: name, templateId: nil) { pitcher in
+            guard let pitcher, let pitcherId = pitcher.id else {
+                completion(.failure(NSError(domain: "Team", code: 500, userInfo: [NSLocalizedDescriptionKey: "Couldn't create a pitcher for this player."])))
+                return
+            }
+            self.addTeamPlayer(teamId: teamId, name: name, jerseyNumber: jerseyNumber, pitcherId: pitcherId, completion: completion)
+        }
+    }
+
+    func updateTeamPlayer(teamId: String, playerId: String, name: String, jerseyNumber: String?, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard user != nil else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+        var data: [String: Any] = ["name": name]
+        if let jerseyNumber, !jerseyNumber.isEmpty {
+            data["jerseyNumber"] = jerseyNumber
+        } else {
+            data["jerseyNumber"] = FieldValue.delete()
+        }
+        teamsCollection().document(teamId).collection("players").document(playerId).updateData(data) { error in
+            if let error {
+                completion(.failure(error))
+            } else {
+                completion(.success(()))
+            }
+        }
+    }
+
+    /// Only removes the roster entry - a linked Pitcher (and its pitch
+    /// history) is left alone, same reasoning as team deletion below.
+    func deleteTeamPlayer(teamId: String, playerId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard user != nil else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+        teamsCollection().document(teamId).collection("players").document(playerId).delete { error in
+            if let error {
+                completion(.failure(error))
+            } else {
+                completion(.success(()))
+            }
+        }
+    }
+
+    func updateTeam(teamId: String, name: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard user != nil else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+        teamsCollection().document(teamId).updateData(["name": name]) { error in
+            if let error {
+                completion(.failure(error))
+            } else {
+                completion(.success(()))
+            }
+        }
+    }
+
+    /// Blocked (not cascading) if the team still has players - the caller
+    /// is expected to have already checked this and only call through when
+    /// it's actually empty, but this re-checks server-side too rather than
+    /// trusting a possibly-stale local `players` array.
+    func deleteTeam(teamId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard user != nil else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+        loadTeamPlayers(teamId: teamId) { players in
+            guard players.isEmpty else {
+                completion(.failure(NSError(domain: "Team", code: 409, userInfo: [NSLocalizedDescriptionKey: "Remove all players before deleting this team."])))
+                return
+            }
+            self.teamsCollection().document(teamId).delete { error in
+                if let error {
+                    completion(.failure(error))
+                } else {
+                    completion(.success(()))
+                }
+            }
+        }
+    }
+
     func createTeamInviteToken(teamId: String, roles: [TeamRole], completion: @escaping (Result<String, Error>) -> Void) {
         guard let user = user else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
