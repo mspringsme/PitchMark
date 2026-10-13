@@ -5739,7 +5739,17 @@ struct PitchTrackerView: View {
             }
 
             if isGame && !activeBatterRosterCandidates.isEmpty {
-                batterRosterPickerRow
+                // Type-erased deliberately - this VStack already sits directly
+                // above atBatSidebar/strikeZoneArea, both AnyView for the same
+                // reason: a third un-erased conditional branch here pushed the
+                // Swift runtime's generic metadata resolution over some
+                // complexity threshold and crashed on launch (SIGABRT deep in
+                // swift_getTypeByMangledNameImpl / SubstGenericParametersFromMetadata,
+                // not a logic bug) as soon as a real account had roster data
+                // making this branch active - never reproduced on an empty
+                // fresh install, which is why it passed every build+test done
+                // signed-out this session.
+                AnyView(batterRosterPickerRow)
             }
 
             HStack(alignment: .top, spacing: 8) {
