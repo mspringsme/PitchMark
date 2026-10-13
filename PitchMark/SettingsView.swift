@@ -978,6 +978,10 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func teamRow(_ entry: (team: Team, membership: TeamMembership)) -> some View {
+        // No role label here on purpose - Coach/Parent/etc. was a leftover
+        // from a dropped multi-person-per-team direction. One person can
+        // coach one team and be a parent-follower on another; a team itself
+        // carries no role, so nothing belongs next to its name.
         Button {
             selectedTeamEntry = TeamEntrySelection(team: entry.team, membership: entry.membership)
         } label: {
@@ -987,9 +991,6 @@ struct SettingsView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer()
-                Text(entry.membership.roles.map { $0.displayName }.joined(separator: ", "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
