@@ -397,6 +397,7 @@ private func buildSavedPlayReviewedEvent(
         opponentJersey: base.opponentJersey,
         opponentBatterId: base.opponentBatterId,
         pitcherId: base.pitcherId,
+        hitterId: base.hitterId,
         createdByUid: base.createdByUid,
         strikeSwingingMarker: strikeSwinging ? base.strikeSwingingMarker : nil,
         strikeLookingMarker: strikeLooking ? base.strikeLookingMarker : nil,
@@ -2889,6 +2890,7 @@ struct PitchResultSheet: View {
             opponentJersey: edited.opponentJersey,
             opponentBatterId: edited.opponentBatterId,
             pitcherId: edited.pitcherId,
+            hitterId: edited.hitterId,
             createdByUid: edited.createdByUid
         )
         updated.id = originalId
@@ -3036,7 +3038,13 @@ struct PitchEvent: Codable, Identifiable {
     var opponentJersey: String?
     var opponentBatterId: String?
     var pitcherId: String?
-    
+    // The linked roster Hitter this pitch was thrown to, when the batter
+    // was selected via the roster picker (PitchTrackerView's
+    // batterRosterPickerButton) rather than jersey-only. Independent of
+    // opponentJersey/opponentBatterId above - both can be set at once, or
+    // just the jersey fields when no roster link was made.
+    var hitterId: String?
+
     var createdByUid: String?
 
     var strikeSwingingMarker: String? = nil
@@ -3224,6 +3232,7 @@ extension PitchEvent {
         self.opponentJersey = data["opponentJersey"] as? String
         self.opponentBatterId = data["opponentBatterId"] as? String
         self.pitcherId = data["pitcherId"] as? String
+        self.hitterId = data["hitterId"] as? String
         self.createdByUid = data["createdByUid"] as? String
         if let rawTrackingMode = data["trackingMode"] as? String,
            let parsedTrackingMode = TrackingMode(rawValue: rawTrackingMode) {
@@ -3284,6 +3293,7 @@ extension PitchEvent {
             let opponentJersey: String?
             let opponentBatterId: String?
             let pitcherId: String?
+            let hitterId: String?
             let trackingMode: TrackingMode?
             let catcherEstimate: PitchCall?
         }
@@ -3314,6 +3324,7 @@ extension PitchEvent {
             opponentJersey: self.opponentJersey,
             opponentBatterId: self.opponentBatterId,
             pitcherId: self.pitcherId,
+            hitterId: self.hitterId,
             trackingMode: self.trackingMode,
             catcherEstimate: self.catcherEstimate
         )

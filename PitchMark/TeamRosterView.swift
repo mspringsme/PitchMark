@@ -44,16 +44,21 @@ struct TeamRosterView: View {
     @State private var newPlayerName: String = ""
     @State private var newPlayerJersey: String = ""
     @State private var newPlayerRole: PlayerRole = .pitcher
+    @State private var newPlayerPositions: Set<FieldPosition> = []
+    @State private var newPlayerBattingSide: BattingSide? = nil
     @State private var addPlayerErrorMessage: String? = nil
     @State private var showLinkPlayerSheet = false
     @State private var myPlayers: [Player] = []
 
-    // For the "View Stats" action - PitcherStatsSheetView needs the actual
-    // Pitcher objects and the owner's full games/teams list, not just ids.
+    // For the "View Stats" actions - PitcherStatsSheetView/HitterStatsView
+    // need the actual Pitcher/Hitter objects and the owner's full
+    // games/teams list, not just ids.
     @State private var myPitchers: [Pitcher] = []
+    @State private var myHitters: [Hitter] = []
     @State private var myGames: [Game] = []
     @State private var myTeams: [(team: Team, membership: TeamMembership)] = []
     @State private var statsPitcher: Pitcher? = nil
+    @State private var statsHitter: Hitter? = nil
 
     @State private var playerActionTarget: TeamPlayer? = nil
     @State private var showPlayerActionsDialog = false
@@ -63,6 +68,8 @@ struct TeamRosterView: View {
     @State private var editingPlayer: TeamPlayer? = nil
     @State private var editPlayerName: String = ""
     @State private var editPlayerJersey: String = ""
+    @State private var editPlayerPositions: Set<FieldPosition> = []
+    @State private var editPlayerBattingSide: BattingSide? = nil
     @State private var editPlayerErrorMessage: String? = nil
 
     @State private var playerPendingDelete: TeamPlayer? = nil
@@ -115,11 +122,15 @@ struct TeamRosterView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        if newPlayerRole.includesHitter {
-                            Text("Hitting stats tracking is coming soon - this just records the role for now.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        positionToggleRow(selected: $newPlayerPositions)
+
+                        Picker("Batting Side", selection: $newPlayerBattingSide) {
+                            Text("Not Set").tag(BattingSide?.none)
+                            ForEach(BattingSide.allCases, id: \.self) { side in
+                                Text(side.displayName).tag(BattingSide?.some(side))
+                            }
                         }
+                        .pickerStyle(.segmented)
 
                         Button("Add") {
                             addPlayer()
@@ -172,6 +183,7 @@ struct TeamRosterView: View {
             refreshPlayers()
             authManager.loadMyPlayers { myPlayers = $0 }
             authManager.loadPitchers { myPitchers = $0 }
+            authManager.loadHitters { myHitters = $0 }
             authManager.loadGames { myGames = $0 }
             authManager.loadMyTeams { teams, _ in myTeams = teams }
         }
@@ -235,14 +247,21 @@ struct TeamRosterView: View {
         ) {
             if let player = playerActionTarget {
                 if player.pitcherId != nil {
-                    Button("View Stats") {
+                    Button("View Pitching Stats") {
                         statsPitcher = myPitchers.first(where: { $0.id == player.pitcherId })
+                    }
+                }
+                if player.hitterId != nil {
+                    Button("View Hitting Stats") {
+                        statsHitter = myHitters.first(where: { $0.id == player.hitterId })
                     }
                 }
                 Button("Edit") {
                     editingPlayer = player
                     editPlayerName = player.name
                     editPlayerJersey = player.jerseyNumber ?? ""
+                    editPlayerPositions = Set(player.positions ?? [])
+                    editPlayerBattingSide = player.battingSide
                     editPlayerErrorMessage = nil
                 }
             }
@@ -266,19 +285,71 @@ struct TeamRosterView: View {
             .environmentObject(authManager)
             .fixedAppDynamicType()
         }
+        .sheet(item: $statsHitter) { hitter in
+            HitterStatsView(
+                hitter: hitter,
+                games: myGames,
+                teams: myTeams.map { $0.team }
+            )
+            .environmentObject(authManager)
+            .fixedAppDynamicType()
+        }
+    }
+
+    /// Capsule multi-select for FieldPosition, same visual language as the
+    /// Teams filter row in PitcherStatsSheetView and the Us/Them control in
+    /// PitchTrackerView (Color.pitchMarkActiveGray when selected).
+    private func positionToggleRow(selected: Binding<Set<FieldPosition>>) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(FieldPosition.allCases, id: \.self) { position in
+                    let isSelected = selected.wrappedValue.contains(position)
+                    Button(position.rawValue) {
+                        if isSelected {
+                            selected.wrappedValue.remove(position)
+                        } else {
+                            selected.wrappedValue.insert(position)
+                        }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
+                }
+            }
+        }
+    }
+
+    /// "SS, 3B · R" style caption - only rendered when there's something to
+    /// show, so a roster with no positions/batting-side set yet looks
+    /// exactly like it did before this feature.
+    @ViewBuilder
+    private func playerSecondaryCaption(_ player: TeamPlayer) -> some View {
+        let positionsText = (player.positions ?? []).map { $0.rawValue }.joined(separator: ", ")
+        let sideText = player.battingSide?.displayName
+        let parts = [positionsText.isEmpty ? nil : positionsText, sideText.map { "\($0.prefix(1))" }].compactMap { $0 }
+        if !parts.isEmpty {
+            Text(parts.joined(separator: " · "))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder
     private func playerRow(_ player: TeamPlayer) -> some View {
-        let label = HStack {
-            Text(player.name)
-                .font(.subheadline.weight(.semibold))
-            if let jersey = player.jerseyNumber, !jersey.isEmpty {
-                Text("#\(jersey)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        let label = VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(player.name)
+                    .font(.subheadline.weight(.semibold))
+                if let jersey = player.jerseyNumber, !jersey.isEmpty {
+                    Text("#\(jersey)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
             }
-            Spacer()
+            playerSecondaryCaption(player)
         }
 
         if isTeamOwner {
@@ -369,6 +440,21 @@ struct TeamRosterView: View {
                 TextField("Name", text: $editPlayerName)
                 TextField("Jersey #", text: $editPlayerJersey)
 
+                Section("Positions") {
+                    positionToggleRow(selected: $editPlayerPositions)
+                }
+
+                Section("Batting Side") {
+                    Picker("Batting Side", selection: $editPlayerBattingSide) {
+                        Text("Not Set").tag(BattingSide?.none)
+                        ForEach(BattingSide.allCases, id: \.self) { side in
+                            Text(side.displayName).tag(BattingSide?.some(side))
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
                 if let editPlayerErrorMessage {
                     Text(editPlayerErrorMessage)
                         .font(.caption)
@@ -409,16 +495,21 @@ struct TeamRosterView: View {
             teamId: teamId,
             name: name,
             jerseyNumber: jersey.isEmpty ? nil : jersey,
-            role: newPlayerRole
+            role: newPlayerRole,
+            positions: newPlayerPositions.isEmpty ? nil : Array(newPlayerPositions),
+            battingSide: newPlayerBattingSide
         ) { result in
             switch result {
             case .success:
                 newPlayerName = ""
                 newPlayerJersey = ""
                 newPlayerRole = .pitcher
+                newPlayerPositions = []
+                newPlayerBattingSide = nil
                 refreshPlayers()
                 authManager.loadMyPlayers { myPlayers = $0 }
                 authManager.loadPitchers { myPitchers = $0 }
+                authManager.loadHitters { myHitters = $0 }
             case .failure(let error):
                 addPlayerErrorMessage = error.localizedDescription
             }
@@ -446,7 +537,14 @@ struct TeamRosterView: View {
         guard let teamId = selection.team.id, let playerId = player.id else { return }
         let name = editPlayerName.trimmingCharacters(in: .whitespaces)
         let jersey = editPlayerJersey.trimmingCharacters(in: .whitespaces)
-        authManager.updateTeamPlayer(teamId: teamId, playerId: playerId, name: name, jerseyNumber: jersey.isEmpty ? nil : jersey) { result in
+        authManager.updateTeamPlayer(
+            teamId: teamId,
+            playerId: playerId,
+            name: name,
+            jerseyNumber: jersey.isEmpty ? nil : jersey,
+            positions: editPlayerPositions.isEmpty ? nil : Array(editPlayerPositions),
+            battingSide: editPlayerBattingSide
+        ) { result in
             switch result {
             case .success:
                 editingPlayer = nil

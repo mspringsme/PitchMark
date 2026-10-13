@@ -65,6 +65,14 @@ struct TeamPlayer: Identifiable, Codable {
     // in particular) needs zero changes.
     var playerId: String? = nil
     var role: PlayerRole? = nil
+    // Denormalized copy of Player.hitterId, same reasoning as pitcherId.
+    var hitterId: String? = nil
+    // Positions/battingSide are seeded from the linked Player at creation/
+    // link time, but edited here team-locally afterward (updateTeamPlayer) -
+    // deliberately not pushed back to the canonical Player, since a kid can
+    // legitimately play a different position on a different team.
+    var positions: [FieldPosition]? = nil
+    var battingSide: BattingSide? = nil
     var createdByUid: String
     var createdAt: Date = Date()
     var archivedAt: Date? = nil
@@ -249,9 +257,11 @@ extension AuthManager {
         name: String,
         jerseyNumber: String?,
         role: PlayerRole,
+        positions: [FieldPosition]? = nil,
+        battingSide: BattingSide? = nil,
         completion: @escaping (Result<TeamPlayer, Error>) -> Void
     ) {
-        createPlayer(name: name, role: role) { result in
+        createPlayer(name: name, role: role, positions: positions, battingSide: battingSide) { result in
             switch result {
             case .success(let player):
                 self.addTeamPlayerLinkingPlayer(teamId: teamId, player: player, jerseyNumber: jerseyNumber, role: role, completion: completion)
@@ -262,9 +272,11 @@ extension AuthManager {
     }
 
     /// "Link existing player" path - the actual cross-team mechanism. Name/
-    /// pitcherId/role are copied from the existing `Player` (so this team's
+    /// pitcherId/hitterId/role/positions/battingSide are all copied from the
+    /// existing `Player` as this team's starting point (so this team's
     /// picker filtering keeps working unchanged); only the jersey number is
-    /// team-specific.
+    /// team-specific. Positions/battingSide can then be edited team-locally
+    /// afterward via `updateTeamPlayer`.
     func addTeamPlayerLinkingPlayer(
         teamId: String,
         player: Player,
@@ -284,6 +296,9 @@ extension AuthManager {
             pitcherId: player.pitcherId,
             playerId: player.id,
             role: role,
+            hitterId: player.hitterId,
+            positions: player.positions,
+            battingSide: player.battingSide,
             createdByUid: user.uid,
             createdAt: Date()
         )
@@ -300,7 +315,15 @@ extension AuthManager {
         }
     }
 
-    func updateTeamPlayer(teamId: String, playerId: String, name: String, jerseyNumber: String?, completion: @escaping (Result<Void, Error>) -> Void) {
+    func updateTeamPlayer(
+        teamId: String,
+        playerId: String,
+        name: String,
+        jerseyNumber: String?,
+        positions: [FieldPosition]? = nil,
+        battingSide: BattingSide? = nil,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
         guard user != nil else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
             return
@@ -310,6 +333,16 @@ extension AuthManager {
             data["jerseyNumber"] = jerseyNumber
         } else {
             data["jerseyNumber"] = FieldValue.delete()
+        }
+        if let positions, !positions.isEmpty {
+            data["positions"] = positions.map { $0.rawValue }
+        } else {
+            data["positions"] = FieldValue.delete()
+        }
+        if let battingSide {
+            data["battingSide"] = battingSide.rawValue
+        } else {
+            data["battingSide"] = FieldValue.delete()
         }
         teamsCollection().document(teamId).collection("players").document(playerId).updateData(data) { error in
             if let error {

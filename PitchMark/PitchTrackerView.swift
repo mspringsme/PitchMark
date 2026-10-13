@@ -202,6 +202,13 @@ struct PitchTrackerView: View {
     @State private var activeAwayTeamName: String = ""
     @State private var awayRoster: [TeamPlayer] = []
     @State private var newAwayPitcherName: String = ""
+    @State private var homeRoster: [TeamPlayer] = []
+    @State private var showSetMyTeamSheet = false
+    @State private var myTeamCandidates: [(team: Team, membership: TeamMembership)] = []
+    @State private var newMyTeamName: String = ""
+    @State private var selectedHitterId: String? = nil
+    @State private var selectedHitterDisplayName: String? = nil
+    @State private var bufferedSharedHitterEvents: [BufferedHitterEvent] = []
     @State private var isRecordingResult = false
     @State private var activeCalledPitchId: String? = nil
     @State private var deferredPendingPitch: Game.PendingPitch? = nil
@@ -504,6 +511,16 @@ struct PitchTrackerView: View {
     private enum StartupPhase { case launching, ready }
     private struct BufferedPitcherEvent: Codable {
         let pitcherId: String
+        let event: PitchEvent
+    }
+    // Deliberately a separate, parallel type/buffer rather than generalizing
+    // BufferedPitcherEvent - this mirror pipeline already has several
+    // battle-tested, multi-call-site lifecycle hooks (flush on disconnect/
+    // background/end-session); duplicating the small mechanical buffer is
+    // lower-risk than refactoring shared infra underneath the working
+    // pitcher path.
+    private struct BufferedHitterEvent: Codable {
+        let hitterId: String
         let event: PitchEvent
     }
 
@@ -1216,6 +1233,21 @@ struct PitchTrackerView: View {
                             .collection("pitchEvents").document(liveEventId)
                     }()
 
+                    // Same reasoning as pitcherDst above, for a linked batter:
+                    // a code-joined partner has no write access to
+                    // /hitters/{id}/pitchEvents (ownerUid-only rules), so the
+                    // owner's device is the only place this copy can be kept
+                    // in step.
+                    let hitterDst: DocumentReference? = {
+                        let raw = change.document.data()["hitterId"] as? String
+                        guard let hid = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+                              !hid.isEmpty
+                        else { return nil }
+                        return Firestore.firestore()
+                            .collection("hitters").document(hid)
+                            .collection("pitchEvents").document(liveEventId)
+                    }()
+
                     if change.type == .removed {
                         self.mirroredLivePitchEventIds.remove(liveEventId)
                         dst.delete { err in
@@ -1228,6 +1260,11 @@ struct PitchTrackerView: View {
                         pitcherDst?.delete { err in
                             if let err {
                                 debugLog("❌ mirror pitcher pitchEvent delete failed:", err.localizedDescription)
+                            }
+                        }
+                        hitterDst?.delete { err in
+                            if let err {
+                                debugLog("❌ mirror hitter pitchEvent delete failed:", err.localizedDescription)
                             }
                         }
                         continue
@@ -1280,6 +1317,21 @@ struct PitchTrackerView: View {
                                 debugLog("❌ mirror pitcher pitchEvent failed:", err.localizedDescription)
                             } else {
                                 debugLog("✅ mirrored pitcher pitchEvent → \(pitcherDst.path)")
+                            }
+                        }
+                    }
+
+                    if let hitterDst {
+                        var hitterData = data
+                        if let author = data["createdByUid"] as? String, author != ownerUid {
+                            hitterData["originalCreatedByUid"] = author
+                        }
+                        hitterData["createdByUid"] = ownerUid
+                        hitterDst.setData(hitterData, merge: false) { err in
+                            if let err {
+                                debugLog("❌ mirror hitter pitchEvent failed:", err.localizedDescription)
+                            } else {
+                                debugLog("✅ mirrored hitter pitchEvent → \(hitterDst.path)")
                             }
                         }
                     }
@@ -2027,6 +2079,7 @@ struct PitchTrackerView: View {
         guard let liveId = activeLiveId else { return }
 
         flushBufferedSharedPitcherEvents(reason: "endLiveSession")
+        flushBufferedSharedHitterEvents(reason: "endLiveSession")
 
         if isOwnerForActiveGame {
             flushProgressToGameIfOwner()
@@ -2321,6 +2374,7 @@ struct PitchTrackerView: View {
 
     private func disconnectFromGame(notifyHost: Bool = true) {
         flushBufferedSharedPitcherEvents(reason: "disconnect")
+        flushBufferedSharedHitterEvents(reason: "disconnect")
         if let liveId = activeLiveId {
             // An explicit Disconnect is a deliberate permanent leave, unlike
             // backgrounding or navigating to Settings (which only pause
@@ -2523,6 +2577,68 @@ struct PitchTrackerView: View {
         }
     }
 
+    private func refreshHomeRoster(teamId: String) {
+        authManager.loadTeamPlayers(teamId: teamId) { players in
+            self.homeRoster = players
+        }
+    }
+
+    /// Symmetric to `handleSelectAwaySide` - tapping Us for a game with no
+    /// linked team yet opens setup instead of silently switching to an
+    /// empty batter picker. Unlike Away, Us needs no inline roster-add UI
+    /// in this sheet - once linked, that team's roster is already managed
+    /// from Home's own Teams and Players screen.
+    private func handleSelectHomeSide() {
+        guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }),
+              let teamId = game.teamId, !teamId.isEmpty else {
+            refreshMyTeamCandidates()
+            showSetMyTeamSheet = true
+            return
+        }
+        activeSide = .home
+    }
+
+    private func refreshMyTeamCandidates() {
+        authManager.loadMyTeams { teams, _ in
+            self.myTeamCandidates = teams
+        }
+    }
+
+    private func setMyTeam(_ team: Team) {
+        guard let gid = selectedGameId, let teamId = team.id,
+              let index = games.firstIndex(where: { $0.id == gid }) else { return }
+        games[index].teamId = teamId
+        if !isDemoMode {
+            authManager.saveGame(games[index])
+        }
+        refreshHomeRoster(teamId: teamId)
+        activeSide = .home
+        showSetMyTeamSheet = false
+    }
+
+    private func createAndSetMyTeam() {
+        let name = newMyTeamName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        authManager.createTeam(name: name) { result in
+            if case .success(let team) = result {
+                self.newMyTeamName = ""
+                self.setMyTeam(team)
+            }
+        }
+    }
+
+    /// Who the batter picker should draw from: when Us is pitching, the
+    /// batter is the opponent's player (away roster); when Them is
+    /// pitching, the batter is ours (home roster). Only hitter-capable
+    /// (linked) entries show up - a player added with role Pitcher alone
+    /// has no `hitterId` and is correctly excluded.
+    private var activeBatterRosterCandidates: [TeamPlayer] {
+        switch activeSide {
+        case .home: return awayRoster.filter { $0.hitterId != nil }
+        case .away: return homeRoster.filter { $0.hitterId != nil }
+        }
+    }
+
     /// `sideFilteredPitchers` filters by `awayPitcherIds`, which only ever
     /// contains linked ids - `addTeamPlayerWithLinkedPitcher` is what makes
     /// an added away pitcher actually show up there.
@@ -2639,6 +2755,61 @@ struct PitchTrackerView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(hasAwayTeam ? "Done" : "Cancel") {
                         showSetOpponentSheet = false
+                    }
+                }
+            }
+        }
+    }
+
+    /// Simpler than setOpponentSheetView on purpose - once linked, this
+    /// team's roster is managed from Home's own Teams and Players screen,
+    /// not an inline add-pitcher UI like the away side needs (which has no
+    /// other entry point into an opponent's roster).
+    private var setMyTeamSheetView: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("New Team")
+                            .font(.headline)
+                        HStack {
+                            TextField("Team name", text: $newMyTeamName)
+                                .textFieldStyle(.roundedBorder)
+                            Button("Create") {
+                                createAndSetMyTeam()
+                            }
+                            .disabled(newMyTeamName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }
+                    }
+
+                    if !myTeamCandidates.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Or Pick a Saved Team")
+                                .font(.headline)
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(myTeamCandidates, id: \.team.id) { entry in
+                                    Button {
+                                        setMyTeam(entry.team)
+                                    } label: {
+                                        Text(entry.team.name)
+                                            .font(.subheadline.weight(.semibold))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding()
+            }
+            .navigationTitle("Set My Team")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cancel") {
+                        showSetMyTeamSheet = false
                     }
                 }
             }
@@ -3268,6 +3439,8 @@ struct PitchTrackerView: View {
         selectedGameId = gameId
         currentTrackingMode = games.first(where: { $0.id == gameId })?.trackingMode ?? .coach
         activeSide = .home
+        selectedHitterId = nil
+        selectedHitterDisplayName = nil
         if let awayTeamId = games.first(where: { $0.id == gameId })?.awayTeamId, !awayTeamId.isEmpty {
             loadAwayPitcherIds(awayTeamId: awayTeamId)
             refreshAwayRoster(awayTeamId: awayTeamId)
@@ -3280,6 +3453,11 @@ struct PitchTrackerView: View {
             awayPitcherIds = []
             awayRoster = []
             activeAwayTeamName = ""
+        }
+        if let teamId = games.first(where: { $0.id == gameId })?.teamId, !teamId.isEmpty {
+            refreshHomeRoster(teamId: teamId)
+        } else {
+            homeRoster = []
         }
         debugLog("🧭[PROG] chooseGame gid=\(gameId) owner=\(ownerUid)")
 
@@ -5560,6 +5738,10 @@ struct PitchTrackerView: View {
                 }
             }
 
+            if isGame && !activeBatterRosterCandidates.isEmpty {
+                batterRosterPickerRow
+            }
+
             HStack(alignment: .top, spacing: 8) {
                 atBatSidebar
 
@@ -5571,6 +5753,52 @@ struct PitchTrackerView: View {
             }
         }
         .padding(.horizontal, 12)
+    }
+
+    /// Independent, optional roster-batter link - deliberately NOT wired
+    /// into the jersey grid (see the plan's "jersey grid stays untouched"
+    /// decision). Only appears at all once a roster has hitter-capable
+    /// players for the current side, so a user who never sets up rosters
+    /// sees zero change here.
+    private var batterRosterPickerRow: some View {
+        HStack(spacing: 8) {
+            Text("Batter:")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            ScrollableSelectionMenuButton(
+                title: "Select Batter",
+                items: activeBatterRosterCandidates,
+                itemTitle: { $0.name },
+                isSelected: { $0.hitterId == selectedHitterId },
+                onSelect: { teamPlayer in
+                    selectedHitterId = teamPlayer.hitterId
+                    selectedHitterDisplayName = teamPlayer.name
+                }
+            ) {
+                Text(selectedHitterDisplayName ?? "Select a batter")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(selectedHitterDisplayName == nil ? Color.secondary : Color.primary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color(.systemGray6)))
+            }
+
+            if selectedHitterId != nil {
+                Button {
+                    selectedHitterId = nil
+                    selectedHitterDisplayName = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 4)
     }
 
     private var scoutInPlayOptions: [String] { ["Out", "1B", "2B", "3B", "HR"] }
@@ -5836,7 +6064,7 @@ struct PitchTrackerView: View {
             }
             usThemButton(side: .home) {
                 guard !isOwnerCallInProgress else { return }
-                activeSide = .home
+                handleSelectHomeSide()
             }
         }
         .opacity(isOwnerCallInProgress ? 0.45 : 1.0)
@@ -7136,7 +7364,8 @@ struct PitchTrackerView: View {
             gameId: nil,
             opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             opponentBatterId: selectedBatterId?.uuidString,
-            pitcherId: selectedPitcherId
+            pitcherId: selectedPitcherId,
+            hitterId: selectedHitterId
         )
         let resolvedEventId = UUID().uuidString
         var eventToSave = event
@@ -7146,6 +7375,7 @@ struct PitchTrackerView: View {
         // Persist and update UI state
         authManager.savePitchEvent(eventToSave)
         saveSharedPitcherEventIfAllowed(eventToSave)
+        saveSharedHitterEventIfAllowed(eventToSave)
         sessionManager.incrementCount()
         withAnimation(.easeInOut(duration: 0.3)) {
             pitchEvents.append(eventToSave)
@@ -7215,7 +7445,8 @@ struct PitchTrackerView: View {
             gameId: selectedGameId,
             opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             opponentBatterId: selectedBatterId?.uuidString,
-            pitcherId: effectivePitcherIdForSave
+            pitcherId: effectivePitcherIdForSave,
+            hitterId: selectedHitterId
         )
     }
 
@@ -7316,6 +7547,7 @@ struct PitchTrackerView: View {
             opponentJersey: jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber,
             opponentBatterId: selectedBatterId?.uuidString,
             pitcherId: effectivePitcherIdForSave,
+            hitterId: selectedHitterId,
             foulMarker: isFoul ? scoutFoulMarkerSymbol(prior: prior) : nil,
             trackingMode: .scout
         )
@@ -7387,6 +7619,9 @@ struct PitchTrackerView: View {
         if eventToPersist.opponentJersey == nil {
             eventToPersist.opponentJersey = fallbackJersey
         }
+        if eventToPersist.hitterId == nil {
+            eventToPersist.hitterId = selectedHitterId
+        }
         if let savedBalls = eventToPersist.atBatBalls, let savedStrikes = eventToPersist.atBatStrikes,
            let key = atBatCountKey(batterId: eventToPersist.opponentBatterId, jersey: eventToPersist.opponentJersey) {
             atBatCountCacheByBatter[key] = (balls: savedBalls, strikes: savedStrikes)
@@ -7456,6 +7691,7 @@ struct PitchTrackerView: View {
 
         if !isDemoMode {
             saveSharedPitcherEventIfAllowed(sharedEvent)
+            saveSharedHitterEventIfAllowed(sharedEvent)
             writeResultSelection(label: eventToPersist.location)
         }
 
@@ -7770,6 +8006,7 @@ struct PitchTrackerView: View {
         gamePitchEvents.removeAll { $0.identity == identity }
         seededGamePitchEventsForLive.removeAll { $0.identity == identity }
         bufferedSharedPitcherEvents.removeAll { $0.event.identity == identity }
+        bufferedSharedHitterEvents.removeAll { $0.event.identity == identity }
     }
 
     private func deletePersistedPitchEvent(_ event: PitchEvent) {
@@ -7917,7 +8154,74 @@ struct PitchTrackerView: View {
             bufferSharedPitcherEvent(pitcherId: pitcherId, event: event)
         }
     }
-    
+
+    // MARK: - Hitter event mirroring (parallels the pitcher pipeline above)
+
+    private var bufferedSharedHitterEventsURL: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("PitchMark", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir.appendingPathComponent("buffered_shared_hitter_events.json")
+    }
+
+    private func loadBufferedSharedHitterEvents() {
+        let url = bufferedSharedHitterEventsURL
+        guard let data = try? Data(contentsOf: url) else {
+            bufferedSharedHitterEvents = []
+            return
+        }
+        do {
+            bufferedSharedHitterEvents = try JSONDecoder().decode([BufferedHitterEvent].self, from: data)
+        } catch {
+            debugLog("❌ Failed to decode buffered hitter events:", error.localizedDescription)
+            bufferedSharedHitterEvents = []
+        }
+    }
+
+    private func persistBufferedSharedHitterEvents() {
+        do {
+            let data = try JSONEncoder().encode(bufferedSharedHitterEvents)
+            try data.write(to: bufferedSharedHitterEventsURL, options: [.atomic])
+        } catch {
+            debugLog("❌ Failed to persist buffered hitter events:", error.localizedDescription)
+        }
+    }
+
+    private func bufferSharedHitterEvent(hitterId: String, event: PitchEvent) {
+        bufferedSharedHitterEvents.append(BufferedHitterEvent(hitterId: hitterId, event: event))
+        persistBufferedSharedHitterEvents()
+    }
+
+    private func flushBufferedSharedHitterEvents(reason: String) {
+        guard !bufferedSharedHitterEvents.isEmpty else { return }
+        debugLog("📤 Flushing \(bufferedSharedHitterEvents.count) buffered hitter events (reason: \(reason))")
+        for buffered in bufferedSharedHitterEvents {
+            authManager.saveSharedHitterEvent(hitterId: buffered.hitterId, event: buffered.event)
+        }
+        bufferedSharedHitterEvents.removeAll()
+        persistBufferedSharedHitterEvents()
+    }
+
+    /// No owner/shared pre-check here the way the pitcher version has one -
+    /// Hitter has no sharing concept (ownerUid-only rules), and this device
+    /// never has a loaded `hitters` list to check against. The write either
+    /// matches the rules' ownerUid check or is denied and logged, same
+    /// fire-and-forget posture the pitcher path already falls back to when
+    /// it can't confirm ownership locally.
+    private func saveSharedHitterEventIfAllowed(_ event: PitchEvent) {
+        let targetHitterId = event.hitterId ?? selectedHitterId
+        guard let hitterId = targetHitterId else { return }
+
+        if shouldWriteSharedPitcherEventImmediately {
+            authManager.saveSharedHitterEvent(hitterId: hitterId, event: event)
+        } else {
+            bufferSharedHitterEvent(hitterId: hitterId, event: event)
+        }
+    }
+
     private var baseBody: some View {
         ZStack {
             backgroundView
@@ -8439,6 +8743,7 @@ struct PitchTrackerView: View {
         }
 
         loadBufferedSharedPitcherEvents()
+        loadBufferedSharedHitterEvents()
 
         // If we've already presented the initial sheets once, don't do it again.
         // (But we can still refresh loaders below if you want; keeping it tight here.)
@@ -9610,6 +9915,7 @@ struct PitchTrackerView: View {
         participantsListener = nil
         uiConnected = false
         flushBufferedSharedPitcherEvents(reason: "background")
+        flushBufferedSharedHitterEvents(reason: "background")
     }
 
     private func resumeLiveSessionIfNeeded() {
@@ -9704,6 +10010,7 @@ struct PitchTrackerView: View {
         case .inactive, .background:
             markBackgroundTimestamp()
             flushBufferedSharedPitcherEvents(reason: "background")
+            flushBufferedSharedHitterEvents(reason: "background")
             pauseLiveSessionForBackground()
         @unknown default:
             break
@@ -9954,8 +10261,20 @@ struct PitchTrackerView: View {
                     persistSelectedPitcherId(nil)
                 }
             }
+            .onChange(of: activeSide) { _, _ in
+                // The linked batter is side-specific (opponent roster vs.
+                // our own); switching sides always clears it rather than
+                // risking a stale cross-side link riding along on the next
+                // pitch.
+                selectedHitterId = nil
+                selectedHitterDisplayName = nil
+            }
             .sheet(isPresented: $showSetOpponentSheet) {
                 setOpponentSheetView
+                    .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showSetMyTeamSheet) {
+                setMyTeamSheetView
                     .fixedAppDynamicType()
             }
             .sheet(isPresented: $showGridKeySheet) {
@@ -10225,6 +10544,7 @@ struct PitchTrackerView: View {
                 // permanently deleted. The deletion-only disk purge removes the
                 // corresponding JSON file immediately after this notification.
                 bufferedSharedPitcherEvents.removeAll()
+                bufferedSharedHitterEvents.removeAll()
             }
             .onReceive(NotificationCenter.default.publisher(for: .displayOnlyExitRequested)) { _ in
                 if isDisplayOnlyMode {

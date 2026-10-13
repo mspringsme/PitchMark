@@ -177,6 +177,31 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────
+    // TOP-LEVEL HITTERS: /hitters/{hitterId}
+    // The Hitter stats entity (Hitter.swift) - mirrors /pitchers but
+    // deliberately simpler: ownerUid-only, no sharedWith/claimedByUid. The
+    // live-session mirror that keeps pitchEvents copies in step only ever
+    // writes from the owner's own device (see startListeningToLivePitchEvents),
+    // so a participant never needs direct write access here either.
+    // ─────────────────────────────────────────────
+    match /hitters/{hitterId} {
+      allow get, list: if signedIn() && resource.data.ownerUid == uid();
+      allow create: if signedIn() && request.resource.data.ownerUid == uid();
+      allow update, delete: if signedIn() && resource.data.ownerUid == uid();
+
+      match /pitchEvents/{eventId} {
+        function hitterDoc() {
+          return get(/databases/$(database)/documents/hitters/$(hitterId)).data;
+        }
+
+        allow get, list: if signedIn() && hitterDoc().ownerUid == uid();
+        allow create: if signedIn() && hitterDoc().ownerUid == uid()
+          && request.resource.data.createdByUid == uid();
+        allow update, delete: if signedIn() && hitterDoc().ownerUid == uid();
+      }
+    }
+
+    // ─────────────────────────────────────────────
     // PITCHER INVITE TOKENS: /pitcherInviteTokens/{token}
     // ─────────────────────────────────────────────
     match /pitcherInviteTokens/{token} {
