@@ -234,8 +234,17 @@ struct PitchTrackerView: View {
     @State private var quickAddTeamId: String? = nil
     @State private var quickAddOnCreate: ((TeamPlayer) -> Void)? = nil
     @State private var chooseBattersSelection: Set<String> = []
+    // Stamped onto PitchEvent.hitterId - derived automatically from
+    // whichever jersey cell is selected (see the onChange below), not set
+    // directly by any picker UI anymore. nil for an ephemeral "this game
+    // only" cell with no roster link.
     @State private var selectedHitterId: String? = nil
-    @State private var selectedHitterDisplayName: String? = nil
+    // Session-local roster-link annotation on top of the jersey grid's own
+    // existing, persisted cell list - see addJerseyCellForRosterPlayer's
+    // doc comment for why this doesn't survive a relaunch yet.
+    @State private var hitterIdByJerseyCellId: [UUID: String] = [:]
+    @State private var showAtBatAddMenu = false
+    @State private var showAtBatRosterPickerSheet = false
     @State private var bufferedSharedHitterEvents: [BufferedHitterEvent] = []
     @State private var isRecordingResult = false
     @State private var activeCalledPitchId: String? = nil
@@ -3599,7 +3608,7 @@ struct PitchTrackerView: View {
         currentTrackingMode = games.first(where: { $0.id == gameId })?.trackingMode ?? .coach
         activeSide = .home
         selectedHitterId = nil
-        selectedHitterDisplayName = nil
+        hitterIdByJerseyCellId = [:]
         if let awayTeamId = games.first(where: { $0.id == gameId })?.awayTeamId, !awayTeamId.isEmpty {
             loadAwayPitcherIds(awayTeamId: awayTeamId)
             refreshAwayRoster(awayTeamId: awayTeamId)
@@ -5967,20 +5976,6 @@ struct PitchTrackerView: View {
                 }
             }
 
-            if isGame && isOwnerForActiveGame {
-                // Type-erased deliberately - this VStack already sits directly
-                // above atBatSidebar/strikeZoneArea, both AnyView for the same
-                // reason: a third un-erased conditional branch here pushed the
-                // Swift runtime's generic metadata resolution over some
-                // complexity threshold and crashed on launch (SIGABRT deep in
-                // swift_getTypeByMangledNameImpl / SubstGenericParametersFromMetadata,
-                // not a logic bug) as soon as a real account had roster data
-                // making this branch active - never reproduced on an empty
-                // fresh install, which is why it passed every build+test done
-                // signed-out this session.
-                AnyView(batterRosterPickerRow)
-            }
-
             HStack(alignment: .top, spacing: 8) {
                 atBatSidebar
 
@@ -6090,125 +6085,141 @@ struct PitchTrackerView: View {
         }
     }
 
-    /// Independent, optional roster-batter link - deliberately NOT wired
-    /// into the jersey grid (see the plan's "jersey grid stays untouched"
-    /// decision). Always visible for the owner while in a game, even with
-    /// nothing to pick yet - an always-hidden row was the actual bug: Away
-    /// mode's batter is drawn from `homeRoster` (Game.teamId), which only
-    /// ever gets set by tapping "Us" first - a coach who goes straight to
-    /// "Them" without ever touching "Us" had no roster and no visible path
-    /// to get one, and fell back to the jersey grid's own unrelated "+"
-    /// with no indication a roster feature existed at all.
-    private var batterPickerTopActions: [SelectionSheetAction] {
-        guard let teamId = currentBattingTeamId else { return [] }
-        let side = activeSide
-        return [SelectionSheetAction(title: "Add New Batter", systemImage: "plus") {
-            presentQuickAddPlayer(teamId: teamId) { newPlayer in
-                if side == .home {
-                    self.addToActiveAwayBatterIdsIfCurated(newPlayer.id)
-                }
-                self.selectedHitterId = newPlayer.hitterId
-                self.selectedHitterDisplayName = newPlayer.name
-            }
-        }]
-    }
-
-    private var batterRosterPickerRow: some View {
-        HStack(spacing: 8) {
-            Text("Batter:")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            if activeBatterRosterCandidates.isEmpty {
-                batterEmptyStateControl
-            } else {
-                ScrollableSelectionMenuButton(
-                    title: "Select Batter",
-                    items: activeBatterRosterCandidates,
-                    topActions: batterPickerTopActions,
-                    itemTitle: { $0.name },
-                    isSelected: { $0.hitterId == selectedHitterId },
-                    onSelect: { teamPlayer in
-                        selectedHitterId = teamPlayer.hitterId
-                        selectedHitterDisplayName = teamPlayer.name
-                    }
-                ) {
-                    Text(selectedHitterDisplayName ?? "Select a batter")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(selectedHitterDisplayName == nil ? Color.secondary : Color.primary)
-                        .lineLimit(1)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(Color(.systemGray6)))
-                }
-
-                if selectedHitterId != nil {
-                    Button {
-                        selectedHitterId = nil
-                        selectedHitterDisplayName = nil
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, 4)
-    }
-
-    /// When a team IS linked but has no batters yet, this is directly
-    /// actionable - not a link-out message - because in real use (several
-    /// games in one day) a coach needs to build a roster on the spot, and
-    /// have it still be there for the next game. Quick-add writes through
-    /// the same Team/TeamPlayer/Player records Home's roster screen uses,
-    /// so it persists there too, not just for this session.
-    @ViewBuilder
-    private var batterEmptyStateControl: some View {
+    /// The At Bat "+" is the single source for adding a batter, in any of
+    /// four ways: an ephemeral this-game-only jersey number (today's
+    /// original flow, untouched), picking an existing roster player,
+    /// creating a brand new roster player, or setting up/switching which
+    /// team that roster even is. All four end up as a real jersey cell in
+    /// the same list - a roster pick isn't a separate side-channel control,
+    /// it's just another way to populate the one list that was always
+    /// there.
+    private func promptTeamSetupForBatting() {
+        teamSetupShouldFlipSide = false
         switch activeSide {
-        case .away:
-            // The batter here is ours (homeRoster, Game.teamId) - nothing
-            // to do with the opponent setup Away itself already prompts for.
-            if let teamId = activeGameForBatterSetup?.teamId, !teamId.isEmpty {
-                Button("Add Batter") {
-                    presentQuickAddPlayer(teamId: teamId) { newPlayer in
-                        self.selectedHitterId = newPlayer.hitterId
-                        self.selectedHitterDisplayName = newPlayer.name
-                    }
-                }
-                .font(.caption.weight(.semibold))
-            } else {
-                Button("Set My Team") {
-                    // Stay on Them afterward - this is about getting
-                    // batters to pick from, not switching sides.
-                    teamSetupShouldFlipSide = false
-                    refreshMyTeamCandidates()
-                    showSetMyTeamSheet = true
-                }
-                .font(.caption.weight(.semibold))
-            }
         case .home:
-            // The batter here is theirs (awayRoster, Game.awayTeamId).
-            if let teamId = activeGameForBatterSetup?.awayTeamId, !teamId.isEmpty {
-                Button("Add Batter") {
-                    presentQuickAddPlayer(teamId: teamId) { newPlayer in
-                        self.addToActiveAwayBatterIdsIfCurated(newPlayer.id)
-                        self.selectedHitterId = newPlayer.hitterId
-                        self.selectedHitterDisplayName = newPlayer.name
+            refreshOpponentTeamCandidates()
+            showSetOpponentSheet = true
+        case .away:
+            refreshMyTeamCandidates()
+            showSetMyTeamSheet = true
+        }
+    }
+
+    private var battingTeamSetupMenuLabel: String {
+        activeSide == .home ? "Opponent Team…" : "My Team…"
+    }
+
+    /// Creates the jersey cell exactly the way the existing Save button
+    /// already does (same append + live-transactional-or-direct persist),
+    /// then additionally remembers the roster link for this session so
+    /// PitchEvent.hitterId gets stamped correctly - including on every
+    /// future re-tap of this same cell, via the selectedBatterId onChange
+    /// below. Deliberately a separate function from the Save button's
+    /// inline logic rather than a refactor of it - this is the single most
+    /// fragile, most load-bearing state in the file (CLAUDE.md), so
+    /// duplicating the well-understood persistence shape is lower risk
+    /// than restructuring the working path underneath it.
+    ///
+    /// Known, accepted limitation: the roster-link annotation itself
+    /// (hitterIdByJerseyCellId) is session-local, not written to Game -
+    /// the jersey cell survives a relaunch (existing persistence), but
+    /// which cells were roster-linked does not. Threading that through
+    /// would mean touching jerseyCells' seven separate rehydration call
+    /// sites, including the live-transactional merge path - a much larger
+    /// and riskier change than this round's actual ask.
+    private func addJerseyCellForRosterPlayer(displayNumber: String, hitterId: String?) {
+        let newCell = JerseyCell(jerseyNumber: displayNumber)
+        jerseyCells.append(newCell)
+        if let hitterId {
+            hitterIdByJerseyCellId[newCell.id] = hitterId
+        }
+
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            LiveGameService.shared.mutateLiveLineup(liveId: liveId) { jerseys, batterIds in
+                jerseys.append(displayNumber)
+                batterIds.append(newCell.id.uuidString)
+            } completion: { result in
+                guard case .success(let merged) = result,
+                      let gameId = selectedGameId,
+                      let owner = effectiveGameOwnerUserId,
+                      !owner.isEmpty,
+                      isOwnerForActiveGame else { return }
+                authManager.updateGameLineup(
+                    ownerUserId: owner,
+                    gameId: gameId,
+                    jerseyNumbers: merged.jerseys,
+                    batterIds: merged.batterIds
+                )
+            }
+        } else if let gameId = selectedGameId,
+                  let owner = effectiveGameOwnerUserId,
+                  !owner.isEmpty {
+            authManager.updateGameLineup(
+                ownerUserId: owner,
+                gameId: gameId,
+                jerseyNumbers: jerseyCells.map { $0.jerseyNumber },
+                batterIds: jerseyCells.map { $0.id.uuidString }
+            )
+        }
+
+        selectedBatterId = newCell.id
+    }
+
+    /// Shared completion for both "Add From Team" and "New Player" - a
+    /// roster player with no jersey number set yet falls back to their
+    /// initials so the fixed-size jersey cell still has something short to
+    /// show (JerseyCellView is a rigid 40x40 square, not built for a name).
+    private func addBatterFromRoster(_ player: TeamPlayer) {
+        if activeSide == .home {
+            addToActiveAwayBatterIdsIfCurated(player.id)
+        }
+        let display = (player.jerseyNumber?.isEmpty == false)
+            ? player.jerseyNumber!
+            : String(player.name.prefix(2)).uppercased()
+        addJerseyCellForRosterPlayer(displayNumber: display, hitterId: player.hitterId)
+    }
+
+    /// Already-in-the-lineup roster players are excluded so the picker
+    /// doesn't offer someone twice.
+    private var atBatRosterPickerCandidates: [TeamPlayer] {
+        let alreadyAdded = Set(hitterIdByJerseyCellId.values)
+        return activeBatterRosterCandidates.filter { !alreadyAdded.contains($0.hitterId ?? "") }
+    }
+
+    private var atBatRosterPickerSheetView: some View {
+        NavigationView {
+            List {
+                if atBatRosterPickerCandidates.isEmpty {
+                    Text("Everyone on this roster is already in the lineup.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(atBatRosterPickerCandidates, id: \.id) { player in
+                        Button {
+                            addBatterFromRoster(player)
+                            showAtBatRosterPickerSheet = false
+                        } label: {
+                            HStack {
+                                Text(player.name)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if let jersey = player.jerseyNumber, !jersey.isEmpty {
+                                    Text("#\(jersey)")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                     }
                 }
-                .font(.caption.weight(.semibold))
-            } else {
-                Button("Set Opponent") {
-                    // Stay on Us afterward - same reasoning as Set My Team
-                    // above, mirrored.
-                    teamSetupShouldFlipSide = false
-                    refreshOpponentTeamCandidates()
-                    showSetOpponentSheet = true
+            }
+            .navigationTitle("Add From Team")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cancel") {
+                        showAtBatRosterPickerSheet = false
+                    }
                 }
-                .font(.caption.weight(.semibold))
             }
         }
     }
@@ -7034,7 +7045,13 @@ struct PitchTrackerView: View {
                             Button(action: {
                                 editingCell = nil
                                 newJerseyNumber = ""
-                                if jerseyCells.isEmpty {
+                                if isGame && isOwnerForActiveGame {
+                                    // The single source for adding a batter
+                                    // - everything else (roster pick, new
+                                    // player, team setup) branches from here
+                                    // now, not a separate control elsewhere.
+                                    showAtBatAddMenu = true
+                                } else if jerseyCells.isEmpty {
                                     showBulkJerseyPrompt = true
                                 } else {
                                     showAddJerseyPopover = true
@@ -7053,6 +7070,40 @@ struct PitchTrackerView: View {
                             }
                             .buttonStyle(.plain)
                             .padding(.horizontal, 6)
+                            .confirmationDialog(
+                                "Add a Batter",
+                                isPresented: $showAtBatAddMenu,
+                                titleVisibility: .visible
+                            ) {
+                                Button("This Game Only") {
+                                    if jerseyCells.isEmpty {
+                                        showBulkJerseyPrompt = true
+                                    } else {
+                                        showAddJerseyPopover = true
+                                        jerseyInputFocused = true
+                                    }
+                                }
+                                Button("Add From Team") {
+                                    if currentBattingTeamId != nil {
+                                        showAtBatRosterPickerSheet = true
+                                    } else {
+                                        promptTeamSetupForBatting()
+                                    }
+                                }
+                                Button("New Player") {
+                                    if let teamId = currentBattingTeamId {
+                                        presentQuickAddPlayer(teamId: teamId) { newPlayer in
+                                            self.addBatterFromRoster(newPlayer)
+                                        }
+                                    } else {
+                                        promptTeamSetupForBatting()
+                                    }
+                                }
+                                Button(battingTeamSetupMenuLabel) {
+                                    promptTeamSetupForBatting()
+                                }
+                                Button("Cancel", role: .cancel) { }
+                            }
                             .confirmationDialog(
                                 "Add multiple jersey numbers?",
                                 isPresented: $showBulkJerseyPrompt,
@@ -10677,9 +10728,14 @@ struct PitchTrackerView: View {
                 // The linked batter is side-specific (opponent roster vs.
                 // our own); switching sides always clears it rather than
                 // risking a stale cross-side link riding along on the next
-                // pitch.
+                // pitch. Deliberately does not touch selectedBatterId/the
+                // jersey cell itself - that list has never been side-aware
+                // (it predates Us/Them entirely) and stays one flat list;
+                // only which roster NEW additions draw from is side-aware.
                 selectedHitterId = nil
-                selectedHitterDisplayName = nil
+            }
+            .onChange(of: selectedBatterId) { _, newId in
+                selectedHitterId = newId.flatMap { hitterIdByJerseyCellId[$0] }
             }
             .sheet(isPresented: $showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }) {
                 setOpponentSheetView
@@ -10691,6 +10747,10 @@ struct PitchTrackerView: View {
             }
             .sheet(isPresented: $showQuickAddPlayerSheet) {
                 quickAddPlayerSheetView
+                    .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showAtBatRosterPickerSheet) {
+                atBatRosterPickerSheetView
                     .fixedAppDynamicType()
             }
             .sheet(isPresented: $showGridKeySheet) {
