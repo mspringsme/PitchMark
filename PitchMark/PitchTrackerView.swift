@@ -207,6 +207,14 @@ struct PitchTrackerView: View {
     @State private var myTeamCandidates: [(team: Team, membership: TeamMembership)] = []
     @State private var newMyTeamName: String = ""
     @State private var showChooseBattersStep = false
+    // Both team-setup sheets can now be reached two ways: from the Us/Them
+    // toggle itself (where landing on that side afterward is the whole
+    // point) or from the batter row's empty-state button while already on
+    // the OTHER side (where the goal is just "get batters to pick from,"
+    // not switch sides - flipping anyway silently undid the side you were
+    // deliberately on, which read as "nothing happened"). Defaults true to
+    // match the toggle's own behavior.
+    @State private var teamSetupShouldFlipSide = true
     @State private var chooseBattersSelection: Set<String> = []
     @State private var selectedHitterId: String? = nil
     @State private var selectedHitterDisplayName: String? = nil
@@ -2524,6 +2532,7 @@ struct PitchTrackerView: View {
     private func handleSelectAwaySide() {
         guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }),
               let awayTeamId = game.awayTeamId, !awayTeamId.isEmpty else {
+            teamSetupShouldFlipSide = true
             refreshOpponentTeamCandidates()
             showSetOpponentSheet = true
             return
@@ -2568,7 +2577,7 @@ struct PitchTrackerView: View {
                 // than silently defaulting to "every hitter on the roster."
                 self.chooseBattersSelection = Set(self.awayRoster.compactMap { $0.hitterId != nil ? $0.id : nil })
                 self.showChooseBattersStep = true
-            } else {
+            } else if self.teamSetupShouldFlipSide {
                 self.activeSide = .away
             }
         }
@@ -2585,12 +2594,13 @@ struct PitchTrackerView: View {
         showChooseBattersStep = true
     }
 
-    /// Reached from both the first-time setup flow (activeSide is still
-    /// .home at this point) and from revisiting via awayRosterSection
-    /// (activeSide is already .away) - flipping to .away and closing the
-    /// sheet is the correct end state either way, since you can only ever
-    /// reach this screen with an away team already set, which is only
-    /// possible once Away has been activated at least once before.
+    /// Reached from the first-time setup flow (triggered by tapping Them,
+    /// teamSetupShouldFlipSide true - landing on .away is the point),
+    /// from revisiting via awayRosterSection (already .away, flipping is a
+    /// harmless no-op), and now also from the Us-side batter row's "Set
+    /// Opponent" button (teamSetupShouldFlipSide false - the coach wants
+    /// opponent batters to pick from while THEY keep pitching, not to
+    /// switch to tracking the opponent's pitcher).
     private func confirmChooseBatters(trackAll: Bool) {
         guard let gid = selectedGameId, let index = games.firstIndex(where: { $0.id == gid }) else { return }
         games[index].activeAwayBatterIds = trackAll ? nil : Array(chooseBattersSelection)
@@ -2599,7 +2609,9 @@ struct PitchTrackerView: View {
         }
         showChooseBattersStep = false
         showSetOpponentSheet = false
-        activeSide = .away
+        if teamSetupShouldFlipSide {
+            activeSide = .away
+        }
     }
 
     private func createAndSetOpponentTeam() {
@@ -2633,6 +2645,7 @@ struct PitchTrackerView: View {
     private func handleSelectHomeSide() {
         guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }),
               let teamId = game.teamId, !teamId.isEmpty else {
+            teamSetupShouldFlipSide = true
             refreshMyTeamCandidates()
             showSetMyTeamSheet = true
             return
@@ -2654,7 +2667,9 @@ struct PitchTrackerView: View {
             authManager.saveGame(games[index])
         }
         refreshHomeRoster(teamId: teamId)
-        activeSide = .home
+        if teamSetupShouldFlipSide {
+            activeSide = .home
+        }
         showSetMyTeamSheet = false
     }
 
@@ -5973,6 +5988,9 @@ struct PitchTrackerView: View {
             // to do with the opponent setup Away itself already prompts for.
             if (activeGameForBatterSetup?.teamId ?? "").isEmpty {
                 Button("Set My Team") {
+                    // Stay on Them afterward - this is about getting
+                    // batters to pick from, not switching sides.
+                    teamSetupShouldFlipSide = false
                     refreshMyTeamCandidates()
                     showSetMyTeamSheet = true
                 }
@@ -5986,6 +6004,9 @@ struct PitchTrackerView: View {
             // The batter here is theirs (awayRoster, Game.awayTeamId).
             if (activeGameForBatterSetup?.awayTeamId ?? "").isEmpty {
                 Button("Set Opponent") {
+                    // Stay on Us afterward - same reasoning as Set My Team
+                    // above, mirrored.
+                    teamSetupShouldFlipSide = false
                     refreshOpponentTeamCandidates()
                     showSetOpponentSheet = true
                 }
