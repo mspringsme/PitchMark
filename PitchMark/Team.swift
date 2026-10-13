@@ -64,7 +64,6 @@ struct TeamPlayer: Identifiable, Codable {
     // pitcherId-filtering call site (PitchTrackerView's away-roster picker
     // in particular) needs zero changes.
     var playerId: String? = nil
-    var role: PlayerRole? = nil
     // Denormalized copy of Player.hitterId, same reasoning as pitcherId.
     var hitterId: String? = nil
     // Positions/battingSide are seeded from the linked Player at creation/
@@ -200,71 +199,23 @@ extension AuthManager {
             }
     }
 
-    func addTeamPlayer(teamId: String, name: String, jerseyNumber: String?, pitcherId: String?, completion: @escaping (Result<TeamPlayer, Error>) -> Void) {
-        guard let user = user else {
-            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
-            return
-        }
-
-        let ref = teamsCollection().document(teamId).collection("players").document()
-        let player = TeamPlayer(
-            id: ref.documentID,
-            name: name,
-            jerseyNumber: jerseyNumber,
-            pitcherId: pitcherId,
-            createdByUid: user.uid,
-            createdAt: Date()
-        )
-
-        do {
-            try ref.setData(from: player) { error in
-                if let error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success(player))
-                }
-            }
-        } catch {
-            completion(.failure(error))
-        }
-    }
-
-    /// Creates a real `Pitcher` doc and adds a `TeamPlayer` linked to it in
-    /// one step, so a player added to a roster this way actually shows up
-    /// anywhere pitchers are picked from - the plain `addTeamPlayer` above
-    /// (pitcherId: nil) does not.
-    func addTeamPlayerWithLinkedPitcher(
-        teamId: String,
-        name: String,
-        jerseyNumber: String?,
-        completion: @escaping (Result<TeamPlayer, Error>) -> Void
-    ) {
-        createPitcher(name: name, templateId: nil) { pitcher in
-            guard let pitcher, let pitcherId = pitcher.id else {
-                completion(.failure(NSError(domain: "Team", code: 500, userInfo: [NSLocalizedDescriptionKey: "Couldn't create a pitcher for this player."])))
-                return
-            }
-            self.addTeamPlayer(teamId: teamId, name: name, jerseyNumber: jerseyNumber, pitcherId: pitcherId, completion: completion)
-        }
-    }
 
     /// "Create new" path for TeamRosterView's Add Player flow - creates a
-    /// real cross-team `Player` (plus a linked Pitcher when the role calls
-    /// for one, via `createPlayer`) and a `TeamPlayer` row on this team
+    /// real cross-team `Player` (with both a linked Pitcher and Hitter,
+    /// always, via `createPlayer`) and a `TeamPlayer` row on this team
     /// pointing at it.
     func addTeamPlayerCreatingNewPlayer(
         teamId: String,
         name: String,
         jerseyNumber: String?,
-        role: PlayerRole,
         positions: [FieldPosition]? = nil,
         battingSide: BattingSide? = nil,
         completion: @escaping (Result<TeamPlayer, Error>) -> Void
     ) {
-        createPlayer(name: name, role: role, positions: positions, battingSide: battingSide) { result in
+        createPlayer(name: name, positions: positions, battingSide: battingSide) { result in
             switch result {
             case .success(let player):
-                self.addTeamPlayerLinkingPlayer(teamId: teamId, player: player, jerseyNumber: jerseyNumber, role: role, completion: completion)
+                self.addTeamPlayerLinkingPlayer(teamId: teamId, player: player, jerseyNumber: jerseyNumber, completion: completion)
             case .failure(let error):
                 completion(.failure(error))
             }
@@ -272,7 +223,7 @@ extension AuthManager {
     }
 
     /// "Link existing player" path - the actual cross-team mechanism. Name/
-    /// pitcherId/hitterId/role/positions/battingSide are all copied from the
+    /// pitcherId/hitterId/positions/battingSide are all copied from the
     /// existing `Player` as this team's starting point (so this team's
     /// picker filtering keeps working unchanged); only the jersey number is
     /// team-specific. Positions/battingSide can then be edited team-locally
@@ -281,7 +232,6 @@ extension AuthManager {
         teamId: String,
         player: Player,
         jerseyNumber: String?,
-        role: PlayerRole?,
         completion: @escaping (Result<TeamPlayer, Error>) -> Void
     ) {
         guard let user = user else {
@@ -295,7 +245,6 @@ extension AuthManager {
             jerseyNumber: jerseyNumber,
             pitcherId: player.pitcherId,
             playerId: player.id,
-            role: role,
             hitterId: player.hitterId,
             positions: player.positions,
             battingSide: player.battingSide,
@@ -312,6 +261,58 @@ extension AuthManager {
             }
         } catch {
             completion(.failure(error))
+        }
+    }
+
+    /// Self-healing backfill for players created before every player always
+    /// got both a Pitcher and Hitter: creates whichever is missing and
+    /// writes it onto both this TeamPlayer row and (when linked) the
+    /// canonical Player, so revisiting a roster is enough to fix it with no
+    /// manual designation step. No-ops (completion called immediately) once
+    /// both already exist - safe to call on every roster load.
+    func ensureTeamPlayerHasPitcherAndHitter(teamId: String, teamPlayer: TeamPlayer, completion: @escaping (TeamPlayer) -> Void) {
+        guard let rowId = teamPlayer.id else {
+            completion(teamPlayer)
+            return
+        }
+        guard teamPlayer.pitcherId == nil || teamPlayer.hitterId == nil else {
+            completion(teamPlayer)
+            return
+        }
+
+        func finish(pitcherId: String?, hitterId: String?) {
+            var updated = teamPlayer
+            updated.pitcherId = pitcherId
+            updated.hitterId = hitterId
+            var data: [String: Any] = [:]
+            if let pitcherId { data["pitcherId"] = pitcherId }
+            if let hitterId { data["hitterId"] = hitterId }
+            guard !data.isEmpty else {
+                completion(teamPlayer)
+                return
+            }
+            self.teamsCollection().document(teamId).collection("players").document(rowId).updateData(data) { _ in
+                completion(updated)
+            }
+            if let playerId = teamPlayer.playerId {
+                Firestore.firestore().collection("players").document(playerId).updateData(data)
+            }
+        }
+
+        if teamPlayer.pitcherId == nil {
+            createPitcher(name: teamPlayer.name, templateId: nil) { pitcher in
+                if teamPlayer.hitterId == nil {
+                    self.createHitter(name: teamPlayer.name) { hitter in
+                        finish(pitcherId: pitcher?.id, hitterId: hitter?.id)
+                    }
+                } else {
+                    finish(pitcherId: pitcher?.id, hitterId: teamPlayer.hitterId)
+                }
+            }
+        } else {
+            createHitter(name: teamPlayer.name) { hitter in
+                finish(pitcherId: teamPlayer.pitcherId, hitterId: hitter?.id)
+            }
         }
     }
 

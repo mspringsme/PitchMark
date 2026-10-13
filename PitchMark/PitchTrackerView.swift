@@ -207,6 +207,13 @@ struct PitchTrackerView: View {
     @State private var myTeamCandidates: [(team: Team, membership: TeamMembership)] = []
     @State private var newMyTeamName: String = ""
     @State private var showChooseBattersStep = false
+    // pitcherId -> every team name that pitcher's linked TeamPlayer shows up
+    // on, across all of the user's teams - lets the new-game pitcher picker
+    // disambiguate same-named pitchers from different teams. Loaded by
+    // fanning out loadTeamPlayers across loadMyTeams's result; no
+    // collectionGroup query exists for this (only /teams/{id}/members has
+    // one), so client-side fan-out is the lowest-risk option.
+    @State private var teamNamesByPitcherId: [String: [String]] = [:]
     // Both team-setup sheets can now be reached two ways: from the Us/Them
     // toggle itself (where landing on that side afterward is the whole
     // point) or from the batter row's empty-state button while already on
@@ -215,6 +222,17 @@ struct PitchTrackerView: View {
     // deliberately on, which read as "nothing happened"). Defaults true to
     // match the toggle's own behavior.
     @State private var teamSetupShouldFlipSide = true
+    // Quick-add: build either roster (ours or the opponent's, whichever is
+    // relevant to the current side) without leaving the game - reachable
+    // from both the pitcher and batter pickers' own "+" action. Writes
+    // through the exact same Team/TeamPlayer/Player records as every other
+    // roster entry point, so it persists outside the game like any other
+    // roster edit, not something scoped to just this session.
+    @State private var showQuickAddPlayerSheet = false
+    @State private var quickAddPlayerName = ""
+    @State private var quickAddPlayerJersey = ""
+    @State private var quickAddTeamId: String? = nil
+    @State private var quickAddOnCreate: ((TeamPlayer) -> Void)? = nil
     @State private var chooseBattersSelection: Set<String> = []
     @State private var selectedHitterId: String? = nil
     @State private var selectedHitterDisplayName: String? = nil
@@ -2708,14 +2726,16 @@ struct PitchTrackerView: View {
     }
 
     /// `sideFilteredPitchers` filters by `awayPitcherIds`, which only ever
-    /// contains linked ids - `addTeamPlayerWithLinkedPitcher` is what makes
-    /// an added away pitcher actually show up there.
+    /// contains linked ids. Uses the same always-both-capable path every
+    /// other add-player entry point uses, so a player added here (really
+    /// "add a player," not just a pitcher - they're hitter-capable too) is
+    /// a real cross-team Player, not a pitcher-only, roster-local record.
     private func addAwayPitcher() {
         guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }),
               let awayTeamId = game.awayTeamId, !awayTeamId.isEmpty else { return }
         let name = newAwayPitcherName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
-        authManager.addTeamPlayerWithLinkedPitcher(teamId: awayTeamId, name: name, jerseyNumber: nil) { result in
+        authManager.addTeamPlayerCreatingNewPlayer(teamId: awayTeamId, name: name, jerseyNumber: nil) { result in
             guard case .success = result else { return }
             self.newAwayPitcherName = ""
             self.loadAwayPitcherIds(awayTeamId: awayTeamId)
@@ -3699,6 +3719,32 @@ struct PitchTrackerView: View {
             ownerUid: ownerUid,
             opponentName: opponent
         )
+        refreshTeamNamesByPitcherId()
+    }
+
+    private func refreshTeamNamesByPitcherId() {
+        authManager.loadMyTeams { teams, _ in
+            guard !teams.isEmpty else {
+                self.teamNamesByPitcherId = [:]
+                return
+            }
+            var result: [String: [String]] = [:]
+            let group = DispatchGroup()
+            for entry in teams {
+                guard let teamId = entry.team.id else { continue }
+                group.enter()
+                self.authManager.loadTeamPlayers(teamId: teamId) { players in
+                    for player in players {
+                        guard let pid = player.pitcherId else { continue }
+                        result[pid, default: []].append(entry.team.name)
+                    }
+                    group.leave()
+                }
+            }
+            group.notify(queue: .main) {
+                self.teamNamesByPitcherId = result
+            }
+        }
     }
 
     private func confirmSessionSelection(
@@ -5792,6 +5838,30 @@ struct PitchTrackerView: View {
         return "#\(jersey)"
     }
 
+    /// Lets either roster be built from inside the picker itself, rather
+    /// than only being addable by leaving the game - the actual fix for
+    /// "no option to add from your team," and for the new player persisting
+    /// as a real Team/TeamPlayer/Player record (not something scoped to
+    /// just this session) the same way every other add-player path does.
+    private var pitcherPickerTopActions: [SelectionSheetAction] {
+        guard isGame else { return [] }
+        if let teamId = currentPitchingTeamId {
+            return [SelectionSheetAction(title: "Add New Pitcher", systemImage: "plus") {
+                presentQuickAddPlayer(teamId: teamId) { newPlayer in
+                    guard let pid = newPlayer.pitcherId,
+                          let pitcher = self.pitchers.first(where: { $0.id == pid }) else { return }
+                    self.applySelectedPitcher(pitcher)
+                }
+            }]
+        } else {
+            return [SelectionSheetAction(title: "Set My Team First", systemImage: "plus") {
+                teamSetupShouldFlipSide = false
+                refreshMyTeamCandidates()
+                showSetMyTeamSheet = true
+            }]
+        }
+    }
+
     private var pitcherPickerButton: some View {
         let pitchersForMenu = isGame
             ? sideFilteredPitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
@@ -5800,6 +5870,7 @@ struct PitchTrackerView: View {
         return ScrollableSelectionMenuButton(
             title: "Select Pitcher",
             items: pitchersForMenu,
+            topActions: pitcherPickerTopActions,
             itemTitle: { $0.name },
             itemSubtitle: { jerseyNumber(forPitcherId: $0.id) },
             isSelected: { $0.id == selectedPitcherId },
@@ -5854,6 +5925,7 @@ struct PitchTrackerView: View {
         return SessionConfirmationSheet(
             pending: pending,
             pitchers: confirmationPitchers,
+            teamNamesByPitcherId: teamNamesByPitcherId,
             templates: visibleTemplates,
             selectedPitcherId: $pendingConfirmationPitcherId,
             selectedTemplateId: $pendingConfirmationTemplateId,
@@ -5926,6 +5998,98 @@ struct PitchTrackerView: View {
         selectedGameId.flatMap { gid in games.first(where: { $0.id == gid }) }
     }
 
+    /// Whichever team's roster the active PITCHER is drawn from right now.
+    private var currentPitchingTeamId: String? {
+        switch activeSide {
+        case .home: return activeGameForBatterSetup?.teamId
+        case .away: return activeGameForBatterSetup?.awayTeamId
+        }
+    }
+
+    /// Whichever team's roster the active BATTER is drawn from right now -
+    /// always the opposite team from currentPitchingTeamId for a given side.
+    private var currentBattingTeamId: String? {
+        switch activeSide {
+        case .home: return activeGameForBatterSetup?.awayTeamId
+        case .away: return activeGameForBatterSetup?.teamId
+        }
+    }
+
+    /// A quick-added away-roster batter needs to join the curated list too
+    /// (Game.activeAwayBatterIds, see "Choose Batters to Track") when one
+    /// is active - otherwise they'd be created but invisible in the picker
+    /// that just created them, since the curated subset would still exclude
+    /// them. No-ops when the list is unset/empty (no restriction active).
+    private func addToActiveAwayBatterIdsIfCurated(_ teamPlayerId: String?) {
+        guard let teamPlayerId,
+              let gid = selectedGameId,
+              let index = games.firstIndex(where: { $0.id == gid }),
+              let activeIds = games[index].activeAwayBatterIds, !activeIds.isEmpty,
+              !activeIds.contains(teamPlayerId)
+        else { return }
+        games[index].activeAwayBatterIds = activeIds + [teamPlayerId]
+        if !isDemoMode {
+            authManager.saveGame(games[index])
+        }
+    }
+
+    private func presentQuickAddPlayer(teamId: String, onCreate: @escaping (TeamPlayer) -> Void) {
+        quickAddPlayerName = ""
+        quickAddPlayerJersey = ""
+        quickAddTeamId = teamId
+        quickAddOnCreate = onCreate
+        showQuickAddPlayerSheet = true
+    }
+
+    private func confirmQuickAddPlayer() {
+        guard let teamId = quickAddTeamId else { return }
+        let name = quickAddPlayerName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        let jersey = quickAddPlayerJersey.trimmingCharacters(in: .whitespaces)
+        authManager.addTeamPlayerCreatingNewPlayer(teamId: teamId, name: name, jerseyNumber: jersey.isEmpty ? nil : jersey) { result in
+            guard case .success(let teamPlayer) = result else { return }
+            self.showQuickAddPlayerSheet = false
+            // Refresh whichever side(s) this team feeds, and reload the
+            // owner's full pitcher list too - applySelectedPitcher (used by
+            // the pitcher picker's own onCreate) needs the new Pitcher to
+            // actually be present in `pitchers`, not just referenced by id.
+            if teamId == self.activeGameForBatterSetup?.awayTeamId {
+                self.loadAwayPitcherIds(awayTeamId: teamId)
+                self.refreshAwayRoster(awayTeamId: teamId)
+            }
+            if teamId == self.activeGameForBatterSetup?.teamId {
+                self.refreshHomeRoster(teamId: teamId)
+            }
+            self.authManager.loadPitchers { self.pitchers = $0 }
+            self.quickAddOnCreate?(teamPlayer)
+            self.quickAddOnCreate = nil
+        }
+    }
+
+    private var quickAddPlayerSheetView: some View {
+        NavigationView {
+            Form {
+                TextField("Name", text: $quickAddPlayerName)
+                TextField("Jersey #", text: $quickAddPlayerJersey)
+            }
+            .navigationTitle("Add Player")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        showQuickAddPlayerSheet = false
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Add") {
+                        confirmQuickAddPlayer()
+                    }
+                    .disabled(quickAddPlayerName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
     /// Independent, optional roster-batter link - deliberately NOT wired
     /// into the jersey grid (see the plan's "jersey grid stays untouched"
     /// decision). Always visible for the owner while in a game, even with
@@ -5935,6 +6099,20 @@ struct PitchTrackerView: View {
     /// "Them" without ever touching "Us" had no roster and no visible path
     /// to get one, and fell back to the jersey grid's own unrelated "+"
     /// with no indication a roster feature existed at all.
+    private var batterPickerTopActions: [SelectionSheetAction] {
+        guard let teamId = currentBattingTeamId else { return [] }
+        let side = activeSide
+        return [SelectionSheetAction(title: "Add New Batter", systemImage: "plus") {
+            presentQuickAddPlayer(teamId: teamId) { newPlayer in
+                if side == .home {
+                    self.addToActiveAwayBatterIdsIfCurated(newPlayer.id)
+                }
+                self.selectedHitterId = newPlayer.hitterId
+                self.selectedHitterDisplayName = newPlayer.name
+            }
+        }]
+    }
+
     private var batterRosterPickerRow: some View {
         HStack(spacing: 8) {
             Text("Batter:")
@@ -5947,6 +6125,7 @@ struct PitchTrackerView: View {
                 ScrollableSelectionMenuButton(
                     title: "Select Batter",
                     items: activeBatterRosterCandidates,
+                    topActions: batterPickerTopActions,
                     itemTitle: { $0.name },
                     isSelected: { $0.hitterId == selectedHitterId },
                     onSelect: { teamPlayer in
@@ -5980,13 +6159,27 @@ struct PitchTrackerView: View {
         .padding(.horizontal, 4)
     }
 
+    /// When a team IS linked but has no batters yet, this is directly
+    /// actionable - not a link-out message - because in real use (several
+    /// games in one day) a coach needs to build a roster on the spot, and
+    /// have it still be there for the next game. Quick-add writes through
+    /// the same Team/TeamPlayer/Player records Home's roster screen uses,
+    /// so it persists there too, not just for this session.
     @ViewBuilder
     private var batterEmptyStateControl: some View {
         switch activeSide {
         case .away:
             // The batter here is ours (homeRoster, Game.teamId) - nothing
             // to do with the opponent setup Away itself already prompts for.
-            if (activeGameForBatterSetup?.teamId ?? "").isEmpty {
+            if let teamId = activeGameForBatterSetup?.teamId, !teamId.isEmpty {
+                Button("Add Batter") {
+                    presentQuickAddPlayer(teamId: teamId) { newPlayer in
+                        self.selectedHitterId = newPlayer.hitterId
+                        self.selectedHitterDisplayName = newPlayer.name
+                    }
+                }
+                .font(.caption.weight(.semibold))
+            } else {
                 Button("Set My Team") {
                     // Stay on Them afterward - this is about getting
                     // batters to pick from, not switching sides.
@@ -5995,14 +6188,19 @@ struct PitchTrackerView: View {
                     showSetMyTeamSheet = true
                 }
                 .font(.caption.weight(.semibold))
-            } else {
-                Text("No batters on your roster yet - add one from Home → Teams and Players.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         case .home:
             // The batter here is theirs (awayRoster, Game.awayTeamId).
-            if (activeGameForBatterSetup?.awayTeamId ?? "").isEmpty {
+            if let teamId = activeGameForBatterSetup?.awayTeamId, !teamId.isEmpty {
+                Button("Add Batter") {
+                    presentQuickAddPlayer(teamId: teamId) { newPlayer in
+                        self.addToActiveAwayBatterIdsIfCurated(newPlayer.id)
+                        self.selectedHitterId = newPlayer.hitterId
+                        self.selectedHitterDisplayName = newPlayer.name
+                    }
+                }
+                .font(.caption.weight(.semibold))
+            } else {
                 Button("Set Opponent") {
                     // Stay on Us afterward - same reasoning as Set My Team
                     // above, mirrored.
@@ -6011,10 +6209,6 @@ struct PitchTrackerView: View {
                     showSetOpponentSheet = true
                 }
                 .font(.caption.weight(.semibold))
-            } else {
-                Text("No opponent batters tracked yet.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -10495,6 +10689,10 @@ struct PitchTrackerView: View {
                 setMyTeamSheetView
                     .fixedAppDynamicType()
             }
+            .sheet(isPresented: $showQuickAddPlayerSheet) {
+                quickAddPlayerSheetView
+                    .fixedAppDynamicType()
+            }
             .sheet(isPresented: $showGridKeySheet) {
                 ScrollableSelectionSheet(
                     title: "Select Template",
@@ -13335,6 +13533,7 @@ struct AddGameCard: View {
 private struct SessionConfirmationSheet: View {
     let pending: PitchTrackerView.PendingSessionConfirmation
     let pitchers: [Pitcher]
+    let teamNamesByPitcherId: [String: [String]]
     let templates: [PitchTemplate]
     @Binding var selectedPitcherId: String?
     @Binding var selectedTemplateId: UUID?
@@ -13389,6 +13588,7 @@ private struct SessionConfirmationSheet: View {
                             }
                         ],
                         itemTitle: { $0.name },
+                        itemSubtitle: { teamNamesByPitcherId[$0.id ?? ""]?.joined(separator: ", ") },
                         isSelected: { $0.id == selectedPitcherId },
                         onSelect: { pitcher in
                             selectedPitcherId = pitcher.id

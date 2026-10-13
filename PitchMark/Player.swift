@@ -15,23 +15,6 @@ import SwiftUI
 import FirebaseFirestore
 import FirebaseAuth
 
-enum PlayerRole: String, Codable, CaseIterable {
-    case pitcher
-    case hitter
-    case both
-
-    var displayName: String {
-        switch self {
-        case .pitcher: return "Pitcher"
-        case .hitter: return "Hitter"
-        case .both: return "Both"
-        }
-    }
-
-    var includesPitcher: Bool { self == .pitcher || self == .both }
-    var includesHitter: Bool { self == .hitter || self == .both }
-}
-
 enum FieldPosition: String, Codable, CaseIterable {
     case pitcher = "P"
     case catcher = "C"
@@ -99,15 +82,16 @@ extension AuthManager {
             }
     }
 
-    /// Creates the Player doc, and - only when the role calls for it -
-    /// a real linked Pitcher and/or Hitter, so stats work exactly like the
-    /// existing Pitcher machinery. `positions`/`battingSide` are stored on
-    /// the Player as the default a newly linked team starts from; editing
-    /// them on a specific team's roster entry afterward is team-local only
-    /// (see `updateTeamPlayer`), not pushed back here.
+    /// Creates the Player doc with both a linked Pitcher and a linked
+    /// Hitter, always - no role designation to pick, since a player might
+    /// pitch, bat, or both over a season and there's no reason to make a
+    /// coach decide that up front (or ever go back and "unlock" the other
+    /// one). `positions`/`battingSide` are stored on the Player as the
+    /// default a newly linked team starts from; editing them on a specific
+    /// team's roster entry afterward is team-local only (see
+    /// `updateTeamPlayer`), not pushed back here.
     func createPlayer(
         name: String,
-        role: PlayerRole,
         positions: [FieldPosition]? = nil,
         battingSide: BattingSide? = nil,
         completion: @escaping (Result<Player, Error>) -> Void
@@ -117,47 +101,31 @@ extension AuthManager {
             return
         }
 
-        func savePlayer(pitcherId: String?, hitterId: String?) {
-            let ref = playersCollection().document()
-            let player = Player(
-                id: ref.documentID,
-                name: name,
-                ownerUid: user.uid,
-                pitcherId: pitcherId,
-                hitterId: hitterId,
-                positions: positions,
-                battingSide: battingSide,
-                createdAt: Date()
-            )
-            do {
-                try ref.setData(from: player) { error in
-                    if let error {
-                        completion(.failure(error))
-                    } else {
-                        completion(.success(player))
+        createPitcher(name: name, templateId: nil) { pitcher in
+            self.createHitter(name: name) { hitter in
+                let ref = self.playersCollection().document()
+                let player = Player(
+                    id: ref.documentID,
+                    name: name,
+                    ownerUid: user.uid,
+                    pitcherId: pitcher?.id,
+                    hitterId: hitter?.id,
+                    positions: positions,
+                    battingSide: battingSide,
+                    createdAt: Date()
+                )
+                do {
+                    try ref.setData(from: player) { error in
+                        if let error {
+                            completion(.failure(error))
+                        } else {
+                            completion(.success(player))
+                        }
                     }
+                } catch {
+                    completion(.failure(error))
                 }
-            } catch {
-                completion(.failure(error))
             }
-        }
-
-        func createHitterIfNeeded(pitcherId: String?) {
-            if role.includesHitter {
-                createHitter(name: name) { hitter in
-                    savePlayer(pitcherId: pitcherId, hitterId: hitter?.id)
-                }
-            } else {
-                savePlayer(pitcherId: pitcherId, hitterId: nil)
-            }
-        }
-
-        if role.includesPitcher {
-            createPitcher(name: name, templateId: nil) { pitcher in
-                createHitterIfNeeded(pitcherId: pitcher?.id)
-            }
-        } else {
-            createHitterIfNeeded(pitcherId: nil)
         }
     }
 }

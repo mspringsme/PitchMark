@@ -15,14 +15,16 @@
 //  delete is never one accidental tap away, same reasoning AssetLibraryView
 //  already uses).
 //
-//  Adding a player creates a real cross-team `Player` (Player.swift) with a
-//  Role (Pitcher/Hitter/Both - Hitter just records intent for now, no
-//  Hitter stats entity exists yet) and, when the role calls for it, a
-//  linked Pitcher doc, so the roster actually feeds the pitcher picker in
-//  games. "Link Existing Player" is the cross-team mechanism itself - pick
-//  one of your own Players from any team instead of creating a new one, so
-//  the same kid's stats (via View Stats on their row) span every team
-//  they're linked from, filterable per-team/combined/career-wide.
+//  Adding a player creates a real cross-team `Player` (Player.swift) with
+//  both a linked Pitcher and a linked Hitter, always - no role designation
+//  to pick, since a kid might pitch, bat, or both over a season. A player
+//  created before this existed gets backfilled with whichever is missing
+//  the moment the roster loads (ensureTeamPlayerHasPitcherAndHitter),
+//  silently - no edit action required. "Link Existing Player" is the
+//  cross-team mechanism itself - pick one of your own Players from any team
+//  instead of creating a new one, so the same kid's stats (via View Stats
+//  on their row) span every team they're linked from, filterable per-team/
+//  combined/career-wide.
 //
 
 import SwiftUI
@@ -43,7 +45,6 @@ struct TeamRosterView: View {
     @State private var players: [TeamPlayer] = []
     @State private var newPlayerName: String = ""
     @State private var newPlayerJersey: String = ""
-    @State private var newPlayerRole: PlayerRole = .pitcher
     @State private var newPlayerPositions: Set<FieldPosition> = []
     @State private var newPlayerBattingSide: BattingSide? = nil
     @State private var addPlayerErrorMessage: String? = nil
@@ -114,13 +115,6 @@ struct TeamRosterView: View {
                     Section("Add Player") {
                         TextField("Name", text: $newPlayerName)
                         TextField("Jersey #", text: $newPlayerJersey)
-
-                        Picker("Role", selection: $newPlayerRole) {
-                            ForEach(PlayerRole.allCases, id: \.self) { role in
-                                Text(role.displayName).tag(role)
-                            }
-                        }
-                        .pickerStyle(.segmented)
 
                         positionToggleRow(selected: $newPlayerPositions)
 
@@ -483,6 +477,15 @@ struct TeamRosterView: View {
         guard let teamId = selection.team.id else { return }
         authManager.loadTeamPlayers(teamId: teamId) { loaded in
             players = loaded
+            // Self-healing backfill for anyone created before every player
+            // always got both links - silent, no designation step needed.
+            for player in loaded where player.pitcherId == nil || player.hitterId == nil {
+                authManager.ensureTeamPlayerHasPitcherAndHitter(teamId: teamId, teamPlayer: player) { updated in
+                    if let idx = players.firstIndex(where: { $0.id == updated.id }) {
+                        players[idx] = updated
+                    }
+                }
+            }
         }
     }
 
@@ -495,7 +498,6 @@ struct TeamRosterView: View {
             teamId: teamId,
             name: name,
             jerseyNumber: jersey.isEmpty ? nil : jersey,
-            role: newPlayerRole,
             positions: newPlayerPositions.isEmpty ? nil : Array(newPlayerPositions),
             battingSide: newPlayerBattingSide
         ) { result in
@@ -503,7 +505,6 @@ struct TeamRosterView: View {
             case .success:
                 newPlayerName = ""
                 newPlayerJersey = ""
-                newPlayerRole = .pitcher
                 newPlayerPositions = []
                 newPlayerBattingSide = nil
                 refreshPlayers()
@@ -522,8 +523,7 @@ struct TeamRosterView: View {
         authManager.addTeamPlayerLinkingPlayer(
             teamId: teamId,
             player: player,
-            jerseyNumber: jersey.isEmpty ? nil : jersey,
-            role: nil
+            jerseyNumber: jersey.isEmpty ? nil : jersey
         ) { result in
             if case .success = result {
                 newPlayerJersey = ""
