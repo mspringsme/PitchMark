@@ -5880,7 +5880,7 @@ struct PitchTrackerView: View {
                 }
             }
 
-            if isGame && !activeBatterRosterCandidates.isEmpty {
+            if isGame && isOwnerForActiveGame {
                 // Type-erased deliberately - this VStack already sits directly
                 // above atBatSidebar/strikeZoneArea, both AnyView for the same
                 // reason: a third un-erased conditional branch here pushed the
@@ -5907,50 +5907,95 @@ struct PitchTrackerView: View {
         .padding(.horizontal, 12)
     }
 
+    private var activeGameForBatterSetup: Game? {
+        selectedGameId.flatMap { gid in games.first(where: { $0.id == gid }) }
+    }
+
     /// Independent, optional roster-batter link - deliberately NOT wired
     /// into the jersey grid (see the plan's "jersey grid stays untouched"
-    /// decision). Only appears at all once a roster has hitter-capable
-    /// players for the current side, so a user who never sets up rosters
-    /// sees zero change here.
+    /// decision). Always visible for the owner while in a game, even with
+    /// nothing to pick yet - an always-hidden row was the actual bug: Away
+    /// mode's batter is drawn from `homeRoster` (Game.teamId), which only
+    /// ever gets set by tapping "Us" first - a coach who goes straight to
+    /// "Them" without ever touching "Us" had no roster and no visible path
+    /// to get one, and fell back to the jersey grid's own unrelated "+"
+    /// with no indication a roster feature existed at all.
     private var batterRosterPickerRow: some View {
         HStack(spacing: 8) {
             Text("Batter:")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            ScrollableSelectionMenuButton(
-                title: "Select Batter",
-                items: activeBatterRosterCandidates,
-                itemTitle: { $0.name },
-                isSelected: { $0.hitterId == selectedHitterId },
-                onSelect: { teamPlayer in
-                    selectedHitterId = teamPlayer.hitterId
-                    selectedHitterDisplayName = teamPlayer.name
+            if activeBatterRosterCandidates.isEmpty {
+                batterEmptyStateControl
+            } else {
+                ScrollableSelectionMenuButton(
+                    title: "Select Batter",
+                    items: activeBatterRosterCandidates,
+                    itemTitle: { $0.name },
+                    isSelected: { $0.hitterId == selectedHitterId },
+                    onSelect: { teamPlayer in
+                        selectedHitterId = teamPlayer.hitterId
+                        selectedHitterDisplayName = teamPlayer.name
+                    }
+                ) {
+                    Text(selectedHitterDisplayName ?? "Select a batter")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(selectedHitterDisplayName == nil ? Color.secondary : Color.primary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color(.systemGray6)))
                 }
-            ) {
-                Text(selectedHitterDisplayName ?? "Select a batter")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(selectedHitterDisplayName == nil ? Color.secondary : Color.primary)
-                    .lineLimit(1)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Capsule().fill(Color(.systemGray6)))
-            }
 
-            if selectedHitterId != nil {
-                Button {
-                    selectedHitterId = nil
-                    selectedHitterDisplayName = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                if selectedHitterId != nil {
+                    Button {
+                        selectedHitterId = nil
+                        selectedHitterDisplayName = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
             Spacer()
         }
         .padding(.horizontal, 4)
+    }
+
+    @ViewBuilder
+    private var batterEmptyStateControl: some View {
+        switch activeSide {
+        case .away:
+            // The batter here is ours (homeRoster, Game.teamId) - nothing
+            // to do with the opponent setup Away itself already prompts for.
+            if (activeGameForBatterSetup?.teamId ?? "").isEmpty {
+                Button("Set My Team") {
+                    refreshMyTeamCandidates()
+                    showSetMyTeamSheet = true
+                }
+                .font(.caption.weight(.semibold))
+            } else {
+                Text("No batters on your roster yet - add one from Home → Teams and Players.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .home:
+            // The batter here is theirs (awayRoster, Game.awayTeamId).
+            if (activeGameForBatterSetup?.awayTeamId ?? "").isEmpty {
+                Button("Set Opponent") {
+                    refreshOpponentTeamCandidates()
+                    showSetOpponentSheet = true
+                }
+                .font(.caption.weight(.semibold))
+            } else {
+                Text("No opponent batters tracked yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var scoutInPlayOptions: [String] { ["Out", "1B", "2B", "3B", "HR"] }
