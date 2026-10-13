@@ -57,6 +57,14 @@ struct TeamPlayer: Identifiable, Codable {
     var name: String
     var jerseyNumber: String? = nil
     var pitcherId: String? = nil
+    // The canonical cross-team identity (Player.swift) - the same Player can
+    // be linked from a TeamPlayer row on more than one Team, which is what
+    // lets one kid's stats span multiple seasons/teams. `pitcherId` above
+    // stays a denormalized copy of Player.pitcherId so every existing
+    // pitcherId-filtering call site (PitchTrackerView's away-roster picker
+    // in particular) needs zero changes.
+    var playerId: String? = nil
+    var role: PlayerRole? = nil
     var createdByUid: String
     var createdAt: Date = Date()
     var archivedAt: Date? = nil
@@ -229,6 +237,66 @@ extension AuthManager {
                 return
             }
             self.addTeamPlayer(teamId: teamId, name: name, jerseyNumber: jerseyNumber, pitcherId: pitcherId, completion: completion)
+        }
+    }
+
+    /// "Create new" path for TeamRosterView's Add Player flow - creates a
+    /// real cross-team `Player` (plus a linked Pitcher when the role calls
+    /// for one, via `createPlayer`) and a `TeamPlayer` row on this team
+    /// pointing at it.
+    func addTeamPlayerCreatingNewPlayer(
+        teamId: String,
+        name: String,
+        jerseyNumber: String?,
+        role: PlayerRole,
+        completion: @escaping (Result<TeamPlayer, Error>) -> Void
+    ) {
+        createPlayer(name: name, role: role) { result in
+            switch result {
+            case .success(let player):
+                self.addTeamPlayerLinkingPlayer(teamId: teamId, player: player, jerseyNumber: jerseyNumber, role: role, completion: completion)
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// "Link existing player" path - the actual cross-team mechanism. Name/
+    /// pitcherId/role are copied from the existing `Player` (so this team's
+    /// picker filtering keeps working unchanged); only the jersey number is
+    /// team-specific.
+    func addTeamPlayerLinkingPlayer(
+        teamId: String,
+        player: Player,
+        jerseyNumber: String?,
+        role: PlayerRole?,
+        completion: @escaping (Result<TeamPlayer, Error>) -> Void
+    ) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+        let ref = teamsCollection().document(teamId).collection("players").document()
+        let teamPlayer = TeamPlayer(
+            id: ref.documentID,
+            name: player.name,
+            jerseyNumber: jerseyNumber,
+            pitcherId: player.pitcherId,
+            playerId: player.id,
+            role: role,
+            createdByUid: user.uid,
+            createdAt: Date()
+        )
+        do {
+            try ref.setData(from: teamPlayer) { error in
+                if let error {
+                    completion(.failure(error))
+                } else {
+                    completion(.success(teamPlayer))
+                }
+            }
+        } catch {
+            completion(.failure(error))
         }
     }
 

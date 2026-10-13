@@ -164,6 +164,19 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────
+    // TOP-LEVEL PLAYERS: /players/{playerId}
+    // The cross-team identity (Player.swift) a TeamPlayer links to via
+    // playerId, so the same kid's stats span every team/season they're
+    // linked from. Single-owner only, unlike /pitchers - no sharedWith/
+    // claimedByUid concept here.
+    // ─────────────────────────────────────────────
+    match /players/{playerId} {
+      allow get, list: if signedIn() && resource.data.ownerUid == uid();
+      allow create: if signedIn() && request.resource.data.ownerUid == uid();
+      allow update, delete: if signedIn() && resource.data.ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
     // PITCHER INVITE TOKENS: /pitcherInviteTokens/{token}
     // ─────────────────────────────────────────────
     match /pitcherInviteTokens/{token} {

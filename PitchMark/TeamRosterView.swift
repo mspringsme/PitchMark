@@ -10,12 +10,19 @@
 //  code - never through a team row.
 //
 //  Owner-only (the team's actual creator, see isTeamOwner below) edit/delete
-//  added for both the team itself and its players - tap a player row to
-//  edit it, swipe to delete it (deliberately two different gestures, so
+//  added for both the team itself and its players - tap a player row for
+//  View Stats/Edit, swipe to delete it (deliberately separate from tap, so
 //  delete is never one accidental tap away, same reasoning AssetLibraryView
-//  already uses). Adding a player here links a real Pitcher doc
-//  (addTeamPlayerWithLinkedPitcher) so this roster actually feeds the
-//  pitcher picker in games, not just a name list.
+//  already uses).
+//
+//  Adding a player creates a real cross-team `Player` (Player.swift) with a
+//  Role (Pitcher/Hitter/Both - Hitter just records intent for now, no
+//  Hitter stats entity exists yet) and, when the role calls for it, a
+//  linked Pitcher doc, so the roster actually feeds the pitcher picker in
+//  games. "Link Existing Player" is the cross-team mechanism itself - pick
+//  one of your own Players from any team instead of creating a new one, so
+//  the same kid's stats (via View Stats on their row) span every team
+//  they're linked from, filterable per-team/combined/career-wide.
 //
 
 import SwiftUI
@@ -36,7 +43,20 @@ struct TeamRosterView: View {
     @State private var players: [TeamPlayer] = []
     @State private var newPlayerName: String = ""
     @State private var newPlayerJersey: String = ""
+    @State private var newPlayerRole: PlayerRole = .pitcher
     @State private var addPlayerErrorMessage: String? = nil
+    @State private var showLinkPlayerSheet = false
+    @State private var myPlayers: [Player] = []
+
+    // For the "View Stats" action - PitcherStatsSheetView needs the actual
+    // Pitcher objects and the owner's full games/teams list, not just ids.
+    @State private var myPitchers: [Pitcher] = []
+    @State private var myGames: [Game] = []
+    @State private var myTeams: [(team: Team, membership: TeamMembership)] = []
+    @State private var statsPitcher: Pitcher? = nil
+
+    @State private var playerActionTarget: TeamPlayer? = nil
+    @State private var showPlayerActionsDialog = false
 
     @State private var teamName: String = ""
 
@@ -87,6 +107,20 @@ struct TeamRosterView: View {
                     Section("Add Player") {
                         TextField("Name", text: $newPlayerName)
                         TextField("Jersey #", text: $newPlayerJersey)
+
+                        Picker("Role", selection: $newPlayerRole) {
+                            ForEach(PlayerRole.allCases, id: \.self) { role in
+                                Text(role.displayName).tag(role)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        if newPlayerRole.includesHitter {
+                            Text("Hitting stats tracking is coming soon - this just records the role for now.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
                         Button("Add") {
                             addPlayer()
                         }
@@ -96,6 +130,10 @@ struct TeamRosterView: View {
                             Text(addPlayerErrorMessage)
                                 .font(.caption)
                                 .foregroundStyle(.red)
+                        }
+
+                        Button("Link Existing Player…") {
+                            showLinkPlayerSheet = true
                         }
                     }
                 }
@@ -132,6 +170,10 @@ struct TeamRosterView: View {
         .onAppear {
             teamName = selection.team.name
             refreshPlayers()
+            authManager.loadMyPlayers { myPlayers = $0 }
+            authManager.loadPitchers { myPitchers = $0 }
+            authManager.loadGames { myGames = $0 }
+            authManager.loadMyTeams { teams, _ in myTeams = teams }
         }
         .confirmationDialog(
             teamName,
@@ -186,11 +228,43 @@ struct TeamRosterView: View {
             primaryAction: { leaveTeam() },
             secondaryTitle: "Cancel"
         )
+        .confirmationDialog(
+            playerActionTarget?.name ?? "Player",
+            isPresented: $showPlayerActionsDialog,
+            titleVisibility: .visible
+        ) {
+            if let player = playerActionTarget {
+                if player.pitcherId != nil {
+                    Button("View Stats") {
+                        statsPitcher = myPitchers.first(where: { $0.id == player.pitcherId })
+                    }
+                }
+                Button("Edit") {
+                    editingPlayer = player
+                    editPlayerName = player.name
+                    editPlayerJersey = player.jerseyNumber ?? ""
+                    editPlayerErrorMessage = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { playerActionTarget = nil }
+        }
         .sheet(isPresented: $isRenamingTeam) {
             renameTeamSheet
         }
         .sheet(item: $editingPlayer) { player in
             editPlayerSheet(player)
+        }
+        .sheet(isPresented: $showLinkPlayerSheet) {
+            linkExistingPlayerSheet
+        }
+        .sheet(item: $statsPitcher) { pitcher in
+            PitcherStatsSheetView(
+                pitcher: pitcher,
+                games: myGames,
+                teams: myTeams.map { $0.team }
+            )
+            .environmentObject(authManager)
+            .fixedAppDynamicType()
         }
     }
 
@@ -209,10 +283,8 @@ struct TeamRosterView: View {
 
         if isTeamOwner {
             Button {
-                editingPlayer = player
-                editPlayerName = player.name
-                editPlayerJersey = player.jerseyNumber ?? ""
-                editPlayerErrorMessage = nil
+                playerActionTarget = player
+                showPlayerActionsDialog = true
             } label: {
                 label.contentShape(Rectangle())
             }
@@ -248,6 +320,44 @@ struct TeamRosterView: View {
                         renameTeam()
                     }
                     .disabled(renameTeamText.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
+    /// The actual cross-team mechanism: pick one of the signed-in user's own
+    /// Players (from any team) instead of creating a new one, so the same
+    /// kid's stats span both rosters. Deliberately explicit, no name
+    /// matching/auto-linking.
+    private var linkExistingPlayerSheet: some View {
+        let alreadyLinkedIds = Set(players.compactMap { $0.playerId })
+        let candidates = myPlayers.filter { !alreadyLinkedIds.contains($0.id ?? "") }
+
+        return NavigationView {
+            List {
+                if candidates.isEmpty {
+                    Text("No other players to link yet - players you add (with \"Create new\") on any team show up here afterward.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(candidates, id: \.id) { player in
+                        Button {
+                            linkExistingPlayer(player)
+                        } label: {
+                            Text(player.name)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Link Existing Player")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Cancel") {
+                        showLinkPlayerSheet = false
+                    }
                 }
             }
         }
@@ -295,14 +405,39 @@ struct TeamRosterView: View {
         let name = newPlayerName.trimmingCharacters(in: .whitespaces)
         let jersey = newPlayerJersey.trimmingCharacters(in: .whitespaces)
         addPlayerErrorMessage = nil
-        authManager.addTeamPlayerWithLinkedPitcher(teamId: teamId, name: name, jerseyNumber: jersey.isEmpty ? nil : jersey) { result in
+        authManager.addTeamPlayerCreatingNewPlayer(
+            teamId: teamId,
+            name: name,
+            jerseyNumber: jersey.isEmpty ? nil : jersey,
+            role: newPlayerRole
+        ) { result in
             switch result {
             case .success:
                 newPlayerName = ""
                 newPlayerJersey = ""
+                newPlayerRole = .pitcher
                 refreshPlayers()
+                authManager.loadMyPlayers { myPlayers = $0 }
+                authManager.loadPitchers { myPitchers = $0 }
             case .failure(let error):
                 addPlayerErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func linkExistingPlayer(_ player: Player) {
+        guard let teamId = selection.team.id else { return }
+        let jersey = newPlayerJersey.trimmingCharacters(in: .whitespaces)
+        authManager.addTeamPlayerLinkingPlayer(
+            teamId: teamId,
+            player: player,
+            jerseyNumber: jersey.isEmpty ? nil : jersey,
+            role: nil
+        ) { result in
+            if case .success = result {
+                newPlayerJersey = ""
+                showLinkPlayerSheet = false
+                refreshPlayers()
             }
         }
     }

@@ -2996,6 +2996,11 @@ struct PitcherStatsSheetView: View {
     let lockToGameId: String?
     let liveId: String?
     let ownerUserId: String?
+    /// Optional - when non-empty, a "Teams" filter row toggles whole teams'
+    /// worth of games in/out of `selectedGameIds` at once (per-team, a few
+    /// combined, or none selected = every team/career-wide, the existing
+    /// default). Empty by default so existing call sites are unaffected.
+    let teams: [Team]
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -3006,7 +3011,8 @@ struct PitcherStatsSheetView: View {
         games: [Game],
         lockToGameId: String? = nil,
         liveId: String? = nil,
-        ownerUserId: String? = nil
+        ownerUserId: String? = nil,
+        teams: [Team] = []
     ) {
         self.pitcher = pitcher
         self.availablePitchers = availablePitchers ?? [pitcher]
@@ -3014,6 +3020,7 @@ struct PitcherStatsSheetView: View {
         self.lockToGameId = lockToGameId
         self.liveId = liveId
         self.ownerUserId = ownerUserId
+        self.teams = teams
         _selectedPitcherId = State(initialValue: pitcher.id)
     }
 
@@ -3794,6 +3801,8 @@ struct PitcherStatsSheetView: View {
                         }
                         .padding(.horizontal)
 
+                        teamFilterRow
+
                         if scope == .games {
                             HStack {
                                 Spacer()
@@ -4311,6 +4320,54 @@ struct PitcherStatsSheetView: View {
                     .padding(.horizontal)
             }
 
+        }
+    }
+
+    /// Toggle chips, one per team, that add/remove that team's whole set of
+    /// games from `selectedGameIds` at once - reuses the exact same state
+    /// `gameFilterList`'s per-game chips already drive, so `filteredEvents`
+    /// needs no changes at all. None selected still means "all games"
+    /// (today's existing default), which now reads as career-wide.
+    @ViewBuilder
+    private var teamFilterRow: some View {
+        if !teams.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Teams")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button("All Teams") {
+                        selectedGameIds = allGameIds
+                    }
+                    .font(.caption)
+                }
+                .padding(.horizontal)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(teams, id: \.id) { team in
+                            let teamGameIds = Set(gamesWithPitcherEvents.filter { $0.teamId == team.id }.compactMap { $0.id })
+                            let isSelected = !teamGameIds.isEmpty && teamGameIds.isSubset(of: selectedGameIds)
+                            Button(team.name) {
+                                guard !teamGameIds.isEmpty else { return }
+                                if isSelected {
+                                    selectedGameIds.subtract(teamGameIds)
+                                } else {
+                                    selectedGameIds.formUnion(teamGameIds)
+                                }
+                            }
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                            .background(
+                                Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6))
+                            )
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
         }
     }
 
