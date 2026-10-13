@@ -82,6 +82,12 @@ struct Game: Identifiable, Codable {
     // can track the away pitcher's pitches to our batter alongside our own
     // pitcher, switchable mid-game. Optional - most games never set this.
     var awayTeamId: String? = nil
+    // TeamPlayer ids from the away roster to actually show in the "Select
+    // Batter" scroll (not every hitter-capable player on a large roster is
+    // necessarily worth tracking). nil or empty = no restriction, show the
+    // whole roster - this is what every game had before the feature existed,
+    // and what a game stays at until the coach deliberately narrows it.
+    var activeAwayBatterIds: [String]? = nil
 
     // Lineup / participants
     var jerseyNumbers: [String] = []

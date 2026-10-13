@@ -206,6 +206,8 @@ struct PitchTrackerView: View {
     @State private var showSetMyTeamSheet = false
     @State private var myTeamCandidates: [(team: Team, membership: TeamMembership)] = []
     @State private var newMyTeamName: String = ""
+    @State private var showChooseBattersStep = false
+    @State private var chooseBattersSelection: Set<String> = []
     @State private var selectedHitterId: String? = nil
     @State private var selectedHitterDisplayName: String? = nil
     @State private var bufferedSharedHitterEvents: [BufferedHitterEvent] = []
@@ -2545,6 +2547,10 @@ struct PitchTrackerView: View {
     private func setOpponentTeam(_ team: Team) {
         guard let gid = selectedGameId, let teamId = team.id,
               let index = games.firstIndex(where: { $0.id == gid }) else { return }
+        // Capture before overwriting - this is what distinguishes "picking an
+        // opponent for the first time" from "tapping Away again to re-manage
+        // an already-set opponent."
+        let isFirstTimeSetup = (games[index].awayTeamId ?? "").isEmpty
         games[index].awayTeamId = teamId
         if !isDemoMode {
             authManager.saveGame(games[index])
@@ -2556,8 +2562,44 @@ struct PitchTrackerView: View {
         // behind the sheet) showed Them's empty/disabled pitcher picker and
         // swapped count colors before there was anything to pick.
         loadAwayPitcherIds(awayTeamId: teamId) {
-            self.activeSide = .away
+            if isFirstTimeSetup {
+                // Let the coach pick which of this roster's batters are
+                // actually worth tracking before finishing setup, rather
+                // than silently defaulting to "every hitter on the roster."
+                self.chooseBattersSelection = Set(self.awayRoster.compactMap { $0.hitterId != nil ? $0.id : nil })
+                self.showChooseBattersStep = true
+            } else {
+                self.activeSide = .away
+            }
         }
+    }
+
+    private func beginEditingActiveBatters() {
+        guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }) else { return }
+        let hitterCapableIds = Set(awayRoster.compactMap { $0.hitterId != nil ? $0.id : nil })
+        if let activeIds = game.activeAwayBatterIds, !activeIds.isEmpty {
+            chooseBattersSelection = Set(activeIds).intersection(hitterCapableIds)
+        } else {
+            chooseBattersSelection = hitterCapableIds
+        }
+        showChooseBattersStep = true
+    }
+
+    /// Reached from both the first-time setup flow (activeSide is still
+    /// .home at this point) and from revisiting via awayRosterSection
+    /// (activeSide is already .away) - flipping to .away and closing the
+    /// sheet is the correct end state either way, since you can only ever
+    /// reach this screen with an away team already set, which is only
+    /// possible once Away has been activated at least once before.
+    private func confirmChooseBatters(trackAll: Bool) {
+        guard let gid = selectedGameId, let index = games.firstIndex(where: { $0.id == gid }) else { return }
+        games[index].activeAwayBatterIds = trackAll ? nil : Array(chooseBattersSelection)
+        if !isDemoMode {
+            authManager.saveGame(games[index])
+        }
+        showChooseBattersStep = false
+        showSetOpponentSheet = false
+        activeSide = .away
     }
 
     private func createAndSetOpponentTeam() {
@@ -2631,11 +2673,22 @@ struct PitchTrackerView: View {
     /// batter is the opponent's player (away roster); when Them is
     /// pitching, the batter is ours (home roster). Only hitter-capable
     /// (linked) entries show up - a player added with role Pitcher alone
-    /// has no `hitterId` and is correctly excluded.
+    /// has no `hitterId` and is correctly excluded. On the away side only,
+    /// a coach can further narrow a large roster down to just the batters
+    /// worth tracking (Game.activeAwayBatterIds) - unset/empty means no
+    /// restriction, matching every game's behavior before this existed.
     private var activeBatterRosterCandidates: [TeamPlayer] {
         switch activeSide {
-        case .home: return awayRoster.filter { $0.hitterId != nil }
-        case .away: return homeRoster.filter { $0.hitterId != nil }
+        case .home:
+            let hitterCapable = awayRoster.filter { $0.hitterId != nil }
+            guard let activeIds = selectedGameId.flatMap({ gid in games.first(where: { $0.id == gid })?.activeAwayBatterIds }),
+                  !activeIds.isEmpty else {
+                return hitterCapable
+            }
+            let activeIdSet = Set(activeIds)
+            return hitterCapable.filter { activeIdSet.contains($0.id ?? "") }
+        case .away:
+            return homeRoster.filter { $0.hitterId != nil }
         }
     }
 
@@ -2731,6 +2784,56 @@ struct PitchTrackerView: View {
                     .disabled(newAwayPitcherName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
+
+            if awayRoster.contains(where: { $0.hitterId != nil }) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Batters")
+                        .font(.headline)
+                    Button("Choose Batters to Track…") {
+                        beginEditingActiveBatters()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Who's actually worth tracking from a roster that can easily have
+    /// more hitter-capable players than anyone wants in the Select Batter
+    /// scroll. Reached both right after first picking an opponent team and,
+    /// later, from awayRosterSection's own "Choose Batters to Track" button
+    /// - same screen either way. Just the row content - setOpponentSheetView
+    /// supplies the single shared NavigationView/toolbar for every step.
+    private var chooseBattersStepContent: some View {
+        let candidates = awayRoster.filter { $0.hitterId != nil }
+
+        return Group {
+            if candidates.isEmpty {
+                Text("No hitter-capable players on this roster yet - add one, or adjust a player's Role, from this team's roster screen.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(candidates, id: \.id) { player in
+                    let pid = player.id ?? ""
+                    let isSelected = chooseBattersSelection.contains(pid)
+                    Button {
+                        if isSelected {
+                            chooseBattersSelection.remove(pid)
+                        } else {
+                            chooseBattersSelection.insert(pid)
+                        }
+                    } label: {
+                        HStack {
+                            Text(player.name)
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            if isSelected {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2739,22 +2842,43 @@ struct PitchTrackerView: View {
         let hasAwayTeam = currentAwayTeamId?.isEmpty == false
 
         return NavigationView {
-            ScrollView {
-                Group {
-                    if hasAwayTeam {
-                        awayRosterSection(teamName: activeAwayTeamName.isEmpty ? "Opponent" : activeAwayTeamName)
-                    } else {
-                        pickOrCreateOpponentSection
+            Group {
+                if showChooseBattersStep {
+                    List {
+                        chooseBattersStepContent
+                    }
+                } else {
+                    ScrollView {
+                        Group {
+                            if hasAwayTeam {
+                                awayRosterSection(teamName: activeAwayTeamName.isEmpty ? "Opponent" : activeAwayTeamName)
+                            } else {
+                                pickOrCreateOpponentSection
+                            }
+                        }
+                        .padding()
                     }
                 }
-                .padding()
             }
-            .navigationTitle("Set Opponent")
+            .navigationTitle(showChooseBattersStep ? "Batters to Track" : "Set Opponent")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(hasAwayTeam ? "Done" : "Cancel") {
-                        showSetOpponentSheet = false
+                if showChooseBattersStep {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Track Everyone") {
+                            confirmChooseBatters(trackAll: true)
+                        }
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") {
+                            confirmChooseBatters(trackAll: false)
+                        }
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(hasAwayTeam ? "Done" : "Cancel") {
+                            showSetOpponentSheet = false
+                        }
                     }
                 }
             }
@@ -5461,7 +5585,12 @@ struct PitchTrackerView: View {
             Spacer(minLength: 4)
 
             if isGame && isOwnerForActiveGame {
-                usThemControl
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Pitching")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    usThemControl
+                }
             }
         }
         .padding(.horizontal, 8)
@@ -5636,6 +5765,18 @@ struct PitchTrackerView: View {
         )
     }
 
+    /// Jersey number for a pitcher, from whichever roster is relevant to the
+    /// current side - a plain Settings-created Pitcher with no linked
+    /// TeamPlayer just shows no subtitle. The row's main source of "who is
+    /// this" detail, since Pitcher itself carries no jersey/roster info.
+    private func jerseyNumber(forPitcherId pitcherId: String?) -> String? {
+        guard let pitcherId else { return nil }
+        let roster = activeSide == .away ? awayRoster : homeRoster
+        guard let jersey = roster.first(where: { $0.pitcherId == pitcherId })?.jerseyNumber,
+              !jersey.isEmpty else { return nil }
+        return "#\(jersey)"
+    }
+
     private var pitcherPickerButton: some View {
         let pitchersForMenu = isGame
             ? sideFilteredPitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
@@ -5645,6 +5786,7 @@ struct PitchTrackerView: View {
             title: "Select Pitcher",
             items: pitchersForMenu,
             itemTitle: { $0.name },
+            itemSubtitle: { jerseyNumber(forPitcherId: $0.id) },
             isSelected: { $0.id == selectedPitcherId },
             onSelect: { pitcher in
                 applySelectedPitcher(pitcher)
@@ -10279,7 +10421,7 @@ struct PitchTrackerView: View {
                 selectedHitterId = nil
                 selectedHitterDisplayName = nil
             }
-            .sheet(isPresented: $showSetOpponentSheet) {
+            .sheet(isPresented: $showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }) {
                 setOpponentSheetView
                     .fixedAppDynamicType()
             }

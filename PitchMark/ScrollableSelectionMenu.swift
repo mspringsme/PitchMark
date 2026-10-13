@@ -26,6 +26,9 @@ struct ScrollableSelectionMenuButton<Item: Identifiable, Label: View>: View {
     let items: [Item]
     let topActions: [SelectionSheetAction]
     let itemTitle: (Item) -> String
+    // Optional second line per row (e.g. jersey number) - defaults to
+    // "no subtitle" so every pre-existing call site is unaffected.
+    let itemSubtitle: (Item) -> String?
     let isSelected: (Item) -> Bool
     let onSelect: (Item) -> Void
     let label: () -> Label
@@ -37,6 +40,7 @@ struct ScrollableSelectionMenuButton<Item: Identifiable, Label: View>: View {
         items: [Item],
         topActions: [SelectionSheetAction] = [],
         itemTitle: @escaping (Item) -> String,
+        itemSubtitle: @escaping (Item) -> String? = { _ in nil },
         isSelected: @escaping (Item) -> Bool,
         onSelect: @escaping (Item) -> Void,
         @ViewBuilder label: @escaping () -> Label
@@ -45,6 +49,7 @@ struct ScrollableSelectionMenuButton<Item: Identifiable, Label: View>: View {
         self.items = items
         self.topActions = topActions
         self.itemTitle = itemTitle
+        self.itemSubtitle = itemSubtitle
         self.isSelected = isSelected
         self.onSelect = onSelect
         self.label = label
@@ -62,12 +67,13 @@ struct ScrollableSelectionMenuButton<Item: Identifiable, Label: View>: View {
                 items: items,
                 topActions: topActions,
                 itemTitle: itemTitle,
-            isSelected: isSelected,
-            onSelect: onSelect
-        )
-        .fixedAppDynamicType()
+                itemSubtitle: itemSubtitle,
+                isSelected: isSelected,
+                onSelect: onSelect
+            )
+            .fixedAppDynamicType()
+        }
     }
-}
 }
 
 struct ScrollableSelectionSheet<Item: Identifiable>: View {
@@ -75,6 +81,7 @@ struct ScrollableSelectionSheet<Item: Identifiable>: View {
     let items: [Item]
     let topActions: [SelectionSheetAction]
     let itemTitle: (Item) -> String
+    var itemSubtitle: (Item) -> String? = { _ in nil }
     let isSelected: (Item) -> Bool
     let onSelect: (Item) -> Void
 
@@ -93,6 +100,7 @@ struct ScrollableSelectionSheet<Item: Identifiable>: View {
                                 } label: {
                                     selectionRow(
                                         title: action.title,
+                                        subtitle: nil,
                                         systemImage: action.systemImage,
                                         isSelected: false
                                     )
@@ -117,6 +125,7 @@ struct ScrollableSelectionSheet<Item: Identifiable>: View {
                                 } label: {
                                     selectionRow(
                                         title: itemTitle(item),
+                                        subtitle: itemSubtitle(item),
                                         systemImage: isSelected(item) ? "checkmark" : nil,
                                         isSelected: isSelected(item)
                                     )
@@ -141,13 +150,19 @@ struct ScrollableSelectionSheet<Item: Identifiable>: View {
     }
 
     @ViewBuilder
-    private func selectionRow(title: String, systemImage: String?, isSelected: Bool) -> some View {
+    private func selectionRow(title: String, subtitle: String?, systemImage: String?, isSelected: Bool) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             if let systemImage {
