@@ -6186,42 +6186,27 @@ struct PitchTrackerView: View {
         return activeBatterRosterCandidates.filter { !alreadyAdded.contains($0.hitterId ?? "") }
     }
 
+    // Reuses the existing generic ScrollableSelectionSheet (already compiled
+    // and in use elsewhere, e.g. the Key picker) rather than a bespoke
+    // NavigationView/List/ForEach tree - a second crash after this feature
+    // shipped traced back to this exact render path (confirmationDialog
+    // deep inside PitchTrackerView's already enormous view graph hitting a
+    // Swift runtime metadata-resolution limit, not a logic bug); reusing an
+    // existing generic specialization instead of introducing a brand new
+    // composite View type is a direct, concrete way to reduce how much NEW
+    // type complexity this feature adds to that graph.
     private var atBatRosterPickerSheetView: some View {
-        NavigationView {
-            List {
-                if atBatRosterPickerCandidates.isEmpty {
-                    Text("Everyone on this roster is already in the lineup.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(atBatRosterPickerCandidates, id: \.id) { player in
-                        Button {
-                            addBatterFromRoster(player)
-                            showAtBatRosterPickerSheet = false
-                        } label: {
-                            HStack {
-                                Text(player.name)
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                if let jersey = player.jerseyNumber, !jersey.isEmpty {
-                                    Text("#\(jersey)")
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
+        ScrollableSelectionSheet(
+            title: "Add From Team",
+            items: atBatRosterPickerCandidates,
+            topActions: [],
+            itemTitle: { $0.name },
+            itemSubtitle: { $0.jerseyNumber.flatMap { j in j.isEmpty ? nil : "#\(j)" } },
+            isSelected: { _ in false },
+            onSelect: { player in
+                addBatterFromRoster(player)
             }
-            .navigationTitle("Add From Team")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cancel") {
-                        showAtBatRosterPickerSheet = false
-                    }
-                }
-            }
-        }
+        )
     }
 
     private var scoutInPlayOptions: [String] { ["Out", "1B", "2B", "3B", "HR"] }
@@ -10723,8 +10708,6 @@ struct PitchTrackerView: View {
                     selectedPitcherId = nil
                     persistSelectedPitcherId(nil)
                 }
-            }
-            .onChange(of: activeSide) { _, _ in
                 // The linked batter is side-specific (opponent roster vs.
                 // our own); switching sides always clears it rather than
                 // risking a stale cross-side link riding along on the next
