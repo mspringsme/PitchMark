@@ -10737,6 +10737,22 @@ struct PitchTrackerView: View {
             .onChange(of: selectedBatterId) { _, newId in
                 selectedHitterId = newId.flatMap { hitterIdByJerseyCellId[$0] }
             }
+            .onChange(of: jerseyCells.map { $0.id }) { _, validIds in
+                // Deleting a jersey cell happens from several places
+                // (the pin-icon detail popover's Delete, JerseyRow's own
+                // "Delete Batter?" sheet) and none of them know about this
+                // roster-link map, nor should they each have to - pruning
+                // here once, keyed off jerseyCells itself changing, catches
+                // every existing and future delete path instead of needing
+                // each one patched individually. Without this, a deleted
+                // roster player stayed permanently excluded from "Add From
+                // Team" (atBatRosterPickerCandidates filters out anyone
+                // already in hitterIdByJerseyCellId.values) even though
+                // they were no longer actually in the lineup - only a full
+                // relaunch (which resets this map in chooseGame) cleared it.
+                let validSet = Set(validIds)
+                hitterIdByJerseyCellId = hitterIdByJerseyCellId.filter { validSet.contains($0.key) }
+            }
             .sheet(isPresented: $showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }) {
                 setOpponentSheetView
                     .fixedAppDynamicType()
