@@ -4362,7 +4362,14 @@ struct PitchTrackerView: View {
                 }
                 atBatHeatmapResultFilter = .all
             }
-            .confirmationDialog("Choose Pitch Type", isPresented: $showAllPitchesHeatmapPitchPicker, titleVisibility: .visible) {
+            // Folded "Select the pitch type for this location." into the
+            // title and dropped the separate message: closure - same
+            // precaution as undoButtonOverlay's conversion nearby (see its
+            // comment); a dynamic ForEach button list means this one can't
+            // move to appConfirmationDialog outright, but avoiding the
+            // heavier actions+message confirmationDialog overload is the
+            // same fix in spirit.
+            .confirmationDialog("Choose Pitch Type - Select the pitch type for this location.", isPresented: $showAllPitchesHeatmapPitchPicker, titleVisibility: .visible) {
                 ForEach(availablePitches(for: selectedTemplate), id: \.self) { pitch in
                     Button(pitch) {
                         guard let pendingTap = pendingAllPitchesHeatmapTap else { return }
@@ -4377,8 +4384,6 @@ struct PitchTrackerView: View {
                 Button("Cancel", role: .cancel) {
                     pendingAllPitchesHeatmapTap = nil
                 }
-            } message: {
-                Text("Select the pitch type for this location.")
             }
         }
     }
@@ -5149,14 +5154,17 @@ struct PitchTrackerView: View {
                 .buttonStyle(.plain)
                 .disabled(lastPersistedEventInCurrentMode == nil)
                 .accessibilityLabel("Undo Last Pitch")
-                .confirmationDialog("Undo Last Pitch?", isPresented: $showUndoConfirm, titleVisibility: .visible) {
-                    Button("Undo", role: .destructive) {
-                        undoLastPitch()
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("This will remove the last recorded pitch.")
-                }
+                // Same conversion as undoButtonOverlay's twin, same reason -
+                // see the comment there.
+                .appConfirmationDialog(
+                    isPresented: $showUndoConfirm,
+                    title: "Undo Last Pitch?",
+                    message: "This will remove the last recorded pitch.",
+                    primaryTitle: "Undo",
+                    primaryRole: .destructive,
+                    primaryAction: { undoLastPitch() },
+                    secondaryTitle: "Cancel"
+                )
             }
 
             Spacer(minLength: 0)
@@ -7391,14 +7399,28 @@ struct PitchTrackerView: View {
         .buttonStyle(.plain)
         .disabled(lastPersistedEventInCurrentMode == nil)
         .accessibilityLabel("Undo Last Pitch")
-        .confirmationDialog("Undo Last Pitch?", isPresented: $showUndoConfirm, titleVisibility: .visible) {
-            Button("Undo", role: .destructive) {
-                undoLastPitch()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This will remove the last recorded pitch.")
-        }
+        // Was SwiftUI's native .confirmationDialog(...) { actions } message: { Text(...) }
+        // - the 5-parameter overload with a separate message closure. That
+        // overload's generic signature is heavier than the actions-only
+        // version used everywhere else in this file, and this exact spot
+        // (deep inside strikeZoneArea, inside the most nested view chain in
+        // the app) crashed on launch three times running, always at this
+        // same confirmationDialog call, across otherwise-unrelated changes
+        // elsewhere in the file - strong evidence this specific overload,
+        // not general file complexity, was the actual trigger. Switched to
+        // this codebase's own appConfirmationDialog (SupportExtensions.swift),
+        // which is plain title/message Strings, not a message ViewBuilder -
+        // also the established house convention for confirmation dialogs
+        // here (see CLAUDE.md's Dialogs section), not a one-off workaround.
+        .appConfirmationDialog(
+            isPresented: $showUndoConfirm,
+            title: "Undo Last Pitch?",
+            message: "This will remove the last recorded pitch.",
+            primaryTitle: "Undo",
+            primaryRole: .destructive,
+            primaryAction: { undoLastPitch() },
+            secondaryTitle: "Cancel"
+        )
         .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
         .offset(y: -115)
     }
