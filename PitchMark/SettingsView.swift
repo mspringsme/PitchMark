@@ -2761,9 +2761,13 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showGameChooser) {
                 GameSelectionSheet(
-                    onCreate: { name, date, trackingMode in
+                    onCreate: { name, date, trackingMode, completion in
                         let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: [], trackingMode: trackingMode)
-                        authManager.saveGame(newGame)
+                        authManager.saveGame(newGame) { result in
+                            if case .success(let saved) = result {
+                                DispatchQueue.main.async { completion(saved) }
+                            }
+                        }
                     },
                     onChoose: { gameId in
                         let ownerUid = authManager.user?.uid ?? ""

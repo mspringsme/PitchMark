@@ -9472,7 +9472,7 @@ struct PitchTrackerView: View {
 
     @ViewBuilder private var gameSheetView: some View {
         GameSelectionSheet(
-            onCreate: { name, date, trackingMode in
+            onCreate: { name, date, trackingMode, completion in
                 if isDemoMode {
                     requireSignInForDemo("Sign in to create your own games.")
                     return
@@ -9485,7 +9485,11 @@ struct PitchTrackerView: View {
                     batterIds: jerseyCells.map { $0.id.uuidString },
                     trackingMode: trackingMode
                 )
-                authManager.saveGame(newGame)
+                authManager.saveGame(newGame) { result in
+                    if case .success(let saved) = result {
+                        DispatchQueue.main.async { completion(saved) }
+                    }
+                }
             },
             onChoose: { gameId in
                 let ownerUid = isDemoMode ? Self.demoUserId : (authManager.user?.uid ?? "")
@@ -13243,7 +13247,11 @@ struct BlendedStrokeCircle: View {
 }
 
 struct GameSelectionSheet: View {
-    var onCreate: (String, Date, TrackingMode) -> Void
+    // The completion fires with the real saved Game (real id included) once
+    // the Firestore write actually confirms - see AddGameCard's onSave
+    // below for why this replaced a fragile reload-and-match-by-name-date
+    // approach.
+    var onCreate: (String, Date, TrackingMode, @escaping (Game) -> Void) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
     @Binding var codeShareInitialTab: Int
@@ -13281,30 +13289,34 @@ struct GameSelectionSheet: View {
 
     @ViewBuilder
     private func gameRow(for game: Game) -> some View {
+        // A row with no id yet is a just-created placeholder still waiting
+        // on its real id from Firestore (see AddGameCard's onSave) - tapping
+        // it used to reload everything and guess which game you meant by
+        // matching opponent name + date, which could resolve to the wrong
+        // game (e.g. a same-named game you'd just deleted, mid-cascade) or
+        // nothing at all, and either way silently failed to enter anything.
+        // Disabling the row for that brief window instead is honest about
+        // what's happening and never guesses.
+        let isStillSaving = (game.id ?? "").isEmpty
         HStack {
             Button(action: {
-                if let gid = game.id, !gid.isEmpty {
-                    onChoose(gid)
-                    dismiss()
-                } else {
-                    // Resolve freshly created game by reloading and matching on name/date
-                    authManager.loadGames { loaded in
-                        self.games = loaded
-                        let calendar = Calendar.current
-                        if let resolved = loaded.first(where: { $0.opponent == game.opponent && calendar.isDate($0.date, inSameDayAs: game.date) }) {
-                            onChoose(resolved.id ?? "")
-                        }
-                        dismiss()
-                    }
-                }
+                guard let gid = game.id, !gid.isEmpty else { return }
+                onChoose(gid)
+                dismiss()
             }) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(game.opponent)
                             .font(.headline)
-                        Text(Self.formatter.string(from: game.date))
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        if isStillSaving {
+                            Label("Saving…", systemImage: "icloud.and.arrow.up")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(Self.formatter.string(from: game.date))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         if game.isArchived {
                             Label("Archived", systemImage: "archivebox")
                                 .font(.caption2)
@@ -13315,6 +13327,8 @@ struct GameSelectionSheet: View {
                 }
             }
             .buttonStyle(.plain)
+            .disabled(isStillSaving)
+            .opacity(isStillSaving ? 0.6 : 1.0)
 
             Spacer(minLength: 12)
 
@@ -13397,6 +13411,17 @@ struct GameSelectionSheet: View {
                 }
             }
             .refreshable {
+                authManager.loadGames { loaded in
+                    self.games = loaded
+                }
+            }
+            .onAppear {
+                // Defends against a stale list after a delete elsewhere in
+                // the app (this sheet otherwise only reflects whatever
+                // games[] the parent happened to pass in when presenting
+                // it) - a real symptom report was entering a DIFFERENT,
+                // already-existing game also failing right after deleting
+                // one, consistent with acting on a stale snapshot.
                 authManager.loadGames { loaded in
                     self.games = loaded
                 }
@@ -13494,9 +13519,22 @@ struct GameSelectionSheet: View {
                                 guard !name.isEmpty else { return }
                                 let item = Game(opponent: name, date: newGameDate, jerseyNumbers: [], trackingMode: newGameTrackingMode)
                                 games.append(item)
-                                onCreate(name, newGameDate, newGameTrackingMode)
                                 showAddGamePopover = false
                                 // Keep the game selection sheet open; do not dismiss here.
+                                onCreate(name, newGameDate, newGameTrackingMode) { saved in
+                                    // Swap the placeholder (id: nil) for the
+                                    // real, server-confirmed game the moment
+                                    // it's ready - the row's tap handler no
+                                    // longer needs to guess at this by
+                                    // reloading and matching on name/date.
+                                    if let idx = games.firstIndex(where: {
+                                        $0.id == nil && $0.opponent == name && Calendar.current.isDate($0.date, inSameDayAs: newGameDate)
+                                    }) {
+                                        games[idx] = saved
+                                    } else {
+                                        games.append(saved)
+                                    }
+                                }
                             }
                         )
                         .frame(maxWidth: 360)

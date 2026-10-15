@@ -2015,27 +2015,42 @@ class AuthManager: ObservableObject {
 
 extension AuthManager {
     func saveGame(_ game: Game) {
+        saveGame(game, completion: nil)
+    }
+
+    /// Same write as the fire-and-forget version above, plus an optional
+    /// completion carrying the saved Game (with its real, resolved id) once
+    /// the write actually confirms. Exists specifically so a NEW game's
+    /// creation flow can know its real id the moment it's available,
+    /// instead of guessing at it later by reloading everything and matching
+    /// on opponent name + date - that match was never reliable (two games
+    /// with the same opponent on the same day, or a race against an
+    /// in-flight delete of a same-named game, could resolve to the wrong
+    /// game or nothing at all) and was the real cause of "created a game
+    /// but couldn't enter it."
+    func saveGame(_ game: Game, completion: ((Result<Game, Error>) -> Void)?) {
         guard let user = user else {
             debugLog("No signed-in user to save game for.")
+            completion?(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
             return
         }
-        
+
         let db = Firestore.firestore()
         let gamesRef = db.collection("users").document(user.uid).collection("games")
         let docRef = (game.id != nil) ? gamesRef.document(game.id!) : gamesRef.document()
         let isNew = (game.id == nil)
-        
+
         do {
             var toSave = game
             if isNew {
                 toSave.jerseyNumbers = []   // keep your existing logic
             }
-            
+
             toSave.id = docRef.documentID
-            
+
             // ✅ Encode the Game model
             let encoded = try Firestore.Encoder().encode(toSave)
-            
+
             // ✅ Add create-only fields (prevents overwriting participants on updates)
             var data = encoded
             if isNew {
@@ -2043,17 +2058,20 @@ extension AuthManager {
                 data["participants"] = [user.uid: true]   // ✅ host is always included
                 data["createdAt"] = FieldValue.serverTimestamp()
             }
-            
+
             docRef.setData(data, merge: true) { error in
                 if let error = error {
                     debugLog("Error saving game: \(error)")
+                    completion?(.failure(error))
                 } else {
                     debugLog("✅ Game saved: \(docRef.documentID)")
+                    completion?(.success(toSave))
                 }
             }
-            
+
         } catch {
             debugLog("Encoding error saving game: \(error)")
+            completion?(.failure(error))
         }
     }
     
