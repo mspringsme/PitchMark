@@ -232,6 +232,8 @@ struct PitchTrackerView: View {
     @State private var quickAddPlayerName = ""
     @State private var quickAddPlayerJersey = ""
     @State private var quickAddTeamId: String? = nil
+    @State private var quickAddPlayerPositions: Set<FieldPosition> = []
+    @State private var quickAddPlayerBattingSide: BattingSide? = nil
     @State private var quickAddOnCreate: ((TeamPlayer) -> Void)? = nil
     @State private var chooseBattersSelection: Set<String> = []
     // Stamped onto PitchEvent.hitterId - derived automatically from
@@ -6101,6 +6103,8 @@ struct PitchTrackerView: View {
     private func presentQuickAddPlayer(teamId: String, onCreate: @escaping (TeamPlayer) -> Void) {
         quickAddPlayerName = ""
         quickAddPlayerJersey = ""
+        quickAddPlayerPositions = []
+        quickAddPlayerBattingSide = nil
         quickAddTeamId = teamId
         quickAddOnCreate = onCreate
         showQuickAddPlayerSheet = true
@@ -6111,7 +6115,13 @@ struct PitchTrackerView: View {
         let name = quickAddPlayerName.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
         let jersey = quickAddPlayerJersey.trimmingCharacters(in: .whitespaces)
-        authManager.addTeamPlayerCreatingNewPlayer(teamId: teamId, name: name, jerseyNumber: jersey.isEmpty ? nil : jersey) { result in
+        authManager.addTeamPlayerCreatingNewPlayer(
+            teamId: teamId,
+            name: name,
+            jerseyNumber: jersey.isEmpty ? nil : jersey,
+            positions: quickAddPlayerPositions.isEmpty ? nil : Array(quickAddPlayerPositions),
+            battingSide: quickAddPlayerBattingSide
+        ) { result in
             guard case .success(let teamPlayer) = result else { return }
             self.showQuickAddPlayerSheet = false
             // Refresh whichever side(s) this team feeds, and reload the
@@ -6131,11 +6141,52 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// Matches TeamRosterView's own position-toggle row (capsules, same
+    /// styling) - that one is private to TeamRosterView, so this is a
+    /// second small copy rather than a cross-file reuse, to keep this quick
+    /// sheet's own state self-contained.
+    private func quickAddPositionToggleRow(selected: Binding<Set<FieldPosition>>) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(FieldPosition.allCases, id: \.self) { position in
+                    let isSelected = selected.wrappedValue.contains(position)
+                    Button(position.rawValue) {
+                        if isSelected {
+                            selected.wrappedValue.remove(position)
+                        } else {
+                            selected.wrappedValue.insert(position)
+                        }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
+                }
+            }
+        }
+    }
+
     private var quickAddPlayerSheetView: some View {
         NavigationView {
             Form {
                 TextField("Name", text: $quickAddPlayerName)
                 TextField("Jersey #", text: $quickAddPlayerJersey)
+
+                Section("Position") {
+                    quickAddPositionToggleRow(selected: $quickAddPlayerPositions)
+                }
+
+                Section("Batting Side") {
+                    Picker("Batting Side", selection: $quickAddPlayerBattingSide) {
+                        Text("Not Set").tag(BattingSide?.none)
+                        ForEach(BattingSide.allCases, id: \.self) { side in
+                            Text(side.displayName).tag(BattingSide?.some(side))
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
             }
             .navigationTitle("Add Player")
             .navigationBarTitleDisplayMode(.inline)
@@ -10840,16 +10891,27 @@ struct PitchTrackerView: View {
                 hitterIdByJerseyCellId = hitterIdByJerseyCellId.filter { validSet.contains($0.key) }
             }
             .sheet(isPresented: $showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }) {
+                // Defaulted to the system's full-size sheet before, which
+                // looked odd for a sheet this sparse - medium fits its
+                // content, with large still reachable by dragging up for
+                // the choose-batters step's longer list.
                 setOpponentSheetView
                     .fixedAppDynamicType()
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showSetMyTeamSheet) {
                 setMyTeamSheetView
                     .fixedAppDynamicType()
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showQuickAddPlayerSheet) {
+                // Same reasoning as setOpponentSheetView above - the old
+                // 2-field version looked lost filling the whole screen;
+                // medium/large now that Position and Batting Side add more
+                // content, matching TeamRosterView's own Add Player form.
                 quickAddPlayerSheetView
                     .fixedAppDynamicType()
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showAtBatRosterPickerSheet) {
                 atBatRosterPickerSheetView

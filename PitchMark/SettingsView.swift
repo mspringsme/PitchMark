@@ -1016,21 +1016,15 @@ struct SettingsView: View {
             )
 
             if expandedHomeOverviewSection == .teams {
+                // The create-team row used to live ONLY in the empty-state
+                // branch below, so it disappeared the moment you had your
+                // first team - no way to add a second one from Home. It's
+                // unconditional now, under the list instead of replacing it.
                 if myTeams.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("You're not on any teams yet.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        HStack {
-                            TextField("Team name", text: $newTeamNameForHome)
-                                .textFieldStyle(.roundedBorder)
-                            Button("Create a Team") {
-                                createTeamFromHome()
-                            }
-                            .disabled(newTeamNameForHome.trimmingCharacters(in: .whitespaces).isEmpty)
-                        }
-                    }
-                    .padding(.horizontal)
+                    Text("You're not on any teams yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal)
                 } else {
                     VStack(spacing: 8) {
                         ForEach(myTeams, id: \.team.id) { entry in
@@ -1039,6 +1033,16 @@ struct SettingsView: View {
                     }
                     .padding(.horizontal)
                 }
+
+                HStack {
+                    TextField("Team name", text: $newTeamNameForHome)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Create a Team") {
+                        createTeamFromHome()
+                    }
+                    .disabled(newTeamNameForHome.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .padding(.horizontal)
             }
         }
         .onAppear {
