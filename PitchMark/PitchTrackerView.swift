@@ -7429,58 +7429,53 @@ struct PitchTrackerView: View {
     /// Mirrors `resetButtonOverlay` on the opposite corner — Undo moved here
     /// from the Cards view now that only the filter button lives there.
     ///
-    /// Crashed on launch FIVE times running at this exact property, across
-    /// otherwise-unrelated fixes in between. Ruled out so far: the native
-    /// .confirmationDialog message-closure overload specifically (switched
-    /// to appConfirmationDialog - still crashed), and AnyView erasure of
-    /// just the inner Button+Label construction before chaining the
-    /// remaining modifiers (still crashed, identical signature, same line).
-    /// That second attempt assumed the crash was about the VALUE's nested
-    /// type; it's actually about this PROPERTY's own declared return type.
-    /// `some View` is an opaque type - the compiler has to synthesize a
-    /// mangled-name descriptor for "whatever concrete type this getter
-    /// returns" and the runtime resolves it lazily via
-    /// swift_getTypeByMangledNameInContextImpl the first time this property
-    /// is read from strikeZoneArea's deeply nested context. Erasing a value
-    /// used INSIDE the function body doesn't change that - the getter's own
-    /// signature was still `some View`, so the opaque-type resolution still
-    /// ran, on the exact same crash path, every time. Declaring the
-    /// property AnyView outright removes the opaque type entirely: there is
-    /// no mangled name to resolve because the return type is already
-    /// concrete.
+    /// Crashed on launch SIX times running at this exact property, across
+    /// otherwise-unrelated fixes in between, including after two different
+    /// AnyView-erasure attempts that both assumed the problem was the
+    /// property's declared type (`some View` vs `AnyView`). Neither
+    /// changed the crash at all - because `AnyView(x)` doesn't skip
+    /// resolving `x`'s type, it requires it: `AnyView.init<V: View>(_:)`
+    /// is itself generic, so the runtime still has to instantiate V's full
+    /// metadata to call the initializer. Wrapping a long modifier chain in
+    /// AnyView only once - at the start, or once at the end - still leaves
+    /// one single expression where every modifier in between stacks onto
+    /// an un-erased type before that one eraser call, and that's the exact
+    /// expression whose metadata blows up.
+    ///
+    /// The actual fix: erase back to AnyView after EVERY modifier, so no
+    /// expression ever asks the runtime to resolve more than one modifier
+    /// stacked on a plain AnyView at a time.
     private var undoButtonOverlay: AnyView {
-        let button = AnyView(
-            Button {
-                showUndoConfirm = true
-            } label: {
-                Text("Undo last pitch")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .frame(maxWidth: 70)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(6)
-            }
-            .buttonStyle(.plain)
-            .disabled(lastPersistedEventInCurrentMode == nil)
-            .accessibilityLabel("Undo Last Pitch")
-        )
+        var label: AnyView = AnyView(Text("Undo last pitch"))
+        label = AnyView(label.font(.caption2.weight(.semibold)))
+        label = AnyView(label.foregroundStyle(.red))
+        label = AnyView(label.multilineTextAlignment(.center))
+        label = AnyView(label.lineLimit(2))
+        label = AnyView(label.frame(maxWidth: 70))
+        label = AnyView(label.fixedSize(horizontal: false, vertical: true))
+        label = AnyView(label.padding(6))
 
-        return AnyView(
-            button
-                .appConfirmationDialog(
-                    isPresented: $showUndoConfirm,
-                    title: "Undo Last Pitch?",
-                    message: "This will remove the last recorded pitch.",
-                    primaryTitle: "Undo",
-                    primaryRole: .destructive,
-                    primaryAction: { undoLastPitch() },
-                    secondaryTitle: "Cancel"
-                )
-                .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
-                .offset(y: -115)
+        var button: AnyView = AnyView(
+            Button(action: { showUndoConfirm = true }, label: { label })
         )
+        button = AnyView(button.buttonStyle(.plain))
+        button = AnyView(button.disabled(lastPersistedEventInCurrentMode == nil))
+        button = AnyView(button.accessibilityLabel("Undo Last Pitch"))
+        button = AnyView(
+            button.appConfirmationDialog(
+                isPresented: $showUndoConfirm,
+                title: "Undo Last Pitch?",
+                message: "This will remove the last recorded pitch.",
+                primaryTitle: "Undo",
+                primaryRole: .destructive,
+                primaryAction: { undoLastPitch() },
+                secondaryTitle: "Cancel"
+            )
+        )
+        button = AnyView(button.frame(height: zoneCornerButtonBlockHeight, alignment: .top))
+        button = AnyView(button.offset(y: -115))
+
+        return button
     }
     
     private var gameStatsOverlay: some View {
