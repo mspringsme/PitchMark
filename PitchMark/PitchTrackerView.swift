@@ -2557,9 +2557,15 @@ struct PitchTrackerView: View {
     /// Tapping Away for a game with no opponent roster yet opens setup
     /// instead of silently switching to an empty picker.
     private func handleSelectAwaySide() {
-        guard let gid = selectedGameId, let game = games.first(where: { $0.id == gid }),
-              let awayTeamId = game.awayTeamId, !awayTeamId.isEmpty else {
+        let game = selectedGameId.flatMap { gid in games.first(where: { $0.id == gid }) }
+        guard let awayTeamId = game?.awayTeamId, !awayTeamId.isEmpty else {
             teamSetupShouldFlipSide = true
+            // Pre-fill from the game's own opponent name (set back when the
+            // game itself was created) - no reason to make the coach retype
+            // the name that's already sitting right there on the game.
+            if let opponent = game?.opponent {
+                newOpponentTeamName = opponent
+            }
             refreshOpponentTeamCandidates()
             showSetOpponentSheet = true
             return
@@ -6097,6 +6103,13 @@ struct PitchTrackerView: View {
         teamSetupShouldFlipSide = false
         switch activeSide {
         case .home:
+            // Same pre-fill handleSelectAwaySide already does when Them
+            // itself is tapped with no opponent set - this is the other
+            // path to the identical "New Opponent Roster" field, from the
+            // Add a Batter menu instead.
+            if let opponent = activeGameForBatterSetup?.opponent {
+                newOpponentTeamName = opponent
+            }
             refreshOpponentTeamCandidates()
             showSetOpponentSheet = true
         case .away:
