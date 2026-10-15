@@ -10655,6 +10655,20 @@ struct PitchTrackerView: View {
     }
 
     var body: some View {
+        // Forces @Published currentMode's Combine/KeyPath generic metadata
+        // to resolve HERE, at the shallowest point in body's own call
+        // stack, instead of lazily the first time something deep inside
+        // strikeZoneArea's nested chain (confirmSheetBinding, 60+
+        // AttributeGraph frames in) reads it - same root cause as
+        // undoButtonOverlay's crash (lazy generic metadata instantiation
+        // crashing when it first happens deep in a recursive AttributeGraph
+        // update), different site: that one was a View's own opaque return
+        // type, this one is Published's internal KeyPath machinery, which
+        // can't be erased away since it's SDK-synthesized. Metadata caches
+        // are process-global once resolved, so paying this cost once here -
+        // where the stack is shallow - means the deep call site never has
+        // to pay it at all.
+        _ = sessionManager.currentMode
         let resolvedDisplayLiveId = displayOnlyLiveId ?? (displayOnlyLiveIdStorage.isEmpty ? nil : displayOnlyLiveIdStorage)
         let displayCoverBinding = Binding<Bool>(
             get: { isDisplayOnlyMode && !isPad },
