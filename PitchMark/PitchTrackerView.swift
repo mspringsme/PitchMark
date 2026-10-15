@@ -2580,9 +2580,18 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// Excludes this game's own "my team" (Game.teamId) from the candidate
+    /// list - without this, nothing stopped a coach from picking their own
+    /// team as the opponent (it's just "one of my teams" from loadMyTeams's
+    /// point of view, with no concept of "opponent-only" teams). Doing so
+    /// sets Game.awayTeamId == Game.teamId, which makes awayRoster and
+    /// homeRoster load the identical roster - "Them" then shows "Us" data
+    /// everywhere, which is exactly what this prevents rather than relying
+    /// on the coach never tapping the wrong (only) row in the list.
     private func refreshOpponentTeamCandidates() {
+        let myTeamId = activeGameForBatterSetup?.teamId
         authManager.loadMyTeams { teams, _ in
-            self.opponentTeamCandidates = teams
+            self.opponentTeamCandidates = teams.filter { $0.team.id != myTeamId }
         }
     }
 
@@ -2686,9 +2695,11 @@ struct PitchTrackerView: View {
         activeSide = .home
     }
 
+    /// Symmetric to refreshOpponentTeamCandidates' exclusion, mirrored.
     private func refreshMyTeamCandidates() {
+        let awayTeamId = activeGameForBatterSetup?.awayTeamId
         authManager.loadMyTeams { teams, _ in
-            self.myTeamCandidates = teams
+            self.myTeamCandidates = teams.filter { $0.team.id != awayTeamId }
         }
     }
 
