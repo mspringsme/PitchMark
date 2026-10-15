@@ -5145,26 +5145,32 @@ struct PitchTrackerView: View {
         let latestEditableEvent = filteredEvents.first(where: { $0.id != nil })
         return HStack(spacing: 6) {
             if showCards {
-                Button {
-                    showUndoConfirm = true
-                } label: {
-                    Image(systemName: "arrow.uturn.backward.circle.fill")
-                        .font(.title3.weight(.semibold))
-                }
-                .buttonStyle(.plain)
-                .disabled(lastPersistedEventInCurrentMode == nil)
-                .accessibilityLabel("Undo Last Pitch")
-                // Same conversion as undoButtonOverlay's twin, same reason -
-                // see the comment there.
-                .appConfirmationDialog(
-                    isPresented: $showUndoConfirm,
-                    title: "Undo Last Pitch?",
-                    message: "This will remove the last recorded pitch.",
-                    primaryTitle: "Undo",
-                    primaryRole: .destructive,
-                    primaryAction: { undoLastPitch() },
-                    secondaryTitle: "Cancel"
+                // Mid-expression AnyView erasure, same reasoning as
+                // undoButtonOverlay's twin (see the comment there) - this
+                // button has the identical shape and sits inside the same
+                // deeply nested strikeZoneArea chain, so it's erased
+                // pre-emptively even though it hasn't specifically crashed.
+                let undoButton = AnyView(
+                    Button {
+                        showUndoConfirm = true
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward.circle.fill")
+                            .font(.title3.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(lastPersistedEventInCurrentMode == nil)
+                    .accessibilityLabel("Undo Last Pitch")
                 )
+                undoButton
+                    .appConfirmationDialog(
+                        isPresented: $showUndoConfirm,
+                        title: "Undo Last Pitch?",
+                        message: "This will remove the last recorded pitch.",
+                        primaryTitle: "Undo",
+                        primaryRole: .destructive,
+                        primaryAction: { undoLastPitch() },
+                        secondaryTitle: "Cancel"
+                    )
             }
 
             Spacer(minLength: 0)
@@ -7383,46 +7389,53 @@ struct PitchTrackerView: View {
 
     /// Mirrors `resetButtonOverlay` on the opposite corner — Undo moved here
     /// from the Cards view now that only the filter button lives there.
+    ///
+    /// Crashed on launch four times running at this exact property, across
+    /// otherwise-unrelated fixes in between - including after replacing its
+    /// native confirmationDialog with this codebase's own appConfirmationDialog,
+    /// which ruled out "it's specifically that overload" as the whole story.
+    /// The remaining difference from resetButtonOverlay (same corner, same
+    /// shape, never crashed) is this property's own modifier-chain DEPTH:
+    /// a 7-modifier Text label inside a Button, then 5 more modifiers
+    /// chained on top - each one nests the accumulated type one layer
+    /// deeper. AnyView at this property's CALL SITE (tried in an earlier
+    /// round) can't help a crash that happens while evaluating the
+    /// property's OWN body, before any wrapping occurs - erasing
+    /// mid-expression, before the remaining modifiers chain on, is the
+    /// actual fix: it collapses the Button+Label's own deeply nested type
+    /// down to AnyView first, so appConfirmationDialog/frame/offset below
+    /// stack onto something flat instead of onto that full nested type.
     private var undoButtonOverlay: some View {
-        Button {
-            showUndoConfirm = true
-        } label: {
-            Text("Undo last pitch")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.red)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(maxWidth: 70)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(6)
-        }
-        .buttonStyle(.plain)
-        .disabled(lastPersistedEventInCurrentMode == nil)
-        .accessibilityLabel("Undo Last Pitch")
-        // Was SwiftUI's native .confirmationDialog(...) { actions } message: { Text(...) }
-        // - the 5-parameter overload with a separate message closure. That
-        // overload's generic signature is heavier than the actions-only
-        // version used everywhere else in this file, and this exact spot
-        // (deep inside strikeZoneArea, inside the most nested view chain in
-        // the app) crashed on launch three times running, always at this
-        // same confirmationDialog call, across otherwise-unrelated changes
-        // elsewhere in the file - strong evidence this specific overload,
-        // not general file complexity, was the actual trigger. Switched to
-        // this codebase's own appConfirmationDialog (SupportExtensions.swift),
-        // which is plain title/message Strings, not a message ViewBuilder -
-        // also the established house convention for confirmation dialogs
-        // here (see CLAUDE.md's Dialogs section), not a one-off workaround.
-        .appConfirmationDialog(
-            isPresented: $showUndoConfirm,
-            title: "Undo Last Pitch?",
-            message: "This will remove the last recorded pitch.",
-            primaryTitle: "Undo",
-            primaryRole: .destructive,
-            primaryAction: { undoLastPitch() },
-            secondaryTitle: "Cancel"
+        let button = AnyView(
+            Button {
+                showUndoConfirm = true
+            } label: {
+                Text("Undo last pitch")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .frame(maxWidth: 70)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(6)
+            }
+            .buttonStyle(.plain)
+            .disabled(lastPersistedEventInCurrentMode == nil)
+            .accessibilityLabel("Undo Last Pitch")
         )
-        .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
-        .offset(y: -115)
+
+        return button
+            .appConfirmationDialog(
+                isPresented: $showUndoConfirm,
+                title: "Undo Last Pitch?",
+                message: "This will remove the last recorded pitch.",
+                primaryTitle: "Undo",
+                primaryRole: .destructive,
+                primaryAction: { undoLastPitch() },
+                secondaryTitle: "Cancel"
+            )
+            .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
+            .offset(y: -115)
     }
     
     private var gameStatsOverlay: some View {
