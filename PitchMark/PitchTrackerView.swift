@@ -481,6 +481,8 @@ struct PitchTrackerView: View {
     @State private var showSelectGameFirstAlert = false
     @State private var showCodeShareErrorAlert = false
     @State private var codeShareErrorMessage: String = ""
+    @State private var showGameEntryErrorAlert = false
+    @State private var gameEntryErrorMessage: String = ""
     @State private var shareCode: String = ""
     @AppStorage(DefaultsKeys.displayOnlyMode) private var isDisplayOnlyMode: Bool = false
     @AppStorage(DefaultsKeys.displayOnlyLiveId) private var displayOnlyLiveIdStorage: String = ""
@@ -1397,6 +1399,18 @@ struct PitchTrackerView: View {
             }
             guard let snap, snap.exists else {
                 debugLog("⚠️ Game doc missing while listening:", ref.path)
+                // The doc is really gone (deleted, or its cascade delete ran
+                // while this was the active game) - not a transient cache
+                // miss, since a snapshot listener attached right after this
+                // same game was just created already sees the pending local
+                // write as existing. Previously this just logged and left
+                // isGame=true with nothing ever populating the tracker -
+                // indistinguishable from "entering a game does nothing."
+                // Bounce back out to the chooser instead of stranding the
+                // user on a blank screen for a game that no longer exists.
+                DispatchQueue.main.async {
+                    self.handleActiveGameDocMissing(gameId: gid)
+                }
                 return
             }
 
@@ -1457,6 +1471,31 @@ struct PitchTrackerView: View {
                 debugLog("❌ decode Game failed:", error)
             }
         }
+    }
+
+    /// Exits game mode back to the chooser when the active game's own
+    /// document has been deleted out from under its listener - see the call
+    /// site in `startListeningToActiveGame`.
+    private func handleActiveGameDocMissing(gameId: String) {
+        // The user may have already moved on (switched games, left game mode)
+        // by the time this async callback lands - don't clobber whatever is
+        // current if it's no longer about this game.
+        guard selectedGameId == gameId else { return }
+
+        gameListener?.remove()
+        gameListener = nil
+        games.removeAll(where: { $0.id == gameId })
+
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: DefaultsKeys.activeGameId)
+        defaults.removeObject(forKey: DefaultsKeys.activeGameOwnerUserId)
+
+        selectedGameId = nil
+        activeGameOwnerUserId = nil
+        isGame = false
+
+        gameEntryErrorMessage = "That game no longer exists (it may have been deleted). Pick another game to continue."
+        showGameEntryErrorAlert = true
     }
 
     private func startListeningToGamePitchEvents() {
@@ -10939,6 +10978,11 @@ struct PitchTrackerView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(codeShareErrorMessage)
+            }
+            .alert("Game Not Found", isPresented: $showGameEntryErrorAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(gameEntryErrorMessage)
             }
             .alert("No pitches found", isPresented: $showNoJerseyEventsAlert) {
                 Button("OK", role: .cancel) { }
