@@ -7429,22 +7429,26 @@ struct PitchTrackerView: View {
     /// Mirrors `resetButtonOverlay` on the opposite corner — Undo moved here
     /// from the Cards view now that only the filter button lives there.
     ///
-    /// Crashed on launch four times running at this exact property, across
-    /// otherwise-unrelated fixes in between - including after replacing its
-    /// native confirmationDialog with this codebase's own appConfirmationDialog,
-    /// which ruled out "it's specifically that overload" as the whole story.
-    /// The remaining difference from resetButtonOverlay (same corner, same
-    /// shape, never crashed) is this property's own modifier-chain DEPTH:
-    /// a 7-modifier Text label inside a Button, then 5 more modifiers
-    /// chained on top - each one nests the accumulated type one layer
-    /// deeper. AnyView at this property's CALL SITE (tried in an earlier
-    /// round) can't help a crash that happens while evaluating the
-    /// property's OWN body, before any wrapping occurs - erasing
-    /// mid-expression, before the remaining modifiers chain on, is the
-    /// actual fix: it collapses the Button+Label's own deeply nested type
-    /// down to AnyView first, so appConfirmationDialog/frame/offset below
-    /// stack onto something flat instead of onto that full nested type.
-    private var undoButtonOverlay: some View {
+    /// Crashed on launch FIVE times running at this exact property, across
+    /// otherwise-unrelated fixes in between. Ruled out so far: the native
+    /// .confirmationDialog message-closure overload specifically (switched
+    /// to appConfirmationDialog - still crashed), and AnyView erasure of
+    /// just the inner Button+Label construction before chaining the
+    /// remaining modifiers (still crashed, identical signature, same line).
+    /// That second attempt assumed the crash was about the VALUE's nested
+    /// type; it's actually about this PROPERTY's own declared return type.
+    /// `some View` is an opaque type - the compiler has to synthesize a
+    /// mangled-name descriptor for "whatever concrete type this getter
+    /// returns" and the runtime resolves it lazily via
+    /// swift_getTypeByMangledNameInContextImpl the first time this property
+    /// is read from strikeZoneArea's deeply nested context. Erasing a value
+    /// used INSIDE the function body doesn't change that - the getter's own
+    /// signature was still `some View`, so the opaque-type resolution still
+    /// ran, on the exact same crash path, every time. Declaring the
+    /// property AnyView outright removes the opaque type entirely: there is
+    /// no mangled name to resolve because the return type is already
+    /// concrete.
+    private var undoButtonOverlay: AnyView {
         let button = AnyView(
             Button {
                 showUndoConfirm = true
@@ -7463,18 +7467,20 @@ struct PitchTrackerView: View {
             .accessibilityLabel("Undo Last Pitch")
         )
 
-        return button
-            .appConfirmationDialog(
-                isPresented: $showUndoConfirm,
-                title: "Undo Last Pitch?",
-                message: "This will remove the last recorded pitch.",
-                primaryTitle: "Undo",
-                primaryRole: .destructive,
-                primaryAction: { undoLastPitch() },
-                secondaryTitle: "Cancel"
-            )
-            .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
-            .offset(y: -115)
+        return AnyView(
+            button
+                .appConfirmationDialog(
+                    isPresented: $showUndoConfirm,
+                    title: "Undo Last Pitch?",
+                    message: "This will remove the last recorded pitch.",
+                    primaryTitle: "Undo",
+                    primaryRole: .destructive,
+                    primaryAction: { undoLastPitch() },
+                    secondaryTitle: "Cancel"
+                )
+                .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
+                .offset(y: -115)
+        )
     }
     
     private var gameStatsOverlay: some View {
@@ -7762,7 +7768,7 @@ struct PitchTrackerView: View {
                 .overlay(AnyView(resetOverlay), alignment: .bottomLeading)
                 .overlay(AnyView(gameStatsOverlay), alignment: .bottomTrailing)
                 .overlay(AnyView(resetButtonOverlay), alignment: .bottomLeading)
-                .overlay(AnyView(undoButtonOverlay), alignment: .bottomTrailing)
+                .overlay(undoButtonOverlay, alignment: .bottomTrailing)
         )
         let batterOverlay = AnyView(batterSideOverlay(SZwidth: SZwidth, verticalOffset: 90))
 
