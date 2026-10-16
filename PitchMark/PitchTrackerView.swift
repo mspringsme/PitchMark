@@ -11360,12 +11360,15 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
         )
 
-        // Home/Games/Moments/Family as real TabView siblings - Games stays
+        // Home/Games/Moments as real TabView siblings - Games stays
         // permanently mounted (so its live-session listeners, boot-once
         // guard, and scenePhase handling above never tear down) while the
-        // other three are reached by selection instead of by sheet. This
+        // other two are reached by selection instead of by sheet. This
         // replaces the old HomeAreaTabBar + onDismiss/asyncAfter(0.05)
-        // sheet-chaining hack entirely.
+        // sheet-chaining hack entirely. Family (Phase 9 of the 2026-09-24
+        // direction) was removed 2026-10-16 - its one job, getting a Moment
+        // or quick text to a family member, is now covered by Moments'
+        // own share action and iOS's share-sheet recents.
         return TabView(selection: $activeHomeArea) {
             gamesTabContent
                 .tabItem { Label(HomeArea.games.title, systemImage: HomeArea.games.systemImage) }
@@ -11380,11 +11383,6 @@ struct PitchTrackerView: View {
                 .fixedAppDynamicType()
                 .tabItem { Label(HomeArea.moments.title, systemImage: HomeArea.moments.systemImage) }
                 .tag(HomeArea.moments)
-
-            FamilyView(onSwitchToArea: { selectHomeArea($0) })
-                .fixedAppDynamicType()
-                .tabItem { Label(HomeArea.family.title, systemImage: HomeArea.family.systemImage) }
-                .tag(HomeArea.family)
         }
     }
     

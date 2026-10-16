@@ -20,7 +20,6 @@ enum HomeArea: Identifiable {
     case games
     case home
     case moments
-    case family
 
     var id: Self { self }
 
@@ -29,7 +28,6 @@ enum HomeArea: Identifiable {
         case .games: return "Games"
         case .home: return "Home"
         case .moments: return "Moments"
-        case .family: return "Family"
         }
     }
 
@@ -38,7 +36,6 @@ enum HomeArea: Identifiable {
         case .games: return "figure.baseball"
         case .home: return "house.fill"
         case .moments: return "video.fill"
-        case .family: return "person.2.fill"
         }
     }
 }
