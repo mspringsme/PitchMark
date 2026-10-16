@@ -2720,6 +2720,23 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// `activeBatterRosterCandidates` reads the cached `awayRoster`/
+    /// `homeRoster` snapshots, which only refresh at a few specific call
+    /// sites (setting an opponent/my team, adding a pitcher, switching
+    /// games). A player added from Home's Team Roster screen while this
+    /// game stays mounted in the background (PitchTrackerView is the
+    /// permanent root, never torn down) hits none of those, so "Add From
+    /// Team" kept showing a stale roster missing the new player. Called
+    /// right before presenting that picker; fire-and-forget is fine since
+    /// the sheet reads these same `@State` arrays and re-renders when they
+    /// land.
+    private func refreshBattingRoster(teamId: String) {
+        switch activeSide {
+        case .home: refreshAwayRoster(awayTeamId: teamId)
+        case .away: refreshHomeRoster(teamId: teamId)
+        }
+    }
+
     /// Symmetric to `handleSelectAwaySide` - tapping Us for a game with no
     /// linked team yet opens setup instead of silently switching to an
     /// empty batter picker. Unlike Away, Us needs no inline roster-add UI
@@ -7197,7 +7214,8 @@ struct PitchTrackerView: View {
                                     }
                                 }
                                 Button("Add From Team") {
-                                    if currentBattingTeamId != nil {
+                                    if let teamId = currentBattingTeamId {
+                                        refreshBattingRoster(teamId: teamId)
                                         showAtBatRosterPickerSheet = true
                                     } else {
                                         promptTeamSetupForBatting()
