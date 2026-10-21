@@ -246,8 +246,18 @@ func localMomentVideoURL(for momentId: String) -> URL? {
 /// Copies a picker's temp file into the app's own sandbox - the temp URL
 /// `UIImagePickerController` hands back does not survive past the current
 /// launch.
+///
+/// `autoBackupToPhotos` defaults to `true` for every genuinely-new-content
+/// call site (a fresh recording, an import, a photos-built video, a saved
+/// Highlight Reel). `duplicateMoment` (MomentsLibraryView.swift) passes
+/// `false`: a duplicate is, by definition, a near-duplicate of a video
+/// that was already auto-backed-up (if the toggle was on) when its
+/// ORIGINAL Moment was first created - exactly the repeat-backup case
+/// `autoBackupMomentVideoToPhotosIfEnabled`'s own doc comment says this
+/// hook is meant to avoid. Reported by the user as an unexpected Photos
+/// permission prompt on "Duplicate to Original."
 @discardableResult
-func saveLocalMomentVideo(from sourceURL: URL, momentId: String) -> Bool {
+func saveLocalMomentVideo(from sourceURL: URL, momentId: String, autoBackupToPhotos: Bool = true) -> Bool {
     guard let destinationURL = localMomentVideoURL(for: momentId) else { return false }
     do {
         try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -255,10 +265,100 @@ func saveLocalMomentVideo(from sourceURL: URL, momentId: String) -> Bool {
             try FileManager.default.removeItem(at: destinationURL)
         }
         try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        // Every path that creates a NEW Moment's ORIGINAL video - a fresh
+        // recording, an import, a photos-built video, a saved Highlight
+        // Reel - funnels through this one function, which is exactly why
+        // the auto-backup hook lives here rather than at each of those
+        // call sites individually. Never fires again on a later EDIT
+        // (Trim/Zoom/Freeze/etc. all write to `localMomentEditedVideoURL`,
+        // a different function entirely) - see
+        // `autoBackupMomentVideoToPhotosIfEnabled`'s doc comment for why
+        // that's deliberate, not a gap.
+        if autoBackupToPhotos {
+            autoBackupMomentVideoToPhotosIfEnabled(sourceURL: destinationURL)
+        }
         return true
     } catch {
         debugLog("❌ saveLocalMomentVideo failed: \(error.localizedDescription)")
         return false
+    }
+}
+
+/// Same key `MomentsLibraryView`'s `@AppStorage` checkbox reads/writes -
+/// `@AppStorage` is a SwiftUI View-only property wrapper, but it's backed
+/// by `UserDefaults.standard` under this exact string regardless, so a
+/// plain free function can read the same toggle directly.
+private let momentsAutoBackupToPhotosKey = "momentsAutoBackupToPhotosEnabled"
+
+private let pitchMarkPhotosAlbumName = "PitchMark"
+
+/// Opt-in, automatic counterpart to the existing manual
+/// `saveMomentVideoToCameraRoll` - saves straight into a dedicated
+/// "PitchMark" Photos album (created the first time it's needed) instead
+/// of the plain Camera Roll, so a user who turned this on can find every
+/// Moment PitchMark has ever auto-backed-up in one place, separate from
+/// everything else in their library.
+///
+/// Fires exactly ONCE per Moment, right after its ORIGINAL video is first
+/// written locally (`saveLocalMomentVideo`'s own call site) - deliberately
+/// NOT re-triggered by later edits, which would otherwise save a new,
+/// near-duplicate multi-second video to Photos on every single Trim/Zoom/
+/// Freeze/etc. tweak. The raw recording surviving in Photos/iCloud - which
+/// syncs independently of this app and of how a user sets up a new phone -
+/// already covers the actual risk (losing a Moment forever because its
+/// video was local-only to a device that got replaced); the "Save to
+/// Camera Roll" action in the Moment detail screen stays the explicit way
+/// to preserve a specific EDITED cut.
+///
+/// Default off (`UserDefaults.standard.bool(forKey:)` returns `false` for
+/// a key that was never set) - silently does nothing, no permission
+/// prompt, zero behavior change, unless the user explicitly turns this on.
+/// Fire-and-forget: a denied permission or any other failure here leaves
+/// the Moment exactly as successfully saved as it already was - this is a
+/// bonus, never a requirement, same "never worse" discipline
+/// `refreshFadeIfNeeded` already uses for its own fire-and-forget rebake.
+func autoBackupMomentVideoToPhotosIfEnabled(sourceURL: URL) {
+    guard UserDefaults.standard.bool(forKey: momentsAutoBackupToPhotosKey) else { return }
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+        guard status == .authorized || status == .limited else { return }
+        findOrCreatePitchMarkPhotosAlbum { collection in
+            guard let collection else { return }
+            PHPhotoLibrary.shared().performChanges({
+                guard let creationRequest = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: sourceURL),
+                      let placeholder = creationRequest.placeholderForCreatedAsset,
+                      let albumChangeRequest = PHAssetCollectionChangeRequest(for: collection) else {
+                    return
+                }
+                albumChangeRequest.addAssets([placeholder] as NSArray)
+            }, completionHandler: nil)
+        }
+    }
+}
+
+/// Fetches the existing "PitchMark" album if one's already there (every
+/// call after the first), else creates it. `PHPhotoLibrary` has no
+/// "create if missing" convenience of its own - both steps need their own
+/// `performChanges`/fetch round trip, which is why this isn't folded
+/// directly into `autoBackupMomentVideoToPhotosIfEnabled` above.
+private func findOrCreatePitchMarkPhotosAlbum(completion: @escaping (PHAssetCollection?) -> Void) {
+    let fetchOptions = PHFetchOptions()
+    fetchOptions.predicate = NSPredicate(format: "title = %@", pitchMarkPhotosAlbumName)
+    let existing = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: fetchOptions)
+    if let album = existing.firstObject {
+        completion(album)
+        return
+    }
+    var placeholder: PHObjectPlaceholder?
+    PHPhotoLibrary.shared().performChanges({
+        let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: pitchMarkPhotosAlbumName)
+        placeholder = request.placeholderForCreatedAssetCollection
+    }) { success, _ in
+        guard success, let localIdentifier = placeholder?.localIdentifier else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+        let result = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [localIdentifier], options: nil)
+        DispatchQueue.main.async { completion(result.firstObject) }
     }
 }
 
@@ -283,6 +383,40 @@ func resolvedMomentVideoURL(for momentId: String) -> URL? {
         return edited
     }
     return localMomentVideoURL(for: momentId)
+}
+
+/// Whether this Moment's video actually exists on THIS device, as opposed
+/// to merely having a Firestore metadata document (which syncs everywhere
+/// signed in - see this file's header comment: "Video files stay
+/// on-device... only this small metadata record syncs to Firestore").
+///
+/// `resolvedMomentVideoURL` is NOT itself a safe existence check - its
+/// fallback branch returns `localMomentVideoURL`'s constructed path
+/// unconditionally, without checking the file is actually there, so it
+/// never returns nil for a non-empty momentId even when nothing has ever
+/// been saved to this device for it. Every call site that used a bare
+/// `if let url = resolvedMomentVideoURL(for:)` as its "is there something
+/// to play/edit" gate was therefore always true on a second device - not a
+/// silently-skipped action, but an editor/player opened against a file
+/// that was never there, left to fail async and stay stuck mid-load.
+func momentVideoExistsLocally(for momentId: String) -> Bool {
+    guard let url = resolvedMomentVideoURL(for: momentId) else { return false }
+    return FileManager.default.fileExists(atPath: url.path)
+}
+
+/// A private backup of `localMomentEditedVideoURL`'s content, saved right
+/// before Freeze's FIRST bake in its current lifecycle (MomentFreezeEditorView.
+/// startExport) and consumed/deleted by `revertCurrentFreezeFrame` below.
+/// Freeze is a direct-chain editor, not a frozen-base ring member (see
+/// MomentFreezeExporter.swift's header comment) - it has no "recompute
+/// fresh from source every time" base the way Audio/Overlay/Zoom/
+/// Slideshow/Crop/Filter/Markup do, so without a backup of its own,
+/// removing or re-editing an already-applied freeze has nothing to export
+/// FROM except the already-frozen video, which just stacks a second hold
+/// on top of the first one's dead time instead of replacing it.
+func localMomentPreFreezeVideoURL(for momentId: String) -> URL? {
+    guard !momentId.isEmpty, let directory = momentsDirectory() else { return nil }
+    return directory.appendingPathComponent("\(momentId)-prefreeze.mov")
 }
 
 /// Every frozen-base ring member (Audio/Overlay/Zoom/Slideshow/Crop, and
@@ -421,6 +555,79 @@ func refreshFadeIfNeeded(momentId: String, authManager: AuthManager, completion:
                 } catch {
                     debugLog("❌ refreshFadeIfNeeded: couldn't copy rebaked fade for", momentId, "-", error.localizedDescription)
                 }
+            }
+        }
+    }
+}
+
+/// Undoes whatever freeze is CURRENTLY on the Moment - restores
+/// `localMomentEditedVideoURL` from the backup `localMomentPreFreezeVideoURL`
+/// saved right before that freeze's first bake, inverse-shifts every
+/// time-based field back by the exact hold that was inserted
+/// (`compositeTimeToFreezeSourceTime`, the paired inverse of
+/// `freezeTimeToCompositeTime`), deletes the backup, and clears the
+/// Firestore `freezeFrame` field.
+///
+/// Used by both "Remove Freeze Frame" and by re-applying an EDITED freeze
+/// (MomentFreezeEditorView.startExport always reverts first, then re-bakes
+/// fresh from the restored video with the new params) - without this,
+/// editing an existing freeze's hold duration or zoom and hitting Apply
+/// again re-bakes a SECOND freeze directly on top of the first one's
+/// already-baked dead time, since the editor's `videoURL` is
+/// `resolvedMomentVideoURL`, which already contains it. Reported by the
+/// user as "removed one and added a new one, and the first seems to still
+/// be there" - the same symptom reproduces identically just by editing an
+/// existing freeze's slider and hitting Apply again, without ever touching
+/// Remove.
+///
+/// Only correct when this freeze was the LAST edit made to the Moment -
+/// inverse-shifting can't distinguish a field that existed before the
+/// freeze (and was pushed forward by it) from one added afterward (already
+/// correctly placed on the real composite timeline), so a time-based edit
+/// made after the freeze gets shifted too if a freeze made earlier is later
+/// removed. A known, accepted narrow edge case, not a regression target.
+///
+/// No-op beyond clearing the Firestore field if there's no backup to
+/// restore from - the safety net for a Moment that had a freeze applied
+/// before this function existed, or one where the backup was separately
+/// lost.
+func revertCurrentFreezeFrame(momentId: String, authManager: AuthManager, completion: @escaping (Error?) -> Void) {
+    guard !momentId.isEmpty else {
+        completion(nil)
+        return
+    }
+    authManager.loadMoment(momentId: momentId) { fresh in
+        guard let fresh, let freezeFrame = fresh.freezeFrame else {
+            completion(nil)
+            return
+        }
+        guard let backupURL = localMomentPreFreezeVideoURL(for: momentId),
+              FileManager.default.fileExists(atPath: backupURL.path),
+              let editedURL = localMomentEditedVideoURL(for: momentId) else {
+            authManager.updateMomentFreezeFrame(momentId: momentId, freezeFrame: nil) { error in
+                completion(error)
+            }
+            return
+        }
+
+        do {
+            try? FileManager.default.removeItem(at: editedURL)
+            try FileManager.default.copyItem(at: backupURL, to: editedURL)
+            try? FileManager.default.removeItem(at: backupURL)
+        } catch {
+            debugLog("❌ revertCurrentFreezeFrame: restore failed for", momentId, "-", error.localizedDescription)
+            completion(error)
+            return
+        }
+
+        authManager.refreshMomentDuration(momentId: momentId, videoURL: editedURL)
+        invalidateOtherFrozenBases(momentId: momentId, except: [])
+        remapAllTimeBasedFields(momentId: momentId, authManager: authManager) {
+            compositeTimeToFreezeSourceTime($0, freezeTimestamp: freezeFrame.timestamp, holdDuration: freezeFrame.holdDuration)
+        }
+        refreshFadeIfNeeded(momentId: momentId, authManager: authManager) {
+            authManager.updateMomentFreezeFrame(momentId: momentId, freezeFrame: nil) { error in
+                completion(error)
             }
         }
     }
@@ -739,6 +946,33 @@ func resolvedMomentPlaybackURL(for momentId: String) -> URL? {
         return faded
     }
     return resolvedMomentVideoURL(for: momentId)
+}
+
+/// Appends the file's own modification date as a URL fragment - ignored
+/// by file-system resolution (`FileManager`/`AVURLAsset` still read the
+/// exact same bytes at the exact same path), but it changes the URL's
+/// STRING identity, which is what AVFoundation's own internal asset/
+/// resource-loader caching keys on.
+///
+/// Every editor in this feature overwrites `localMomentEditedVideoURL` at
+/// the SAME fixed path on every edit - a fresh `AVPlayer(url:)` built
+/// straight from that bare path right after an edit can serve STALE
+/// cached samples left over from whatever content used to live at that
+/// path, with no error or signal that anything's wrong. Same bug CLASS
+/// `momentThumbnailCache` already had to defend against for its own
+/// in-memory cache (see `momentThumbnailCacheKey`'s doc comment,
+/// MomentThumbnail.swift) - this is the equivalent fix for the OS/
+/// AVFoundation layer, which has no public "invalidate" API of its own.
+/// Reported by the user as hearing the pre-freeze clip's audio playing
+/// from the beginning during a freeze's hold - exactly what stale,
+/// pre-mute-mix cached audio would sound like.
+func cacheBustedPlaybackURL(_ url: URL) -> URL {
+    guard let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date else {
+        return url
+    }
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    components?.fragment = String(mtime.timeIntervalSinceReferenceDate)
+    return components?.url ?? url
 }
 
 // MARK: - Local photo storage (same directory convention as video)
@@ -1382,6 +1616,9 @@ func removeAllLocalMomentFiles(momentId: String, photoCount: Int) {
         try? FileManager.default.removeItem(at: edited)
     }
     invalidateOtherFrozenBases(momentId: momentId, except: [])
+    if let preFreeze = localMomentPreFreezeVideoURL(for: momentId) {
+        try? FileManager.default.removeItem(at: preFreeze)
+    }
     // Plain deletion, not refreshFadeIfNeeded - the Moment itself is
     // being destroyed, there's nothing left to rebake a fade for.
     if let faded = localMomentFadedVideoURL(for: momentId) {

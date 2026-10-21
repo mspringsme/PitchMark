@@ -554,7 +554,21 @@ struct SettingsView: View {
     @State private var myTeams: [(team: Team, membership: TeamMembership)] = []
     @State private var selectedTeamEntry: TeamEntrySelection? = nil
     @State private var newTeamNameForHome: String = ""
-    @State private var showGameChooser = false
+    // Creating, archiving and deleting games all happen inline in Home's
+    // Games section now. The old route was a separate GameSelectionSheet,
+    // which put a sheet (the new-game card) inside a sheet (the chooser)
+    // inside a tab - the presentation nesting behind several rounds of
+    // "tapped the new game and nothing happened" bugs.
+    @State private var showInlineNewGame = false
+    @State private var inlineNewGameName: String = ""
+    @State private var inlineNewGameDate: Date = Date()
+    @State private var inlineNewGameTrackingMode: TrackingMode = .coach
+    @State private var createGameError: String? = nil
+    @State private var showArchivedGames = false
+    @State private var pendingDeleteGameId: String? = nil
+    @State private var pendingDeleteGameName: String = ""
+    @State private var showDeleteGameConfirm = false
+    @State private var showFinalDeleteGameConfirm = false
     // Accordion: expanding one of Home's two collapsible sections closes
     // the other. nil means both collapsed; .games is the default open one.
     @State private var expandedHomeOverviewSection: HomeOverviewSection? = .games
@@ -830,7 +844,15 @@ struct SettingsView: View {
         defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
 
         onSwitchToArea?(.games)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        // The Games tab has to be the one on screen before this lands: the
+        // handler presents a sheet, and asking a tab that is still
+        // mid-switch to present one gets the presentation dropped. 0.05s
+        // was too tight to cover a real tab transition - and it mattered
+        // most after an idle return, which forces the Home tab, so every
+        // tap from then on needed a switch first. Two hops to the next
+        // runloop plus a full transition's worth of delay is still
+        // imperceptible but no longer lands mid-animation.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             NotificationCenter.default.post(
                 name: .gameOrSessionChosen,
                 object: nil,
@@ -861,46 +883,117 @@ struct SettingsView: View {
     /// game. Vertical (not the old horizontal scroll strip) deliberately
     /// leaves room to the right of the name/date for future per-game
     /// metadata (score, record, etc.) without needing another redesign.
+    /// `menuGame` adds the per-game Archive/Delete menu. Live-session rows
+    /// pass nil: a joined session isn't ours to archive or delete.
     @ViewBuilder
-    private func gameRow(opponent: String, dateText: String?, isLive: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                if isLive {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 6, height: 6)
-                        Text("LIVE")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.green)
+    private func gameRow(
+        opponent: String,
+        dateText: String?,
+        isLive: Bool,
+        menuGame: Game? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 6) {
+            Button(action: action) {
+                HStack(spacing: 10) {
+                    if isLive {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 6, height: 6)
+                            Text("LIVE")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.green)
+                        }
                     }
-                }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(opponent)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    if let dateText {
-                        Text(dateText)
-                            .font(.caption2)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(opponent)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if let dateText {
+                            Text(dateText)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Spacer()
+
+                    if let menuGame, menuGame.isArchived {
+                        Label("Archived", systemImage: "archivebox")
+                            .labelStyle(.iconOnly)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
-
-                Spacer()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(isLive ? Color.green.opacity(0.5) : Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(isLive ? Color.green.opacity(0.5) : Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if let menuGame {
+                Menu {
+                    if menuGame.isArchived {
+                        Button {
+                            guard let id = menuGame.id, !id.isEmpty else { return }
+                            authManager.unarchiveGame(gameId: id)
+                            if let idx = games.firstIndex(where: { $0.id == id }) {
+                                games[idx].archivedAt = nil
+                            }
+                        } label: {
+                            Label("Unarchive Game", systemImage: "archivebox")
+                        }
+                    } else {
+                        Button {
+                            guard let id = menuGame.id, !id.isEmpty else { return }
+                            authManager.archiveGame(gameId: id)
+                            if let idx = games.firstIndex(where: { $0.id == id }) {
+                                games[idx].archivedAt = Date()
+                            }
+                        } label: {
+                            Label("Archive Game", systemImage: "archivebox")
+                        }
+                    }
+
+                    // The open game isn't deletable - pulling it out from
+                    // under the tracker would leave it mid-session with no
+                    // game. Shown-but-disabled rather than hidden so the
+                    // option doesn't look like it went missing.
+                    if isActiveGame(menuGame) {
+                        Button {} label: {
+                            Label("Open in Games tab - can't delete", systemImage: "lock")
+                        }
+                        .disabled(true)
+                    } else {
+                        Button(role: .destructive) {
+                            guard let id = menuGame.id, !id.isEmpty else { return }
+                            pendingDeleteGameId = id
+                            pendingDeleteGameName = menuGame.opponent
+                            showDeleteGameConfirm = true
+                        } label: {
+                            Label("Delete Game…", systemImage: "trash")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .buttonStyle(.plain)
     }
 
     private var activeGames: [Game] {
@@ -943,6 +1036,7 @@ struct SettingsView: View {
         title: String,
         section: HomeOverviewSection,
         trailingSystemImage: String,
+        trailingFont: Font = .subheadline,
         trailingAction: @escaping () -> Void
     ) -> some View {
         let isExpanded = expandedHomeOverviewSection == section
@@ -969,7 +1063,7 @@ struct SettingsView: View {
 
             Button(action: trailingAction) {
                 Image(systemName: trailingSystemImage)
-                    .font(.subheadline)
+                    .font(trailingFont)
             }
             .buttonStyle(.plain)
         }
@@ -1109,12 +1203,37 @@ struct SettingsView: View {
             collapsibleSectionHeader(
                 title: "Games",
                 section: .games,
-                trailingSystemImage: "arrowshape.right.circle.fill",
-                trailingAction: { showGameChooser = true }
+                trailingSystemImage: showInlineNewGame ? "xmark.circle.fill" : "plus.circle.fill",
+                trailingFont: .title2,
+                trailingAction: { toggleInlineNewGame() }
             )
 
-            if expandedHomeOverviewSection == .games, !joinedLiveSessions.isEmpty || !activeGames.isEmpty {
+            if expandedHomeOverviewSection == .games {
                 VStack(spacing: 8) {
+                    if let createGameError {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                            Text(createGameError)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                            Spacer(minLength: 8)
+                            Button("Dismiss") { self.createGameError = nil }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.plain)
+                        }
+                    }
+
+                    if showInlineNewGame {
+                        AddGameCard(
+                            opponentName: $inlineNewGameName,
+                            gameDate: $inlineNewGameDate,
+                            trackingMode: $inlineNewGameTrackingMode,
+                            onCancel: { closeInlineNewGame() },
+                            onSave: { createInlineGame() }
+                        )
+                    }
+
                     // Live-joined games first - they're the ones with a
                     // clock on them (owner can end the session any time).
                     ForEach(joinedLiveSessions) { session in
@@ -1126,14 +1245,208 @@ struct SettingsView: View {
                     let sorted = activeGames.sorted(by: { $0.date > $1.date })
                     let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
                     ForEach(quickGames) { item in
-                        gameRow(opponent: item.game.opponent, dateText: quickLaunchDateCaption(for: item.game), isLive: false) {
+                        gameRow(
+                            opponent: item.game.opponent,
+                            dateText: quickLaunchDateCaption(for: item.game),
+                            isLive: false,
+                            menuGame: item.game
+                        ) {
                             launchGame(item.game)
+                        }
+                    }
+
+                    if joinedLiveSessions.isEmpty, activeGames.isEmpty, !showInlineNewGame {
+                        Text("No games yet. Tap + to create one.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 6)
+                    }
+
+                    if !archivedGames.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showArchivedGames.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(showArchivedGames ? "Hide Archived" : "Show Archived (\(archivedGames.count))")
+                                    .font(.caption.weight(.semibold))
+                                Image(systemName: "chevron.down")
+                                    .font(.caption2.weight(.semibold))
+                                    .rotationEffect(.degrees(showArchivedGames ? 0 : -90))
+                            }
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+
+                        if showArchivedGames {
+                            let archived = archivedGames.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
+                            ForEach(archived) { item in
+                                gameRow(
+                                    opponent: item.game.opponent,
+                                    dateText: quickLaunchDateCaption(for: item.game),
+                                    isLive: false,
+                                    menuGame: item.game
+                                ) {
+                                    launchGame(item.game)
+                                }
+                            }
                         }
                     }
                 }
                 .padding(.horizontal)
             }
         }
+        .appConfirmationDialog(
+            isPresented: $showDeleteGameConfirm,
+            title: "Delete Game?",
+            message: pendingDeleteGameName.isEmpty
+                ? "This will remove the game and its lineup."
+                : "This will remove \"\(pendingDeleteGameName)\" and its lineup.",
+            primaryTitle: "Continue",
+            primaryRole: .destructive,
+            primaryAction: { showFinalDeleteGameConfirm = true },
+            secondaryTitle: "Cancel",
+            secondaryAction: { clearPendingGameDeletion() }
+        )
+        .appConfirmationDialog(
+            isPresented: $showFinalDeleteGameConfirm,
+            title: "Delete Game and Stats?",
+            message: pendingDeleteGameName.isEmpty
+                ? "This will permanently delete the game, all pitch events for that game, and pitcher stats linked to it. This cannot be undone."
+                : "This will permanently delete \"\(pendingDeleteGameName)\", all pitch events for that game, and pitcher stats linked to it. This cannot be undone.",
+            primaryTitle: "Delete Everything",
+            primaryRole: .destructive,
+            primaryAction: { confirmDeletePendingGame() },
+            secondaryTitle: "Cancel",
+            secondaryAction: { clearPendingGameDeletion() }
+        )
+    }
+
+    private var archivedGames: [Game] {
+        games
+            .filter { $0.isArchived }
+            .sorted(by: { $0.date > $1.date })
+    }
+
+    /// The game currently open in the Games tab. `chooseGame` writes this
+    /// defaults key and clears it on exit, so it's the same notion of
+    /// "active" the tracker itself restores from on launch.
+    private var activeGameId: String? {
+        let stored = UserDefaults.standard.string(forKey: PitchTrackerView.DefaultsKeys.activeGameId)
+        return (stored?.isEmpty == false) ? stored : nil
+    }
+
+    private func isActiveGame(_ game: Game) -> Bool {
+        guard let id = game.id, let activeGameId else { return false }
+        return id == activeGameId
+    }
+
+    /// A team counts as in-use when it's either side of the open game -
+    /// ours or the opponent's.
+    private func isTeamInActiveGame(_ teamId: String?) -> Bool {
+        guard let teamId, !teamId.isEmpty,
+              let activeGameId,
+              let game = games.first(where: { $0.id == activeGameId })
+        else { return false }
+        return game.teamId == teamId || game.awayTeamId == teamId
+    }
+
+    /// Tapping + while the section is collapsed should open the section
+    /// too, otherwise the form it just revealed would be hidden.
+    private func toggleInlineNewGame() {
+        if showInlineNewGame {
+            closeInlineNewGame()
+            return
+        }
+        inlineNewGameName = ""
+        inlineNewGameDate = Date()
+        inlineNewGameTrackingMode = .coach
+        createGameError = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            expandedHomeOverviewSection = .games
+            showInlineNewGame = true
+        }
+    }
+
+    private func closeInlineNewGame() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showInlineNewGame = false
+        }
+        inlineNewGameName = ""
+    }
+
+    /// Creates the game and puts it straight in the list. The row is real
+    /// and openable as soon as Firestore mints the id (onLocalWrite) -
+    /// waiting on the server ack is what used to leave a new game sitting
+    /// in the list as an untappable "Saving..." row.
+    private func createInlineGame() {
+        let name = inlineNewGameName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let newGame = Game(
+            id: nil,
+            opponent: name,
+            date: inlineNewGameDate,
+            jerseyNumbers: [],
+            trackingMode: inlineNewGameTrackingMode
+        )
+        closeInlineNewGame()
+
+        var stampedId: String? = nil
+        authManager.saveGame(
+            newGame,
+            onLocalWrite: { stamped in
+                stampedId = stamped.id
+                if let idx = self.games.firstIndex(where: { $0.id == stamped.id }) {
+                    self.games[idx] = stamped
+                } else {
+                    self.games.append(stamped)
+                }
+                self.createGameError = nil
+            }
+        ) { result in
+            guard case .failure(let error) = result else { return }
+            DispatchQueue.main.async {
+                if let stampedId, let idx = self.games.firstIndex(where: { $0.id == stampedId }) {
+                    self.games.remove(at: idx)
+                }
+                self.createGameError = "Couldn't save \"\(name)\": \(error.localizedDescription)"
+                debugLog("❌ create game failed:", error.localizedDescription)
+            }
+        }
+    }
+
+    private func clearPendingGameDeletion() {
+        pendingDeleteGameId = nil
+        pendingDeleteGameName = ""
+    }
+
+    private func confirmDeletePendingGame() {
+        guard let id = pendingDeleteGameId else { return }
+        // Re-checked here, not just when building the menu: the game can
+        // become the active one between opening this dialog and confirming.
+        guard id != activeGameId else {
+            clearPendingGameDeletion()
+            return
+        }
+        if let idx = games.firstIndex(where: { $0.id == id }) {
+            games.remove(at: idx)
+        }
+        authManager.deleteGameCascade(gameId: id) { result in
+            if case .failure(let error) = result {
+                debugLog("❌ deleteGameCascade failed:", error.localizedDescription)
+            }
+        }
+        NotificationCenter.default.post(
+            name: .gameOrSessionDeleted,
+            object: nil,
+            userInfo: ["type": "game", "gameId": id]
+        )
+        clearPendingGameDeletion()
     }
 
     /// Re-enters a game joined as a partner, using the same
@@ -2452,8 +2765,14 @@ struct SettingsView: View {
                 appSettingsSheetView
             }
             .sheet(item: $selectedTeamEntry, onDismiss: { refreshMyTeams() }) { entry in
-                TeamRosterView(selection: entry)
-                    .environmentObject(authManager)
+                TeamRosterView(
+                    selection: entry,
+                    isInActiveGame: isTeamInActiveGame(entry.team.id),
+                    onDeleted: { deletedTeamId in
+                        myTeams.removeAll { $0.team.id == deletedTeamId }
+                    }
+                )
+                .environmentObject(authManager)
             }
             .fullScreenCover(isPresented: $showQRScanner) {
                 ZStack(alignment: .bottom) {
@@ -2761,41 +3080,6 @@ struct SettingsView: View {
                     games: games
                 )
                 .environmentObject(authManager)
-                .fixedAppDynamicType()
-            }
-            .sheet(isPresented: $showGameChooser) {
-                GameSelectionSheet(
-                    onCreate: { name, date, trackingMode, completion in
-                        let newGame = Game(id: nil, opponent: name, date: date, jerseyNumbers: [], trackingMode: trackingMode)
-                        authManager.saveGame(newGame) { result in
-                            if case .success(let saved) = result {
-                                DispatchQueue.main.async { completion(saved) }
-                            }
-                        }
-                    },
-                    onChoose: { gameId in
-                        let ownerUid = authManager.user?.uid ?? ""
-                        NotificationCenter.default.post(
-                            name: .gameOrSessionChosen,
-                            object: nil,
-                            userInfo: [
-                                "type": "game",
-                                "gameId": gameId,
-                                "ownerUserId": ownerUid
-                            ]
-                        )
-                        onSwitchToArea?(.games)
-                    },
-                    onCancel: {
-                        showGameChooser = false
-                    },
-                    codeShareInitialTab: $codeShareInitialTab,
-                    showCodeShareSheet: $showCodeShareSheet,
-                    shareCode: $shareCode,
-                    codeShareSheetID: $codeShareSheetID,
-                    showCodeShareModePicker: $showCodeShareModePicker,
-                    games: $games,
-                )
                 .fixedAppDynamicType()
             }
         }

@@ -219,6 +219,18 @@ private struct MomentGridCell: View {
 
     @State private var thumbnail: UIImage? = nil
 
+    /// True when this Moment's Firestore metadata synced here but its
+    /// video never did - it was recorded on a different signed-in device
+    /// (see `momentVideoExistsLocally`'s doc comment, Moment.swift).
+    /// Distinguishing this from "thumbnail just hasn't loaded yet" matters:
+    /// without it, a Moment from another device looked identical to any
+    /// other tile until tapped, where it opened a player/editor stuck
+    /// against a file that was never on this device.
+    private var isAvailableOnThisDevice: Bool {
+        guard let id = moment.id else { return true }
+        return momentVideoExistsLocally(for: id)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .topTrailing) {
@@ -230,6 +242,14 @@ private struct MomentGridCell: View {
                             Image(uiImage: thumbnail)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
+                        } else if !isAvailableOnThisDevice {
+                            VStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.icloud")
+                                    .font(.title3)
+                                Text("Other device")
+                                    .font(.caption2.weight(.semibold))
+                            }
+                            .foregroundStyle(.secondary)
                         } else {
                             Image(systemName: momentKindIconName(moment))
                                 .font(.title)

@@ -171,6 +171,33 @@ func zoomLayerPosition(center: CGPoint, scale: Double, renderSize: CGSize) -> CG
     )
 }
 
+/// The valid range for one axis of `center`, given `scale`, such that the
+/// layer `zoomLayerPosition` positions still fully covers the render
+/// canvas on that axis. Outside this range, the scaled layer's far edge
+/// pulls inward from the canvas edge, exposing whatever sits behind it -
+/// for MomentFreezeExporter.swift, the looped filler video underneath the
+/// still-frame sprite, which during the hold is literally replaying from
+/// the start of the clip. Reported by the user as the frame visibly
+/// "replaying" in a sliver at the edge whenever the zoom center was
+/// dragged toward an edge without enough scale to cover it.
+///
+/// Derivation: requiring the scaled layer's edges land at or beyond
+/// `[0, renderSize]` on a given axis reduces to `center` falling inside
+/// `[0.5/scale, 1 - 0.5/scale]` - independent of the axis's actual render
+/// size, since `zoomLayerPosition`'s own formula is. Collapses to the
+/// single point 0.5 at `scale <= 1` (no magnification to re-frame within,
+/// so only dead-center avoids exposing an edge - the same constraint any
+/// Ken Burns pan/zoom tool enforces between its pan bounds and zoom
+/// level).
+func clampedZoomCenter(_ center: CGPoint, scale: Double) -> CGPoint {
+    let minComponent = scale > 0 ? min(0.5 / scale, 0.5) : 0.5
+    let maxComponent = 1 - minComponent
+    return CGPoint(
+        x: min(max(center.x, minComponent), maxComponent),
+        y: min(max(center.y, minComponent), maxComponent)
+    )
+}
+
 /// Samples `zoomTransform(at:)` every `sampleInterval` seconds across
 /// `[0, duration]`, always including the exact start and end regardless
 /// of whether the interval divides evenly - same shape as

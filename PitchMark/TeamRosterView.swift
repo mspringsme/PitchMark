@@ -38,6 +38,16 @@ struct TeamEntrySelection: Identifiable {
 
 struct TeamRosterView: View {
     let selection: TeamEntrySelection
+    /// True when this team is one of the two sides of the game currently
+    /// open in the Games tab. Deleting it out from under a live tracking
+    /// session would strand that game's roster mid-game.
+    var isInActiveGame: Bool = false
+    /// Lets the presenting list drop the row immediately. Without it the
+    /// only signal was a `loadMyTeams` reload on dismiss, which races the
+    /// delete it is meant to reflect - so the deleted team stayed on
+    /// screen until some later interaction happened to reload after the
+    /// write had propagated.
+    var onDeleted: ((String) -> Void)? = nil
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -81,6 +91,7 @@ struct TeamRosterView: View {
     @State private var renameTeamText: String = ""
     @State private var showDeleteTeamDialog = false
     @State private var showCantDeleteTeamDialog = false
+    @State private var showCantDeleteActiveTeamDialog = false
     @State private var showLeaveTeamDialog = false
 
     /// Management rights (add/edit/delete) are gated on actually being the
@@ -191,7 +202,9 @@ struct TeamRosterView: View {
                 isRenamingTeam = true
             }
             Button("Delete Team", role: .destructive) {
-                if players.isEmpty {
+                if isInActiveGame {
+                    showCantDeleteActiveTeamDialog = true
+                } else if players.isEmpty {
                     showDeleteTeamDialog = true
                 } else {
                     showCantDeleteTeamDialog = true
@@ -202,6 +215,13 @@ struct TeamRosterView: View {
         .confirmationDialog(
             "Remove all players from the roster before deleting the team.",
             isPresented: $showCantDeleteTeamDialog,
+            titleVisibility: .visible
+        ) {
+            Button("OK") { }
+        }
+        .confirmationDialog(
+            "This team is in the game you have open. Close that game first, or switch to a different one, before deleting it.",
+            isPresented: $showCantDeleteActiveTeamDialog,
             titleVisibility: .visible
         ) {
             Button("OK") { }
@@ -579,8 +599,17 @@ struct TeamRosterView: View {
     private func deleteTeam() {
         guard let teamId = selection.team.id else { return }
         authManager.deleteTeam(teamId: teamId) { result in
-            if case .success = result {
+            switch result {
+            case .success:
+                // Tell the presenting list before dismissing: its own
+                // onDismiss reload is a fresh Firestore read that can
+                // easily still return this team, which is why a deleted
+                // team used to linger until some unrelated interaction
+                // reloaded late enough to miss it.
+                onDeleted?(teamId)
                 dismiss()
+            case .failure(let error):
+                debugLog("❌ deleteTeam failed:", error.localizedDescription)
             }
         }
     }

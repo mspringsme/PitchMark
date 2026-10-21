@@ -2028,7 +2028,23 @@ extension AuthManager {
     /// in-flight delete of a same-named game, could resolve to the wrong
     /// game or nothing at all) and was the real cause of "created a game
     /// but couldn't enter it."
-    func saveGame(_ game: Game, completion: ((Result<Game, Error>) -> Void)?) {
+    /// `onLocalWrite` fires as soon as the write is handed to Firestore,
+    /// carrying the game stamped with its real id. `completion` still waits
+    /// for the backend to acknowledge.
+    ///
+    /// The distinction matters: `setData`'s completion does not fire until
+    /// the server acks, so on a flaky or offline connection it may not fire
+    /// for minutes, or at all this launch - even though Firestore has
+    /// already durably queued the write and the document id is valid.
+    /// Revealing the id only on ack left a brand-new game sitting in the
+    /// list as a disabled "Saving..." row that could not be opened, for as
+    /// long as the round trip took. The id is minted client-side by
+    /// `gamesRef.document()`, so there is nothing to wait for.
+    func saveGame(
+        _ game: Game,
+        onLocalWrite: ((Game) -> Void)? = nil,
+        completion: ((Result<Game, Error>) -> Void)?
+    ) {
         guard let user = user else {
             debugLog("No signed-in user to save game for.")
             completion?(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
@@ -2059,12 +2075,15 @@ extension AuthManager {
                 data["createdAt"] = FieldValue.serverTimestamp()
             }
 
+            let stamped = toSave
+            DispatchQueue.main.async { onLocalWrite?(stamped) }
+
             docRef.setData(data, merge: true) { error in
                 if let error = error {
                     debugLog("Error saving game: \(error)")
                     completion?(.failure(error))
                 } else {
-                    debugLog("✅ Game saved: \(docRef.documentID)")
+                    debugLog("✅ Game saved (server ack): \(docRef.documentID)")
                     completion?(.success(toSave))
                 }
             }

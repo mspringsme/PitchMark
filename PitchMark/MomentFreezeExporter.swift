@@ -121,6 +121,17 @@ func exportFrozenMoment(sourceURL: URL, freezeFrame: FreezeFrame, completion: @e
             : nil
 
         var cursor = CMTime.zero
+        let postDuration = CMTimeSubtract(videoDuration, freezeTime)
+        // Whether it's safe to give the hold span GENUINELY EMPTY audio
+        // (see below) rather than real, volume-muted source audio - only
+        // when real post-freeze content follows it. An empty time range
+        // that ends up as the composition's own TRAILING content is
+        // silently dropped by AVFoundation (see
+        // MomentSlideshowExporter.swift's header comment for the bug this
+        // is), which would truncate the whole export's duration if the
+        // freeze sits at the very last frame of the clip. That edge case
+        // keeps the old real-audio-plus-mute behavior instead.
+        let canUseEmptyHoldAudio = postDuration > .zero
         // The hold loop's actual inserted duration can differ from the
         // nominal `holdDuration` by a tiny rounding epsilon - its chunks
         // are computed via CMTimeMinimum/CMTimeSubtract in the source's
@@ -147,26 +158,60 @@ func exportFrozenMoment(sourceURL: URL, freezeFrame: FreezeFrame, completion: @e
                 cursor = CMTimeAdd(cursor, freezeTime)
             }
 
-            // The hold span - real looped frames (never actually seen;
-            // the still sprite below covers them) so the track's
+            // The hold span's VIDEO - real looped frames (never actually
+            // seen; the still sprite below covers them) so the track's
             // reported duration genuinely extends, same fix
             // MomentSlideshowExporter.swift's header comment documents
-            // for `insertEmptyTimeRange`'s silent failure.
+            // for `insertEmptyTimeRange`'s silent failure on a VIDEO
+            // track specifically (a sprite needs real decodable frames
+            // underneath it, unlike audio - see the empty-audio branch
+            // right below, which doesn't have that constraint).
             var remainingHold = holdDuration
             while remainingHold > .zero {
                 let chunk = CMTimeMinimum(remainingHold, videoDuration)
                 try compVideoTrack.insertTimeRange(CMTimeRange(start: .zero, duration: chunk), of: sourceVideoTrack, at: cursor)
-                if let sourceAudioTrack, let compAudioTrack {
-                    try compAudioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: chunk), of: sourceAudioTrack, at: cursor)
-                }
                 cursor = CMTimeAdd(cursor, chunk)
                 remainingHold = CMTimeSubtract(remainingHold, chunk)
             }
             holdEndCursor = cursor
 
+            // The hold span's AUDIO - genuinely empty, not real looped
+            // source audio silenced via a volume mix. A muted-but-real
+            // segment's silence depends on the mix actually being honored
+            // exactly as built; empty time range has nothing for a mix
+            // bug (or a stale-cache layer upstream of the mix, or
+            // anything else) to ever let through, regardless of cause.
+            // This replaces the step-function mute mix this codebase
+            // trusted for Audio Overlay's mute regions and Slideshow's
+            // photo spans, which here kept producing the pre-freeze
+            // clip's own audio audibly during the hold despite three
+            // rounds of narrower fixes (player instance, player cache,
+            // the mix itself) - reported by the user each time as
+            // hearing the clip "restart from the beginning" for the
+            // hold's duration.
+            if let compAudioTrack {
+                if canUseEmptyHoldAudio {
+                    compAudioTrack.insertEmptyTimeRange(CMTimeRange(start: cursor, duration: CMTimeSubtract(holdEndCursor, cursor)))
+                } else if let sourceAudioTrack {
+                    // Freeze sits at the very last frame - empty time
+                    // would be the composition's own trailing content
+                    // and get silently dropped (see `canUseEmptyHoldAudio`
+                    // above), so fall back to real audio + a volume mute
+                    // for this one edge case only.
+                    var remainingHoldAudio = holdDuration
+                    var audioCursor = cursor
+                    while remainingHoldAudio > .zero {
+                        let chunk = CMTimeMinimum(remainingHoldAudio, videoDuration)
+                        try compAudioTrack.insertTimeRange(CMTimeRange(start: .zero, duration: chunk), of: sourceAudioTrack, at: audioCursor)
+                        audioCursor = CMTimeAdd(audioCursor, chunk)
+                        remainingHoldAudio = CMTimeSubtract(remainingHoldAudio, chunk)
+                    }
+                }
+            }
+
             // Post-freeze content, unchanged, resumed from exactly where
             // the hold interrupted it.
-            let postDuration = CMTimeSubtract(videoDuration, freezeTime)
+            cursor = holdEndCursor
             if postDuration > .zero {
                 try compVideoTrack.insertTimeRange(CMTimeRange(start: freezeTime, duration: postDuration), of: sourceVideoTrack, at: cursor)
                 if let sourceAudioTrack, let compAudioTrack {
@@ -179,14 +224,11 @@ func exportFrozenMoment(sourceURL: URL, freezeFrame: FreezeFrame, completion: @e
             return
         }
 
-        // Silences the looped filler audio under the held frame only -
-        // same plain step-function mix MomentSlideshowExporter.swift
-        // uses for its own `.photo` spans. The `freezeTime > .zero`
-        // guard avoids two points at the exact same time (a freeze right
-        // at the clip's start), the identical collision
-        // MomentSlideshowExporter.swift's header comment already flags.
+        // Only the very-last-frame edge case (`!canUseEmptyHoldAudio`)
+        // still needs a mute mix - the common case's hold audio is
+        // genuinely empty now, nothing left to mute.
         var audioMix: AVMutableAudioMix? = nil
-        if let compAudioTrack {
+        if let compAudioTrack, !canUseEmptyHoldAudio {
             let params = AVMutableAudioMixInputParameters(track: compAudioTrack)
             if freezeTime > .zero {
                 params.setVolume(1.0, at: .zero)
@@ -268,7 +310,13 @@ func exportFrozenMoment(sourceURL: URL, freezeFrame: FreezeFrame, completion: @e
             // extracted) - the user-adjustable zoom center only applies
             // to where the hold ENDS UP by the end of the hold.
             let startTransform = ZoomTransform(center: CGPoint(x: 0.5, y: 0.5), scale: 1.0)
-            let endTransform = ZoomTransform(center: freezeFrame.zoomCenter, scale: max(freezeFrame.zoomScale, minZoomScale))
+            let endScale = max(freezeFrame.zoomScale, minZoomScale)
+            // Re-clamped here, not just at the editor's drag/slider - a
+            // FreezeFrame saved before this clamp existed can still carry
+            // an off-center/low-scale combination that would otherwise
+            // reproduce the bug on every future export. See
+            // `clampedZoomCenter`'s doc comment (MomentZoom.swift).
+            let endTransform = ZoomTransform(center: clampedZoomCenter(freezeFrame.zoomCenter, scale: endScale), scale: endScale)
             let beginTime = AVCoreAnimationBeginTimeAtZero + holdBeginSeconds
 
             // A quick zoom-out back to normal right before the hold

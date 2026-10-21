@@ -93,3 +93,14 @@ struct FreezeFrame: Codable, Equatable {
 func freezeTimeToCompositeTime(_ sourceTime: Double, freezeTimestamp: Double, holdDuration: Double) -> Double {
     sourceTime <= freezeTimestamp ? sourceTime : sourceTime + holdDuration
 }
+
+/// The exact inverse of `freezeTimeToCompositeTime` above - used by
+/// `revertCurrentFreezeFrame` (Moment.swift) to shift every time-based
+/// field back to where it was before this freeze's hold was inserted.
+/// `max(..., freezeTimestamp)` guards a composite time that falls INSIDE
+/// the hold span itself (which has no well-defined pre-freeze source time)
+/// by collapsing it to the freeze point rather than producing a time past
+/// the real post-freeze content that comes right after it.
+func compositeTimeToFreezeSourceTime(_ compositeTime: Double, freezeTimestamp: Double, holdDuration: Double) -> Double {
+    compositeTime <= freezeTimestamp ? compositeTime : max(compositeTime - holdDuration, freezeTimestamp)
+}

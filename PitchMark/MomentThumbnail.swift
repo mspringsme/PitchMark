@@ -37,7 +37,14 @@ private func momentThumbnailCacheKey(momentId: String, videoURL: URL) -> NSStrin
 /// `appliesPreferredTrackTransform` pattern `MomentFilterEditorView.swift`'s
 /// `loadFrameAndSwatches` already uses for an in-editor frame grab.
 func momentThumbnail(for moment: Moment, completion: @escaping (UIImage?) -> Void) {
-    guard let momentId = moment.id, let videoURL = resolvedMomentPlaybackURL(for: momentId) else {
+    // `resolvedMomentPlaybackURL`/`resolvedMomentVideoURL` always resolve
+    // to a constructed path, even when nothing was ever saved to this
+    // device for this Moment (its Firestore metadata synced here, its
+    // video didn't - see `momentVideoExistsLocally`'s doc comment). Bail
+    // before the AVFoundation round trip rather than letting it fail async
+    // against a file that was never going to exist.
+    guard let momentId = moment.id, momentVideoExistsLocally(for: momentId),
+          let videoURL = resolvedMomentPlaybackURL(for: momentId) else {
         completion(nil)
         return
     }

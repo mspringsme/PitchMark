@@ -150,6 +150,20 @@ struct MomentFreezeEditorView: View {
                         Toggle("Zoom In During Hold", isOn: $zoomEnabled)
                         if zoomEnabled {
                             Slider(value: $zoomScale, in: minZoomScale...maxZoomScale)
+                                // Lowering the scale after the marker is
+                                // already placed near an edge can
+                                // re-invalidate it the same way dragging
+                                // can - re-clamp here too, or the still
+                                // sprite's edge pulls back from the canvas
+                                // the moment Apply bakes this value in,
+                                // with no drag involved. See
+                                // `clampedZoomCenter`'s doc comment
+                                // (MomentZoom.swift).
+                                .onChange(of: zoomScale) { _, newScale in
+                                    let clamped = clampedZoomCenter(CGPoint(x: zoomCenterX, y: zoomCenterY), scale: newScale)
+                                    zoomCenterX = clamped.x
+                                    zoomCenterY = clamped.y
+                                }
                             Text("Drag the yellow marker on the video above to set where it zooms in.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -213,7 +227,26 @@ struct MomentFreezeEditorView: View {
         GeometryReader { geometry in
             let videoRect = videoDisplayRect(containerSize: geometry.size, naturalSize: naturalSize)
             ZStack {
+                // Sized/positioned to `videoRect` (not the full
+                // GeometryReader area) specifically so `scaleEffect`'s
+                // UnitPoint anchor below lines up with `zoomCenterX/Y`,
+                // which are normalized against the actual video content
+                // rect, not the letterboxed container - same technique
+                // MomentZoomEditorView.swift's own live preview uses.
+                // Previously this view just showed a static reference dot
+                // on the unzoomed frame with no way to see how strong the
+                // zoom actually looks (reported by the user: the effect
+                // was invisible until after saving and reviewing the
+                // clip) - this makes the hold's end-of-zoom framing
+                // visible live, the same way the slider drags.
                 PlayerContainerView(player: player)
+                    .frame(width: videoRect.width, height: videoRect.height)
+                    .scaleEffect(
+                        zoomEnabled ? zoomScale : 1.0,
+                        anchor: UnitPoint(x: zoomCenterX, y: zoomCenterY)
+                    )
+                    .clipped()
+                    .position(x: videoRect.midX, y: videoRect.midY)
                 if calloutEnabled, naturalSize.width > 0 {
                     overlayTextCardPreview(
                         OverlayTextContent(templateID: calloutTemplateID, line1: calloutLine1, line2: calloutLine2, colorHex: colorToHex(calloutColor) ?? "#FFFFFF"),
@@ -255,7 +288,15 @@ struct MomentFreezeEditorView: View {
                             x: (value.location.x - videoRect.minX) / videoRect.width,
                             y: (value.location.y - videoRect.minY) / videoRect.height
                         )
-                        let clamped = clampedOffset(raw)
+                        // Scale-aware, not the plain 0...1 `clampedOffset`
+                        // Crop's offset drag uses - dragging the marker
+                        // toward an edge at a scale too low to cover that
+                        // edge once zoomed is exactly the bug reported:
+                        // the still-frame sprite pulls back from the
+                        // canvas edge, exposing the looped filler video
+                        // underneath mid-hold. See `clampedZoomCenter`'s
+                        // doc comment (MomentZoom.swift).
+                        let clamped = clampedZoomCenter(raw, scale: zoomScale)
                         zoomCenterX = clamped.x
                         zoomCenterY = clamped.y
                     }
@@ -377,7 +418,7 @@ struct MomentFreezeEditorView: View {
     private func removeFreeze() {
         exportErrorMessage = nil
         isExporting = true
-        authManager.updateMomentFreezeFrame(momentId: momentId, freezeFrame: nil) { error in
+        revertCurrentFreezeFrame(momentId: momentId, authManager: authManager) { error in
             isExporting = false
             if let error {
                 exportErrorMessage = "Couldn't remove the freeze frame: \(error.localizedDescription)"
@@ -390,38 +431,78 @@ struct MomentFreezeEditorView: View {
 
     private func startExport() {
         exportErrorMessage = nil
-        guard let destination = localMomentEditedVideoURL(for: momentId) else { return }
         let freezeFrame = buildFreezeFrame()
         isExporting = true
-        exportFrozenMoment(sourceURL: videoURL, freezeFrame: freezeFrame) { result in
-            switch result {
-            case .failure(let error):
+
+        func bake(from sourceURL: URL) {
+            guard let destination = localMomentEditedVideoURL(for: momentId) else {
                 isExporting = false
-                exportErrorMessage = "Couldn't apply the freeze frame: \(error.localizedDescription)"
-            case .success(let tempURL):
-                do {
-                    try? FileManager.default.removeItem(at: destination)
-                    try FileManager.default.copyItem(at: tempURL, to: destination)
-                    try? FileManager.default.removeItem(at: tempURL)
-                    authManager.refreshMomentDuration(momentId: momentId, videoURL: destination)
-                    // Every frozen-base ring member now misses this
-                    // freeze - see Moment.swift's
-                    // invalidateOtherFrozenBases doc comment.
-                    invalidateOtherFrozenBases(momentId: momentId, except: [])
-                    // See MomentAudioEditorView.swift's identical comment.
-                    refreshFadeIfNeeded(momentId: momentId, authManager: authManager) { onExported() }
-                    remapAllTimeBasedFields(momentId: momentId, authManager: authManager) {
-                        freezeTimeToCompositeTime($0, freezeTimestamp: freezeFrame.timestamp, holdDuration: freezeFrame.holdDuration)
+                return
+            }
+            exportFrozenMoment(sourceURL: sourceURL, freezeFrame: freezeFrame) { result in
+                switch result {
+                case .failure(let error):
+                    isExporting = false
+                    exportErrorMessage = "Couldn't apply the freeze frame: \(error.localizedDescription)"
+                case .success(let tempURL):
+                    do {
+                        // Backed up BEFORE overwriting `destination` - the
+                        // clean, pre-this-freeze source `revertCurrentFreezeFrame`
+                        // restores from if this freeze is later removed or
+                        // re-edited. See that function's doc comment
+                        // (Moment.swift) for why a bare re-export like
+                        // Trim/Speed use isn't enough once there's a
+                        // Remove affordance.
+                        if let backupURL = localMomentPreFreezeVideoURL(for: momentId) {
+                            try? FileManager.default.removeItem(at: backupURL)
+                            try? FileManager.default.copyItem(at: sourceURL, to: backupURL)
+                        }
+                        try? FileManager.default.removeItem(at: destination)
+                        try FileManager.default.copyItem(at: tempURL, to: destination)
+                        try? FileManager.default.removeItem(at: tempURL)
+                        authManager.refreshMomentDuration(momentId: momentId, videoURL: destination)
+                        // Every frozen-base ring member now misses this
+                        // freeze - see Moment.swift's
+                        // invalidateOtherFrozenBases doc comment.
+                        invalidateOtherFrozenBases(momentId: momentId, except: [])
+                        // See MomentAudioEditorView.swift's identical comment.
+                        refreshFadeIfNeeded(momentId: momentId, authManager: authManager) { onExported() }
+                        remapAllTimeBasedFields(momentId: momentId, authManager: authManager) {
+                            freezeTimeToCompositeTime($0, freezeTimestamp: freezeFrame.timestamp, holdDuration: freezeFrame.holdDuration)
+                        }
+                        authManager.updateMomentFreezeFrame(momentId: momentId, freezeFrame: freezeFrame) { _ in }
+                        isExporting = false
+                        onExported()
+                        dismiss()
+                    } catch {
+                        isExporting = false
+                        exportErrorMessage = "Couldn't save the exported video: \(error.localizedDescription)"
                     }
-                    authManager.updateMomentFreezeFrame(momentId: momentId, freezeFrame: freezeFrame) { _ in }
-                    isExporting = false
-                    onExported()
-                    dismiss()
-                } catch {
-                    isExporting = false
-                    exportErrorMessage = "Couldn't save the exported video: \(error.localizedDescription)"
                 }
             }
+        }
+
+        if hadExistingFreeze {
+            // Undo whatever freeze is on the Moment right now before
+            // re-baking with the (possibly edited) params below - without
+            // this, re-applying bakes directly on top of the already-baked
+            // hold from last time. See `revertCurrentFreezeFrame`'s doc
+            // comment (Moment.swift).
+            revertCurrentFreezeFrame(momentId: momentId, authManager: authManager) { error in
+                if let error {
+                    isExporting = false
+                    exportErrorMessage = "Couldn't apply the freeze frame: \(error.localizedDescription)"
+                    return
+                }
+                guard let cleanSource = resolvedMomentVideoURL(for: momentId) else {
+                    isExporting = false
+                    exportErrorMessage = "Couldn't locate the video to re-apply the freeze frame to."
+                    return
+                }
+                bake(from: cleanSource)
+            }
+        } else {
+            bake(from: videoURL)
         }
     }
 }

@@ -41,10 +41,14 @@ enum CropExportError: Error {
 
 func exportCroppedMoment(sourceURL: URL, cropSettings: CropSettings, completion: @escaping (Result<URL, Error>) -> Void) {
     DispatchQueue.global(qos: .userInitiated).async {
-        guard cropSettings.aspect != .original else {
+        guard cropSettings.aspect != .original || cropSettings.resolvedScale > minCropZoomScale else {
             // Same no-op shape MomentFadeExporter.swift uses when both
             // toggles are off: nothing to bake, hand back the source
-            // unchanged rather than a pointless re-encode.
+            // unchanged rather than a pointless re-encode. Original aspect
+            // AND no zoom is the only truly-nothing-to-do case now - zoomed
+            // into Original is a real crop (same output dimensions, smaller
+            // sampled footprint) and must fall through to the real export
+            // path below, same as Square/9:16 always did.
             DispatchQueue.main.async { completion(.success(sourceURL)) }
             return
         }
@@ -94,7 +98,7 @@ func exportCroppedMoment(sourceURL: URL, cropSettings: CropSettings, completion:
             return
         }
 
-        let (scale, position) = cropLayerGeometry(sourceSize: sourceSize, targetRenderSize: renderSize, offset: cropSettings.offset)
+        let (scale, position) = cropLayerGeometry(sourceSize: sourceSize, targetRenderSize: renderSize, offset: cropSettings.offset, scale: cropSettings.resolvedScale)
         let crop = CGAffineTransform(scaleX: scale, y: scale).concatenating(CGAffineTransform(translationX: position.x, y: position.y))
         let finalTransform = transform.concatenating(crop)
 

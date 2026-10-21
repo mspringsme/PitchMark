@@ -26,7 +26,11 @@ struct MomentPlaybackView: View {
 
     init(videoURL: URL) {
         self.videoURL = videoURL
-        _player = State(initialValue: AVPlayer(url: videoURL))
+        // See `cacheBustedPlaybackURL`'s doc comment (Moment.swift) - this
+        // is exactly the "just-edited, same fixed path" case it guards
+        // against, since this view is opened right after an editor
+        // overwrites that path.
+        _player = State(initialValue: AVPlayer(url: cacheBustedPlaybackURL(videoURL)))
     }
 
     var body: some View {

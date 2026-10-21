@@ -140,12 +140,24 @@ struct MomentDetailView: View {
 
     private var momentId: String { moment.id ?? "" }
 
+    /// False when this Moment's Firestore metadata synced to this device
+    /// but its video never did - recorded on a different signed-in device
+    /// (see `momentVideoExistsLocally`'s doc comment, Moment.swift). Drives
+    /// whether `playbackSection` shows a player or an explanatory banner,
+    /// and whether `editActionsSection`'s video editors are even offered -
+    /// every one of them bakes into a video file that doesn't exist here.
+    private var hasLocalMedia: Bool {
+        momentVideoExistsLocally(for: momentId)
+    }
+
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     playbackSection
-                    editActionsSection
+                    if hasLocalMedia {
+                        editActionsSection
+                    }
                     photosSection
                 }
                 .padding()
@@ -364,6 +376,14 @@ struct MomentDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(alignment: .bottomTrailing) {
                     Button {
+                        // The fullscreen cover builds its OWN separate
+                        // AVPlayer (MomentPlaybackView) from the same
+                        // file - if this inline player was already
+                        // playing, nothing stopped it once hidden behind
+                        // the cover, so both played audio at once.
+                        // Reported by the user as two overlapping audio
+                        // tracks during Freeze Frame review.
+                        player.pause()
                         showFullScreenPlayback = true
                     } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -374,6 +394,28 @@ struct MomentDetailView: View {
                     }
                     .padding(8)
                 }
+        } else if !hasLocalMedia {
+            // Explains the gap rather than leaving a blank space where the
+            // player would be - this Moment's metadata synced here via
+            // Firestore, but its video is local-only to whatever device
+            // recorded it (see `hasLocalMedia`'s doc comment).
+            VStack(spacing: 8) {
+                Image(systemName: "exclamationmark.icloud")
+                    .font(.largeTitle)
+                    .foregroundStyle(.secondary)
+                Text("This Moment was recorded on another device")
+                    .font(.subheadline.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                Text("Its video isn't available here. Open it on the device it was recorded on to view or edit it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .frame(height: 220)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         Text(moment.createdAt.formatted(date: .abbreviated, time: .shortened))
             .font(.caption)
@@ -416,6 +458,12 @@ struct MomentDetailView: View {
                 editActionButton("Zoom") { showZoomEditor = true }
                 editActionButton("Crop", caption: cropCaption) { showCropEditor = true }
                 editActionButton("Freeze Frame", caption: moment.freezeFrame != nil ? "Applied" : nil) {
+                    // Same reasoning as the fullscreen-expand button above
+                    // - this sheet gets its own AVPlayer too
+                    // (MomentFreezeEditorView), and a still-playing inline
+                    // player left running behind it is exactly what
+                    // produced the overlapping audio the user reported.
+                    player?.pause()
                     showFreezeEditor = true
                 }
                 editActionButton("Filters", caption: filterCaption) { showFilterEditor = true }
@@ -741,11 +789,27 @@ struct MomentDetailView: View {
     /// the faded result when a fade is applied, same as share/save/
     /// duplicate elsewhere in the app.
     private func reloadPlayer() {
-        guard let url = resolvedMomentPlaybackURL(for: momentId) else {
+        // `resolvedMomentPlaybackURL` always resolves to SOME path, even
+        // when nothing was ever saved to this device - see
+        // `momentVideoExistsLocally`'s doc comment (Moment.swift). Without
+        // this guard, a Moment synced from another device got handed to
+        // AVPlayer anyway, which just failed async and sat stuck mid-load
+        // with no explanation - `hasLocalMedia` is what drives
+        // `playbackSection`'s banner instead.
+        // Pause whatever's already here BEFORE replacing it. Freeze's own
+        // export path calls `onExported` (= this) twice in quick
+        // succession by design - once immediately, once again when an
+        // async fade rebake lands (see MomentAudioEditorView.swift's
+        // identical comment on why) - and reassigning `player` doesn't
+        // guarantee the OLD AVPlayer instance stops producing audio the
+        // instant it loses this reference. Reported by the user as two
+        // overlapping audio tracks right around a freeze's hold-end.
+        player?.pause()
+        guard hasLocalMedia, let url = resolvedMomentPlaybackURL(for: momentId) else {
             player = nil
             return
         }
-        player = AVPlayer(url: url)
+        player = AVPlayer(url: cacheBustedPlaybackURL(url))
     }
 
     /// Re-fetches `moment` fresh from Firestore - see its own `@State`

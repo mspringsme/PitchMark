@@ -489,17 +489,21 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         session.addConnection(frontMovieConnection)
         session.addConnection(backPhotoConnection)
         session.addConnection(frontPhotoConnection)
+        applyPreferredVideoStabilization(to: backVideoConnection)
+        applyPreferredVideoStabilization(to: frontMovieConnection)
 
         if let backPreviewLayer {
             let connection = AVCaptureConnection(inputPort: backVideoPort, videoPreviewLayer: backPreviewLayer)
             if session.canAddConnection(connection) {
                 session.addConnection(connection)
+                applyPreferredVideoStabilization(to: connection)
             }
         }
         if let frontPreviewLayer {
             let connection = AVCaptureConnection(inputPort: frontVideoPort, videoPreviewLayer: frontPreviewLayer)
             if session.canAddConnection(connection) {
                 session.addConnection(connection)
+                applyPreferredVideoStabilization(to: connection)
             }
         }
 
@@ -534,6 +538,29 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         configureSingleCameraFallbackLocked(backInput: backInput)
     }
 
+    /// Applied to both the movie-output connections (what actually gets
+    /// recorded) and the preview-layer connections (what's shown live
+    /// while framing a shot) - called at every connection add site in
+    /// this file so the viewfinder and the saved clip are stabilized the
+    /// same way, rather than the recording looking smoother than what the
+    /// user saw while shooting it.
+    ///
+    /// `.auto` lets the system choose the strongest stabilization the
+    /// current camera/format/lighting actually supports, rather than
+    /// locking to one fixed mode - the documented recommended default for
+    /// general recording (the stronger `.cinematicExtended` crops the
+    /// frame more and adds a couple seconds of buffering latency, a
+    /// trade-off not worth making by default here). Must be called AFTER
+    /// the connection is added to the session - `isVideoStabilizationSupported`
+    /// can read stale/incorrect before that, on-device-confirmed behavior
+    /// this codebase already relies on elsewhere for connection setup
+    /// order (see configureSession()'s own comment on connection add
+    /// order mattering).
+    private func applyPreferredVideoStabilization(to connection: AVCaptureConnection) {
+        guard connection.isVideoStabilizationSupported else { return }
+        connection.preferredVideoStabilizationMode = .auto
+    }
+
     /// Must be called from inside an already-open
     /// beginConfiguration/commitConfiguration pair (see the two call
     /// sites above).
@@ -565,7 +592,10 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         // both the video and audio ports doesn't actually work.
         let backVideoConnection = AVCaptureConnection(inputPorts: [backVideoPort], output: backMovieOutput)
         let backPhotoConnection = AVCaptureConnection(inputPorts: [backVideoPort], output: backPhotoOutput)
-        if session.canAddConnection(backVideoConnection) { session.addConnection(backVideoConnection) }
+        if session.canAddConnection(backVideoConnection) {
+            session.addConnection(backVideoConnection)
+            applyPreferredVideoStabilization(to: backVideoConnection)
+        }
         if session.canAddConnection(backPhotoConnection) { session.addConnection(backPhotoConnection) }
         if let audioInput, let audioPort = audioInput.ports.first(where: { $0.mediaType == .audio }) {
             let backAudioConnection = AVCaptureConnection(inputPorts: [audioPort], output: backMovieOutput)
@@ -576,6 +606,7 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
             let connection = AVCaptureConnection(inputPort: backVideoPort, videoPreviewLayer: backPreviewLayer)
             if session.canAddConnection(connection) {
                 session.addConnection(connection)
+                applyPreferredVideoStabilization(to: connection)
             }
         }
 
