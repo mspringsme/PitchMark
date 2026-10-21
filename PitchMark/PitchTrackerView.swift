@@ -148,71 +148,77 @@ struct PitchTrackerView: View {
     }
 
     @State private var mirroredLivePitchEventIds: Set<String> = []
-    @State private var didAutoDismissCodeSheetForLiveId: String? = nil
-    @State private var uiConnected: Bool = false
-    @State private var showCodeAssignmentSheet = false
-    @State private var pitcherName: String = ""
+    // The 153 presentation-state properties that used to be `@State` here
+    // live in this object now - see TrackerUIState.swift for why. Each one
+    // keeps a same-named forwarding property below, so `foo` still reads and
+    // writes exactly as before; only `$foo` became `$ui.foo`.
+    @StateObject private var ui = TrackerUIState()
+
+    private var didAutoDismissCodeSheetForLiveId: String? { get { ui.didAutoDismissCodeSheetForLiveId } nonmutating set { ui.didAutoDismissCodeSheetForLiveId = newValue } }
+    private var uiConnected: Bool { get { ui.uiConnected } nonmutating set { ui.uiConnected = newValue } }
+    private var showCodeAssignmentSheet: Bool { get { ui.showCodeAssignmentSheet } nonmutating set { ui.showCodeAssignmentSheet = newValue } }
+    private var pitcherName: String { get { ui.pitcherName } nonmutating set { ui.pitcherName = newValue } }
     @State private var selectedPitches: Set<String> = []
     @State private var calledPitch: PitchCall? = nil
     @State private var lastCallInitiatedAt: Date? = nil
-    @State private var lastObservedPendingCallId: String? = nil
+    private var lastObservedPendingCallId: String? { get { ui.lastObservedPendingCallId } nonmutating set { ui.lastObservedPendingCallId = newValue } }
     @State private var lastTappedPosition: CGPoint? = nil
     @State private var batterSide: BatterSide = .right
     @State private var pitchCodeAssignments: [PitchCodeAssignment] = []
-    @State private var selectedCode: String = ""
-    @State private var selectedPitch: String = ""
-    @State private var selectedLocation: String = ""
-    @State private var gameIsActive: Bool = false
+    private var selectedCode: String { get { ui.selectedCode } nonmutating set { ui.selectedCode = newValue } }
+    private var selectedPitch: String { get { ui.selectedPitch } nonmutating set { ui.selectedPitch = newValue } }
+    private var selectedLocation: String { get { ui.selectedLocation } nonmutating set { ui.selectedLocation = newValue } }
+    private var gameIsActive: Bool { get { ui.gameIsActive } nonmutating set { ui.gameIsActive = newValue } }
     /// Home/Moments/Family are TabView siblings of Games, not sheets - a
     /// single selection replaces the old showSettings/showMomentsSheet/
     /// showFamilySheet trio (and the onDismiss+asyncAfter(0.05) dance that
     /// used to chain one sheet's dismissal into the next one's presentation).
     @State private var activeHomeArea: HomeArea = .games
-    @State private var showProfile = false
+    private var showProfile: Bool { get { ui.showProfile } nonmutating set { ui.showProfile = newValue } }
     @State private var templates: [PitchTemplate] = []
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
     @Environment(\.scenePhase) private var scenePhase
-    @State private var showProfileSheet = false
-    @State private var showSignOutConfirmation = false
+    private var showProfileSheet: Bool { get { ui.showProfileSheet } nonmutating set { ui.showProfileSheet = newValue } }
+    private var showSignOutConfirmation: Bool { get { ui.showSignOutConfirmation } nonmutating set { ui.showSignOutConfirmation = newValue } }
     @State private var selectedTemplate: PitchTemplate? = nil
-    @State private var showTemplateEditor = false
-    @State private var showInviteJoinSheet = false
-    @State private var inviteJoinText: String = ""
-    @State private var inviteJoinError: String? = nil
-    @State private var showProPaywall = false
-    @State private var showProGateAlert = false
-    @State private var proGateMessage: String = ""
-    @State private var showDemoLoginWall = false
-    @State private var demoLoginWallMessage = "Sign in to save your own teams, pitchers, and grid keys."
-    @State private var showCameraPicker = false
-    @State private var showCameraUnavailableAlert = false
-    @State private var showCameraPermissionAlert = false
-    @State private var showQRScanner = false
-    @State private var showGridKeySheet = false
-    @State private var showCallingPitchesPrompt = false
+    private var showTemplateEditor: Bool { get { ui.showTemplateEditor } nonmutating set { ui.showTemplateEditor = newValue } }
+    private var showInviteJoinSheet: Bool { get { ui.showInviteJoinSheet } nonmutating set { ui.showInviteJoinSheet = newValue } }
+    private var inviteJoinText: String { get { ui.inviteJoinText } nonmutating set { ui.inviteJoinText = newValue } }
+    private var inviteJoinError: String? { get { ui.inviteJoinError } nonmutating set { ui.inviteJoinError = newValue } }
+    private var showProPaywall: Bool { get { ui.showProPaywall } nonmutating set { ui.showProPaywall = newValue } }
+    private var showProGateAlert: Bool { get { ui.showProGateAlert } nonmutating set { ui.showProGateAlert = newValue } }
+    private var proGateMessage: String { get { ui.proGateMessage } nonmutating set { ui.proGateMessage = newValue } }
+    private var showDemoLoginWall: Bool { get { ui.showDemoLoginWall } nonmutating set { ui.showDemoLoginWall = newValue } }
+    private var demoLoginWallMessage: String { get { ui.demoLoginWallMessage } nonmutating set { ui.demoLoginWallMessage = newValue } }
+    private var showCameraPicker: Bool { get { ui.showCameraPicker } nonmutating set { ui.showCameraPicker = newValue } }
+    private var showCameraUnavailableAlert: Bool { get { ui.showCameraUnavailableAlert } nonmutating set { ui.showCameraUnavailableAlert = newValue } }
+    private var showCameraPermissionAlert: Bool { get { ui.showCameraPermissionAlert } nonmutating set { ui.showCameraPermissionAlert = newValue } }
+    private var showQRScanner: Bool { get { ui.showQRScanner } nonmutating set { ui.showQRScanner = newValue } }
+    private var showGridKeySheet: Bool { get { ui.showGridKeySheet } nonmutating set { ui.showGridKeySheet = newValue } }
+    private var showCallingPitchesPrompt: Bool { get { ui.showCallingPitchesPrompt } nonmutating set { ui.showCallingPitchesPrompt = newValue } }
     @State private var promptedTrackingModeLiveIds: Set<String> = Set(UserDefaults.standard.array(forKey: DefaultsKeys.promptedTrackingModeLiveIds) as? [String] ?? [])
     @State private var pitchers: [Pitcher] = []
-    @State private var selectedPitcherId: String? = nil
+    private var selectedPitcherId: String? { get { ui.selectedPitcherId } nonmutating set { ui.selectedPitcherId = newValue } }
     @State private var activeSide: GameSide = .home
     @State private var awayPitcherIds: Set<String> = []
-    @State private var showSetOpponentSheet = false
+    private var showSetOpponentSheet: Bool { get { ui.showSetOpponentSheet } nonmutating set { ui.showSetOpponentSheet = newValue } }
     @State private var opponentTeamCandidates: [(team: Team, membership: TeamMembership)] = []
-    @State private var newOpponentTeamName: String = ""
+    private var newOpponentTeamName: String { get { ui.newOpponentTeamName } nonmutating set { ui.newOpponentTeamName = newValue } }
     @State private var newOpponentTeamDesignation = TeamDesignationDraft()
-    @State private var activeAwayTeamName: String = ""
+    private var activeAwayTeamName: String { get { ui.activeAwayTeamName } nonmutating set { ui.activeAwayTeamName = newValue } }
     @State private var awayRoster: [TeamPlayer] = []
-    @State private var newAwayPitcherName: String = ""
+    private var newAwayPitcherName: String { get { ui.newAwayPitcherName } nonmutating set { ui.newAwayPitcherName = newValue } }
     // Mirror of activeAwayTeamName for our own side, so controls that act
     // on a roster can say whose roster it is instead of leaving the coach
     // to infer it from which side is currently pitching.
-    @State private var activeHomeTeamName: String = ""
+    private var activeHomeTeamName: String { get { ui.activeHomeTeamName } nonmutating set { ui.activeHomeTeamName = newValue } }
     @State private var homeRoster: [TeamPlayer] = []
-    @State private var showSetMyTeamSheet = false
+    private var showSetMyTeamSheet: Bool { get { ui.showSetMyTeamSheet } nonmutating set { ui.showSetMyTeamSheet = newValue } }
     @State private var myTeamCandidates: [(team: Team, membership: TeamMembership)] = []
-    @State private var newMyTeamName: String = ""
+    private var newMyTeamName: String { get { ui.newMyTeamName } nonmutating set { ui.newMyTeamName = newValue } }
     @State private var newMyTeamDesignation = TeamDesignationDraft()
-    @State private var showChooseBattersStep = false
+    private var showChooseBattersStep: Bool { get { ui.showChooseBattersStep } nonmutating set { ui.showChooseBattersStep = newValue } }
     // pitcherId -> every team name that pitcher's linked TeamPlayer shows up
     // on, across all of the user's teams - lets the new-game pitcher picker
     // disambiguate same-named pitchers from different teams. Loaded by
@@ -227,17 +233,17 @@ struct PitchTrackerView: View {
     // not switch sides - flipping anyway silently undid the side you were
     // deliberately on, which read as "nothing happened"). Defaults true to
     // match the toggle's own behavior.
-    @State private var teamSetupShouldFlipSide = true
+    private var teamSetupShouldFlipSide: Bool { get { ui.teamSetupShouldFlipSide } nonmutating set { ui.teamSetupShouldFlipSide = newValue } }
     // Quick-add: build either roster (ours or the opponent's, whichever is
     // relevant to the current side) without leaving the game - reachable
     // from both the pitcher and batter pickers' own "+" action. Writes
     // through the exact same Team/TeamPlayer/Player records as every other
     // roster entry point, so it persists outside the game like any other
     // roster edit, not something scoped to just this session.
-    @State private var showQuickAddPlayerSheet = false
-    @State private var quickAddPlayerName = ""
-    @State private var quickAddPlayerJersey = ""
-    @State private var quickAddTeamId: String? = nil
+    private var showQuickAddPlayerSheet: Bool { get { ui.showQuickAddPlayerSheet } nonmutating set { ui.showQuickAddPlayerSheet = newValue } }
+    private var quickAddPlayerName: String { get { ui.quickAddPlayerName } nonmutating set { ui.quickAddPlayerName = newValue } }
+    private var quickAddPlayerJersey: String { get { ui.quickAddPlayerJersey } nonmutating set { ui.quickAddPlayerJersey = newValue } }
+    private var quickAddTeamId: String? { get { ui.quickAddTeamId } nonmutating set { ui.quickAddTeamId = newValue } }
     @State private var quickAddPlayerPositions: Set<FieldPosition> = []
     @State private var quickAddPlayerBattingSide: BattingSide? = nil
     @State private var quickAddOnCreate: ((TeamPlayer) -> Void)? = nil
@@ -246,31 +252,31 @@ struct PitchTrackerView: View {
     // whichever jersey cell is selected (see the onChange below), not set
     // directly by any picker UI anymore. nil for an ephemeral "this game
     // only" cell with no roster link.
-    @State private var selectedHitterId: String? = nil
+    private var selectedHitterId: String? { get { ui.selectedHitterId } nonmutating set { ui.selectedHitterId = newValue } }
     // Session-local roster-link annotation on top of the jersey grid's own
     // existing, persisted cell list - see addJerseyCellForRosterPlayer's
     // doc comment for why this doesn't survive a relaunch yet.
     @State private var hitterIdByJerseyCellId: [UUID: String] = [:]
-    @State private var showAtBatAddMenu = false
-    @State private var showAtBatRosterPickerSheet = false
+    private var showAtBatAddMenu: Bool { get { ui.showAtBatAddMenu } nonmutating set { ui.showAtBatAddMenu = newValue } }
+    private var showAtBatRosterPickerSheet: Bool { get { ui.showAtBatRosterPickerSheet } nonmutating set { ui.showAtBatRosterPickerSheet = newValue } }
     @State private var bufferedSharedHitterEvents: [BufferedHitterEvent] = []
-    @State private var isRecordingResult = false
-    @State private var activeCalledPitchId: String? = nil
+    private var isRecordingResult: Bool { get { ui.isRecordingResult } nonmutating set { ui.isRecordingResult = newValue } }
+    private var activeCalledPitchId: String? { get { ui.activeCalledPitchId } nonmutating set { ui.activeCalledPitchId = newValue } }
     @State private var deferredPendingPitch: Game.PendingPitch? = nil
     @State private var deferredDisplayCode: (colorName: String, code: String)? = nil
-    @State private var actualLocationRecorded: String? = nil
+    private var actualLocationRecorded: String? { get { ui.actualLocationRecorded } nonmutating set { ui.actualLocationRecorded = newValue } }
     @State private var atBatCountCacheByBatter: [String: (balls: Int, strikes: Int)] = [:]
-    @State private var resultVisualState: String? = nil
-    @State private var pendingResultLabel: String? = nil
+    private var resultVisualState: String? { get { ui.resultVisualState } nonmutating set { ui.resultVisualState = newValue } }
+    private var pendingResultLabel: String? { get { ui.pendingResultLabel } nonmutating set { ui.pendingResultLabel = newValue } }
     /// Whether the coach has already answered (Reset doesn't count; No/Done do)
     /// the "estimate what was called" prompt for the current Catcher-mode
     /// pitch. Reset to false whenever a fresh catcher result location arrives.
-    @State private var catcherEstimateDismissed: Bool = true
+    private var catcherEstimateDismissed: Bool { get { ui.catcherEstimateDismissed } nonmutating set { ui.catcherEstimateDismissed = newValue } }
     @State private var catcherEstimate: PitchCall? = nil
-    @State private var catcherEstimateDraftPitch: String = "Catcher"
-    @State private var catcherEstimateDraftLocation: String? = nil
-    @State private var autoPitchOnlyEnabled: Bool = false
-    @State private var showResultConfirmation = false
+    private var catcherEstimateDraftPitch: String { get { ui.catcherEstimateDraftPitch } nonmutating set { ui.catcherEstimateDraftPitch = newValue } }
+    private var catcherEstimateDraftLocation: String? { get { ui.catcherEstimateDraftLocation } nonmutating set { ui.catcherEstimateDraftLocation = newValue } }
+    private var autoPitchOnlyEnabled: Bool { get { ui.autoPitchOnlyEnabled } nonmutating set { ui.autoPitchOnlyEnabled = newValue } }
+    private var showResultConfirmation: Bool { get { ui.showResultConfirmation } nonmutating set { ui.showResultConfirmation = newValue } }
     @State private var isGameMode: Double = 1
     @StateObject var sessionManager = PitchSessionManager()
     @State private var modeSliderValue: Double = 1 // game only
@@ -286,81 +292,81 @@ struct PitchTrackerView: View {
     @State private var joinedLiveSessionsListener: ListenerRegistration? = nil
     /// Guards `recordJoinedLiveSession`'s cosmetic refresh (opponent name,
     /// owner game id) to once per room instead of on every live-doc snapshot.
-    @State private var joinedSessionDetailsSyncedForLiveId: String? = nil
-    @State private var showPitchResults = false
-    @State private var showCardsFullScreenSheet = false
-    @State private var cardsEditTargetEventID: String? = nil
+    private var joinedSessionDetailsSyncedForLiveId: String? { get { ui.joinedSessionDetailsSyncedForLiveId } nonmutating set { ui.joinedSessionDetailsSyncedForLiveId = newValue } }
+    private var showPitchResults: Bool { get { ui.showPitchResults } nonmutating set { ui.showPitchResults = newValue } }
+    private var showCardsFullScreenSheet: Bool { get { ui.showCardsFullScreenSheet } nonmutating set { ui.showCardsFullScreenSheet = newValue } }
+    private var cardsEditTargetEventID: String? { get { ui.cardsEditTargetEventID } nonmutating set { ui.cardsEditTargetEventID = newValue } }
     @State private var sharedDeletedEventIDs: Set<String> = []
     @State private var sharedEditedEventOverrides: [String: PitchEvent] = [:]
     @State private var sharedPitcherOverrides: [String: String] = [:]
     @State private var sharedBatterJerseyOverrides: [String: String] = [:]
-    @State private var showConfirmSheet = false
-    @State private var showUndoConfirm = false
+    private var showConfirmSheet: Bool { get { ui.showConfirmSheet } nonmutating set { ui.showConfirmSheet = newValue } }
+    private var showUndoConfirm: Bool { get { ui.showUndoConfirm } nonmutating set { ui.showUndoConfirm = newValue } }
     @State private var calledPitchComposerDetent: PresentationDetent = .fraction(0.28)
-    @State private var isStrikeSwinging = false
-    @State private var isStrikeLooking = false
-    @State private var isWildPitch = false
-    @State private var isPassedBall = false
-    @State private var isBall = false
-    @State private var isCalledPitchViewVisible = false
-    @State private var shouldBlurBackground = false
-    @State private var isGame = false
-    @State private var selectedOutcome: String? = nil
-    @State private var selectedDescriptor: String? = nil
+    private var isStrikeSwinging: Bool { get { ui.isStrikeSwinging } nonmutating set { ui.isStrikeSwinging = newValue } }
+    private var isStrikeLooking: Bool { get { ui.isStrikeLooking } nonmutating set { ui.isStrikeLooking = newValue } }
+    private var isWildPitch: Bool { get { ui.isWildPitch } nonmutating set { ui.isWildPitch = newValue } }
+    private var isPassedBall: Bool { get { ui.isPassedBall } nonmutating set { ui.isPassedBall = newValue } }
+    private var isBall: Bool { get { ui.isBall } nonmutating set { ui.isBall = newValue } }
+    private var isCalledPitchViewVisible: Bool { get { ui.isCalledPitchViewVisible } nonmutating set { ui.isCalledPitchViewVisible = newValue } }
+    private var shouldBlurBackground: Bool { get { ui.shouldBlurBackground } nonmutating set { ui.shouldBlurBackground = newValue } }
+    private var isGame: Bool { get { ui.isGame } nonmutating set { ui.isGame = newValue } }
+    private var selectedOutcome: String? { get { ui.selectedOutcome } nonmutating set { ui.selectedOutcome = newValue } }
+    private var selectedDescriptor: String? { get { ui.selectedDescriptor } nonmutating set { ui.selectedDescriptor = newValue } }
     @State private var pitchResultBannerPhase: PitchResultBannerPhase = .code
-    @State private var isError: Bool = false
-    @State private var showGameSheet = false
-    @State private var showGameStatsSheet = false
-    @State private var showGameSummarySheet = false
-    @State private var showGameSummaryShareSheet = false
+    private var isError: Bool { get { ui.isError } nonmutating set { ui.isError = newValue } }
+    private var showGameSheet: Bool { get { ui.showGameSheet } nonmutating set { ui.showGameSheet = newValue } }
+    private var showGameStatsSheet: Bool { get { ui.showGameStatsSheet } nonmutating set { ui.showGameStatsSheet = newValue } }
+    private var showGameSummarySheet: Bool { get { ui.showGameSummarySheet } nonmutating set { ui.showGameSummarySheet = newValue } }
+    private var showGameSummaryShareSheet: Bool { get { ui.showGameSummaryShareSheet } nonmutating set { ui.showGameSummaryShareSheet = newValue } }
     @State private var selectedGameSummaryPitcherSelection: String = allPitchersSummarySelection
     @State private var currentTrackingMode: TrackingMode = .coach
-    @State private var opponentName: String? = nil
-    @State private var selectedGameId: String? = nil
+    private var opponentName: String? { get { ui.opponentName } nonmutating set { ui.opponentName = newValue } }
+    private var selectedGameId: String? { get { ui.selectedGameId } nonmutating set { ui.selectedGameId = newValue } }
     // Participant overlay state
-    @State private var showParticipantOverlay: Bool = false
-    @State private var ownerTemplateName: String? = nil
+    private var showParticipantOverlay: Bool { get { ui.showParticipantOverlay } nonmutating set { ui.showParticipantOverlay = newValue } }
+    private var ownerTemplateName: String? { get { ui.ownerTemplateName } nonmutating set { ui.ownerTemplateName = newValue } }
     
     @State private var jerseyCells: [JerseyCell] = sampleJerseyCells
     @State private var draggingJersey: JerseyCell?
-    @State private var showAddJerseyPopover = false
-    @State private var newJerseyNumber: String = ""
-    @State private var showBulkJerseyPrompt = false
-    @State private var showBulkJerseyInput = false
-    @State private var bulkJerseyNumbers: String = ""
-    @State private var showDummyLineupInput = false
-    @State private var dummyLineupCount: String = ""
-    @State private var showActivateNewBatterPrompt = false
+    private var showAddJerseyPopover: Bool { get { ui.showAddJerseyPopover } nonmutating set { ui.showAddJerseyPopover = newValue } }
+    private var newJerseyNumber: String { get { ui.newJerseyNumber } nonmutating set { ui.newJerseyNumber = newValue } }
+    private var showBulkJerseyPrompt: Bool { get { ui.showBulkJerseyPrompt } nonmutating set { ui.showBulkJerseyPrompt = newValue } }
+    private var showBulkJerseyInput: Bool { get { ui.showBulkJerseyInput } nonmutating set { ui.showBulkJerseyInput = newValue } }
+    private var bulkJerseyNumbers: String { get { ui.bulkJerseyNumbers } nonmutating set { ui.bulkJerseyNumbers = newValue } }
+    private var showDummyLineupInput: Bool { get { ui.showDummyLineupInput } nonmutating set { ui.showDummyLineupInput = newValue } }
+    private var dummyLineupCount: String { get { ui.dummyLineupCount } nonmutating set { ui.dummyLineupCount = newValue } }
+    private var showActivateNewBatterPrompt: Bool { get { ui.showActivateNewBatterPrompt } nonmutating set { ui.showActivateNewBatterPrompt = newValue } }
     @State private var pendingNewBatterActivation: JerseyCell? = nil
     @State private var selectedBatterId: UUID? = nil
-    @State private var selectedBatterJersey: String? = nil
+    private var selectedBatterJersey: String? { get { ui.selectedBatterJersey } nonmutating set { ui.selectedBatterJersey = newValue } }
     @State private var jerseyDetailEvent: PitchEvent? = nil
     @State private var pendingJerseyDetailCell: JerseyCell? = nil
-    @State private var showJerseyDetailSheet = false
-    @State private var showNoJerseyEventsAlert = false
-    @State private var noJerseyEventsMessage = ""
-    @State private var showNextBatterAdjustmentAlert = false
-    @State private var nextBatterAdjustmentMessage = "Adjust to next batter if needed"
-    @State private var didAutoRetryJerseyDetail = false
+    private var showJerseyDetailSheet: Bool { get { ui.showJerseyDetailSheet } nonmutating set { ui.showJerseyDetailSheet = newValue } }
+    private var showNoJerseyEventsAlert: Bool { get { ui.showNoJerseyEventsAlert } nonmutating set { ui.showNoJerseyEventsAlert = newValue } }
+    private var noJerseyEventsMessage: String { get { ui.noJerseyEventsMessage } nonmutating set { ui.noJerseyEventsMessage = newValue } }
+    private var showNextBatterAdjustmentAlert: Bool { get { ui.showNextBatterAdjustmentAlert } nonmutating set { ui.showNextBatterAdjustmentAlert = newValue } }
+    private var nextBatterAdjustmentMessage: String { get { ui.nextBatterAdjustmentMessage } nonmutating set { ui.nextBatterAdjustmentMessage = newValue } }
+    private var didAutoRetryJerseyDetail: Bool { get { ui.didAutoRetryJerseyDetail } nonmutating set { ui.didAutoRetryJerseyDetail = newValue } }
     @State private var jerseyDetailPayload: JerseyDetailPayload? = nil
-    @State private var atBatPulse = false
-    @State private var showAtBatHeatmapSheet = false
-    @State private var selectedAtBatHeatmapPitch: String = ""
+    private var atBatPulse: Bool { get { ui.atBatPulse } nonmutating set { ui.atBatPulse = newValue } }
+    private var showAtBatHeatmapSheet: Bool { get { ui.showAtBatHeatmapSheet } nonmutating set { ui.showAtBatHeatmapSheet = newValue } }
+    private var selectedAtBatHeatmapPitch: String { get { ui.selectedAtBatHeatmapPitch } nonmutating set { ui.selectedAtBatHeatmapPitch = newValue } }
     @State private var atBatHeatmapResultFilter: BatterHeatmapResultFilter = .all
     @State private var pendingHeatmapCall: (pitch: String, location: String, isStrike: Bool)? = nil
     @State private var pendingAllPitchesHeatmapTap: (location: String, isStrike: Bool)? = nil
-    @State private var showAllPitchesHeatmapPitchPicker = false
-    @State private var showHeatmapUnavailablePitchAlert = false
-    @State private var heatmapUnavailablePitchMessage = ""
+    private var showAllPitchesHeatmapPitchPicker: Bool { get { ui.showAllPitchesHeatmapPitchPicker } nonmutating set { ui.showAllPitchesHeatmapPitchPicker = newValue } }
+    private var showHeatmapUnavailablePitchAlert: Bool { get { ui.showHeatmapUnavailablePitchAlert } nonmutating set { ui.showHeatmapUnavailablePitchAlert = newValue } }
+    private var heatmapUnavailablePitchMessage: String { get { ui.heatmapUnavailablePitchMessage } nonmutating set { ui.heatmapUnavailablePitchMessage = newValue } }
     @State private var scoutObservedResult: ScoutObservedResult? = nil
-    @State private var scoutInPlayOutcome: String? = nil
-    @State private var scoutHitOnPlay = false
-    @State private var scoutDescriptor: String? = nil
-    @State private var scoutErrorOnPlay = false
-    @State private var scoutMiscOutcome: String? = nil
+    private var scoutInPlayOutcome: String? { get { ui.scoutInPlayOutcome } nonmutating set { ui.scoutInPlayOutcome = newValue } }
+    private var scoutHitOnPlay: Bool { get { ui.scoutHitOnPlay } nonmutating set { ui.scoutHitOnPlay = newValue } }
+    private var scoutDescriptor: String? { get { ui.scoutDescriptor } nonmutating set { ui.scoutDescriptor = newValue } }
+    private var scoutErrorOnPlay: Bool { get { ui.scoutErrorOnPlay } nonmutating set { ui.scoutErrorOnPlay = newValue } }
+    private var scoutMiscOutcome: String? { get { ui.scoutMiscOutcome } nonmutating set { ui.scoutMiscOutcome = newValue } }
     @State private var scoutZoneSelection: ScoutZoneSelection? = nil
-    @State private var showScoutFieldMap = false
-    @State private var scoutBattedBallRegionName: String? = nil
+    private var showScoutFieldMap: Bool { get { ui.showScoutFieldMap } nonmutating set { ui.showScoutFieldMap = newValue } }
+    private var scoutBattedBallRegionName: String? { get { ui.scoutBattedBallRegionName } nonmutating set { ui.scoutBattedBallRegionName = newValue } }
     @State private var scoutBattedBallTapNormalized: CGPoint? = nil
     private struct SavedPlayReviewDraft: Identifiable {
         let id = UUID()
@@ -370,24 +376,24 @@ struct PitchTrackerView: View {
     }
 
     @State private var savedPlayReviewDraft: SavedPlayReviewDraft? = nil
-    @State private var savedPlayReviewTitle: String = "Saved Play"
+    private var savedPlayReviewTitle: String { get { ui.savedPlayReviewTitle } nonmutating set { ui.savedPlayReviewTitle = newValue } }
     @State private var savedPlayReviewSummaryLines: [String] = []
-    @State private var savedPlayReviewCountText: String = ""
+    private var savedPlayReviewCountText: String { get { ui.savedPlayReviewCountText } nonmutating set { ui.savedPlayReviewCountText = newValue } }
     @State private var savedPlayReviewEvent: PitchEvent? = nil
     @FocusState private var jerseyInputFocused: Bool
     
     @State private var editingCell: JerseyCell?
-    @State private var showResetConfirm = false
+    private var showResetConfirm: Bool { get { ui.showResetConfirm } nonmutating set { ui.showResetConfirm = newValue } }
     // Removed @State private var isReset = false here as per instructions
 
-    @State private var isReorderingMode: Bool = false
+    private var isReorderingMode: Bool { get { ui.isReorderingMode } nonmutating set { ui.isReorderingMode = newValue } }
     @State private var colorRefreshToken = UUID()
-    @State private var hasPresentedInitialSettings = false
-    @State private var lastAuthenticatedUserId: String? = nil
+    private var hasPresentedInitialSettings: Bool { get { ui.hasPresentedInitialSettings } nonmutating set { ui.hasPresentedInitialSettings = newValue } }
+    private var lastAuthenticatedUserId: String? { get { ui.lastAuthenticatedUserId } nonmutating set { ui.lastAuthenticatedUserId = newValue } }
 
 
     // Added according to instructions
-    @State private var showTemplateChangeWarning = false
+    private var showTemplateChangeWarning: Bool { get { ui.showTemplateChangeWarning } nonmutating set { ui.showTemplateChangeWarning = newValue } }
     @State private var pendingTemplateSelection: PitchTemplate? = nil
     @State private var lastAppliedTemplateId: UUID? = nil
     @State private var pendingGameConfirmation: PendingSessionConfirmation? = nil
@@ -399,8 +405,8 @@ struct PitchTrackerView: View {
     // you can't get in" matched. showGameSheet's onDismiss now fires the
     // confirmation request only once the first sheet has actually finished
     // dismissing.
-    @State private var pendingGameChoiceGameId: String? = nil
-    @State private var pendingGameChoiceOwnerUid: String? = nil
+    private var pendingGameChoiceGameId: String? { get { ui.pendingGameChoiceGameId } nonmutating set { ui.pendingGameChoiceGameId = newValue } }
+    private var pendingGameChoiceOwnerUid: String? { get { ui.pendingGameChoiceOwnerUid } nonmutating set { ui.pendingGameChoiceOwnerUid = newValue } }
     // Same shape of race, one step later: confirming the pitcher/template
     // sheet used to call chooseGame (which flips isGame and swaps in the
     // tracker, including the At Bat scroll's "+" button) in the same
@@ -408,7 +414,7 @@ struct PitchTrackerView: View {
     // gesture recognizer stuck unresponsive until a full app relaunch
     // forced a clean re-layout. Deferred to this sheet's onDismiss instead.
     @State private var deferredGameEntryAction: (() -> Void)? = nil
-    @State private var pendingConfirmationPitcherId: String? = nil
+    private var pendingConfirmationPitcherId: String? { get { ui.pendingConfirmationPitcherId } nonmutating set { ui.pendingConfirmationPitcherId = newValue } }
     @State private var pendingConfirmationTemplateId: UUID? = nil
     @State private var pendingConfirmationTrackingMode: TrackingMode = .coach
 
@@ -493,36 +499,36 @@ struct PitchTrackerView: View {
         /// republishes that 0 over the other device's real count.
         let outs: Int?
     }
-    @State private var isSelecting: Bool = false
+    private var isSelecting: Bool { get { ui.isSelecting } nonmutating set { ui.isSelecting = newValue } }
     @State private var selectedEventIDs: Set<String> = []
     @State private var localTemplateOverrides: [String: String] = [:]
-    @State private var pitchFirst = true
-    @State private var showCodeShareSheet = false
-    @State private var showCodeShareModePicker = false
+    private var pitchFirst: Bool { get { ui.pitchFirst } nonmutating set { ui.pitchFirst = newValue } }
+    private var showCodeShareSheet: Bool { get { ui.showCodeShareSheet } nonmutating set { ui.showCodeShareSheet = newValue } }
+    private var showCodeShareModePicker: Bool { get { ui.showCodeShareModePicker } nonmutating set { ui.showCodeShareModePicker = newValue } }
     @State private var codeShareInitialTab: Int = 0 // 0 = Generate, 1 = Enter
-    @State private var inviteSheetDismissArmed: Bool = false
+    private var inviteSheetDismissArmed: Bool { get { ui.inviteSheetDismissArmed } nonmutating set { ui.inviteSheetDismissArmed = newValue } }
     @State private var inviteSheetOpenedAt: Date? = nil
-    @State private var showSelectGameFirstAlert = false
-    @State private var showCodeShareErrorAlert = false
-    @State private var codeShareErrorMessage: String = ""
-    @State private var showGameEntryErrorAlert = false
-    @State private var gameEntryErrorMessage: String = ""
-    @State private var shareCode: String = ""
+    private var showSelectGameFirstAlert: Bool { get { ui.showSelectGameFirstAlert } nonmutating set { ui.showSelectGameFirstAlert = newValue } }
+    private var showCodeShareErrorAlert: Bool { get { ui.showCodeShareErrorAlert } nonmutating set { ui.showCodeShareErrorAlert = newValue } }
+    private var codeShareErrorMessage: String { get { ui.codeShareErrorMessage } nonmutating set { ui.codeShareErrorMessage = newValue } }
+    private var showGameEntryErrorAlert: Bool { get { ui.showGameEntryErrorAlert } nonmutating set { ui.showGameEntryErrorAlert = newValue } }
+    private var gameEntryErrorMessage: String { get { ui.gameEntryErrorMessage } nonmutating set { ui.gameEntryErrorMessage = newValue } }
+    private var shareCode: String { get { ui.shareCode } nonmutating set { ui.shareCode = newValue } }
     @AppStorage(DefaultsKeys.displayOnlyMode) private var isDisplayOnlyMode: Bool = false
     @AppStorage(DefaultsKeys.displayOnlyLiveId) private var displayOnlyLiveIdStorage: String = ""
-    @State private var displayOnlyLiveId: String? = nil
+    private var displayOnlyLiveId: String? { get { ui.displayOnlyLiveId } nonmutating set { ui.displayOnlyLiveId = newValue } }
     @State private var displayCodePayload: CodeDisplayOverlayPayload? = nil
     @State private var displayCodeClearWork: DispatchWorkItem? = nil
     @State private var displayListener: ListenerRegistration? = nil
     @State private var displayStateListener: ListenerRegistration? = nil
     @State private var displayHeartbeatTimer: Timer? = nil
     @State private var displaySessionListener: ListenerRegistration? = nil
-    @State private var showSessionConflictAlert = false
-    @State private var showDisplayAppMissingAlert = false
-    @State private var sessionCheckInProgress = false
-    @State private var autoLiveCreateInProgress = false
-    @State private var didAutoCreateLiveSessionForGameId: String? = nil
-    @State private var activeGameOwnerUserId: String? = nil
+    private var showSessionConflictAlert: Bool { get { ui.showSessionConflictAlert } nonmutating set { ui.showSessionConflictAlert = newValue } }
+    private var showDisplayAppMissingAlert: Bool { get { ui.showDisplayAppMissingAlert } nonmutating set { ui.showDisplayAppMissingAlert = newValue } }
+    private var sessionCheckInProgress: Bool { get { ui.sessionCheckInProgress } nonmutating set { ui.sessionCheckInProgress = newValue } }
+    private var autoLiveCreateInProgress: Bool { get { ui.autoLiveCreateInProgress } nonmutating set { ui.autoLiveCreateInProgress = newValue } }
+    private var didAutoCreateLiveSessionForGameId: String? { get { ui.didAutoCreateLiveSessionForGameId } nonmutating set { ui.didAutoCreateLiveSessionForGameId = newValue } }
+    private var activeGameOwnerUserId: String? { get { ui.activeGameOwnerUserId } nonmutating set { ui.activeGameOwnerUserId = newValue } }
     @State private var gameListener: ListenerRegistration? = nil
     @State private var livePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEventsListener: ListenerRegistration? = nil
@@ -558,16 +564,16 @@ struct PitchTrackerView: View {
     /// has no `progressRevision` field, so its first commit lands at 1; a floor
     /// carried over from a previous room would swallow the partner's first
     /// updates in the new one.
-    @State private var progressRevisionRoomId: String? = nil
+    private var progressRevisionRoomId: String? { get { ui.progressRevisionRoomId } nonmutating set { ui.progressRevisionRoomId = newValue } }
     /// Bumped by every local progress mutation. `publishedLocalProgressToken`
     /// trails it until the corresponding publish reports back, which is how
     /// `hasUnpublishedLocalProgress` knows this device is holding newer state.
     @State private var localProgressChangeToken: Int = 0
     @State private var publishedLocalProgressToken: Int = 0
     @State private var lastUnpublishedProgressChangeAt: Date? = nil
-    @State private var progressPublishScheduled = false
+    private var progressPublishScheduled: Bool { get { ui.progressPublishScheduled } nonmutating set { ui.progressPublishScheduled = newValue } }
     @State private var bufferedSharedPitcherEvents: [BufferedPitcherEvent] = []
-    @State private var lastObservedResultSelectionId: String? = nil
+    private var lastObservedResultSelectionId: String? { get { ui.lastObservedResultSelectionId } nonmutating set { ui.lastObservedResultSelectionId = newValue } }
     @State private var codeShareSheetID = UUID()
     // MARK: - Startup gating (prevents sheet-flash on launch)
 
@@ -588,26 +594,26 @@ struct PitchTrackerView: View {
     }
 
     @State private var startupPhase: StartupPhase = .launching
-    @State private var isRestoringState = false
+    private var isRestoringState: Bool { get { ui.isRestoringState } nonmutating set { ui.isRestoringState = newValue } }
 
     // ✅ Live-room mirrored scoreboard fields (used when activeLiveId != nil)
     @State private var balls: Int = 0
     @State private var strikes: Int = 0
     @State private var outs: Int = 0
-    @State private var showOutsFlash: Bool = false
+    private var showOutsFlash: Bool { get { ui.showOutsFlash } nonmutating set { ui.showOutsFlash = newValue } }
     @State private var inning: Int = 1
     @State private var hits: Int = 0
     @State private var walks: Int = 0
     @State private var us: Int = 0
     @State private var them: Int = 0
     @State private var heartbeatTimer: Timer? = nil
-    @State private var isJoiningSession: Bool = false
-    @State private var pendingRestoreGameId: String? = nil
-    @State private var pendingLiveTemplateId: String? = nil
-    @State private var pendingLiveTemplateName: String? = nil
-    @State private var liveTemplateOverrideLocked: Bool = false
+    private var isJoiningSession: Bool { get { ui.isJoiningSession } nonmutating set { ui.isJoiningSession = newValue } }
+    private var pendingRestoreGameId: String? { get { ui.pendingRestoreGameId } nonmutating set { ui.pendingRestoreGameId = newValue } }
+    private var pendingLiveTemplateId: String? { get { ui.pendingLiveTemplateId } nonmutating set { ui.pendingLiveTemplateId = newValue } }
+    private var pendingLiveTemplateName: String? { get { ui.pendingLiveTemplateName } nonmutating set { ui.pendingLiveTemplateName = newValue } }
+    private var liveTemplateOverrideLocked: Bool { get { ui.liveTemplateOverrideLocked } nonmutating set { ui.liveTemplateOverrideLocked = newValue } }
     @State private var pendingOutsResetWorkItem: DispatchWorkItem? = nil
-    @State private var lastOutResetEventIdentity: String? = nil
+    private var lastOutResetEventIdentity: String? { get { ui.lastOutResetEventIdentity } nonmutating set { ui.lastOutResetEventIdentity = newValue } }
     @State private var lastOutResetPreviousOuts: Int? = nil
 
     private func dismissAllTopLevelSheets() {
@@ -1565,15 +1571,15 @@ struct PitchTrackerView: View {
     }
 
     @State private var liveListener: ListenerRegistration? = nil
-    @State private var activeLiveId: String? = nil
-    @State private var livePitcherId: String? = nil
-    @State private var livePitcherName: String? = nil
-    @State private var didHydrateLineupFromLive: Bool = false
-    @State private var didSeedOwnerGameEventsForLive: Bool = false
-    @State private var didSeedLivePitchEventsFromOwnerGame: Bool = false
+    private var activeLiveId: String? { get { ui.activeLiveId } nonmutating set { ui.activeLiveId = newValue } }
+    private var livePitcherId: String? { get { ui.livePitcherId } nonmutating set { ui.livePitcherId = newValue } }
+    private var livePitcherName: String? { get { ui.livePitcherName } nonmutating set { ui.livePitcherName = newValue } }
+    private var didHydrateLineupFromLive: Bool { get { ui.didHydrateLineupFromLive } nonmutating set { ui.didHydrateLineupFromLive = newValue } }
+    private var didSeedOwnerGameEventsForLive: Bool { get { ui.didSeedOwnerGameEventsForLive } nonmutating set { ui.didSeedOwnerGameEventsForLive = newValue } }
+    private var didSeedLivePitchEventsFromOwnerGame: Bool { get { ui.didSeedLivePitchEventsFromOwnerGame } nonmutating set { ui.didSeedLivePitchEventsFromOwnerGame = newValue } }
     @State private var seededGamePitchEventsForLive: [PitchEvent] = []
     @State private var participantsListener: ListenerRegistration? = nil
-    @State private var liveSessionRenewalInFlight: Bool = false
+    private var liveSessionRenewalInFlight: Bool { get { ui.liveSessionRenewalInFlight } nonmutating set { ui.liveSessionRenewalInFlight = newValue } }
 
     private func seedOwnerGamePitchEventsForLiveIfNeeded() {
         guard activeLiveId != nil else { return }
@@ -2934,7 +2940,7 @@ struct PitchTrackerView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("New Opponent Roster")
                     .font(.headline)
-                TextField("Opponent team name", text: $newOpponentTeamName)
+                TextField("Opponent team name", text: $ui.newOpponentTeamName)
                     .textFieldStyle(.roundedBorder)
                 // Same four mandatory choices Home's create-team form
                 // collects - a team minted here is a real Team and has to
@@ -3020,7 +3026,7 @@ struct PitchTrackerView: View {
                 Text("Add Player")
                     .font(.headline)
                 HStack {
-                    TextField("Name", text: $newAwayPitcherName)
+                    TextField("Name", text: $ui.newAwayPitcherName)
                         .textFieldStyle(.roundedBorder)
                     Button("Add") {
                         addAwayPitcher()
@@ -3143,7 +3149,7 @@ struct PitchTrackerView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("New Team")
                             .font(.headline)
-                        TextField("Team name", text: $newMyTeamName)
+                        TextField("Team name", text: $ui.newMyTeamName)
                             .textFieldStyle(.roundedBorder)
                         TeamDesignationForm(draft: $newMyTeamDesignation)
                         HStack {
@@ -3642,7 +3648,11 @@ struct PitchTrackerView: View {
             _pitchCodeAssignments = State(initialValue: t.codeAssignments)
         }
         _templates = State(initialValue: previewTemplates)
-        _isGame = State(initialValue: previewIsGame)
+        // isGame moved into TrackerUIState, so it is seeded on the object
+        // rather than through a `State(initialValue:)` on this struct.
+        let seededUI = TrackerUIState()
+        seededUI.isGame = previewIsGame
+        _ui = StateObject(wrappedValue: seededUI)
     }
     
     // MARK: - Helpers for Pitches Faced Popover
@@ -4604,7 +4614,7 @@ struct PitchTrackerView: View {
             // move to appConfirmationDialog outright, but avoiding the
             // heavier actions+message confirmationDialog overload is the
             // same fix in spirit.
-            .confirmationDialog("Choose Pitch Type - Select the pitch type for this location.", isPresented: $showAllPitchesHeatmapPitchPicker, titleVisibility: .visible) {
+            .confirmationDialog("Choose Pitch Type - Select the pitch type for this location.", isPresented: $ui.showAllPitchesHeatmapPitchPicker, titleVisibility: .visible) {
                 ForEach(availablePitches(for: selectedTemplate), id: \.self) { pitch in
                     Button(pitch) {
                         guard let pendingTap = pendingAllPitchesHeatmapTap else { return }
@@ -5215,7 +5225,7 @@ struct PitchTrackerView: View {
         .transition(.opacity)
         .frame(maxWidth: .infinity, alignment: .top)
         .background(.regularMaterial)
-        .sheet(isPresented: $showCardsFullScreenSheet, onDismiss: {
+        .sheet(isPresented: $ui.showCardsFullScreenSheet, onDismiss: {
             cardsEditTargetEventID = nil
         }) {
             pitchResultSheetBody(
@@ -5401,7 +5411,7 @@ struct PitchTrackerView: View {
                 // parent's frame, so a dialog hung off this little button
                 // renders full-screen but only accepts taps inside the
                 // button (CLAUDE.md, "Dialogs"). Two of them were bound to
-                // $showUndoConfirm - this one and the zone corner button's
+                // $ui.showUndoConfirm - this one and the zone corner button's
                 // - so both also presented at once.
                 undoButton
             }
@@ -5565,10 +5575,10 @@ struct PitchTrackerView: View {
                     VStack(spacing: 8) {
                         CalledPitchView(
                             pitchResultBannerPhase: $pitchResultBannerPhase,
-                            isRecordingResult: $isRecordingResult,
-                            activeCalledPitchId: $activeCalledPitchId,
-                            pitchFirst: $pitchFirst,
-                            autoPitchOnlyEnabled: $autoPitchOnlyEnabled,
+                            isRecordingResult: $ui.isRecordingResult,
+                            activeCalledPitchId: $ui.activeCalledPitchId,
+                            pitchFirst: $ui.pitchFirst,
+                            autoPitchOnlyEnabled: $ui.autoPitchOnlyEnabled,
                             liveId: activeLiveId,
                             call: call,
                             pitchCodeAssignments: pitchCodeAssignments,
@@ -5630,7 +5640,7 @@ struct PitchTrackerView: View {
             walks: walksBinding,
             us: usBinding,
             them: themBinding,
-            selectedGameId: $selectedGameId,
+            selectedGameId: $ui.selectedGameId,
             onProgressChange: {
                 markLocalProgressChange()
             }
@@ -5762,7 +5772,7 @@ struct PitchTrackerView: View {
 
     /// Both of these bind through locals captured BEFORE the closures are
     /// formed - `sessionManager` is a class, so that capture is one pointer,
-    /// and `$showConfirmSheet` / `$calledPitch` capture only their @State
+    /// and `$ui.showConfirmSheet` / `$calledPitch` capture only their @State
     /// boxes. Writing `sessionManager.currentMode` or `showConfirmSheet`
     /// directly inside the closure bodies instead implicitly captures
     /// `self`, and `self` is a struct with hundreds of stored properties -
@@ -5772,7 +5782,7 @@ struct PitchTrackerView: View {
     /// closures still read live state through the reference and the boxes.
     private var confirmSheetBinding: Binding<Bool> {
         let manager = sessionManager
-        let confirmSheet = $showConfirmSheet
+        let confirmSheet = $ui.showConfirmSheet
         return Binding<Bool>(
             get: { manager.currentMode == .game && confirmSheet.wrappedValue },
             set: { newValue in
@@ -5810,10 +5820,10 @@ struct PitchTrackerView: View {
                 VStack(spacing: 8) {
                     CalledPitchView(
                         pitchResultBannerPhase: $pitchResultBannerPhase,
-                        isRecordingResult: $isRecordingResult,
-                        activeCalledPitchId: $activeCalledPitchId,
-                        pitchFirst: $pitchFirst,
-                        autoPitchOnlyEnabled: $autoPitchOnlyEnabled,
+                        isRecordingResult: $ui.isRecordingResult,
+                        activeCalledPitchId: $ui.activeCalledPitchId,
+                        pitchFirst: $ui.pitchFirst,
+                        autoPitchOnlyEnabled: $ui.autoPitchOnlyEnabled,
                         liveId: activeLiveId,
                         call: call,
                         pitchCodeAssignments: pitchCodeAssignments,
@@ -5862,8 +5872,8 @@ struct PitchTrackerView: View {
             resultCall: call,
             batterSide: batterSide,
             pitchOptions: ["Catcher"] + (selectedTemplate?.pitches ?? []),
-            draftPitch: $catcherEstimateDraftPitch,
-            draftLocation: $catcherEstimateDraftLocation,
+            draftPitch: $ui.catcherEstimateDraftPitch,
+            draftLocation: $ui.catcherEstimateDraftLocation,
             onReset: {
                 catcherEstimateDraftPitch = "Catcher"
                 catcherEstimateDraftLocation = nil
@@ -5972,10 +5982,10 @@ struct PitchTrackerView: View {
         // nested inside a Menu's own items is a known-fragile pattern in
         // this codebase (see the "Menu loses scroll position" note in
         // CLAUDE.md); this dialog fires from the Menu's own action closure
-        // via $showCodeShareModePicker instead, same as before.
+        // via $ui.showCodeShareModePicker instead, same as before.
         .confirmationDialog(
             "",
-            isPresented: $showCodeShareModePicker,
+            isPresented: $ui.showCodeShareModePicker,
             titleVisibility: .hidden
         ) {
             Button("Create Invite Link") {
@@ -6231,7 +6241,7 @@ struct PitchTrackerView: View {
             pitchers: confirmationPitchers,
             teamNamesByPitcherId: teamNamesByPitcherId,
             templates: visibleTemplates,
-            selectedPitcherId: $pendingConfirmationPitcherId,
+            selectedPitcherId: $ui.pendingConfirmationPitcherId,
             selectedTemplateId: $pendingConfirmationTemplateId,
             selectedTrackingMode: $pendingConfirmationTrackingMode,
             resolvedPitcherName: resolvedPitcherName(for: pendingConfirmationPitcherId),
@@ -6412,8 +6422,8 @@ struct PitchTrackerView: View {
     private var quickAddPlayerSheetView: some View {
         NavigationView {
             Form {
-                TextField("Name", text: $quickAddPlayerName)
-                TextField("Jersey #", text: $quickAddPlayerJersey)
+                TextField("Name", text: $ui.quickAddPlayerName)
+                TextField("Jersey #", text: $ui.quickAddPlayerJersey)
 
                 Section("Position") {
                     quickAddPositionToggleRow(selected: $quickAddPlayerPositions)
@@ -6683,20 +6693,20 @@ struct PitchTrackerView: View {
                         Text(scoutObservedResult == .foul ? "Foul Outcome" : "In-Play Outcome")
                             .font(.caption)
                             .foregroundStyle(.gray)
-                        scoutOptionWrap(options: scoutInPlayOptions, selection: $scoutInPlayOutcome)
+                        scoutOptionWrap(options: scoutInPlayOptions, selection: $ui.scoutInPlayOutcome)
 
                         HStack {
-                            scoutBooleanTagButton("Hit", isOn: $scoutHitOnPlay)
+                            scoutBooleanTagButton("Hit", isOn: $ui.scoutHitOnPlay)
                             Spacer()
                         }
 
                         Text("Contact Type")
                             .font(.caption)
                             .foregroundStyle(.gray)
-                        scoutOptionWrap(options: scoutDescriptorOptions, selection: $scoutDescriptor)
+                        scoutOptionWrap(options: scoutDescriptorOptions, selection: $ui.scoutDescriptor)
 
                         HStack {
-                            scoutBooleanTagButton("E", isOn: $scoutErrorOnPlay)
+                            scoutBooleanTagButton("E", isOn: $ui.scoutErrorOnPlay)
                             Spacer()
                         }
 
@@ -6755,10 +6765,10 @@ struct PitchTrackerView: View {
             makeBatterSideOverlay(SZwidth: width, verticalOffset: 0)
         }
         .clipped()
-        .sheet(isPresented: $showScoutFieldMap) {
+        .sheet(isPresented: $ui.showScoutFieldMap) {
             ScoutFieldMapSheet(
-                selectedOutcome: $scoutInPlayOutcome,
-                battedBallRegionName: $scoutBattedBallRegionName,
+                selectedOutcome: $ui.scoutInPlayOutcome,
+                battedBallRegionName: $ui.scoutBattedBallRegionName,
                 battedBallTapNormalized: $scoutBattedBallTapNormalized,
                 isDemoMode: isDemoMode
             )
@@ -7299,12 +7309,12 @@ struct PitchTrackerView: View {
                                     selectedBatterId: $selectedBatterId,
                                     draggingJersey: $draggingJersey,
                                     editingCell: $editingCell,
-                                    newJerseyNumber: $newJerseyNumber,
-                                    showAddJerseyPopover: $showAddJerseyPopover,
+                                    newJerseyNumber: $ui.newJerseyNumber,
+                                    showAddJerseyPopover: $ui.showAddJerseyPopover,
                                     selectedGameId: selectedGameId,
                                     effectiveGameOwnerUserId: effectiveGameOwnerUserId,
                                     activeLiveId: activeLiveId,
-                                    isReordering: $isReorderingMode,
+                                    isReordering: $ui.isReorderingMode,
                                     onSelectedBatterChanged: { _ in
                                         ballsBinding.wrappedValue = 0
                                         strikesBinding.wrappedValue = 0
@@ -7315,7 +7325,7 @@ struct PitchTrackerView: View {
 
                             if showAddJerseyPopover {
                                 VStack(spacing: 6) {
-                                    TextField("##", text: $newJerseyNumber)
+                                    TextField("##", text: $ui.newJerseyNumber)
                                         .keyboardType(.numberPad)
                                         .textFieldStyle(.roundedBorder)
                                         .frame(height: 36)
@@ -7462,7 +7472,7 @@ struct PitchTrackerView: View {
                             .padding(.horizontal, 6)
                             .confirmationDialog(
                                 "Add a Batter to \(battingTeamDisplayName)",
-                                isPresented: $showAtBatAddMenu,
+                                isPresented: $ui.showAtBatAddMenu,
                                 titleVisibility: .visible
                             ) {
                                 Button("Jersey Number Only (this game)") {
@@ -7497,7 +7507,7 @@ struct PitchTrackerView: View {
                             }
                             .confirmationDialog(
                                 "Add multiple jersey numbers?",
-                                isPresented: $showBulkJerseyPrompt,
+                                isPresented: $ui.showBulkJerseyPrompt,
                                 titleVisibility: .visible
                             ) {
                                 Button("Add Multiple") {
@@ -7515,8 +7525,8 @@ struct PitchTrackerView: View {
                             } message: {
                                 Text("Speak or type the jersey numbers with commas in between (example: 2, 7, 18).")
                             }
-                            .alert("Add jersey numbers", isPresented: $showBulkJerseyInput) {
-                                TextField("2, 7, 18", text: $bulkJerseyNumbers)
+                            .alert("Add jersey numbers", isPresented: $ui.showBulkJerseyInput) {
+                                TextField("2, 7, 18", text: $ui.bulkJerseyNumbers)
                                 Button("Cancel", role: .cancel) {
                                     bulkJerseyNumbers = ""
                                 }
@@ -7577,8 +7587,8 @@ struct PitchTrackerView: View {
                             } message: {
                                 Text("Speak or type the jersey numbers with commas in between.")
                             }
-                            .alert("Add dummy lineup", isPresented: $showDummyLineupInput) {
-                                TextField("6", text: $dummyLineupCount)
+                            .alert("Add dummy lineup", isPresented: $ui.showDummyLineupInput) {
+                                TextField("6", text: $ui.dummyLineupCount)
                                 Button("Cancel", role: .cancel) {
                                     dummyLineupCount = ""
                                 }
@@ -7722,8 +7732,8 @@ struct PitchTrackerView: View {
     private func makeZoneGameStatsButtons() -> ZoneGameStatsButtons {
         ZoneGameStatsButtons(
             isGame: isGame,
-            showStats: $showGameStatsSheet,
-            showSummary: $showGameSummarySheet
+            showStats: $ui.showGameStatsSheet,
+            showSummary: $ui.showGameSummarySheet
         )
     }
 
@@ -7738,7 +7748,7 @@ struct PitchTrackerView: View {
         ZoneUndoButton(
             blockHeight: zoneCornerButtonBlockHeight,
             isDisabled: lastPersistedEventInCurrentMode == nil,
-            showConfirm: $showUndoConfirm
+            showConfirm: $ui.showUndoConfirm
         )
     }
 
@@ -7894,7 +7904,7 @@ struct PitchTrackerView: View {
             StrikeZoneCard(
                 SZwidth: SZwidth,
                 strikeZoneHeight: strikeZoneHeight,
-                isGame: $isGame,
+                isGame: $ui.isGame,
                 batterSide: batterSide,
                 lastTappedPosition: lastTappedPosition,
                 setLastTapped: { lastTappedPosition = $0 },
@@ -7911,8 +7921,8 @@ struct PitchTrackerView: View {
                 setSelectedPitch: { selectedPitch = $0 },
                 resultVisualState: resultVisualState,
                 setResultVisualState: { resultVisualState = $0 },
-                pendingResultLabel: $pendingResultLabel,
-                showResultConfirmation: $showResultConfirmation,
+                pendingResultLabel: $ui.pendingResultLabel,
+                showResultConfirmation: $ui.showResultConfirmation,
                 showConfirmSheet: confirmSheetBinding,
                 onResultLocationPicked: { pickedLabel in
                     pendingResultLabel = pickedLabel
@@ -9015,7 +9025,7 @@ struct PitchTrackerView: View {
         // two dialogs presenting at once, each only tappable inside its own
         // small button's frame.
         .appConfirmationDialog(
-            isPresented: $showUndoConfirm,
+            isPresented: $ui.showUndoConfirm,
             title: "Undo Last Pitch?",
             message: "This will remove the last recorded pitch.",
             primaryTitle: "Undo",
@@ -9483,7 +9493,7 @@ struct PitchTrackerView: View {
                 .padding(.horizontal, 24)
             }
             .transition(.opacity)
-            .alert("Display App Not Installed", isPresented: $showDisplayAppMissingAlert) {
+            .alert("Display App Not Installed", isPresented: $ui.showDisplayAppMissingAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Install and open Pitchmark Display to use this option.")
@@ -9853,10 +9863,10 @@ struct PitchTrackerView: View {
                 showGameSheet = false
             },
             codeShareInitialTab: $codeShareInitialTab,
-            showCodeShareSheet: $showCodeShareSheet,
-            shareCode: $shareCode,
+            showCodeShareSheet: $ui.showCodeShareSheet,
+            shareCode: $ui.shareCode,
             codeShareSheetID: $codeShareSheetID,
-            showCodeShareModePicker: $showCodeShareModePicker,
+            showCodeShareModePicker: $ui.showCodeShareModePicker,
             isDemoMode: isDemoMode,
             onRequireSignIn: {
                 requireSignInForDemo("Sign in to create and manage your own games.")
@@ -9896,7 +9906,7 @@ struct PitchTrackerView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
 
-                TextField("Paste invite link", text: $inviteJoinText)
+                TextField("Paste invite link", text: $ui.inviteJoinText)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
@@ -9935,15 +9945,15 @@ struct PitchTrackerView: View {
         let selectedJersey = jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber
         let selectedBatterKey = atBatCountKey(batterId: selectedBatterId?.uuidString, jersey: selectedJersey)
         PitchResultSheetView(
-            isPresented: $showConfirmSheet,
-            isStrikeSwinging: $isStrikeSwinging,
-            isStrikeLooking: $isStrikeLooking,
-            isWildPitch: $isWildPitch,
-            isPassedBall: $isPassedBall,
-            isBall: $isBall,
-            selectedOutcome: $selectedOutcome,
-            selectedDescriptor: $selectedDescriptor,
-            isError: $isError,
+            isPresented: $ui.showConfirmSheet,
+            isStrikeSwinging: $ui.isStrikeSwinging,
+            isStrikeLooking: $ui.isStrikeLooking,
+            isWildPitch: $ui.isWildPitch,
+            isPassedBall: $ui.isPassedBall,
+            isBall: $ui.isBall,
+            selectedOutcome: $ui.selectedOutcome,
+            selectedDescriptor: $ui.selectedDescriptor,
+            isError: $ui.isError,
             isDemoMode: isDemoMode,
             pendingResultLabel: pendingResultLabel,
             pitchCall: calledPitch,
@@ -9975,8 +9985,8 @@ struct PitchTrackerView: View {
 
     @ViewBuilder private var codeAssignmentSheetView: some View {
         CodeAssignmentSettingsView(
-            selectedPitch: $selectedPitch,
-            selectedLocation: $selectedLocation,
+            selectedPitch: $ui.selectedPitch,
+            selectedLocation: $ui.selectedLocation,
             pitchCodeAssignments: $pitchCodeAssignments,
             allPitches: allPitches,
             allLocations: allLocationsFromGrid()
@@ -9993,10 +10003,10 @@ struct PitchTrackerView: View {
             allPitches: allPitches,
             selectedTemplate: $selectedTemplate,
             codeShareInitialTab: $codeShareInitialTab,
-            showCodeShareSheet: $showCodeShareSheet,
-            shareCode: $shareCode,
+            showCodeShareSheet: $ui.showCodeShareSheet,
+            shareCode: $ui.shareCode,
             codeShareSheetID: $codeShareSheetID,
-            showCodeShareModePicker: $showCodeShareModePicker,
+            showCodeShareModePicker: $ui.showCodeShareModePicker,
             onSwitchToArea: { selectHomeArea($0) }
         )
         .environmentObject(authManager)
@@ -10684,7 +10694,7 @@ struct PitchTrackerView: View {
                     .disabled(summaryTotalPitches == 0)
                 }
             }
-            .sheet(isPresented: $showGameSummaryShareSheet) {
+            .sheet(isPresented: $ui.showGameSummaryShareSheet) {
                 ShareSheet(items: [summaryShareText])
                     .fixedAppDynamicType()
             }
@@ -11003,7 +11013,7 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v2 = v1
-            .sheet(isPresented: $showGameSheet, onDismiss: {
+            .sheet(isPresented: $ui.showGameSheet, onDismiss: {
                 refreshGamesList()
 
                 if let gameId = pendingGameChoiceGameId, let ownerUid = pendingGameChoiceOwnerUid {
@@ -11027,18 +11037,18 @@ struct PitchTrackerView: View {
 
 
         let v3 = v2
-            .sheet(isPresented: $showCodeShareSheet) {
+            .sheet(isPresented: $ui.showCodeShareSheet) {
                 codeShareSheetView
                     .fixedAppDynamicType()
             }
             .eraseToAnyView()
 
         let v4 = v3
-            .sheet(isPresented: $showInviteJoinSheet) {
+            .sheet(isPresented: $ui.showInviteJoinSheet) {
                 inviteJoinSheetView
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showProPaywall) {
+            .sheet(isPresented: $ui.showProPaywall) {
                 ProPaywallView(
                     title: "PitchMark Pro",
                     message: "Connect participants, unlock full grid keys, and use the display app with PitchMark Pro.",
@@ -11046,7 +11056,7 @@ struct PitchTrackerView: View {
                 )
                 .fixedAppDynamicType()
             }
-            .fullScreenCover(isPresented: $showQRScanner) {
+            .fullScreenCover(isPresented: $ui.showQRScanner) {
                 ZStack(alignment: .bottom) {
                     QRScannerView { scanned in
                         inviteJoinText = scanned
@@ -11066,13 +11076,13 @@ struct PitchTrackerView: View {
                 }
                 .fixedAppDynamicType()
             }
-            .alert("Camera Unavailable", isPresented: $showCameraUnavailableAlert) {
+            .alert("Camera Unavailable", isPresented: $ui.showCameraUnavailableAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("This device doesn’t have a camera available.")
             }
             .appConfirmationDialog(
-                isPresented: $showCameraPermissionAlert,
+                isPresented: $ui.showCameraPermissionAlert,
                 title: "Camera Access Needed",
                 message: "Enable Camera access in Settings to scan the owner’s QR code.",
                 primaryTitle: "Open Settings",
@@ -11124,7 +11134,7 @@ struct PitchTrackerView: View {
                 let validSet = Set(validIds)
                 hitterIdByJerseyCellId = hitterIdByJerseyCellId.filter { validSet.contains($0.key) }
             }
-            .sheet(isPresented: $showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }) {
+            .sheet(isPresented: $ui.showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }) {
                 // Defaulted to the system's full-size sheet before, which
                 // looked odd for a sheet this sparse - medium fits its
                 // content, with large still reachable by dragging up for
@@ -11133,12 +11143,12 @@ struct PitchTrackerView: View {
                     .fixedAppDynamicType()
                     .presentationDetents([.medium, .large])
             }
-            .sheet(isPresented: $showSetMyTeamSheet) {
+            .sheet(isPresented: $ui.showSetMyTeamSheet) {
                 setMyTeamSheetView
                     .fixedAppDynamicType()
                     .presentationDetents([.medium, .large])
             }
-            .sheet(isPresented: $showQuickAddPlayerSheet) {
+            .sheet(isPresented: $ui.showQuickAddPlayerSheet) {
                 // Same reasoning as setOpponentSheetView above - the old
                 // 2-field version looked lost filling the whole screen;
                 // medium/large now that Position and Batting Side add more
@@ -11147,11 +11157,11 @@ struct PitchTrackerView: View {
                     .fixedAppDynamicType()
                     .presentationDetents([.medium, .large])
             }
-            .sheet(isPresented: $showAtBatRosterPickerSheet) {
+            .sheet(isPresented: $ui.showAtBatRosterPickerSheet) {
                 atBatRosterPickerSheetView
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showGridKeySheet) {
+            .sheet(isPresented: $ui.showGridKeySheet) {
                 ScrollableSelectionSheet(
                     title: "Select Template",
                     items: visibleTemplates,
@@ -11165,7 +11175,7 @@ struct PitchTrackerView: View {
                 .fixedAppDynamicType()
             }
             .appConfirmationDialog(
-                isPresented: $showCallingPitchesPrompt,
+                isPresented: $ui.showCallingPitchesPrompt,
                 title: "Calling Pitches?",
                 message: "Are you calling pitches for this game, or just tracking what happens? You can switch anytime with the Coach/Scout control.",
                 primaryTitle: "I’m Calling Pitches",
@@ -11188,7 +11198,7 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v7 = v6
-            .sheet(isPresented: $showCodeAssignmentSheet) {
+            .sheet(isPresented: $ui.showCodeAssignmentSheet) {
                 codeAssignmentSheetView
                     .fixedAppDynamicType()
             }
@@ -11205,14 +11215,14 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v9 = v8b
-            .sheet(isPresented: $showGameStatsSheet) {
+            .sheet(isPresented: $ui.showGameStatsSheet) {
                 gameStatsSheetView
                     .fixedAppDynamicType()
             }
             .eraseToAnyView()
 
         let v9b = v9
-            .sheet(isPresented: $showGameSummarySheet) {
+            .sheet(isPresented: $ui.showGameSummarySheet) {
                 gameSummarySheetView
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
@@ -11247,7 +11257,7 @@ struct PitchTrackerView: View {
             .blur(radius: pendingGameConfirmation != nil ? 5 : 0)
             .allowsHitTesting(!showSessionConflictAlert)
             .appConfirmationDialog(
-                isPresented: $showProGateAlert,
+                isPresented: $ui.showProGateAlert,
                 title: "Upgrade to Pro",
                 message: proGateMessage,
                 primaryTitle: "Upgrade",
@@ -11257,7 +11267,7 @@ struct PitchTrackerView: View {
                 secondaryTitle: "Not Now"
             )
             .appConfirmationDialog(
-                isPresented: $showDemoLoginWall,
+                isPresented: $ui.showDemoLoginWall,
                 title: "Sign In Required",
                 message: demoLoginWallMessage,
                 primaryTitle: "Sign In",
@@ -11266,31 +11276,31 @@ struct PitchTrackerView: View {
                 },
                 secondaryTitle: "Not Now"
             )
-            .alert("Select a game first", isPresented: $showSelectGameFirstAlert) {
+            .alert("Select a game first", isPresented: $ui.showSelectGameFirstAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("Create or choose a game before generating a partner code.")
             }
-            .alert("Code Link", isPresented: $showCodeShareErrorAlert) {
+            .alert("Code Link", isPresented: $ui.showCodeShareErrorAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(codeShareErrorMessage)
             }
-            .alert("Game Not Found", isPresented: $showGameEntryErrorAlert) {
+            .alert("Game Not Found", isPresented: $ui.showGameEntryErrorAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(gameEntryErrorMessage)
             }
-            .alert("No pitches found", isPresented: $showNoJerseyEventsAlert) {
+            .alert("No pitches found", isPresented: $ui.showNoJerseyEventsAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(noJerseyEventsMessage)
             }
-            .alert("Adjust to next batter if needed", isPresented: $showNextBatterAdjustmentAlert) {
+            .alert("Adjust to next batter if needed", isPresented: $ui.showNextBatterAdjustmentAlert) {
             } message: {
                 Text(nextBatterAdjustmentMessage)
             }
-            .alert("Pitch Unavailable", isPresented: $showHeatmapUnavailablePitchAlert) {
+            .alert("Pitch Unavailable", isPresented: $ui.showHeatmapUnavailablePitchAlert) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(heatmapUnavailablePitchMessage)
@@ -11349,7 +11359,7 @@ struct PitchTrackerView: View {
                 .presentationDragIndicator(.visible)
                 .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showAtBatHeatmapSheet, onDismiss: {
+            .sheet(isPresented: $ui.showAtBatHeatmapSheet, onDismiss: {
                 executePendingHeatmapCallIfNeeded()
             }) {
                 atBatBatterHeatmapSheetView
@@ -11369,7 +11379,7 @@ struct PitchTrackerView: View {
                     .fixedAppDynamicType()
             }
             .appConfirmationDialog(
-                isPresented: $showActivateNewBatterPrompt,
+                isPresented: $ui.showActivateNewBatterPrompt,
                 title: "Activate New Batter?",
                 message: pendingNewBatterActivation.map { "Would you like to activate #\($0.jerseyNumber) now?" } ?? "Would you like to activate the new batter now?",
                 primaryTitle: "Activate Batter",

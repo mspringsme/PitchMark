@@ -268,10 +268,30 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
 
   Things that measurably do **not** help: AnyView erasure, pre-warming at the
   top of `body`, and moving `self`-capturing closures out of a parent's frame.
-  The only lever that addresses the cause is making `PitchTrackerView` smaller
-  — splitting state and subviews into child views that own their own `@State`,
-  so the struct stops being a ~3 KB value copied all over the render path.
-  That refactor is still owed.
+  The lever that does work is making `PitchTrackerView` smaller.
+
+  **Step 1 done (2026-10-21):** 153 presentation-state properties (Bool flags,
+  `String = ""` text entry, `String? = nil` ids) moved out of `@State` into
+  `TrackerUIState`, an `ObservableObject`. Measured on the device object:
+
+  | | before | after |
+  |---|---|---|
+  | struct size (`assignWithCopy` witness) | 3232 B | **1120 B** (−65 %) |
+  | `body.getter` frame | 2208 B | 3808 B (+1600) |
+  | largest frame in file | 3408 B | 3808 B (still < 4096 probe) |
+
+  Net win: every copy on the render path is 2112 B cheaper, against a one-time
+  +1600 B in `body`. `PitchTrackerView` keeps a same-named forwarding computed
+  property for each moved value (`get { ui.x } nonmutating set { … }`), so the
+  ~1050 plain `foo` references needed no edit — only the 94 `$foo` binding
+  sites became `$ui.foo`. Invalidation granularity is unchanged: `@State` on
+  this view already invalidated all of it, and one `@Published` object does the
+  same. Note `@Published` must be written on the main thread, same as `@State`.
+
+  **Still owed if headroom is short:** `body` is a 766-line chain with 31
+  presentation modifiers — splitting it into segment properties would move its
+  3808 B into separate frames. Remaining `@State` on the view: ~110 (arrays,
+  dictionaries, model types).
 
 ## Known open items
 
