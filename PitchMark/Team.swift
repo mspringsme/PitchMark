@@ -34,6 +34,39 @@ struct Team: Identifiable, Codable {
     var createdByUid: String
     var createdAt: Date = Date()
     var archivedAt: Date? = nil
+
+    // Designation (2026-10-21). Mandatory at every creation path, but the
+    // five fields are genuinely Optional here because teams created before
+    // the designation existed have none of them - a non-optional field (or
+    // a hand-written Decodable init) would make those documents fail to
+    // decode entirely and drop the team off "my teams". `designation`
+    // returns nil for them and the UI simply shows no stamp.
+    var seasonStart: TeamSeason? = nil
+    var seasonEnd: TeamSeason? = nil
+    var startYear: Int? = nil
+    var ageGroup: TeamAgeGroup? = nil
+    var division: TeamDivision? = nil
+
+    /// All-or-nothing on purpose: a half-filled stamp ("16U" with no season)
+    /// is worse than none, since the whole point is telling two same-named
+    /// teams apart.
+    var designation: TeamDesignation? {
+        guard let seasonStart, let seasonEnd, let startYear, let ageGroup, let division else { return nil }
+        return TeamDesignation(
+            seasonStart: seasonStart,
+            seasonEnd: seasonEnd,
+            startYear: startYear,
+            ageGroup: ageGroup,
+            division: division
+        )
+    }
+
+    /// "Reds · Fall–Winter '25–'26 · 16U · A", falling back to just the
+    /// name for a pre-designation team.
+    var displayNameWithDesignation: String {
+        guard let designation else { return name }
+        return "\(name) · \(designation.inlineText)"
+    }
 }
 
 /// Doc id == the member's uid. `uid` is also stored as a plain field so the
@@ -84,14 +117,28 @@ extension AuthManager {
         Firestore.firestore().collection("teams")
     }
 
-    func createTeam(name: String, completion: @escaping (Result<Team, Error>) -> Void) {
+    /// `designation` is a required parameter, not an optional one: every
+    /// creation path in the app (Home's Teams section, the tracker's Set My
+    /// Team / Set Opponent Team sheets) collects all four choices before
+    /// calling, so there is no way to mint a team without a stamp.
+    func createTeam(name: String, designation: TeamDesignation, completion: @escaping (Result<Team, Error>) -> Void) {
         guard let user = user else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
             return
         }
 
         let ref = teamsCollection().document()
-        let team = Team(id: ref.documentID, name: name, createdByUid: user.uid, createdAt: Date())
+        let team = Team(
+            id: ref.documentID,
+            name: name,
+            createdByUid: user.uid,
+            createdAt: Date(),
+            seasonStart: designation.seasonStart,
+            seasonEnd: designation.seasonEnd,
+            startYear: designation.startYear,
+            ageGroup: designation.ageGroup,
+            division: designation.division
+        )
 
         do {
             try ref.setData(from: team) { error in
@@ -370,12 +417,23 @@ extension AuthManager {
         }
     }
 
-    func updateTeam(teamId: String, name: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    /// `designation` stays optional here (unlike `createTeam`) only so a
+    /// plain rename of a pre-designation team doesn't have to invent one;
+    /// passing a designation writes all five fields together.
+    func updateTeam(teamId: String, name: String, designation: TeamDesignation? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         guard user != nil else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
             return
         }
-        teamsCollection().document(teamId).updateData(["name": name]) { error in
+        var data: [String: Any] = ["name": name]
+        if let designation {
+            data["seasonStart"] = designation.seasonStart.rawValue
+            data["seasonEnd"] = designation.seasonEnd.rawValue
+            data["startYear"] = designation.startYear
+            data["ageGroup"] = designation.ageGroup.rawValue
+            data["division"] = designation.division.rawValue
+        }
+        teamsCollection().document(teamId).updateData(data) { error in
             if let error {
                 completion(.failure(error))
             } else {

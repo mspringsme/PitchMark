@@ -25,7 +25,11 @@ enum HomeArea: Identifiable {
 
     var title: String {
         switch self {
-        case .games: return "Games"
+        // Singular: the tab shows the ONE game currently open in the
+        // tracker, not a list of games - that list lives in Home's Games
+        // section. The plural read as a second browser and sent people
+        // looking for the game chooser here.
+        case .games: return "Game"
         case .home: return "Home"
         case .moments: return "Moments"
         }

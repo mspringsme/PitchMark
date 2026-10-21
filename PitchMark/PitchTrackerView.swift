@@ -199,6 +199,7 @@ struct PitchTrackerView: View {
     @State private var showSetOpponentSheet = false
     @State private var opponentTeamCandidates: [(team: Team, membership: TeamMembership)] = []
     @State private var newOpponentTeamName: String = ""
+    @State private var newOpponentTeamDesignation = TeamDesignationDraft()
     @State private var activeAwayTeamName: String = ""
     @State private var awayRoster: [TeamPlayer] = []
     @State private var newAwayPitcherName: String = ""
@@ -210,6 +211,7 @@ struct PitchTrackerView: View {
     @State private var showSetMyTeamSheet = false
     @State private var myTeamCandidates: [(team: Team, membership: TeamMembership)] = []
     @State private var newMyTeamName: String = ""
+    @State private var newMyTeamDesignation = TeamDesignationDraft()
     @State private var showChooseBattersStep = false
     // pitcherId -> every team name that pitcher's linked TeamPlayer shows up
     // on, across all of the user's teams - lets the new-game pitcher picker
@@ -2757,10 +2759,11 @@ struct PitchTrackerView: View {
 
     private func createAndSetOpponentTeam() {
         let name = newOpponentTeamName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        authManager.createTeam(name: name) { result in
+        guard !name.isEmpty, let designation = newOpponentTeamDesignation.designation else { return }
+        authManager.createTeam(name: name, designation: designation) { result in
             if case .success(let team) = result {
                 self.newOpponentTeamName = ""
+                self.newOpponentTeamDesignation.reset()
                 self.setOpponentTeam(team)
             }
         }
@@ -2838,10 +2841,11 @@ struct PitchTrackerView: View {
 
     private func createAndSetMyTeam() {
         let name = newMyTeamName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        authManager.createTeam(name: name) { result in
+        guard !name.isEmpty, let designation = newMyTeamDesignation.designation else { return }
+        authManager.createTeam(name: name, designation: designation) { result in
             if case .success(let team) = result {
                 self.newMyTeamName = ""
+                self.newMyTeamDesignation.reset()
                 self.setMyTeam(team)
             }
         }
@@ -2930,13 +2934,23 @@ struct PitchTrackerView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("New Opponent Roster")
                     .font(.headline)
+                TextField("Opponent team name", text: $newOpponentTeamName)
+                    .textFieldStyle(.roundedBorder)
+                // Same four mandatory choices Home's create-team form
+                // collects - a team minted here is a real Team and has to
+                // carry the same stamp, or it shows up undesignated
+                // everywhere else.
+                TeamDesignationForm(draft: $newOpponentTeamDesignation)
                 HStack {
-                    TextField("Opponent team name", text: $newOpponentTeamName)
-                        .textFieldStyle(.roundedBorder)
+                    Spacer()
                     Button("Create") {
                         createAndSetOpponentTeam()
                     }
-                    .disabled(newOpponentTeamName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        newOpponentTeamName.trimmingCharacters(in: .whitespaces).isEmpty
+                            || !newOpponentTeamDesignation.isComplete
+                    )
                 }
             }
 
@@ -2949,10 +2963,14 @@ struct PitchTrackerView: View {
                             Button {
                                 setOpponentTeam(entry.team)
                             } label: {
-                                Text(entry.team.name)
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
+                                HStack(spacing: 8) {
+                                    Text(entry.team.name)
+                                        .font(.subheadline.weight(.semibold))
+                                    Spacer(minLength: 8)
+                                    TeamDesignationBadge(designation: entry.team.designation)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -3125,13 +3143,19 @@ struct PitchTrackerView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("New Team")
                             .font(.headline)
+                        TextField("Team name", text: $newMyTeamName)
+                            .textFieldStyle(.roundedBorder)
+                        TeamDesignationForm(draft: $newMyTeamDesignation)
                         HStack {
-                            TextField("Team name", text: $newMyTeamName)
-                                .textFieldStyle(.roundedBorder)
+                            Spacer()
                             Button("Create") {
                                 createAndSetMyTeam()
                             }
-                            .disabled(newMyTeamName.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(
+                                newMyTeamName.trimmingCharacters(in: .whitespaces).isEmpty
+                                    || !newMyTeamDesignation.isComplete
+                            )
                         }
                     }
 
@@ -3144,10 +3168,14 @@ struct PitchTrackerView: View {
                                     Button {
                                         setMyTeam(entry.team)
                                     } label: {
-                                        Text(entry.team.name)
-                                            .font(.subheadline.weight(.semibold))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .contentShape(Rectangle())
+                                        HStack(spacing: 8) {
+                                            Text(entry.team.name)
+                                                .font(.subheadline.weight(.semibold))
+                                            Spacer(minLength: 8)
+                                            TeamDesignationBadge(designation: entry.team.designation)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -5368,16 +5396,14 @@ struct PitchTrackerView: View {
                     .disabled(lastPersistedEventInCurrentMode == nil)
                     .accessibilityLabel("Undo Last Pitch")
                 )
+                // The confirm dialog is attached once at baseBody's root,
+                // not here: SwiftUI clips an overlay's hit-testing to its
+                // parent's frame, so a dialog hung off this little button
+                // renders full-screen but only accepts taps inside the
+                // button (CLAUDE.md, "Dialogs"). Two of them were bound to
+                // $showUndoConfirm - this one and the zone corner button's
+                // - so both also presented at once.
                 undoButton
-                    .appConfirmationDialog(
-                        isPresented: $showUndoConfirm,
-                        title: "Undo Last Pitch?",
-                        message: "This will remove the last recorded pitch.",
-                        primaryTitle: "Undo",
-                        primaryRole: .destructive,
-                        primaryAction: { undoLastPitch() },
-                        secondaryTitle: "Cancel"
-                    )
             }
 
             Spacer(minLength: 0)
@@ -5734,26 +5760,40 @@ struct PitchTrackerView: View {
         pendingResultLabel == nil
     }
 
+    /// Both of these bind through locals captured BEFORE the closures are
+    /// formed - `sessionManager` is a class, so that capture is one pointer,
+    /// and `$showConfirmSheet` / `$calledPitch` capture only their @State
+    /// boxes. Writing `sessionManager.currentMode` or `showConfirmSheet`
+    /// directly inside the closure bodies instead implicitly captures
+    /// `self`, and `self` is a struct with hundreds of stored properties -
+    /// each such closure then emits a full `outlined init with copy of
+    /// PitchTrackerView` into this getter's stack frame, which is what blew
+    /// the stack at `___chkstk_darwin` here. Semantics are unchanged: the
+    /// closures still read live state through the reference and the boxes.
     private var confirmSheetBinding: Binding<Bool> {
-        Binding<Bool>(
-            get: { sessionManager.currentMode == .game && showConfirmSheet },
+        let manager = sessionManager
+        let confirmSheet = $showConfirmSheet
+        return Binding<Bool>(
+            get: { manager.currentMode == .game && confirmSheet.wrappedValue },
             set: { newValue in
-                if sessionManager.currentMode == .game {
-                    showConfirmSheet = newValue
-                } else {
-                    // Keep the sheet hidden here.
-                    showConfirmSheet = false
-                }
+                // Keep the sheet hidden outside game mode.
+                confirmSheet.wrappedValue = (manager.currentMode == .game) ? newValue : false
             }
         )
     }
 
     private var calledPitchComposerBinding: Binding<Bool> {
-        Binding<Bool>(
-            get: { currentTrackingMode != .scout && calledPitch != nil },
+        let trackingMode = $currentTrackingMode
+        let call = $calledPitch
+        // The only part that genuinely needs the view: resetCallAndResultUIState
+        // touches a dozen @State properties. Kept to ONE capture, in this
+        // getter's own frame.
+        let reset: () -> Void = { resetCallAndResultUIState() }
+        return Binding<Bool>(
+            get: { trackingMode.wrappedValue != .scout && call.wrappedValue != nil },
             set: { newValue in
                 if !newValue {
-                    resetCallAndResultUIState()
+                    reset()
                 }
             }
         )
@@ -6712,7 +6752,7 @@ struct PitchTrackerView: View {
             scoutBottomActionBar(width: width)
         }
         .overlay(alignment: .center) {
-            batterSideOverlay(SZwidth: width, verticalOffset: 0)
+            makeBatterSideOverlay(SZwidth: width, verticalOffset: 0)
         }
         .clipped()
         .sheet(isPresented: $showScoutFieldMap) {
@@ -7646,23 +7686,10 @@ struct PitchTrackerView: View {
         .shadow(color: .black.opacity(0.2), radius: 3, x: 0, y: 2)
     }
 
-    /// Just the "vs. opponent" bubble now — the reset button itself moved to
-    /// `resetButtonOverlay`, floating higher up beside the strike zone
-    /// (mirrored by `undoButtonOverlay` on the right) instead of sitting
-    /// right next to this label.
-    private var resetOverlay: some View {
-        Text("vs. \(opponentName ?? "Game")")
-            .font(.subheadline.weight(.semibold))
-            .lineLimit(1)
-            .minimumScaleFactor(0.6)
-            .foregroundStyle(.primary)
-            .frame(maxWidth: 130, alignment: .center)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial)
-            .clipShape(Capsule())
-            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-    }
+    // The five strike-zone corner overlays moved to top-level structs near
+    // AddGameCard (ZoneOpponentLabel / ZoneResetButton / ZoneUndoButton /
+    // ZoneGameStatsButtons / BatterSideOverlay) - see the comment there for
+    // why. Don't reintroduce them as computed properties here.
 
     private func resetPitchSelection() {
         // ✅ 1) Reset local call/result UI
@@ -7689,187 +7716,58 @@ struct PitchTrackerView: View {
         }
     }
 
-    /// Floats beside the strike zone's bottom-left corner, above the
-    /// "vs. opponent" bubble that stays at the true bottom edge.
-    /// Both text buttons sit inside a frame of this same fixed height
+    /// Each of these exists so the `self`-capturing closure (or the
+    /// Binding) it builds is materialized in ITS own stack frame, not in
+    /// `strikeZoneArea`'s - see the comment at the call site.
+    private func makeZoneGameStatsButtons() -> ZoneGameStatsButtons {
+        ZoneGameStatsButtons(
+            isGame: isGame,
+            showStats: $showGameStatsSheet,
+            showSummary: $showGameSummarySheet
+        )
+    }
+
+    private func makeZoneResetButton() -> ZoneResetButton {
+        ZoneResetButton(
+            blockHeight: zoneCornerButtonBlockHeight,
+            onReset: { resetPitchSelection() }
+        )
+    }
+
+    private func makeZoneUndoButton() -> ZoneUndoButton {
+        ZoneUndoButton(
+            blockHeight: zoneCornerButtonBlockHeight,
+            isDisabled: lastPersistedEventInCurrentMode == nil,
+            showConfirm: $showUndoConfirm
+        )
+    }
+
+    /// Builds `BatterSideOverlay` with this view's current state. Only the
+    /// plain values it needs cross the boundary - no part of
+    /// PitchTrackerView's type ends up inside the struct's metadata, which
+    /// is the whole point of the extraction.
+    private func makeBatterSideOverlay(SZwidth: CGFloat, verticalOffset: CGFloat = -20) -> BatterSideOverlay {
+        BatterSideOverlay(
+            SZwidth: SZwidth,
+            verticalOffset: verticalOffset,
+            batterSide: batterSide,
+            showsScoutInPlayIndicator: currentTrackingMode == .scout && scoutObservedResult == .inPlay,
+            onSelect: { side in
+                withAnimation { batterSide = side }
+                persistBatterSide(side)
+                pushBatterSideToActiveGame(side)
+            }
+        )
+    }
+
+    /// Both corner text buttons sit inside a frame of this fixed height
     /// (reserving room for "Undo last pitch" wrapping to 2 lines) so their
     /// top edges land at the same y even though "Reset" is 1 line and
-    /// "Undo last pitch" is 2 — a bottom-anchored block sized only to its
-    /// own content would otherwise push the taller one higher.
+    /// "Undo last pitch" is 2 - a bottom-anchored block sized only to its
+    /// own content would otherwise push the taller one higher. Passed into
+    /// ZoneResetButton/ZoneUndoButton.
     private var zoneCornerButtonBlockHeight: CGFloat { 36 }
 
-    /// Text-only now (icon dropped for space) — tappable via a plain Button
-    /// so it keeps a reasonable hit target despite the small caption font.
-    private var resetButtonOverlay: some View {
-        Button {
-            resetPitchSelection()
-        } label: {
-            Text("Reset")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.red)
-                .padding(6)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Reset pitch selection")
-        .frame(height: zoneCornerButtonBlockHeight, alignment: .top)
-        .offset(y: -115)
-    }
-
-    /// Mirrors `resetButtonOverlay` on the opposite corner — Undo moved here
-    /// from the Cards view now that only the filter button lives there.
-    ///
-    /// Crashed on launch SIX times running at this exact property, across
-    /// otherwise-unrelated fixes in between, including after two different
-    /// AnyView-erasure attempts that both assumed the problem was the
-    /// property's declared type (`some View` vs `AnyView`). Neither
-    /// changed the crash at all - because `AnyView(x)` doesn't skip
-    /// resolving `x`'s type, it requires it: `AnyView.init<V: View>(_:)`
-    /// is itself generic, so the runtime still has to instantiate V's full
-    /// metadata to call the initializer. Wrapping a long modifier chain in
-    /// AnyView only once - at the start, or once at the end - still leaves
-    /// one single expression where every modifier in between stacks onto
-    /// an un-erased type before that one eraser call, and that's the exact
-    /// expression whose metadata blows up.
-    ///
-    /// The actual fix: erase back to AnyView after EVERY modifier, so no
-    /// expression ever asks the runtime to resolve more than one modifier
-    /// stacked on a plain AnyView at a time.
-    private var undoButtonOverlay: AnyView {
-        var label: AnyView = AnyView(Text("Undo last pitch"))
-        label = AnyView(label.font(.caption2.weight(.semibold)))
-        label = AnyView(label.foregroundStyle(.red))
-        label = AnyView(label.multilineTextAlignment(.center))
-        label = AnyView(label.lineLimit(2))
-        label = AnyView(label.frame(maxWidth: 70))
-        label = AnyView(label.fixedSize(horizontal: false, vertical: true))
-        label = AnyView(label.padding(6))
-
-        var button: AnyView = AnyView(
-            Button(action: { showUndoConfirm = true }, label: { label })
-        )
-        button = AnyView(button.buttonStyle(.plain))
-        button = AnyView(button.disabled(lastPersistedEventInCurrentMode == nil))
-        button = AnyView(button.accessibilityLabel("Undo Last Pitch"))
-        button = AnyView(
-            button.appConfirmationDialog(
-                isPresented: $showUndoConfirm,
-                title: "Undo Last Pitch?",
-                message: "This will remove the last recorded pitch.",
-                primaryTitle: "Undo",
-                primaryRole: .destructive,
-                primaryAction: { undoLastPitch() },
-                secondaryTitle: "Cancel"
-            )
-        )
-        button = AnyView(button.frame(height: zoneCornerButtonBlockHeight, alignment: .top))
-        button = AnyView(button.offset(y: -115))
-
-        return button
-    }
-    
-    private var gameStatsOverlay: some View {
-        Group {
-            if isGame {
-                HStack(spacing: 8) {
-                    Button(action: {
-                        showGameStatsSheet = true
-                    }) {
-                        Image(systemName: "chart.bar")
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Game Stats")
-
-                    Button(action: {
-                        showGameSummarySheet = true
-                    }) {
-                        Image(systemName: "doc.text")
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
-                            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Game Summary")
-                }
-            }
-        }
-    }
-    
-    private func batterSideOverlay(SZwidth: CGFloat, verticalOffset: CGFloat = -20) -> AnyView {
-        let iconSize: CGFloat = 36
-        let leftButton = AnyView(
-            Button(action: {
-                withAnimation { batterSide = .left }
-                persistBatterSide(.left)
-                pushBatterSideToActiveGame(.left)
-            }) {
-                AnyView(
-                    Image("rightBatterIcon")
-                        .resizable()
-                        .renderingMode(.template)
-                        .frame(width: iconSize, height: iconSize)
-                        .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
-                )
-            }
-            .buttonStyle(.plain)
-        )
-
-        let scoutIndicator: AnyView
-        if currentTrackingMode == .scout && scoutObservedResult == .inPlay {
-            scoutIndicator = AnyView(
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(.green)
-                    .frame(width: iconSize, alignment: .center)
-                    .offset(y: 80)
-            )
-        } else {
-            scoutIndicator = AnyView(EmptyView())
-        }
-
-        let leftControls = AnyView(
-            VStack(alignment: .leading, spacing: 4) {
-                leftButton
-                scoutIndicator
-            }
-        )
-
-        let rightButton = AnyView(
-            Button(action: {
-                withAnimation { batterSide = .right }
-                persistBatterSide(.right)
-                pushBatterSideToActiveGame(.right)
-            }) {
-                AnyView(
-                    Image("leftBatterIcon")
-                        .resizable()
-                        .renderingMode(.template)
-                        .frame(width: iconSize, height: iconSize)
-                        .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
-                )
-            }
-            .buttonStyle(.plain)
-        )
-
-        return AnyView(
-            HStack {
-                leftControls
-                Spacer()
-                rightButton
-            }
-            .frame(width: SZwidth)
-            .padding(.horizontal, 12)
-            .padding(.top, 6)
-            .offset(y: verticalOffset)
-        )
-    }
-    
     private struct StrikeZoneCard: View {
         let SZwidth: CGFloat
         let strikeZoneHeight: CGFloat
@@ -7986,8 +7884,13 @@ struct PitchTrackerView: View {
         }
     }
     
-    private func strikeZoneArea(width SZwidth: CGFloat) -> AnyView {
-        let card = AnyView(
+    /// Split out of `strikeZoneArea` for the same stack-frame reason the
+    /// overlay factories exist: this call site alone builds ten closures
+    /// that capture `self`, and `self` is a struct with hundreds of stored
+    /// properties. Keeping them in their own frame is what leaves
+    /// `strikeZoneArea` enough stack to assemble the overlays.
+    private func makeStrikeZoneCard(SZwidth: CGFloat) -> AnyView {
+        AnyView(
             StrikeZoneCard(
                 SZwidth: SZwidth,
                 strikeZoneHeight: strikeZoneHeight,
@@ -8046,15 +7949,40 @@ struct PitchTrackerView: View {
                 forceOutlineButtons: isDemoMode
             )
         )
+    }
 
-        let decoratedCard = AnyView(
-            card
-                .overlay(AnyView(resetOverlay), alignment: .bottomLeading)
-                .overlay(AnyView(gameStatsOverlay), alignment: .bottomTrailing)
-                .overlay(AnyView(resetButtonOverlay), alignment: .bottomLeading)
-                .overlay(undoButtonOverlay, alignment: .bottomTrailing)
-        )
-        let batterOverlay = AnyView(batterSideOverlay(SZwidth: SZwidth, verticalOffset: 90))
+    private func strikeZoneArea(width SZwidth: CGFloat) -> AnyView {
+        let card = makeStrikeZoneCard(SZwidth: SZwidth)
+
+        // Every overlay is built by its own `make…` method rather than
+        // inline here. That is a STACK FRAME requirement, not style:
+        // PitchTrackerView is a struct with hundreds of stored properties,
+        // and any closure written inline in this function that touches
+        // `self` emits an `outlined init with copy of PitchTrackerView` -
+        // a full by-value copy of the whole view - into THIS frame. Three
+        // such closures inline here overflowed the stack outright
+        // (`___chkstk_darwin`). One copy per callee frame is fine; several
+        // live at once in one frame is not. Keep new overlays factored the
+        // same way, and prefer a @Binding over a closure where the action
+        // is just setting state.
+        var decoratedCard: AnyView = card
+        decoratedCard = AnyView(decoratedCard.overlay(
+            ZoneOpponentLabel(opponentName: opponentName),
+            alignment: .bottomLeading
+        ))
+        decoratedCard = AnyView(decoratedCard.overlay(
+            makeZoneGameStatsButtons(),
+            alignment: .bottomTrailing
+        ))
+        decoratedCard = AnyView(decoratedCard.overlay(
+            makeZoneResetButton(),
+            alignment: .bottomLeading
+        ))
+        decoratedCard = AnyView(decoratedCard.overlay(
+            makeZoneUndoButton(),
+            alignment: .bottomTrailing
+        ))
+        let batterOverlay = AnyView(makeBatterSideOverlay(SZwidth: SZwidth, verticalOffset: 90))
 
         return AnyView(ZStack(alignment: .top) {
             decoratedCard
@@ -9080,6 +9008,21 @@ struct PitchTrackerView: View {
             )
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        // Attached at the root, where its full-screen overlay can actually
+        // receive a tap anywhere. Both of the buttons that set
+        // showUndoConfirm (the cards row and the zone's bottom-right
+        // corner) used to carry their own copy of this dialog, which meant
+        // two dialogs presenting at once, each only tappable inside its own
+        // small button's frame.
+        .appConfirmationDialog(
+            isPresented: $showUndoConfirm,
+            title: "Undo Last Pitch?",
+            message: "This will remove the last recorded pitch.",
+            primaryTitle: "Undo",
+            primaryRole: .destructive,
+            primaryAction: { undoLastPitch() },
+            secondaryTitle: "Cancel"
+        )
         .onAppear {
             AppDelegate.setOrientationLock(.portrait)
             if isPad && !isDisplayOnlyMode {
@@ -9869,12 +9812,12 @@ struct PitchTrackerView: View {
 
     @ViewBuilder private var gameSheetView: some View {
         GameSelectionSheet(
-            onCreate: { name, date, trackingMode, completion in
+            onCreate: { name, date, trackingMode, ourTeamId, opponentTeamId, completion in
                 if isDemoMode {
                     requireSignInForDemo("Sign in to create your own games.")
                     return
                 }
-                let newGame = Game(
+                var newGame = Game(
                     id: nil,
                     opponent: name,
                     date: date,
@@ -9882,6 +9825,8 @@ struct PitchTrackerView: View {
                     batterIds: jerseyCells.map { $0.id.uuidString },
                     trackingMode: trackingMode
                 )
+                newGame.teamId = ourTeamId
+                newGame.awayTeamId = opponentTeamId
                 // Swap the placeholder for a real, openable row as soon as
                 // the id exists; only report back again if the backend
                 // actually rejects the write.
@@ -10052,7 +9997,6 @@ struct PitchTrackerView: View {
             shareCode: $shareCode,
             codeShareSheetID: $codeShareSheetID,
             showCodeShareModePicker: $showCodeShareModePicker,
-            hasActiveSessionSelection: (selectedGameId != nil),
             onSwitchToArea: { selectHomeArea($0) }
         )
         .environmentObject(authManager)
@@ -10925,22 +10869,20 @@ struct PitchTrackerView: View {
         // where the stack is shallow - means the deep call site never has
         // to pay it at all.
         _ = sessionManager.currentMode
-        // Same crash class, same property, recurring: undoButtonOverlay's
-        // erase-after-every-modifier rewrite (see its own doc comment)
-        // reduced the metadata each step has to resolve, but didn't
-        // eliminate the crash outright - it can still be the FIRST thing
-        // in the whole launch to resolve AnyView+Text+.font(...)'s combined
-        // generic metadata, and that first resolution is what crashes when
-        // it happens 60+ AttributeGraph frames deep inside strikeZoneArea's
-        // chain. Pre-warming it here, same as currentMode above, forces
-        // that same resolution to happen at the shallow top of body
-        // instead, where it's cheap - the deep call site then just reads
-        // an already-cached result.
-        _ = undoButtonOverlay
+        // The strike-zone overlays used to be pre-warmed here too, for the
+        // same crash class. They are top-level structs now (see the comment
+        // above ZoneOpponentLabel), so they carry none of this view's
+        // context in their metadata and need no pre-warm at all.
         let resolvedDisplayLiveId = displayOnlyLiveId ?? (displayOnlyLiveIdStorage.isEmpty ? nil : displayOnlyLiveIdStorage)
+        // Same discipline as confirmSheetBinding: locals captured before the
+        // closures exist, so neither one implicitly captures `self` and
+        // copies the whole view into `body`'s own stack frame.
+        let displayOnlyFlag = $isDisplayOnlyMode
+        let deviceIsPad = isPad
+        let exitDisplayOnly: () -> Void = { exitDisplayOnlyMode() }
         let displayCoverBinding = Binding<Bool>(
-            get: { isDisplayOnlyMode && !isPad },
-            set: { newValue in if !newValue { exitDisplayOnlyMode() } }
+            get: { displayOnlyFlag.wrappedValue && !deviceIsPad },
+            set: { newValue in if !newValue { exitDisplayOnly() } }
         )
         let displayCoverView: AnyView = {
             if let liveId = resolvedDisplayLiveId {
@@ -11490,6 +11432,20 @@ struct PitchTrackerView: View {
                 if isDisplayOnlyMode {
                     exitDisplayOnlyMode()
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .activeGameShouldClose)) { note in
+                // Home's "Close Game". Scoped to one game id so a stale
+                // post can't pull a different game out from under the
+                // tracker; no id means "whatever is open".
+                if let wanted = (note.userInfo?["gameId"] as? String),
+                   let current = selectedGameId,
+                   wanted != current {
+                    return
+                }
+                // Same teardown the in-tracker exit uses - listeners,
+                // lineup, defaults - and it tells the host we left, which
+                // a deliberate close should do.
+                disconnectFromGame(notifyHost: true)
             }
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { note in
                 guard let info = note.userInfo as? [String: Any] else { return }
@@ -13765,7 +13721,9 @@ struct GameSelectionSheet: View {
     // placeholder row sat at "Saving..." forever, permanently disabled
     // (so untappable) with no error anywhere, and was then silently
     // dropped by the next games reload.
-    var onCreate: (String, Date, TrackingMode, @escaping (Result<Game, Error>) -> Void) -> Void
+    /// Carries both sides' team ids (nil when a side wasn't picked, or the
+    /// account has no teams yet) alongside the opponent name/date/mode.
+    var onCreate: (String, Date, TrackingMode, String?, String?, @escaping (Result<Game, Error>) -> Void) -> Void
     var onChoose: (String) -> Void
     var onCancel: () -> Void
     @Binding var codeShareInitialTab: Int
@@ -13780,7 +13738,12 @@ struct GameSelectionSheet: View {
     @State private var newOpponentName: String = ""
     @State private var newGameDate: Date = Date()
     @State private var newGameTrackingMode: TrackingMode = .coach
-    
+    @State private var newGameTeamId: String? = nil
+    @State private var newGameOpponentTeamId: String? = nil
+    /// Loaded once when the add-game card is opened; this sheet is the boot
+    /// picker and has no other reason to know about teams.
+    @State private var myTeamsForNewGame: [Team] = []
+
     @State private var createGameError: String? = nil
     @State private var pendingDeleteGameId: String? = nil
     @State private var pendingDeleteGameName: String = ""
@@ -13979,6 +13942,16 @@ struct GameSelectionSheet: View {
                                 onRequireSignIn()
                                 return
                             }
+                            newGameTeamId = nil
+                            newGameOpponentTeamId = nil
+                            authManager.loadMyTeams { teams, _ in
+                                myTeamsForNewGame = teams.map { $0.team }
+                                // A coach with exactly one team shouldn't
+                                // have to pick it every game.
+                                if myTeamsForNewGame.count == 1 {
+                                    newGameTeamId = myTeamsForNewGame.first?.id
+                                }
+                            }
                             showAddGamePopover = true
                         } label: {
                             HStack(spacing: 4) {
@@ -14046,15 +14019,39 @@ struct GameSelectionSheet: View {
                             .ignoresSafeArea()
                             .onTapGesture { showAddGamePopover = false }
                         
+                        // The card grew two team pickers and an inline
+                        // create-team form, so it can now be taller than
+                        // the screen. Unconditionally scrollable rather
+                        // than gated on a height threshold - the same
+                        // mistake the tracker's own ScrollView fallback
+                        // already made once (see CLAUDE.md).
+                        ScrollView {
                         AddGameCard(
                             opponentName: $newOpponentName,
                             gameDate: $newGameDate,
                             trackingMode: $newGameTrackingMode,
+                            myTeams: myTeamsForNewGame,
+                            ourTeamId: $newGameTeamId,
+                            opponentTeamId: $newGameOpponentTeamId,
+                            onCreateTeam: { name, designation, completion in
+                                authManager.createTeam(name: name, designation: designation) { result in
+                                    switch result {
+                                    case .success(let team):
+                                        myTeamsForNewGame.append(team)
+                                        completion(team)
+                                    case .failure(let error):
+                                        debugLog("❌ createTeam from AddGameCard failed:", error.localizedDescription)
+                                        completion(nil)
+                                    }
+                                }
+                            },
                             onCancel: { showAddGamePopover = false },
                             onSave: {
                                 let name = newOpponentName.trimmingCharacters(in: .whitespacesAndNewlines)
                                 guard !name.isEmpty else { return }
-                                let item = Game(opponent: name, date: newGameDate, jerseyNumbers: [], trackingMode: newGameTrackingMode)
+                                var item = Game(opponent: name, date: newGameDate, jerseyNumbers: [], trackingMode: newGameTrackingMode)
+                                item.teamId = newGameTeamId
+                                item.awayTeamId = newGameOpponentTeamId
                                 games.append(item)
                                 showAddGamePopover = false
                                 // Keep the game selection sheet open; do not dismiss here.
@@ -14064,7 +14061,7 @@ struct GameSelectionSheet: View {
                                 // still find the row - by then it is no longer
                                 // the id-less placeholder this started as.
                                 var stampedId: String? = nil
-                                onCreate(name, placeholderDate, newGameTrackingMode) { result in
+                                onCreate(name, placeholderDate, newGameTrackingMode, newGameTeamId, newGameOpponentTeamId) { result in
                                     let rowIndex = games.firstIndex(where: { candidate in
                                         if let stampedId, candidate.id == stampedId { return true }
                                         return candidate.id == nil
@@ -14100,6 +14097,8 @@ struct GameSelectionSheet: View {
                         )
                         .frame(maxWidth: 360)
                         .padding()
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
                     }
                     .transition(.opacity.combined(with: .scale))
                     .animation(.easeInOut(duration: 0.2), value: showAddGamePopover)
@@ -14117,6 +14116,194 @@ struct GameSelectionSheet: View {
     }()
 }
 
+// MARK: - Strike zone corner overlays
+//
+// These five were computed properties / a method on PitchTrackerView, and
+// between them they crashed on launch EIGHT times with the same runtime
+// metadata signature (`swift_getTypeByMangledName` → `resolveOpaqueType` →
+// `_findExtendedTypeContextDescriptor` → `buildDescriptorPath`), each fix
+// just moving the crash to whichever sibling was next to be resolved.
+//
+// Erasing to AnyView after every modifier, and pre-warming at the top of
+// `body`, both failed as general cures - `batterSideOverlay` was already
+// fully erased to AnyView and crashed anyway. The reason: the runtime isn't
+// struggling with chain *length*, it's walking the enclosing type's
+// descriptor path, and the enclosing type is a 14,500-line view with an
+// enormous generic/opaque context. Every `some View` member declared in
+// there inherits that context.
+//
+// Extracting them to top-level structs removes the context entirely: each
+// body is now a small concrete type resolved in its own shallow descriptor
+// path, with nothing of PitchTrackerView in its mangled name. This is the
+// same shape `StrikeZoneCard` (the card these decorate) already had - and
+// that one never crashed, which is the clue that mattered.
+//
+// Keep new strike-zone decorations as structs here. Do not move them back
+// to computed properties on PitchTrackerView.
+
+/// The "vs. opponent" bubble at the zone's bottom edge.
+private struct ZoneOpponentLabel: View {
+    let opponentName: String?
+
+    var body: some View {
+        Text("vs. \(opponentName ?? "Game")")
+            .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
+            .foregroundStyle(.primary)
+            .frame(maxWidth: 130, alignment: .center)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+    }
+}
+
+/// Bottom-left corner: text-only Reset, sized to the shared corner block
+/// height so it lines up with Undo on the opposite corner.
+private struct ZoneResetButton: View {
+    let blockHeight: CGFloat
+    let onReset: () -> Void
+
+    var body: some View {
+        Button(action: onReset) {
+            Text("Reset")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.red)
+                .padding(6)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Reset pitch selection")
+        .frame(height: blockHeight, alignment: .top)
+        .offset(y: -115)
+    }
+}
+
+/// Bottom-right corner, mirroring `ZoneResetButton`.
+/// The confirm dialog lives at baseBody's root, not in here - see the note
+/// at its attachment site.
+private struct ZoneUndoButton: View {
+    let blockHeight: CGFloat
+    let isDisabled: Bool
+    @Binding var showConfirm: Bool
+
+    var body: some View {
+        Button {
+            showConfirm = true
+        } label: {
+            Text("Undo last pitch")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(maxWidth: 70)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(6)
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .accessibilityLabel("Undo Last Pitch")
+        .frame(height: blockHeight, alignment: .top)
+        .offset(y: -115)
+    }
+}
+
+/// Bottom-right: the game stats / game summary pair. Renders nothing
+/// outside game mode.
+/// Takes bindings, not closures, deliberately: a closure written inline in
+/// `strikeZoneArea` captures `self`, and `self` is a struct with hundreds of
+/// stored properties, so each one costs a full by-value copy of
+/// PitchTrackerView on that function's stack frame. A Binding captures only
+/// the @State box. See the stack-frame note on `strikeZoneArea`.
+private struct ZoneGameStatsButtons: View {
+    let isGame: Bool
+    @Binding var showStats: Bool
+    @Binding var showSummary: Bool
+
+    var body: some View {
+        if isGame {
+            HStack(spacing: 8) {
+                Button(action: { showStats = true }) {
+                    Image(systemName: "chart.bar")
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Game Stats")
+
+                Button(action: { showSummary = true }) {
+                    Image(systemName: "doc.text")
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Game Summary")
+            }
+        }
+    }
+}
+
+/// Left/right batter icons flanking the zone, plus scout mode's in-play
+/// chevron under the left one.
+private struct BatterSideOverlay: View {
+    let SZwidth: CGFloat
+    var verticalOffset: CGFloat = -20
+    let batterSide: BatterSide
+    let showsScoutInPlayIndicator: Bool
+    let onSelect: (BatterSide) -> Void
+
+    private let iconSize: CGFloat = 36
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    onSelect(.left)
+                } label: {
+                    Image("rightBatterIcon")
+                        .resizable()
+                        .renderingMode(.template)
+                        .frame(width: iconSize, height: iconSize)
+                        .foregroundColor(batterSide == .left ? .primary : .gray.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+
+                if showsScoutInPlayIndicator {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.green)
+                        .frame(width: iconSize, alignment: .center)
+                        .offset(y: 80)
+                }
+            }
+
+            Spacer()
+
+            Button {
+                onSelect(.right)
+            } label: {
+                Image("leftBatterIcon")
+                    .resizable()
+                    .renderingMode(.template)
+                    .frame(width: iconSize, height: iconSize)
+                    .foregroundColor(batterSide == .right ? .primary : .gray.opacity(0.4))
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(width: SZwidth)
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .offset(y: verticalOffset)
+    }
+}
+
 struct GameItem: Identifiable {
     let id = UUID()
     var opponent: String
@@ -14124,12 +14311,57 @@ struct GameItem: Identifiable {
 }
 
 
+/// Both sides of the game are picked here now. Opponent used to be a free
+/// text field, which meant every opponent was a throwaway string and their
+/// roster had to be built later from inside the tracker; it's a Team like
+/// ours is, with the same picker and an inline "New Team" escape hatch for
+/// an opponent you haven't met yet.
+///
+/// `opponentName` is still the binding the callers save onto `Game.opponent`
+/// - it's kept in sync with the chosen team's name rather than replaced, so
+/// every existing read of `game.opponent` (row titles, live-session labels,
+/// delete confirmations) keeps working untouched.
 struct AddGameCard: View {
     @Binding var opponentName: String
     @Binding var gameDate: Date
     @Binding var trackingMode: TrackingMode
+    /// Every team the signed-in user is on - the candidate pool for BOTH
+    /// sides. Can legitimately be empty on a brand-new account, in which
+    /// case both pickers offer only "New Team…".
+    var myTeams: [Team] = []
+    @Binding var ourTeamId: String?
+    @Binding var opponentTeamId: String?
+    /// Creates a Team and hands it back, or nil on failure. The card has no
+    /// Firestore access of its own; the presenting view owns the write.
+    var onCreateTeam: (String, TeamDesignation, @escaping (Team?) -> Void) -> Void
     var onCancel: () -> Void
     var onSave: () -> Void
+
+    /// Which side's "New Team…" is currently expanded, if either. One at a
+    /// time: the inline form is tall, and two open at once would push Save
+    /// off the bottom of the card.
+    private enum NewTeamTarget { case ours, opponent }
+    @State private var newTeamTarget: NewTeamTarget? = nil
+    @State private var newTeamName: String = ""
+    @State private var newTeamDesignation = TeamDesignationDraft()
+    @State private var isCreatingTeam = false
+    @State private var createTeamError: String? = nil
+
+    private func team(_ id: String?) -> Team? {
+        guard let id else { return nil }
+        return myTeams.first(where: { $0.id == id })
+    }
+
+    /// A team can't be both sides of the same game.
+    private func candidates(excluding excludedId: String?) -> [Team] {
+        myTeams.filter { $0.id != excludedId || excludedId == nil }
+    }
+
+    private var canSave: Bool {
+        !opponentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && newTeamTarget == nil
+            && !isCreatingTeam
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -14145,8 +14377,34 @@ struct AddGameCard: View {
                 .buttonStyle(.plain)
             }
 
-            TextField("Opponent name", text: $opponentName)
-                .textFieldStyle(.roundedBorder)
+            teamPickerRow(
+                title: "Our team",
+                selectedId: ourTeamId,
+                options: candidates(excluding: opponentTeamId),
+                onSelect: { ourTeamId = $0 },
+                onClear: { ourTeamId = nil },
+                onAddNew: { beginNewTeam(.ours) }
+            )
+
+            teamPickerRow(
+                title: "Opponent",
+                selectedId: opponentTeamId,
+                options: candidates(excluding: ourTeamId),
+                onSelect: { id in
+                    opponentTeamId = id
+                    // Keep Game.opponent in step with the chosen team.
+                    opponentName = team(id)?.name ?? opponentName
+                },
+                onClear: {
+                    opponentTeamId = nil
+                    opponentName = ""
+                },
+                onAddNew: { beginNewTeam(.opponent) }
+            )
+
+            if newTeamTarget != nil {
+                newTeamInlineForm
+            }
 
             DatePicker("Date & Time", selection: $gameDate, displayedComponents: [.date, .hourAndMinute])
 
@@ -14162,13 +14420,164 @@ struct AddGameCard: View {
                 Button("Cancel", action: onCancel)
                 Button("Save", action: onSave)
                     .buttonStyle(.borderedProminent)
-                    .disabled(opponentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canSave)
             }
         }
         .padding(16)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(radius: 10)
+    }
+
+    private func beginNewTeam(_ target: NewTeamTarget) {
+        newTeamName = ""
+        newTeamDesignation.reset()
+        createTeamError = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            newTeamTarget = target
+        }
+    }
+
+    private func cancelNewTeam() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            newTeamTarget = nil
+        }
+        newTeamName = ""
+        newTeamDesignation.reset()
+        createTeamError = nil
+    }
+
+    private func commitNewTeam() {
+        let name = newTeamName.trimmingCharacters(in: .whitespaces)
+        guard let target = newTeamTarget,
+              !name.isEmpty,
+              let designation = newTeamDesignation.designation,
+              !isCreatingTeam
+        else { return }
+
+        isCreatingTeam = true
+        createTeamError = nil
+        onCreateTeam(name, designation) { created in
+            isCreatingTeam = false
+            guard let created, let id = created.id else {
+                createTeamError = "Couldn't create \"\(name)\". Try again."
+                return
+            }
+            switch target {
+            case .ours:
+                ourTeamId = id
+            case .opponent:
+                opponentTeamId = id
+                opponentName = created.name
+            }
+            cancelNewTeam()
+        }
+    }
+
+    @ViewBuilder
+    private var newTeamInlineForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(newTeamTarget == .ours ? "New Team (ours)" : "New Opponent Team")
+                .font(.subheadline.weight(.semibold))
+
+            TextField("Team name", text: $newTeamName)
+                .textFieldStyle(.roundedBorder)
+
+            TeamDesignationForm(draft: $newTeamDesignation, showsTitle: false)
+
+            if let createTeamError {
+                Text(createTeamError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { cancelNewTeam() }
+                Button(isCreatingTeam ? "Creating…" : "Create Team") { commitNewTeam() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(
+                        newTeamName.trimmingCharacters(in: .whitespaces).isEmpty
+                            || !newTeamDesignation.isComplete
+                            || isCreatingTeam
+                    )
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.black.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.black.opacity(0.1), lineWidth: 1)
+        )
+    }
+
+    private func teamPickerRow(
+        title: String,
+        selectedId: String?,
+        options: [Team],
+        onSelect: @escaping (String?) -> Void,
+        onClear: @escaping () -> Void,
+        onAddNew: @escaping () -> Void
+    ) -> some View {
+        let selected = team(selectedId)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 80, alignment: .leading)
+                Menu {
+                    ForEach(options, id: \.id) { option in
+                        Button {
+                            onSelect(option.id)
+                        } label: {
+                            Text(option.displayNameWithDesignation)
+                        }
+                    }
+                    Divider()
+                    Button {
+                        onAddNew()
+                    } label: {
+                        Label("New Team…", systemImage: "plus.circle")
+                    }
+                    if selectedId != nil {
+                        Button("Clear", action: onClear)
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(selected?.name ?? "Select")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(selected == nil ? Color.secondary : Color.primary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(selected == nil ? Color(.systemGray6) : Color.pitchMarkActiveGray.opacity(0.12))
+                    )
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(selected == nil ? Color(.systemGray4) : Color.pitchMarkActiveGray.opacity(0.45), lineWidth: 1)
+                    )
+                    .contentShape(Capsule(style: .continuous))
+                }
+                Spacer(minLength: 0)
+            }
+
+            if let designation = selected?.designation {
+                Text(designation.inlineText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 90)
+            }
+        }
     }
 }
 

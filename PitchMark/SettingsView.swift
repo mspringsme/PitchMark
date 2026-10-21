@@ -524,7 +524,6 @@ struct SettingsView: View {
     @Binding var shareCode: String
     @Binding var codeShareSheetID: UUID
     @Binding var showCodeShareModePicker: Bool
-    let hasActiveSessionSelection: Bool
     var onSwitchToArea: ((HomeArea) -> Void)? = nil
 
     @EnvironmentObject var authManager: AuthManager
@@ -544,16 +543,36 @@ struct SettingsView: View {
     @FocusState private var isDeleteConfirmationFocused: Bool
     @State private var showAccountActionsSheet = false
     @State private var showLearnPitchMark = false
+    @State private var showSoundCreditsSheet = false
+    @State private var activeGameIdValue: String? = nil
     @State private var showMoreAccountActionsSheet = false
     @State private var showFinalDeleteAccountConfirmation = false
     @State private var templatePendingDeletion: PitchTemplate?
     @State private var showDeleteAlert = false
     @Environment(\.dismiss) private var dismiss
     
-    @State private var showAppSettingsSheet = false
     @State private var myTeams: [(team: Team, membership: TeamMembership)] = []
     @State private var selectedTeamEntry: TeamEntrySelection? = nil
     @State private var newTeamNameForHome: String = ""
+    // Creating a team is an inline form now (same shape as the Games
+    // section's), because the four mandatory designation pickers no longer
+    // fit the one-line name field + button it used to be.
+    @State private var showInlineNewTeam = false
+    @State private var newTeamDesignation = TeamDesignationDraft()
+    @State private var createTeamError: String? = nil
+
+    // Home's Players section - the pitcher roster that used to live inside
+    // the gear/Settings sheet, plus every non-pitching roster player under
+    // the "All" scope.
+    @State private var playersScope: PlayersScope = .pitchers
+    @State private var showPlayersFilterSheet = false
+    @State private var playerFilterTeamIds: Set<String> = []
+    @State private var playerFilterAgeGroups: Set<TeamAgeGroup> = []
+    @State private var playerFilterDivisions: Set<TeamDivision> = []
+    @State private var rosterEntries: [RosterEntry] = []
+    @State private var myHitters: [Hitter] = []
+    @State private var statsHitter: Hitter? = nil
+    @State private var isRefreshingPlayers = false
     // Creating, archiving and deleting games all happen inline in Home's
     // Games section now. The old route was a separate GameSelectionSheet,
     // which put a sheet (the new-game card) inside a sheet (the chooser)
@@ -563,6 +582,8 @@ struct SettingsView: View {
     @State private var inlineNewGameName: String = ""
     @State private var inlineNewGameDate: Date = Date()
     @State private var inlineNewGameTrackingMode: TrackingMode = .coach
+    @State private var inlineNewGameTeamId: String? = nil
+    @State private var inlineNewGameOpponentTeamId: String? = nil
     @State private var createGameError: String? = nil
     @State private var showArchivedGames = false
     @State private var pendingDeleteGameId: String? = nil
@@ -610,7 +631,6 @@ struct SettingsView: View {
     @State private var showQRScanner = false
     @State private var showCameraUnavailableAlert = false
     @State private var showCameraPermissionAlert = false
-    @State private var showSelectSessionBeforeCloseAlert = false
 
     private static let quickLaunchDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -649,8 +669,6 @@ struct SettingsView: View {
     @State private var ownedPitchersListener: ListenerRegistration? = nil
     @State private var sharedPitchersListener: ListenerRegistration? = nil
     @State private var livePitchersById: [String: Pitcher] = [:]
-    @State private var storeGlowAngle: Double = 0
-    @State private var storeGlowPulse = false
     
     private var sortedTemplates: [PitchTemplate] {
         templates.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
@@ -716,14 +734,10 @@ struct SettingsView: View {
         sortedTemplates.filter { hiddenTemplateIds.contains($0.id.uuidString) }
     }
 
-    private var visiblePitchers: [Pitcher] {
-        sortedPitchers.filter { !hiddenPitcherIds.contains($0.id ?? "") }
-    }
+    // visiblePitchers/hiddenPitchers used to split the Settings-sheet
+    // pitcher strip in two. Home's Players section filters its own rows
+    // instead (passesPlayerFilters), so both are gone.
 
-    private var hiddenPitchers: [Pitcher] {
-        sortedPitchers.filter { hiddenPitcherIds.contains($0.id ?? "") }
-    }
-    
     private func joinByCodeFromSettings() {
         // set the tab first
         showCodeShareModePicker = false
@@ -842,6 +856,7 @@ struct SettingsView: View {
         defaults.set(gameId, forKey: PitchTrackerView.DefaultsKeys.activeGameId)
         defaults.set(ownerUid, forKey: PitchTrackerView.DefaultsKeys.activeGameOwnerUserId)
         defaults.set("tracker", forKey: PitchTrackerView.DefaultsKeys.lastView)
+        refreshActiveGameId()
 
         onSwitchToArea?(.games)
         // The Games tab has to be the one on screen before this lands: the
@@ -966,13 +981,16 @@ struct SettingsView: View {
 
                     // The open game isn't deletable - pulling it out from
                     // under the tracker would leave it mid-session with no
-                    // game. Shown-but-disabled rather than hidden so the
-                    // option doesn't look like it went missing.
+                    // game. Rather than a dead "can't delete" row, the menu
+                    // now offers the way out: Close Game takes it out of
+                    // in-use status (and with it, its teams/players), and
+                    // Delete becomes available on the next open of this menu.
                     if isActiveGame(menuGame) {
-                        Button {} label: {
-                            Label("Open in Games tab - can't delete", systemImage: "lock")
+                        Button {
+                            closeActiveGame(menuGame)
+                        } label: {
+                            Label("Close Game (in use)", systemImage: "xmark.circle")
                         }
-                        .disabled(true)
                     } else {
                         Button(role: .destructive) {
                             guard let id = menuGame.id, !id.isEmpty else { return }
@@ -1006,19 +1024,15 @@ struct SettingsView: View {
         games.map { "\($0.id ?? "")|\($0.archivedAt?.timeIntervalSince1970 ?? 0)" }
     }
 
+    /// Just the wordmark now. The gear that opened a separate Settings
+    /// sheet is gone (2026-10-21): Code Grid Keys and store became Home
+    /// sections of their own and Sound Credits moved into the account
+    /// sheet, so the sheet had nothing left to hold.
     private var homeHeaderRow: some View {
         HStack {
             Text("PitchMark")
                 .font(.title2.weight(.bold))
             Spacer()
-            Button {
-                showAppSettingsSheet = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.title3)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Settings")
         }
         .padding(.horizontal)
     }
@@ -1026,6 +1040,46 @@ struct SettingsView: View {
     private enum HomeOverviewSection {
         case games
         case teams
+        case players
+        case templates
+    }
+
+    /// What the Players section's Pitchers/All toggle switches between.
+    /// `.pitchers` is the old Settings-sheet pitcher roster; `.all` adds
+    /// every other player on your teams - kids who only bat - whose Stats
+    /// button points at hitting stats instead of pitching stats.
+    private enum PlayersScope: Hashable {
+        case pitchers
+        case all
+    }
+
+    /// One `TeamPlayer` row paired with the team it came from, so a player
+    /// row can show the team's designation without a second lookup.
+    private struct RosterEntry: Identifiable {
+        let id: String
+        let teamPlayer: TeamPlayer
+        let team: Team
+    }
+
+    /// One row in the Players list - one *person*, not one roster entry. A
+    /// player linked from two teams collapses into a single row carrying
+    /// both teams, rather than appearing twice under a name you'd have to
+    /// read the designation to tell apart.
+    private struct PlayerListRow: Identifiable {
+        let id: String
+        var name: String
+        var jersey: String?
+        var pitcher: Pitcher?
+        var hitterId: String?
+        var teams: [Team]
+
+        var pitches: Bool { pitcher != nil }
+
+        /// "Hadley 33" - the caption under the avatar in the row.
+        var captionName: String {
+            guard let jersey, !jersey.isEmpty else { return name }
+            return "\(name) \(jersey)"
+        }
     }
 
     /// Shared collapsible-header row for Home's two accordion sections -
@@ -1084,7 +1138,10 @@ struct SettingsView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Spacer()
+                Spacer(minLength: 8)
+                // Right-justified designation. Renders nothing for a team
+                // created before designations existed.
+                TeamDesignationBadge(designation: entry.team.designation)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -1103,95 +1160,789 @@ struct SettingsView: View {
     private var myTeamsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             collapsibleSectionHeader(
-                title: "Teams and Players",
+                title: "Teams",
                 section: .teams,
-                trailingSystemImage: "arrow.clockwise",
-                trailingAction: refreshMyTeams
+                trailingSystemImage: showInlineNewTeam ? "xmark.circle.fill" : "plus.circle.fill",
+                trailingFont: .title2,
+                trailingAction: { toggleInlineNewTeam() }
             )
 
             if expandedHomeOverviewSection == .teams {
-                // The create-team row used to live ONLY in the empty-state
-                // branch below, so it disappeared the moment you had your
-                // first team - no way to add a second one from Home. It's
-                // unconditional now, under the list instead of replacing it.
-                if myTeams.isEmpty {
-                    Text("You're not on any teams yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal)
-                } else {
-                    VStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let createTeamError {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                            Text(createTeamError)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                            Spacer(minLength: 8)
+                            Button("Dismiss") { self.createTeamError = nil }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.plain)
+                        }
+                    }
+
+                    if showInlineNewTeam {
+                        newTeamCard
+                    }
+
+                    // The create-team row used to live ONLY in the empty-state
+                    // branch below, so it disappeared the moment you had your
+                    // first team - no way to add a second one from Home. It's
+                    // the header's + now, available either way.
+                    if myTeams.isEmpty, !showInlineNewTeam {
+                        Text("You're not on any teams yet. Tap + to create one.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
                         ForEach(myTeams, id: \.team.id) { entry in
                             teamRow(entry)
                         }
                     }
-                    .padding(.horizontal)
-                }
-
-                HStack {
-                    TextField("Team name", text: $newTeamNameForHome)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Create a Team") {
-                        createTeamFromHome()
-                    }
-                    .disabled(newTeamNameForHome.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .padding(.horizontal)
             }
         }
         .onAppear {
-            if myTeams.isEmpty {
-                refreshMyTeams()
+            // Unconditional now: the header's manual refresh button became
+            // the + for the inline create form, and teams/rosters are
+            // one-shot reads (unlike pitchers, which have a live listener),
+            // so this is the only thing that picks up a change made on
+            // another device.
+            refreshMyTeams()
+        }
+    }
+
+    private var newTeamCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("New Team")
+                    .font(.headline)
+                Spacer()
+                Button(action: { closeInlineNewTeam() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            TextField("Team name", text: $newTeamNameForHome)
+                .textFieldStyle(.roundedBorder)
+
+            TeamDesignationForm(draft: $newTeamDesignation)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { closeInlineNewTeam() }
+                Button("Save") { createTeamFromHome() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canCreateTeamFromHome)
             }
         }
+        .padding(16)
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(radius: 10)
+    }
+
+    private var canCreateTeamFromHome: Bool {
+        !newTeamNameForHome.trimmingCharacters(in: .whitespaces).isEmpty && newTeamDesignation.isComplete
+    }
+
+    private func toggleInlineNewTeam() {
+        if showInlineNewTeam {
+            closeInlineNewTeam()
+            return
+        }
+        newTeamNameForHome = ""
+        newTeamDesignation.reset()
+        createTeamError = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            expandedHomeOverviewSection = .teams
+            showInlineNewTeam = true
+        }
+    }
+
+    private func closeInlineNewTeam() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showInlineNewTeam = false
+        }
+        newTeamNameForHome = ""
+        newTeamDesignation.reset()
     }
 
     private func refreshMyTeams() {
         authManager.loadMyTeams { teams, error in
             myTeams = teams
+            // The Players section draws every row's team/designation from
+            // this same list, so a team edit has to re-seed the roster too.
+            refreshRosterEntries(for: teams.map { $0.team })
         }
     }
 
     private func createTeamFromHome() {
         let name = newTeamNameForHome.trimmingCharacters(in: .whitespaces)
-        authManager.createTeam(name: name) { result in
-            if case .success = result {
-                newTeamNameForHome = ""
+        guard !name.isEmpty, let designation = newTeamDesignation.designation else { return }
+        authManager.createTeam(name: name, designation: designation) { result in
+            switch result {
+            case .success:
+                closeInlineNewTeam()
                 refreshMyTeams()
+            case .failure(let error):
+                createTeamError = "Couldn't create \"\(name)\": \(error.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: - Home: Players
+
+    /// Every roster row across every team I'm on, used to pair a player
+    /// with the team (and therefore the designation) they belong to.
+    /// Re-seeded whenever `myTeams` reloads, since a designation edit has
+    /// to reach these rows too.
+    private func refreshRosterEntries(for teams: [Team]? = nil) {
+        let teams = teams ?? myTeams.map { $0.team }
+        guard !teams.isEmpty else {
+            rosterEntries = []
+            return
+        }
+        isRefreshingPlayers = true
+        var collected: [RosterEntry] = []
+        let group = DispatchGroup()
+        for team in teams {
+            guard let teamId = team.id else { continue }
+            group.enter()
+            // loadTeamPlayers already completes on the main queue, so the
+            // appends below are serialized without a lock.
+            authManager.loadTeamPlayers(teamId: teamId) { players in
+                for player in players where player.archivedAt == nil {
+                    collected.append(
+                        RosterEntry(
+                            id: "\(teamId)|\(player.id ?? UUID().uuidString)",
+                            teamPlayer: player,
+                            team: team
+                        )
+                    )
+                }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            self.rosterEntries = collected
+            self.isRefreshingPlayers = false
+        }
+    }
+
+    private func refreshMyHitters() {
+        authManager.loadHitters { loaded in
+            myHitters = loaded
+        }
+    }
+
+    /// Roster rows and standalone Pitchers folded into one row per person.
+    /// Keyed by pitcherId first so the Pitcher doc and the roster entry that
+    /// links it collapse together instead of listing the same kid twice.
+    private var playerRows: [PlayerListRow] {
+        var rows: [String: PlayerListRow] = [:]
+        var order: [String] = []
+        var pitchersById: [String: Pitcher] = [:]
+        for pitcher in sortedPitchers {
+            if let id = pitcher.id { pitchersById[id] = pitcher }
+        }
+
+        for entry in rosterEntries {
+            let teamPlayer = entry.teamPlayer
+            guard let key = teamPlayer.pitcherId ?? teamPlayer.playerId ?? teamPlayer.id else { continue }
+            if var existing = rows[key] {
+                if !existing.teams.contains(where: { $0.id == entry.team.id }) {
+                    existing.teams.append(entry.team)
+                }
+                if existing.jersey == nil { existing.jersey = teamPlayer.jerseyNumber }
+                if existing.hitterId == nil { existing.hitterId = teamPlayer.hitterId }
+                rows[key] = existing
+            } else {
+                rows[key] = PlayerListRow(
+                    id: key,
+                    name: teamPlayer.name,
+                    jersey: teamPlayer.jerseyNumber,
+                    pitcher: teamPlayer.pitcherId.flatMap { pitchersById[$0] },
+                    hitterId: teamPlayer.hitterId,
+                    teams: [entry.team]
+                )
+                order.append(key)
+            }
+        }
+
+        // A Pitcher created straight from this section's +, or shared in by
+        // someone else, has no roster row of its own but still belongs here.
+        for pitcher in sortedPitchers {
+            guard let id = pitcher.id, rows[id] == nil else { continue }
+            rows[id] = PlayerListRow(
+                id: id,
+                name: pitcher.name,
+                jersey: nil,
+                pitcher: pitcher,
+                hitterId: nil,
+                teams: []
+            )
+            order.append(id)
+        }
+
+        return order
+            .compactMap { rows[$0] }
+            .filter { playersScope == .all || $0.pitches }
+            .filter { passesPlayerFilters($0) }
+            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    private func passesPlayerFilters(_ row: PlayerListRow) -> Bool {
+        // Archive is a local, per-device notion and only pitchers have one.
+        if let pitcherId = row.pitcher?.id, hiddenPitcherIds.contains(pitcherId), !showHiddenPitchers {
+            return false
+        }
+        if !playerFilterTeamIds.isEmpty {
+            let matchesTeam = row.teams.contains { playerFilterTeamIds.contains($0.id ?? "") }
+            let matchesNoTeam = row.teams.isEmpty && playerFilterTeamIds.contains(Self.noTeamFilterId)
+            if !matchesTeam && !matchesNoTeam { return false }
+        }
+        if !playerFilterAgeGroups.isEmpty {
+            let matches = row.teams.contains { team in
+                guard let group = team.ageGroup else { return false }
+                return playerFilterAgeGroups.contains(group)
+            }
+            if !matches { return false }
+        }
+        if !playerFilterDivisions.isEmpty {
+            let matches = row.teams.contains { team in
+                guard let division = team.division else { return false }
+                return playerFilterDivisions.contains(division)
+            }
+            if !matches { return false }
+        }
+        return true
+    }
+
+    /// Sentinel id for the filter sheet's "No team" row - a real team id can
+    /// never be empty, so it can share the same `Set<String>`.
+    private static let noTeamFilterId = ""
+
+    private var hasActivePlayerFilter: Bool {
+        !playerFilterTeamIds.isEmpty
+            || !playerFilterAgeGroups.isEmpty
+            || !playerFilterDivisions.isEmpty
+            || showHiddenPitchers
+    }
+
+    private func clearPlayerFilters() {
+        playerFilterTeamIds = []
+        playerFilterAgeGroups = []
+        playerFilterDivisions = []
+        showHiddenPitchers = false
+    }
+
+    private func beginAddPlayerFromHome() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            expandedHomeOverviewSection = .players
+        }
+        editingPitcher = nil
+        newPitcherName = ""
+        showAddPitcher = true
+    }
+
+    /// The Players header carries three controls of its own, so it can't use
+    /// `collapsibleSectionHeader` - only the title+chevron half is shared
+    /// behavior.
+    private var playersSectionHeader: some View {
+        let isExpanded = expandedHomeOverviewSection == .players
+        return HStack(spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedHomeOverviewSection = isExpanded ? nil : .players
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Players")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 4)
+
+            CapsuleSegmentedControl(
+                options: [("Pitchers", PlayersScope.pitchers), ("All", PlayersScope.all)],
+                selection: $playersScope,
+                segmentMinWidth: 52
+            )
+            .font(.caption)
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedHomeOverviewSection = .players
+                }
+                showPlayersFilterSheet = true
+            } label: {
+                Image(systemName: hasActivePlayerFilter
+                      ? "line.3.horizontal.decrease.circle.fill"
+                      : "line.3.horizontal.decrease.circle")
+                    .font(.title3)
+                    .foregroundStyle(hasActivePlayerFilter ? Color.pitchMarkActiveGray : Color.primary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Filter players")
+
+            Button {
+                beginAddPlayerFromHome()
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.title2)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add player")
+        }
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var playersOverviewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            playersSectionHeader
+
+            if expandedHomeOverviewSection == .players {
+                let rows = playerRows
+                if rows.isEmpty {
+                    Text(playersEmptyMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.vertical, 6)
+                } else {
+                    Divider()
+                        .padding(.horizontal)
+                    // Bounded vertical scroll rather than letting the list
+                    // run the page's full length - a 20-kid roster would
+                    // otherwise push Games and Teams far off screen.
+                    playersScrollBody(rows)
+                }
+            }
+        }
+        .onChange(of: playersScope) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                expandedHomeOverviewSection = .players
             }
         }
     }
 
     @ViewBuilder
-    private var appSettingsSheetView: some View {
+    private func playersScrollBody(_ rows: [PlayerListRow]) -> some View {
+        let content = VStack(spacing: 8) {
+            ForEach(rows) { row in
+                playerListRowView(row)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 4)
+
+        if rows.count > 5 {
+            ScrollView(.vertical, showsIndicators: true) {
+                content
+            }
+            .frame(maxHeight: 360)
+        } else {
+            content
+        }
+    }
+
+    private var playersEmptyMessage: String {
+        if hasActivePlayerFilter {
+            return "No players match the current filter."
+        }
+        switch playersScope {
+        case .pitchers:
+            return "No pitchers yet. Tap + to add one."
+        case .all:
+            return "No players yet. Add them to a team's roster, or tap + to add a pitcher."
+        }
+    }
+
+    /// Non-pitching players have no portrait store of their own (portraits
+    /// are keyed by pitcherId), so they get an initials circle instead of
+    /// `PitcherAvatarView`.
+    @ViewBuilder
+    private func playerAvatar(_ row: PlayerListRow, size: CGFloat) -> some View {
+        if let pitcher = row.pitcher {
+            PitcherAvatarView(pitcher: pitcher, size: size)
+        } else {
+            ZStack {
+                Circle().fill(Color(.systemGray3))
+                Text(playerInitials(row.name))
+                    .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: size, height: size)
+            .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
+        }
+    }
+
+    private func playerInitials(_ name: String) -> String {
+        let parts = name.split(whereSeparator: { $0.isWhitespace }).prefix(2)
+        let initials = parts.compactMap { $0.first }.map(String.init).joined()
+        return initials.isEmpty ? "?" : initials.uppercased()
+    }
+
+    private func playerListRowView(_ row: PlayerListRow) -> some View {
+        let isArchived = row.pitcher?.id.map { hiddenPitcherIds.contains($0) } ?? false
+        return HStack(spacing: 10) {
+            VStack(spacing: 4) {
+                playerAvatar(row, size: 52)
+                Text(row.captionName)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .allowsTightening(true)
+                    .frame(width: 70)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let team = row.teams.first {
+                    HStack(spacing: 4) {
+                        Text(team.name)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if row.teams.count > 1 {
+                            Text("+\(row.teams.count - 1)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    TeamDesignationBadge(designation: team.designation, alignment: .leading)
+                } else {
+                    Text("No team")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !row.pitches {
+                    Text("Bats only")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if isArchived {
+                    Text("Archived")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            Button("Stats") {
+                openStats(for: row)
+            }
+            .buttonStyle(.bordered)
+            .font(.caption.weight(.semibold))
+            .disabled(!canOpenStats(for: row))
+
+            Menu {
+                playerRowMenu(row)
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func canOpenStats(for row: PlayerListRow) -> Bool {
+        if row.pitcher != nil { return true }
+        guard let hitterId = row.hitterId else { return false }
+        return myHitters.contains { $0.id == hitterId }
+    }
+
+    private func openStats(for row: PlayerListRow) {
+        if let pitcher = row.pitcher {
+            statsPitcher = pitcher
+            return
+        }
+        guard let hitterId = row.hitterId else { return }
+        statsHitter = myHitters.first(where: { $0.id == hitterId })
+    }
+
+    /// The gear menu - the same Image / Edit / Owned / Archive / Copy
+    /// actions the old horizontal pitcher strip in Settings exposed, now
+    /// per-row. A non-pitching player has none of those (they're Pitcher-doc
+    /// operations), so its menu opens the roster screen that does own it.
+    @ViewBuilder
+    private func playerRowMenu(_ row: PlayerListRow) -> some View {
+        if let pitcher = row.pitcher {
+            let isArchived = pitcher.id.map { hiddenPitcherIds.contains($0) } ?? false
+
+            Button {
+                beginPitcherPortraitSelection(for: pitcher)
+            } label: {
+                Label("Image", systemImage: "photo")
+            }
+
+            Button {
+                editingPitcher = pitcher
+                newPitcherName = pitcher.name
+                showAddPitcher = true
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+
+            if pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
+                Button {
+                    beginPitcherShare(pitcher)
+                } label: {
+                    Label(isGeneratingPitcherShare ? "Sharing…" : "Owned", systemImage: "person.crop.circle.badge.checkmark")
+                }
+                .disabled(isGeneratingPitcherShare)
+            } else {
+                Button {
+                    reclaimPitcher(pitcher)
+                } label: {
+                    Label("Reclaim", systemImage: "arrow.uturn.backward.circle")
+                }
+            }
+
+            Button {
+                copyPitcherTarget = pitcher
+                showCopyPitcherConfirm = true
+            } label: {
+                Label(isCopyingPitcher ? "Copying…" : "Copy", systemImage: "doc.on.doc")
+            }
+            .disabled(isCopyingPitcher)
+
+            Button {
+                guard let id = pitcher.id else { return }
+                if isArchived {
+                    hiddenPitcherIds.remove(id)
+                } else {
+                    hiddenPitcherIds.insert(id)
+                }
+                saveHiddenPitcherIds()
+                if pitcherActionTargetId == id { pitcherActionTargetId = nil }
+            } label: {
+                Label(isArchived ? "Unarchive" : "Archive", systemImage: "archivebox")
+            }
+        }
+
+        if let team = row.teams.first,
+           let entry = myTeams.first(where: { $0.team.id == team.id }) {
+            Button {
+                selectedTeamEntry = TeamEntrySelection(team: entry.team, membership: entry.membership)
+            } label: {
+                Label("Open \(team.name) Roster", systemImage: "list.bullet.rectangle")
+            }
+        }
+    }
+
+    /// Sheet-hosted `List`, not a `Menu`: Home re-renders constantly from the
+    /// pitcher listeners, and a `Menu`'s contents are a transient `UIMenu`
+    /// that loses its scroll position on every one of those re-renders
+    /// (same reason the cards filter UI is a List - see CLAUDE.md).
+    @ViewBuilder
+    private var playersFilterSheetView: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    sectionCard {
-                        templatesSection
+            List {
+                Section("Team") {
+                    ForEach(myTeams, id: \.team.id) { entry in
+                        let teamId = entry.team.id ?? ""
+                        filterToggleRow(
+                            title: entry.team.name,
+                            subtitle: entry.team.designation?.inlineText,
+                            isOn: playerFilterTeamIds.contains(teamId)
+                        ) {
+                            toggleMembership(teamId, in: &playerFilterTeamIds)
+                        }
                     }
-
-                    sectionCard {
-                        pitchersSection
-                    }
-
-                    sectionCard {
-                        storeSection
-                    }
-
-                    sectionCard {
-                        soundCreditsSection
+                    filterToggleRow(
+                        title: "No team",
+                        subtitle: "Players not on any roster",
+                        isOn: playerFilterTeamIds.contains(Self.noTeamFilterId)
+                    ) {
+                        toggleMembership(Self.noTeamFilterId, in: &playerFilterTeamIds)
                     }
                 }
-                .padding(.top, 4)
+
+                Section("Age Group") {
+                    ForEach(TeamAgeGroup.allCases) { group in
+                        filterToggleRow(
+                            title: group.displayName,
+                            subtitle: nil,
+                            isOn: playerFilterAgeGroups.contains(group)
+                        ) {
+                            toggleMembership(group, in: &playerFilterAgeGroups)
+                        }
+                    }
+                }
+
+                Section("Division") {
+                    ForEach(TeamDivision.allCases) { division in
+                        filterToggleRow(
+                            title: division.displayName,
+                            subtitle: nil,
+                            isOn: playerFilterDivisions.contains(division)
+                        ) {
+                            toggleMembership(division, in: &playerFilterDivisions)
+                        }
+                    }
+                }
+
+                Section {
+                    Toggle("Show archived", isOn: $showHiddenPitchers)
+                        .tint(Color.pitchMarkActiveGray)
+                    Button("Clear All Filters") {
+                        clearPlayerFilters()
+                    }
+                    .disabled(!hasActivePlayerFilter)
+                }
             }
-            .navigationTitle("Settings")
+            .listStyle(.insetGrouped)
+            .navigationTitle("Filter Players")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        showAppSettingsSheet = false
+                    Button("Done") { showPlayersFilterSheet = false }
+                }
+            }
+        }
+    }
+
+    private func toggleMembership<T: Hashable>(_ value: T, in set: inout Set<T>) {
+        if set.contains(value) {
+            set.remove(value)
+        } else {
+            set.insert(value)
+        }
+    }
+
+    private func filterToggleRow(
+        title: String,
+        subtitle: String?,
+        isOn: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
+                }
+                Spacer()
+                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isOn ? Color.pitchMarkActiveGray : Color.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // The gear's Settings sheet is gone (2026-10-21). Everything it held
+    // moved out: Pitchers and Code Grid Keys to Home sections of their own,
+    // store to a Home row, Sound Credits into the account sheet below Terms
+    // of Use.
+
+    /// Code Grid Keys as Home's fourth accordion. Same list body the
+    /// Settings sheet used; only the header changed, so the refresh and
+    /// new-template buttons keep working exactly as before.
+    @ViewBuilder
+    private var templatesOverviewSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        expandedHomeOverviewSection =
+                            (expandedHomeOverviewSection == .templates) ? nil : .templates
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Code Grid Keys")
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(expandedHomeOverviewSection == .templates ? 0 : -90))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 4)
+
+                Button {
+                    guard !isRefreshingTemplates else { return }
+                    isRefreshingTemplates = true
+                    authManager.loadTemplates { loaded in
+                        templates = loaded
+                        if selectedTemplate == nil {
+                            selectedTemplate = loaded.first
+                        }
+                        isRefreshingTemplates = false
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .disabled(isRefreshingTemplates)
+                .accessibilityLabel("Refresh code grid keys")
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        expandedHomeOverviewSection = .templates
+                    }
+                    editorTemplate = PitchTemplate(
+                        id: UUID(),
+                        name: "",
+                        pitches: [],
+                        codeAssignments: []
+                    )
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New code grid key")
+            }
+            .padding(.horizontal)
+
+            if expandedHomeOverviewSection == .templates {
+                templatesListView
+
+                if showHiddenTemplates, !hiddenTemplates.isEmpty {
+                    hiddenTemplatesSection
                 }
             }
         }
@@ -1229,6 +1980,24 @@ struct SettingsView: View {
                             opponentName: $inlineNewGameName,
                             gameDate: $inlineNewGameDate,
                             trackingMode: $inlineNewGameTrackingMode,
+                            myTeams: myTeams.map { $0.team },
+                            ourTeamId: $inlineNewGameTeamId,
+                            opponentTeamId: $inlineNewGameOpponentTeamId,
+                            onCreateTeam: { name, designation, completion in
+                                authManager.createTeam(name: name, designation: designation) { result in
+                                    switch result {
+                                    case .success(let team):
+                                        // Put it in the picker's pool right
+                                        // away, otherwise the card would
+                                        // select an id the menu can't name.
+                                        refreshMyTeams()
+                                        completion(team)
+                                    case .failure(let error):
+                                        debugLog("❌ createTeam from AddGameCard failed:", error.localizedDescription)
+                                        completion(nil)
+                                    }
+                                }
+                            },
                             onCancel: { closeInlineNewGame() },
                             onSave: { createInlineGame() }
                         )
@@ -1333,12 +2102,40 @@ struct SettingsView: View {
             .sorted(by: { $0.date > $1.date })
     }
 
-    /// The game currently open in the Games tab. `chooseGame` writes this
+    /// The game currently open in the Game tab. `chooseGame` writes this
     /// defaults key and clears it on exit, so it's the same notion of
     /// "active" the tracker itself restores from on launch.
-    private var activeGameId: String? {
+    ///
+    /// Mirrored into `@State` rather than read straight from UserDefaults
+    /// at render time: SwiftUI doesn't observe UserDefaults, so "Close
+    /// Game" would clear the key and the menu would still show the game as
+    /// in-use until some unrelated change happened to redraw it.
+    private var activeGameId: String? { activeGameIdValue }
+
+    private func refreshActiveGameId() {
         let stored = UserDefaults.standard.string(forKey: PitchTrackerView.DefaultsKeys.activeGameId)
-        return (stored?.isEmpty == false) ? stored : nil
+        let resolved = (stored?.isEmpty == false) ? stored : nil
+        if activeGameIdValue != resolved {
+            activeGameIdValue = resolved
+        }
+    }
+
+    /// Takes the open game out of in-use status so it - and the teams and
+    /// players linked to it - can be deleted. Clears the defaults keys here
+    /// AND posts, because the tracker's own teardown
+    /// (`disconnectFromGame`) is what stops its listeners and drops the
+    /// lineup; doing only one of the two leaves the other side stale.
+    private func closeActiveGame(_ game: Game) {
+        guard let id = game.id, !id.isEmpty else { return }
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activeGameId)
+        defaults.removeObject(forKey: PitchTrackerView.DefaultsKeys.activeGameOwnerUserId)
+        NotificationCenter.default.post(
+            name: .activeGameShouldClose,
+            object: nil,
+            userInfo: ["gameId": id]
+        )
+        refreshActiveGameId()
     }
 
     private func isActiveGame(_ game: Game) -> Bool {
@@ -1366,6 +2163,10 @@ struct SettingsView: View {
         inlineNewGameName = ""
         inlineNewGameDate = Date()
         inlineNewGameTrackingMode = .coach
+        // Pre-select when there's only one team to choose - a coach with a
+        // single team shouldn't have to pick it every game.
+        inlineNewGameTeamId = myTeams.count == 1 ? myTeams.first?.team.id : nil
+        inlineNewGameOpponentTeamId = nil
         createGameError = nil
         withAnimation(.easeInOut(duration: 0.2)) {
             expandedHomeOverviewSection = .games
@@ -1378,6 +2179,8 @@ struct SettingsView: View {
             showInlineNewGame = false
         }
         inlineNewGameName = ""
+        inlineNewGameTeamId = nil
+        inlineNewGameOpponentTeamId = nil
     }
 
     /// Creates the game and puts it straight in the list. The row is real
@@ -1387,13 +2190,19 @@ struct SettingsView: View {
     private func createInlineGame() {
         let name = inlineNewGameName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        let newGame = Game(
+        var newGame = Game(
             id: nil,
             opponent: name,
             date: inlineNewGameDate,
             jerseyNumbers: [],
             trackingMode: inlineNewGameTrackingMode
         )
+        // Our side, chosen in the card. Left nil the tracker still asks for
+        // it on the first tap of "Us", exactly as before.
+        newGame.teamId = inlineNewGameTeamId
+        // The opponent is a real Team now, so the away roster is linked
+        // from the start instead of being set up later from the tracker.
+        newGame.awayTeamId = inlineNewGameOpponentTeamId
         closeInlineNewGame()
 
         var stampedId: String? = nil
@@ -1883,223 +2692,10 @@ struct SettingsView: View {
         .presentationDragIndicator(.visible)
     }
 
-    @ViewBuilder
-    private var templatesHeader: some View {
-        HStack {
-            Text("Code Grid Keys")
-                .font(.headline)
-                .bold()
-            Spacer()
-            Button {
-                guard !isRefreshingTemplates else { return }
-                isRefreshingTemplates = true
-                authManager.loadTemplates { loaded in
-                    templates = loaded
-                    if selectedTemplate == nil {
-                        selectedTemplate = loaded.first
-                    }
-                    isRefreshingTemplates = false
-                }
-            } label: {
-                Image(systemName: isRefreshingTemplates ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
-                    .font(.subheadline.weight(.semibold))
-            }
-            .buttonStyle(.bordered)
-            .disabled(isRefreshingTemplates)
-            Button {
-                editorTemplate = PitchTemplate(
-                    id: UUID(),
-                    name: "",
-                    pitches: [],
-                    codeAssignments: []
-                )
-            } label: {
-                Image(systemName: "plus.circle.fill")
-                    .font(.subheadline)
-            }
-            .buttonStyle(.plain)
-        }
-    }
+    // templatesHeader/templatesSection were the Settings sheet's wrapper
+    // around templatesListView. The accordion header in
+    // templatesOverviewSection replaced both.
 
-    @ViewBuilder
-    private var pitchersHeader: some View {
-        HStack {
-            Text("Pitchers")
-                .font(.headline)
-                .bold()
-            Spacer()
-            Button {
-                editingPitcher = nil
-                newPitcherName = ""
-                showAddPitcher = true
-            } label: {
-                Image(systemName: "plus.circle.fill")
-                    .font(.subheadline)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private var templatesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            templatesHeader
-                .padding(.horizontal, 4)
-            templatesListView
-
-            if showHiddenTemplates {
-                if !hiddenTemplates.isEmpty {
-                    hiddenTemplatesSection
-                }
-            }
-        }
-    }
-
-    private var pitchersSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            pitchersHeader
-                .padding(.horizontal, 4)
-            pitchersListView
-
-            if showHiddenPitchers {
-                if !hiddenPitchers.isEmpty {
-                    hiddenPitchersSection
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var pitchersListView: some View {
-        if pitchers.isEmpty {
-            Text("No pitchers saved")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 12)
-        } else if visiblePitchers.isEmpty {
-            Text("No visible pitchers")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 12)
-        } else {
-            let selected = visiblePitchers.first(where: { $0.id == pitcherActionTargetId })
-
-            VStack(alignment: .leading, spacing: 12) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(visiblePitchers) { pitcher in
-                            let isActive = pitcher.id == pitcherActionTargetId
-                            Button {
-                                pitcherActionTargetId = (pitcherActionTargetId == pitcher.id) ? nil : pitcher.id
-                            } label: {
-                                VStack(spacing: 4) {
-                                    PitcherAvatarView(pitcher: pitcher, size: 58)
-                                        .padding(6)
-                                        .background(
-                                            Circle().fill(isActive ? Color.black.opacity(0.12) : Color.clear)
-                                        )
-                                        .overlay(
-                                            Circle().stroke(Color.black, lineWidth: isActive ? 2 : 1)
-                                        )
-
-                                    Text(pitcher.name)
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.6)
-                                        .allowsTightening(true)
-                                        .frame(width: 64)
-                                }
-                                .transaction { transaction in
-                                    transaction.animation = nil
-                                }
-                                .animation(nil, value: pitcherActionTargetId)
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        if !hiddenPitchers.isEmpty {
-                            Button(showHiddenPitchers ? "Hide Archived" : "Show Archived") {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    showHiddenPitchers.toggle()
-                                }
-                            }
-                            .font(.caption)
-                            .buttonStyle(.bordered)
-                            .tint(.gray)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-
-                if let pitcher = selected {
-                    let isActiveOwner = pitcher.isActiveOwner(currentUid: authManager.user?.uid)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                        Button("Image") {
-                            beginPitcherPortraitSelection(for: pitcher)
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("Edit") {
-                            editingPitcher = pitcher
-                            newPitcherName = pitcher.name
-                            showAddPitcher = true
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("Stats") {
-                            statsPitcher = pitcher
-                        }
-                        .buttonStyle(.bordered)
-
-                        if isActiveOwner {
-                            Button(isGeneratingPitcherShare ? "Sharing..." : "Owned") {
-                                beginPitcherShare(pitcher)
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(isGeneratingPitcherShare)
-                        } else {
-                            Button("Reclaim") {
-                                reclaimPitcher(pitcher)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        Spacer()
-
-                        VStack(alignment: .trailing, spacing: 6) {
-                            Button("Archive") {
-                                if let id = pitcher.id {
-                                    hiddenPitcherIds.insert(id)
-                                    saveHiddenPitcherIds()
-                                    if pitcherActionTargetId == id {
-                                        pitcherActionTargetId = nil
-                                    }
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .font(.caption)
-
-                            Button(isCopyingPitcher ? "Copying..." : "Copy") {
-                                copyPitcherTarget = pitcher
-                                showCopyPitcherConfirm = true
-                            }
-                            .buttonStyle(.bordered)
-                            .font(.caption)
-                            .disabled(isCopyingPitcher)
-                        }
-                        }
-                        .padding(.horizontal)
-                    }
-                }
-
-                Spacer().frame(height: 8)
-            }
-        }
-    }
-    
     @ViewBuilder
     private var templatesListView: some View {
         if templates.isEmpty {
@@ -2217,118 +2813,76 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var hiddenPitchersSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Hidden Pitchers")
-                .font(.headline)
-                .foregroundColor(.gray)
-                .padding(.horizontal)
-            VStack(spacing: 0) {
-                ForEach(hiddenPitchers) { pitcher in
-                    HStack {
-                        Text(pitcher.name)
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        Spacer()
-                        Button("Unhide") {
-                            if let id = pitcher.id {
-                                hiddenPitcherIds.remove(id)
-                                saveHiddenPitcherIds()
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(.gray)
-                    }
-                    .padding(.vertical, 6)
-                    Divider().padding(.leading)
-                }
-            }
-            .padding(.horizontal)
-        }
-    }
-
+    /// The glow's two `repeatForever` animations used to drive @State on
+    /// SettingsView itself, which was survivable inside a dedicated
+    /// Settings sheet but not on Home: every frame of the animation would
+    /// invalidate the whole screen - the Players list included - which is
+    /// the same defect `atBatPulse` has in the tracker. `StoreGlowLabel`
+    /// owns that state now, so only the capsule redraws. (The two
+    /// `.animation(nil, value: storeGlow*)` guards on the toolbar button
+    /// existed only to blunt that same bleed, and went with it.)
     private var storeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             NavigationLink {
                 Storefront
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "cart")
-                        .font(.subheadline.weight(.semibold))
-                    Text("store")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .foregroundColor(.black)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule().fill(Color.black.opacity(0.06))
-                )
-                .overlay(
-                    Capsule().stroke(Color.black, lineWidth: 1)
-                )
-                .overlay(
-                    Capsule()
-                        .stroke(
-                            AngularGradient(
-                                gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
-                                center: .center,
-                                angle: .degrees(storeGlowAngle)
-                            ),
-                            lineWidth: 2
-                        )
-                        .blur(radius: 2)
-                        .opacity(0.9)
-                )
-                .shadow(color: Color.cyan.opacity(storeGlowPulse ? 0.6 : 0.3), radius: storeGlowPulse ? 10 : 4)
-                .padding(.horizontal)
-                .onAppear {
-                    withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
-                        storeGlowAngle = 360
-                    }
-                    withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-                        storeGlowPulse = true
-                    }
-                }
+                StoreGlowLabel()
             }
-
         }
     }
 
-    /// 2026-09-29 - the bundled sound pack's courtesy attribution list.
-    /// Plain capsule row, deliberately without storeSection's glow
-    /// treatment (that's specific to Store branding).
-    private var soundCreditsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            NavigationLink {
-                SoundCreditsView()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "quote.bubble")
-                        .font(.subheadline.weight(.semibold))
-                    Text("sound credits")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .foregroundColor(.black)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule().fill(Color.black.opacity(0.06))
-                )
-                .overlay(
-                    Capsule().stroke(Color.black, lineWidth: 1)
-                )
+    // soundCreditsSection's capsule row lived in the Settings sheet. The
+    // list itself now opens from the account sheet, below Terms of Use.
+
+    /// Extracted so its two `repeatForever` animations invalidate only this
+    /// capsule instead of all of Home - see `storeSection` above.
+    private struct StoreGlowLabel: View {
+        @State private var glowAngle: Double = 0
+        @State private var glowPulse = false
+
+        var body: some View {
+            HStack(spacing: 8) {
+                Image(systemName: "cart")
+                    .font(.subheadline.weight(.semibold))
+                Text("store")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
+            .foregroundColor(.black)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(Color.black.opacity(0.06))
+            )
+            .overlay(
+                Capsule().stroke(Color.black, lineWidth: 1)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(
+                        AngularGradient(
+                            gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
+                            center: .center,
+                            angle: .degrees(glowAngle)
+                        ),
+                        lineWidth: 2
+                    )
+                    .blur(radius: 2)
+                    .opacity(0.9)
+            )
+            .shadow(color: Color.cyan.opacity(glowPulse ? 0.6 : 0.3), radius: glowPulse ? 10 : 4)
             .padding(.horizontal)
+            .onAppear {
+                withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
+                    glowAngle = 360
+                }
+                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                    glowPulse = true
+                }
+            }
         }
     }
 
@@ -2352,6 +2906,29 @@ struct SettingsView: View {
                 Link("Terms of Use", destination: termsOfUseURL)
                     .font(.subheadline)
             }
+
+            // Moved here from the (now removed) Settings sheet - it sits
+            // with Privacy Policy and Terms of Use because it's the same
+            // kind of thing: a legal/courtesy attribution list, not a
+            // control. Presented as its own sheet rather than a
+            // NavigationLink: this sheet has no NavigationView to push into.
+            Button {
+                showAccountActionsSheet = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    showSoundCreditsSheet = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "quote.bubble")
+                        .foregroundStyle(.secondary)
+                    Text("Sound Credits")
+                        .font(.headline)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .contentShape(Rectangle())
+            }
+            .accessibilityHint("Opens the bundled sound pack's attribution list.")
 
             Button {
                 showAccountActionsSheet = false
@@ -2734,6 +3311,18 @@ struct SettingsView: View {
                             myTeamsSection
                         }
 
+                        sectionCard {
+                            playersOverviewSection
+                        }
+
+                        sectionCard {
+                            templatesOverviewSection
+                        }
+
+                        sectionCard {
+                            storeSection
+                        }
+
                         Color.clear.frame(height: 8)
                         Image("SoftballBaseballWtitle4")
                             .resizable()
@@ -2760,9 +3349,6 @@ struct SettingsView: View {
             .sheet(isPresented: $showInviteJoinSheet) {
                 inviteJoinSheetView
                     .fixedAppDynamicType()
-            }
-            .sheet(isPresented: $showAppSettingsSheet) {
-                appSettingsSheetView
             }
             .sheet(item: $selectedTeamEntry, onDismiss: { refreshMyTeams() }) { entry in
                 TeamRosterView(
@@ -2820,6 +3406,17 @@ struct SettingsView: View {
                 LearnPitchMarkView()
                     .fixedAppDynamicType()
             }
+            .sheet(isPresented: $showSoundCreditsSheet) {
+                NavigationView {
+                    SoundCreditsView()
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") { showSoundCreditsSheet = false }
+                            }
+                        }
+                }
+                .fixedAppDynamicType()
+            }
             .sheet(isPresented: $showChangeEmailSheet) {
                 changeEmailSheetView
                     .fixedAppDynamicType()
@@ -2853,6 +3450,16 @@ struct SettingsView: View {
             .onAppear {
                 loadHiddenIds()
                 startPitchersListenerIfNeeded()
+                refreshMyHitters()
+                refreshActiveGameId()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionChosen)) { _ in
+                // The tracker writes activeGameId as part of opening a
+                // game; mirror it so "Close Game" shows up on the right row.
+                refreshActiveGameId()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionDeleted)) { _ in
+                refreshActiveGameId()
             }
             .onDisappear {
                 ownedPitchersListener?.remove()
@@ -2977,45 +3584,12 @@ struct SettingsView: View {
                     .transaction { transaction in
                         transaction.animation = nil
                     }
-                    .animation(nil, value: storeGlowAngle)
-                    .animation(nil, value: storeGlowPulse)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(action: {
-                        guard hasActiveSessionSelection else {
-                            showSelectSessionBeforeCloseAlert = true
-                            return
-                        }
-                        // Notify listeners (e.g., PitchTrackerView) to reload with the latest selected template before dismissing
-                        if let tmpl = selectedTemplate {
-                            NotificationCenter.default.post(
-                                name: .templateSelectionDidChange,
-                                object: nil,
-                                userInfo: [
-                                    "templateId": tmpl.id.uuidString
-                                ]
-                            )
-                        } else {
-                            NotificationCenter.default.post(name: .templateSelectionDidChange, object: nil, userInfo: nil)
-                        }
-
-                        onSwitchToArea?(.games)
-                    }) {
-                        Image(systemName: "xmark")
-                            .imageScale(.medium)
-                    }
-                    .transaction { transaction in
-                        transaction.animation = nil
-                    }
-                    .animation(nil, value: storeGlowAngle)
-                    .animation(nil, value: storeGlowPulse)
-                    .accessibilityLabel("Go to Games")
-                }
-            }
-            .alert("Select Game First", isPresented: $showSelectSessionBeforeCloseAlert) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text("Choose a game before closing Settings.")
+                // The X that used to sit here (go to the Game tab, gated on
+                // "Select Game First") is gone - the bottom tab bar is what
+                // controls flow between Home/Game/Moments, and the gate
+                // actively got in the way once a game could be closed out
+                // of in-use status from this screen.
             }
             .sheet(item: $editorTemplate) { template in
                 TemplateEditorView(
@@ -3077,10 +3651,24 @@ struct SettingsView: View {
             .sheet(item: $statsPitcher) { pitcher in
                 PitcherStatsSheetView(
                     pitcher: pitcher,
-                    games: games
+                    games: games,
+                    teams: myTeams.map { $0.team }
                 )
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
+            }
+            .sheet(item: $statsHitter) { hitter in
+                HitterStatsView(
+                    hitter: hitter,
+                    games: games,
+                    teams: myTeams.map { $0.team }
+                )
+                .environmentObject(authManager)
+                .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showPlayersFilterSheet) {
+                playersFilterSheetView
+                    .fixedAppDynamicType()
             }
         }
         .fixedAppDynamicType()

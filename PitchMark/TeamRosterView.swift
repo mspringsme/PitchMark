@@ -75,6 +75,10 @@ struct TeamRosterView: View {
     @State private var showPlayerActionsDialog = false
 
     @State private var teamName: String = ""
+    /// Mirrors `teamName`: the sheet's own copy, so an edit shows up here
+    /// without waiting for the presenting list to reload.
+    @State private var teamDesignation: TeamDesignation? = nil
+    @State private var editTeamDesignation = TeamDesignationDraft()
 
     @State private var editingPlayer: TeamPlayer? = nil
     @State private var editPlayerName: String = ""
@@ -185,6 +189,7 @@ struct TeamRosterView: View {
         }
         .onAppear {
             teamName = selection.team.name
+            teamDesignation = selection.team.designation
             refreshPlayers()
             authManager.loadMyPlayers { myPlayers = $0 }
             authManager.loadPitchers { myPitchers = $0 }
@@ -197,8 +202,9 @@ struct TeamRosterView: View {
             isPresented: $showTeamActionsDialog,
             titleVisibility: .visible
         ) {
-            Button("Rename Team") {
+            Button("Edit Team") {
                 renameTeamText = teamName
+                editTeamDesignation = TeamDesignationDraft(teamDesignation)
                 isRenamingTeam = true
             }
             Button("Delete Team", role: .destructive) {
@@ -220,7 +226,7 @@ struct TeamRosterView: View {
             Button("OK") { }
         }
         .confirmationDialog(
-            "This team is in the game you have open. Close that game first, or switch to a different one, before deleting it.",
+            "This team is in the game you have open. On Home, open that game's ••• menu and tap \"Close Game\" first, then come back here.",
             isPresented: $showCantDeleteActiveTeamDialog,
             titleVisibility: .visible
         ) {
@@ -387,12 +393,21 @@ struct TeamRosterView: View {
         }
     }
 
+    /// Renames and re-designates in one pass. The designation half is the
+    /// only way to stamp a team created before designations existed, so Save
+    /// stays enabled on the name alone - demanding all four here would leave
+    /// a legacy team unrenameable until its coach filled them in.
     private var renameTeamSheet: some View {
         NavigationView {
             Form {
-                TextField("Team name", text: $renameTeamText)
+                Section("Name") {
+                    TextField("Team name", text: $renameTeamText)
+                }
+                Section("Designation") {
+                    TeamDesignationForm(draft: $editTeamDesignation, showsTitle: false)
+                }
             }
-            .navigationTitle("Rename Team")
+            .navigationTitle("Edit Team")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -588,9 +603,10 @@ struct TeamRosterView: View {
     private func renameTeam() {
         guard let teamId = selection.team.id else { return }
         let name = renameTeamText.trimmingCharacters(in: .whitespaces)
-        authManager.updateTeam(teamId: teamId, name: name) { result in
+        authManager.updateTeam(teamId: teamId, name: name, designation: editTeamDesignation.designation) { result in
             if case .success = result {
                 teamName = name
+                teamDesignation = editTeamDesignation.designation ?? teamDesignation
                 isRenamingTeam = false
             }
         }

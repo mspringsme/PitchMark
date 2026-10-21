@@ -200,6 +200,78 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
 - The tracker's `ScrollView` fallback is **unconditional**. It used to be gated
   on `height <= 700`, which left iPhone 17 (874pt) bleeding past the safe area
   top and bottom while iPhone 17 Pro Max (956pt) looked fine.
+- **Launch crash in `swift_getTypeByMangledName` / `resolveOpaqueType` /
+  `_findExtendedTypeContextDescriptor` / `buildDescriptorPath`.** Hit **eight
+  times** across `undoButtonOverlay`, `resetButtonOverlay` and
+  `batterSideOverlay` — all members of `PitchTrackerView` consumed deep inside
+  `strikeZoneArea`.
+
+  **What does not work** (five failed attempts, don't repeat them): wrapping
+  the chain in `AnyView` once; declaring the member's type `AnyView` instead of
+  `some View`; wrapping at the call site; erasing to `AnyView` after *every*
+  modifier; pre-warming the member at the top of `body` with `_ = foo`. The
+  decisive evidence against all of it: `batterSideOverlay` was **already**
+  returning `AnyView`, already fully erased internally, and crashed anyway.
+
+  **What works: make it a top-level `View` struct.** The runtime is not
+  choking on chain length — it is walking the *enclosing type's* descriptor
+  path, and the enclosing type is a 14,500-line view with a huge generic/opaque
+  context that every `some View` member declared inside it inherits. A
+  top-level struct's body is a small concrete type with none of
+  `PitchTrackerView` in its mangled name. `StrikeZoneCard` — the card these
+  five decorate — was always a struct, and never once crashed.
+
+  The five strike-zone overlays are now `ZoneOpponentLabel`, `ZoneResetButton`,
+  `ZoneUndoButton`, `ZoneGameStatsButtons` and `BatterSideOverlay`, declared at
+  file scope. Keep new strike-zone decorations structs too, and don't move
+  them back — but read the next entry before wiring one up.
+- **Launch crash at `___chkstk_darwin`, naming a different function every
+  build** (`strikeZoneArea`, then `confirmSheetBinding.getter`, …). This is
+  stack *exhaustion* across the whole render path, **not** one oversized
+  function — which is why "fixing" the named function only moves the crash to
+  the next one. Do not chase the named frame.
+
+  Measured on the arm64 device object (`otool -tV`, `sub sp, sp, #imm` in each
+  prologue) rather than guessed:
+
+  | | at HEAD | after a big feature session |
+  |---|---|---|
+  | `assignWithCopy value witness for PitchTrackerView` (≈ the struct's size) | 3136 B | 3232 B |
+  | `PitchTrackerView.body.getter` frame | 2032 B | 2208 B |
+  | functions emitting a stack probe | **0** | **0** |
+
+  So: **no single frame in this file exceeds 4 KB in Debug or Release**, and
+  `confirmSheetBinding.getter` — which one crash report named — is a *160-byte*
+  frame. The cost is spread across a ~150-frame AttributeGraph chain, and every
+  copy of the view costs ~3 KB because `PitchTrackerView` is a ~3 KB value.
+
+  Useful commands for the next person:
+  ```
+  xcodebuild -scheme PitchMark -destination 'generic/platform=iOS' \
+    -derivedDataPath DD CODE_SIGNING_ALLOWED=NO build
+  xcrun otool -tV DD/.../arm64/PitchTrackerView.o | grep -E 'sub\s+sp, sp, #0x'
+  ```
+
+  **Confirmed 2026-10-21 by the exception type**, which is the one piece of
+  evidence that settles it: `EXC_BAD_ACCESS (code=2, address=0x16b40bff8)` —
+  code 2 is a protection failure and the address is in the stack region, i.e.
+  the guard page. It is a stack overflow, and it is **intermittent** (same
+  build sometimes launches, sometimes dies) because the app sits right at the
+  limit. Ask for the exception type before theorising; a bare backtrace names
+  a different innocent function every run.
+
+  **The cause is the size of `PitchTrackerView` itself.** It declares **267
+  `@State` properties** (273 property wrappers total), which is what makes the
+  struct a ~3.2 KB value — and the crashing frame is always `outlined init
+  with copy of PitchTrackerView`, i.e. that 3.2 KB being copied onto the stack
+  again. The render path copies it many times over.
+
+  Things that measurably do **not** help: AnyView erasure, pre-warming at the
+  top of `body`, and moving `self`-capturing closures out of a parent's frame.
+  The only lever that addresses the cause is making `PitchTrackerView` smaller
+  — splitting state and subviews into child views that own their own `@State`,
+  so the struct stops being a ~3 KB value copied all over the render path.
+  That refactor is still owed.
 
 ## Known open items
 

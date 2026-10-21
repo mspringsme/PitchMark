@@ -13,6 +13,11 @@ extension Notification.Name {
     // Fired when a game session is deleted
     static let gameOrSessionDeleted = Notification.Name("gameOrSessionDeleted")
 
+    // Fired from Home's "Close Game" action to take the open game out of
+    // in-use status (clears activeGameId and tears the tracker's listeners
+    // down), so the game - and the teams/players on it - become deletable.
+    static let activeGameShouldClose = Notification.Name("activeGameShouldClose")
+
     // Fired to request that progress be reset for a given session (or general)
     static let practiceProgressReset = Notification.Name("practiceProgressReset")
 
