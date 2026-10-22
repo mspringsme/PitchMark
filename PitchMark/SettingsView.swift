@@ -1072,8 +1072,24 @@ struct SettingsView: View {
         var pitcher: Pitcher?
         var hitterId: String?
         var teams: [Team]
+        /// Union of the roster positions this player is listed at, across
+        /// every team they're linked from.
+        var positions: Set<FieldPosition>
+        /// True when this row came from a standalone `Pitcher` record with no
+        /// roster entry behind it - i.e. something created straight from this
+        /// section's + button, or shared in. Those are pitchers by
+        /// construction; there's no roster row to carry a position.
+        var isStandalonePitcher: Bool
 
-        var pitches: Bool { pitcher != nil }
+        /// **Not** `pitcher != nil`. Every `Player` in this app is created
+        /// with both a linked Pitcher and a linked Hitter, always
+        /// (`createPlayer`, and `ensureTeamPlayerHasPitcherAndHitter`
+        /// backfills older ones), so `pitcherId` is non-nil for essentially
+        /// everyone and tells you nothing. The only real signal is whether
+        /// the coach listed P among their positions.
+        var isPitcher: Bool {
+            isStandalonePitcher || positions.contains(.pitcher)
+        }
 
         /// "Hadley 33" - the caption under the avatar in the row.
         var captionName: String {
@@ -1361,6 +1377,7 @@ struct SettingsView: View {
                 }
                 if existing.jersey == nil { existing.jersey = teamPlayer.jerseyNumber }
                 if existing.hitterId == nil { existing.hitterId = teamPlayer.hitterId }
+                existing.positions.formUnion(teamPlayer.positions ?? [])
                 rows[key] = existing
             } else {
                 rows[key] = PlayerListRow(
@@ -1369,7 +1386,9 @@ struct SettingsView: View {
                     jersey: teamPlayer.jerseyNumber,
                     pitcher: teamPlayer.pitcherId.flatMap { pitchersById[$0] },
                     hitterId: teamPlayer.hitterId,
-                    teams: [entry.team]
+                    teams: [entry.team],
+                    positions: Set(teamPlayer.positions ?? []),
+                    isStandalonePitcher: false
                 )
                 order.append(key)
             }
@@ -1385,16 +1404,22 @@ struct SettingsView: View {
                 jersey: nil,
                 pitcher: pitcher,
                 hitterId: nil,
-                teams: []
+                teams: [],
+                positions: [],
+                isStandalonePitcher: true
             )
             order.append(id)
         }
 
         return order
             .compactMap { rows[$0] }
-            .filter { playersScope == .all || $0.pitches }
             .filter { passesPlayerFilters($0) }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    /// What the list actually shows, after the Pitchers/All scope.
+    private var scopedPlayerRows: [PlayerListRow] {
+        playerRows.filter { playersScope == .all || $0.isPitcher }
     }
 
     private func passesPlayerFilters(_ row: PlayerListRow) -> Bool {
@@ -1517,7 +1542,7 @@ struct SettingsView: View {
             playersSectionHeader
 
             if expandedHomeOverviewSection == .players {
-                let rows = playerRows
+                let rows = scopedPlayerRows
                 if rows.isEmpty {
                     Text(playersEmptyMessage)
                         .font(.footnote)
@@ -1563,6 +1588,12 @@ struct SettingsView: View {
     }
 
     private var playersEmptyMessage: String {
+        // "Pitchers" keys off the P position on a roster entry, because every
+        // player has a linked Pitcher record regardless. If there are players
+        // but none is marked P, say so - otherwise this just looks broken.
+        if playersScope == .pitchers, !playerRows.isEmpty {
+            return "No one is listed at P. Open a team, tap a player, and add P to their positions - or tap + to add a pitcher directly."
+        }
         if hasActivePlayerFilter {
             return "No players match the current filter."
         }
@@ -1633,7 +1664,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if !row.pitches {
+                if !row.isPitcher {
                     Text("Bats only")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -1676,14 +1707,17 @@ struct SettingsView: View {
         )
     }
 
+    /// Routes on `isPitcher`, not on `pitcher != nil` - every player has a
+    /// linked Pitcher record whether or not they pitch, so keying off that
+    /// sent every non-pitcher to the pitching stats sheet.
     private func canOpenStats(for row: PlayerListRow) -> Bool {
-        if row.pitcher != nil { return true }
+        if row.isPitcher, row.pitcher != nil { return true }
         guard let hitterId = row.hitterId else { return false }
         return myHitters.contains { $0.id == hitterId }
     }
 
     private func openStats(for row: PlayerListRow) {
-        if let pitcher = row.pitcher {
+        if row.isPitcher, let pitcher = row.pitcher {
             statsPitcher = pitcher
             return
         }

@@ -2995,7 +2995,7 @@ struct PitchTrackerView: View {
                 // Away" - which described a PITCHING-side effect inside a
                 // sheet whose other control builds the BATTING lineup, the
                 // single most confusing sentence in this flow.
-                Text("The opposing team's roster. Their pitchers appear in Select Pitcher when Them is pitching; their batters can be added to the At Bat list below.")
+                Text("The opposing team's roster. Their pitchers appear in Select Pitcher when they're the side pitching; their batters can be added to the At Bat list below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -3921,6 +3921,11 @@ struct PitchTrackerView: View {
     }
 
     private func requestGameConfirmation(gameId: String, ownerUid: String) {
+        // The "Account In Use" blocker is a root `.overlay`, and a sheet
+        // renders above that - so presenting this one while a conflict is up
+        // hides the only control that can resolve it. That is what made the
+        // pitcher/grid-key sheet appear on top of the takeover prompt.
+        guard !showSessionConflictAlert else { return }
         let game = games.first(where: { $0.id == gameId })
         let opponent = game?.opponent ?? opponentName
         pendingConfirmationTrackingMode = .coach
@@ -5268,8 +5273,8 @@ struct PitchTrackerView: View {
         HStack(alignment: .top, spacing: 8) {
             countDisplaySegment
             cardsSegmentButton
-            scoreSegment(label: "Us", value: usBinding.wrappedValue)
-            scoreSegment(label: "Them", value: themBinding.wrappedValue)
+            scoreSegment(label: sideLabel(for: .home, maxLength: 7), value: usBinding.wrappedValue)
+            scoreSegment(label: sideLabel(for: .away, maxLength: 7), value: themBinding.wrappedValue)
         }
         .foregroundStyle(.black)
     }
@@ -5619,6 +5624,8 @@ struct PitchTrackerView: View {
     @ViewBuilder
     private var progressOverlayContent: some View {
         ProgressGameView(
+            homeTeamLabel: sideLabel(for: .home, maxLength: 6).uppercased(),
+            awayTeamLabel: sideLabel(for: .away, maxLength: 6).uppercased(),
             ownerUserId: effectiveGameOwnerUserId,
             balls: ballsBinding,
             strikes: strikesBinding,
@@ -6893,17 +6900,59 @@ struct PitchTrackerView: View {
         .opacity(isOwnerCallInProgress ? 0.45 : 1.0)
     }
 
+    /// The two sides are labelled with the actual team names now, falling
+    /// back to "Us"/"Them" only when a side has no team linked yet (a game
+    /// created before the new-game card asked for both sides, or one the
+    /// coach skipped). Long names are abbreviated rather than truncated, so
+    /// the two capsules stay the same size as before.
+    /// `maxLength` is per-call because the places these labels appear have
+    /// very different budgets: the pitching toggle is a capsule of its own,
+    /// while the Score row squeezes two of them either side of "Score".
+    private func sideLabel(for side: GameSide, maxLength: Int = 10) -> String {
+        let linked: String
+        switch side {
+        case .home:
+            linked = activeHomeTeamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .away:
+            let name = activeAwayTeamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The game's own opponent string is the next best thing: it is
+            // the opponent team's name for any game made by the new card.
+            linked = name.isEmpty
+                ? (opponentName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                : name
+        }
+        guard !linked.isEmpty else { return side.displayName }
+        return Self.abbreviatedTeamName(linked, maxLength: maxLength)
+    }
+
+    /// Keeps short names intact ("Reds"); turns a long multi-word name into
+    /// its initials ("Lady Thunder Gold" -> "LTG") and a long single word
+    /// into its first few letters, so neither blows out the capsule.
+    static func abbreviatedTeamName(_ name: String, maxLength: Int = 10) -> String {
+        if name.count <= maxLength { return name }
+        let words = name.split(whereSeparator: { $0.isWhitespace })
+        if words.count > 1 {
+            let initials = words.compactMap { $0.first }.map(String.init).joined().uppercased()
+            if initials.count <= maxLength, !initials.isEmpty { return initials }
+            return String(initials.prefix(maxLength))
+        }
+        return String(name.prefix(maxLength))
+    }
+
     private func usThemButton(side: GameSide, action: @escaping () -> Void) -> some View {
         let isSelected = activeSide == side
         return Button(action: action) {
-            Text(side.displayName)
+            Text(sideLabel(for: side))
                 .font(.caption2.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
                 .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(side == .home ? "Our team pitching" : "Opponent pitching")
     }
 
     private func sidebarControlButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
@@ -9287,13 +9336,24 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// Publishes which live room this device is showing. It deliberately does
+    /// **not** write `deviceId` any more.
+    ///
+    /// It used to, and that silently re-claimed primary as a side effect of
+    /// publishing a liveId: after another device took over, this one would
+    /// stamp its own id back onto the document the moment anything called
+    /// here, the other device's listener would see a foreign id and raise its
+    /// own "Account In Use", and the two would trade primary back and forth -
+    /// the reported loop where taking over primary bounced you to Home and
+    /// the next game tap bounced you straight back again.
+    ///
+    /// Claiming primary is `claimPrimarySession`'s job alone, reached only
+    /// through the explicit "Take Over Primary" button or through
+    /// `ensurePrimarySessionOrPrompt` finding no owner at all.
     private func updateActiveSessionLiveId(_ liveId: String?) {
         guard !isDisplayOnlyMode, !showSessionConflictAlert else { return }
         guard let ref = activeSessionDocRef else { return }
-        var payload: [String: Any] = [
-            "deviceId": deviceSessionId,
-            "mode": "primary"
-        ]
+        var payload: [String: Any] = [:]
         if let liveId, !liveId.isEmpty {
             payload["liveId"] = liveId
         } else {
@@ -9359,38 +9419,70 @@ struct PitchTrackerView: View {
         return Firestore.firestore().collection("users").document(uid).collection("meta").document("activeSession")
     }
 
-    private func ensurePrimarySessionOrPrompt() {
-        guard !isDisplayOnlyMode else { return }
-        guard authManager.isSignedIn else { return }
-        guard !sessionCheckInProgress else { return }
-        guard let ref = activeSessionDocRef else { return }
+    /// Reads `users/{uid}/meta/activeSession` and reports back whether this
+    /// device is blocked by another one holding primary.
+    ///
+    /// **The completion is the whole point.** This is a Firestore read, so it
+    /// returns long after the call. Callers used to invoke it and then test
+    /// `showSessionConflictAlert` on the very next line, which could never be
+    /// true yet - so the boot flow and the resume flow always continued as if
+    /// there were no conflict, presented their sheets, and the "Account In
+    /// Use" blocker then arrived *underneath* them (it is a root `.overlay`,
+    /// and a sheet renders above that). That is the "it asked me to take over
+    /// primary from behind the pitcher/grid-key sheet" report.
+    ///
+    /// Concurrent callers are queued rather than dropped: at launch,
+    /// `.onAppear` plus the `isSignedIn` and `uid` onChange handlers can all
+    /// land within a frame of each other, and the old `guard
+    /// !sessionCheckInProgress else { return }` silently stranded every
+    /// caller but the first - which, with a completion, would have hung the
+    /// boot flow outright.
+    private func ensurePrimarySessionOrPrompt(completion: ((Bool) -> Void)? = nil) {
+        guard !isDisplayOnlyMode else { completion?(false); return }
+        guard authManager.isSignedIn else { completion?(false); return }
+        guard let ref = activeSessionDocRef else { completion?(false); return }
 
+        if let completion { ui.pendingPrimarySessionChecks.append(completion) }
+        guard !sessionCheckInProgress else { return }
         sessionCheckInProgress = true
-        ref.getDocument { snap, err in
+
+        func finish(_ hasConflict: Bool) {
             sessionCheckInProgress = false
+            let waiting = ui.pendingPrimarySessionChecks
+            ui.pendingPrimarySessionChecks = []
+            for block in waiting { block(hasConflict) }
+        }
+
+        ref.getDocument { snap, err in
             if let err {
                 debugLog("⚠️ activeSession read failed:", err.localizedDescription)
+                finish(false)
                 return
             }
 
             let data = snap?.data() ?? [:]
             let existingDevice = data["deviceId"] as? String
             if existingDevice == nil {
-                claimPrimarySession()
+                // Claim first, THEN release the waiters - claiming dismisses
+                // sheets and forces Home, which would otherwise land on top
+                // of whatever the boot flow had just presented.
+                claimPrimarySession { finish(false) }
                 return
             }
 
             if existingDevice == deviceSessionId {
+                finish(false)
                 return
             }
 
             dismissAllTopLevelSheets()
             showSessionConflictAlert = true
+            finish(true)
         }
     }
 
-    private func claimPrimarySession() {
-        guard let ref = activeSessionDocRef else { return }
+    private func claimPrimarySession(completion: (() -> Void)? = nil) {
+        guard let ref = activeSessionDocRef else { completion?(); return }
         let payload: [String: Any] = [
             "deviceId": deviceSessionId,
             "claimedAt": FieldValue.serverTimestamp(),
@@ -9399,6 +9491,7 @@ struct PitchTrackerView: View {
         ref.setData(payload, merge: true) { err in
             if let err {
                 debugLog("⚠️ activeSession claim failed:", err.localizedDescription)
+                completion?()
                 return
             }
             self.isDisplayOnlyMode = false
@@ -9406,6 +9499,7 @@ struct PitchTrackerView: View {
             self.displayOnlyLiveIdStorage = ""
             self.dismissAllTopLevelSheets()
             self.activeHomeArea = .home
+            completion?()
         }
     }
 
@@ -9476,7 +9570,14 @@ struct PitchTrackerView: View {
 
                     Button("Take Over Primary", role: .destructive) {
                         showSessionConflictAlert = false
-                        claimPrimarySession()
+                        // Resume the boot flow the conflict interrupted. If
+                        // the conflict was raised at launch, nothing after
+                        // the session check has run yet - games, templates
+                        // and the initial sheet all still owe their turn, and
+                        // without this the app sits on an empty Home.
+                        claimPrimarySession {
+                            continueBootAfterSessionCheck()
+                        }
                     }
                     .buttonStyle(.bordered)
 
@@ -9517,11 +9618,17 @@ struct PitchTrackerView: View {
 
         startDisplaySessionListener()
         startListeningToJoinedLiveSessions()
-        ensurePrimarySessionOrPrompt()
-        if showSessionConflictAlert {
-            return
+        // Everything below waits on the answer. Running it first is what put
+        // the "Account In Use" blocker behind the boot sheets.
+        ensurePrimarySessionOrPrompt { hasConflict in
+            guard !hasConflict else { return }
+            continueBootAfterSessionCheck()
         }
+    }
 
+    /// The rest of `handleInitialAppear`, split out so it can run as the
+    /// completion of the primary-session check rather than racing it.
+    private func continueBootAfterSessionCheck() {
         if shouldForceSettingsOnLaunch() {
             activeHomeArea = .home
         }
@@ -10815,10 +10922,15 @@ struct PitchTrackerView: View {
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
         switch newPhase {
         case .active:
-            ensurePrimarySessionOrPrompt()
-            resumeLiveSessionIfNeeded()
-            evaluateIdleAndMaybeShowSettings()
+            // Same ordering rule as boot: don't resume into a game or
+            // present the idle-return sheet until we know we still hold
+            // primary, or the blocker ends up underneath them.
             clearForceSettingsFlagOnResume()
+            ensurePrimarySessionOrPrompt { hasConflict in
+                guard !hasConflict else { return }
+                resumeLiveSessionIfNeeded()
+                evaluateIdleAndMaybeShowSettings()
+            }
         case .inactive, .background:
             markBackgroundTimestamp()
             flushBufferedSharedPitcherEvents(reason: "background")
@@ -11875,6 +11987,10 @@ private struct InningAddCircle: View {
 }
 
 private struct ProgressGameView: View {
+    /// Team names for the Score row, already abbreviated by the caller.
+    /// Fall back to "US"/"THEM" when a side has no team linked.
+    let homeTeamLabel: String
+    let awayTeamLabel: String
     let ownerUserId: String?
     @Binding var balls: Int
     @Binding var strikes: Int
@@ -11950,7 +12066,7 @@ private struct ProgressGameView: View {
 
             VStack(spacing: 6) {
                 StatsPanelCard {
-                    StatStepper(label: "US", value: $us, onChange: onProgressChange)
+                    StatStepper(label: homeTeamLabel, value: $us, onChange: onProgressChange)
                     StatDivider()
                     Spacer(minLength: 8)
                     Text("Score")
@@ -11960,7 +12076,7 @@ private struct ProgressGameView: View {
                         .fixedSize()
                     Spacer(minLength: 8)
                     StatDivider()
-                    StatStepper(label: "THEM", value: $them, labelPosition: .trailing, onChange: onProgressChange)
+                    StatStepper(label: awayTeamLabel, value: $them, labelPosition: .trailing, onChange: onProgressChange)
                 }
                 StatsPanelCard {
                     StatStepper(label: "Hits", value: $hits, onChange: {})

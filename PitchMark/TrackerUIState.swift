@@ -34,6 +34,11 @@ import SwiftUI
 import Combine
 
 final class TrackerUIState: ObservableObject {
+    /// Callers waiting on the in-flight `ensurePrimarySessionOrPrompt` read.
+    /// Deliberately NOT @Published - it is plumbing, not view state, and
+    /// publishing it would invalidate the whole tracker on every check.
+    var pendingPrimarySessionChecks: [(Bool) -> Void] = []
+
     @Published var didAutoDismissCodeSheetForLiveId: String? = nil
     @Published var uiConnected: Bool = false
     @Published var showCodeAssignmentSheet: Bool = false

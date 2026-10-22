@@ -60,6 +60,12 @@ enum GameSide: String, CaseIterable {
     case home
     case away
 
+    /// **Fallback only.** Every side label in the tracker - the pitching
+    /// toggle, the header score pills, the Score row's steppers - shows the
+    /// actual team name now, via `PitchTrackerView.sideLabel(for:maxLength:)`.
+    /// These two strings are what that falls back to when a side has no team
+    /// linked yet (a game made before the new-game card asked for both sides,
+    /// or one where the coach skipped a side).
     var displayName: String {
         switch self {
         case .home: return "Us"

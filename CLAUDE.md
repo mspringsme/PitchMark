@@ -152,6 +152,30 @@ render a called pitch and nothing else — a credential there lets a display dev
 rejoin as a full participant with write access to pitch events. They live in
 `users/{uid}/liveSessions/{liveId}`, which is owner-only.
 
+## Primary-device session (two devices, one account)
+
+`users/{uid}/meta/activeSession` holds `deviceId` — whoever's id is there owns
+primary. Three rules, each learned from the same multi-device bug report:
+
+- **`ensurePrimarySessionOrPrompt` is asynchronous.** It is a Firestore read.
+  Callers must use its completion, never test `showSessionConflictAlert` on the
+  next line — that can't be true yet. Both the boot flow
+  (`continueBootAfterSessionCheck`) and the scene-`.active` resume now hang off
+  that completion. Getting this wrong let the boot sheets present first and the
+  "Account In Use" blocker arrive underneath them.
+- **Only `claimPrimarySession` may write `deviceId`.** `updateActiveSessionLiveId`
+  used to stamp its own id in alongside `liveId`, which silently re-claimed
+  primary as a side effect of publishing a live room — two devices then traded
+  primary back and forth forever, each bouncing the other to Home.
+- **The blocker is a root `.overlay`, so any sheet renders above it.**
+  `requestGameConfirmation` bails while `showSessionConflictAlert` is set;
+  anything else that presents a sheet needs the same guard, or it hides the only
+  control that can resolve the conflict.
+
+Concurrent callers of the check are queued (`pendingPrimarySessionChecks`), not
+dropped — at launch `.onAppear` and the `isSignedIn`/`uid` `onChange` handlers
+all fire within a frame, and dropping them would strand the boot flow.
+
 ## Live session lifetime
 
 A room, its join code and its invite token all carry a 4h `expiresAt`
