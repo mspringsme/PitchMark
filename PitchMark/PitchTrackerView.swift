@@ -5333,13 +5333,14 @@ struct PitchTrackerView: View {
 
     private var cardsSegmentButton: some View {
         let isActive = overlayTab == .cards
+        // Icon rather than the word "Cards": this row also carries both
+        // teams' score pills, and since those became real team names instead
+        // of "Us"/"Them" the row had no width to spare.
         return Button {
             overlayTab = .cards
         } label: {
-            Text("Cards")
+            Image(systemName: "baseball")
                 .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
                 .background(Color(.systemGray5))
@@ -5350,6 +5351,7 @@ struct PitchTrackerView: View {
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Cards")
     }
 
     /// Floats above the cards scroll (see `cardsAndOverlay`) rather than
@@ -9463,10 +9465,9 @@ struct PitchTrackerView: View {
             let data = snap?.data() ?? [:]
             let existingDevice = data["deviceId"] as? String
             if existingDevice == nil {
-                // Claim first, THEN release the waiters - claiming dismisses
-                // sheets and forces Home, which would otherwise land on top
-                // of whatever the boot flow had just presented.
-                claimPrimarySession { finish(false) }
+                // Nobody owns the session: claim it quietly and carry on.
+                // This must NOT disturb the UI - see claimPrimarySession.
+                claimPrimarySession(isExplicitTakeover: false) { finish(false) }
                 return
             }
 
@@ -9481,7 +9482,15 @@ struct PitchTrackerView: View {
         }
     }
 
-    private func claimPrimarySession(completion: (() -> Void)? = nil) {
+    /// `isExplicitTakeover` separates the two very different reasons this
+    /// runs. Tapping "Take Over Primary" is a deliberate seizure from another
+    /// device, and dropping whatever was on screen to land on Home is the
+    /// right response. Finding `deviceId` absent at boot or on resume is
+    /// routine bookkeeping - nobody owned the session - and doing the same
+    /// thing there tore down the pitcher/grid-key sheet mid-selection and
+    /// bounced the coach back to Home, repeatedly, every time the app became
+    /// active.
+    private func claimPrimarySession(isExplicitTakeover: Bool = true, completion: (() -> Void)? = nil) {
         guard let ref = activeSessionDocRef else { completion?(); return }
         let payload: [String: Any] = [
             "deviceId": deviceSessionId,
@@ -9497,8 +9506,10 @@ struct PitchTrackerView: View {
             self.isDisplayOnlyMode = false
             self.displayOnlyLiveId = nil
             self.displayOnlyLiveIdStorage = ""
-            self.dismissAllTopLevelSheets()
-            self.activeHomeArea = .home
+            if isExplicitTakeover {
+                self.dismissAllTopLevelSheets()
+                self.activeHomeArea = .home
+            }
             completion?()
         }
     }
@@ -9576,7 +9587,8 @@ struct PitchTrackerView: View {
                         // and the initial sheet all still owe their turn, and
                         // without this the app sits on an empty Home.
                         claimPrimarySession {
-                            continueBootAfterSessionCheck()
+                            // claimPrimarySession already put us on Home.
+                            continueBootAfterSessionCheck(forceHome: false)
                         }
                     }
                     .buttonStyle(.bordered)
@@ -9618,18 +9630,23 @@ struct PitchTrackerView: View {
 
         startDisplaySessionListener()
         startListeningToJoinedLiveSessions()
+        // Evaluated NOW, not in the completion: it consumes a one-shot
+        // defaults flag, and asking after the round trip meant the answer
+        // (and the resulting jump to Home) arrived late enough to interrupt
+        // whatever the coach had already started doing.
+        let forceHomeOnLaunch = shouldForceSettingsOnLaunch()
         // Everything below waits on the answer. Running it first is what put
         // the "Account In Use" blocker behind the boot sheets.
         ensurePrimarySessionOrPrompt { hasConflict in
             guard !hasConflict else { return }
-            continueBootAfterSessionCheck()
+            continueBootAfterSessionCheck(forceHome: forceHomeOnLaunch)
         }
     }
 
     /// The rest of `handleInitialAppear`, split out so it can run as the
     /// completion of the primary-session check rather than racing it.
-    private func continueBootAfterSessionCheck() {
-        if shouldForceSettingsOnLaunch() {
+    private func continueBootAfterSessionCheck(forceHome: Bool) {
+        if forceHome {
             activeHomeArea = .home
         }
 
@@ -10922,14 +10939,17 @@ struct PitchTrackerView: View {
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
         switch newPhase {
         case .active:
-            // Same ordering rule as boot: don't resume into a game or
-            // present the idle-return sheet until we know we still hold
-            // primary, or the blocker ends up underneath them.
             clearForceSettingsFlagOnResume()
+            // Runs SYNCHRONOUSLY, on purpose. It is a local clock check with
+            // nothing to do with session ownership, and it forces
+            // activeHomeArea = .home. Behind the session read it landed a
+            // round trip late - i.e. after the coach had already tapped into
+            // a game - and threw them back to Home. Only the live-session
+            // resume below genuinely has to wait for the ownership answer.
+            evaluateIdleAndMaybeShowSettings()
             ensurePrimarySessionOrPrompt { hasConflict in
                 guard !hasConflict else { return }
                 resumeLiveSessionIfNeeded()
-                evaluateIdleAndMaybeShowSettings()
             }
         case .inactive, .background:
             markBackgroundTimestamp()
@@ -12068,13 +12088,18 @@ private struct ProgressGameView: View {
                 StatsPanelCard {
                     StatStepper(label: homeTeamLabel, value: $us, onChange: onProgressChange)
                     StatDivider()
-                    Spacer(minLength: 8)
+                    Spacer(minLength: 0)
+                    // Was .fixedSize() with 8pt spacers either side. Both
+                    // sides of this row are team names now rather than
+                    // "US"/"THEM", so the centre caption yields space to them
+                    // instead of holding its full width.
                     Text("Score")
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(.blue)
                         .lineLimit(1)
-                        .fixedSize()
-                    Spacer(minLength: 8)
+                        .minimumScaleFactor(0.6)
+                        .layoutPriority(0)
+                    Spacer(minLength: 0)
                     StatDivider()
                     StatStepper(label: awayTeamLabel, value: $them, labelPosition: .trailing, onChange: onProgressChange)
                 }
