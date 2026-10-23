@@ -205,8 +205,23 @@ service cloud.firestore {
     // PITCHER INVITE TOKENS: /pitcherInviteTokens/{token}
     // ─────────────────────────────────────────────
     match /pitcherInviteTokens/{token} {
-      allow get: if signedIn();
-      allow list: if false;
+      // get stays open to any signed-in user: the redeemer is by definition
+      // NOT the owner, and holding the 12-char token is the credential. An
+      // expired token reads as absent to everyone but its owner, the same
+      // shape the live-session join artifacts use above.
+      allow get: if signedIn()
+        && (
+          resource == null
+          || notExpired(resource.data)
+          || resource.data.ownerUid == uid()
+        );
+
+      // Owner-scoped list, so revokePitcherSharing can find the outstanding
+      // tokens for a pitcher and delete them. Evaluated per candidate
+      // document against resource.data - request.query.where() is not real
+      // rules syntax, so the client query must carry the matching
+      // whereField("ownerUid", ...) or the whole list is denied.
+      allow list: if signedIn() && resource.data.ownerUid == uid();
 
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid()
@@ -215,6 +230,19 @@ service cloud.firestore {
       allow update, delete: if signedIn()
         && resource != null
         && resource.data.ownerUid == uid();
+
+      // A redeemer may burn the token they just used - only those two
+      // fields, and only while it is unredeemed. Holding the token already
+      // lets them redeem it, so this grants no new access; it is what makes
+      // an invite single-use without routing redemption through a Cloud
+      // Function (the owner-only rule above cannot do it: the redeemer is
+      // never the owner).
+      allow update: if signedIn()
+        && resource != null
+        && !(resource.data.keys().hasAny(['redeemedByUid']))
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['redeemedByUid', 'redeemedAt'])
+        && request.resource.data.redeemedByUid == uid();
     }
 
     // ─────────────────────────────────────────────

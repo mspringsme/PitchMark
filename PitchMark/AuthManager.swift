@@ -1350,6 +1350,12 @@ class AuthManager: ObservableObject {
         return output
     }
 
+    /// How long a pitcher invite link stays redeemable. Deliberately *not*
+    /// `LiveGameService.sessionLifetime` (4h): that is tuned for a game in
+    /// progress, while sharing a pitcher is a season-scale relationship and a
+    /// link mailed to a parent has to survive the weekend.
+    static let pitcherInviteLifetime: TimeInterval = 14 * 24 * 60 * 60
+
     func createPitcherInviteToken(pitcherId: String, completion: @escaping (Result<String, Error>) -> Void) {
         guard let user = user else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
@@ -1361,7 +1367,8 @@ class AuthManager: ObservableObject {
         let data: [String: Any] = [
             "pitcherId": pitcherId,
             "ownerUid": user.uid,
-            "createdAt": FieldValue.serverTimestamp()
+            "createdAt": FieldValue.serverTimestamp(),
+            "expiresAt": Timestamp(date: Date().addingTimeInterval(Self.pitcherInviteLifetime))
         ]
 
         ref.setData(data) { error in
@@ -1391,7 +1398,24 @@ class AuthManager: ObservableObject {
                   let pitcherId = data["pitcherId"] as? String,
                   !pitcherId.isEmpty
             else {
-                completion(.failure(NSError(domain: "Invite", code: 404, userInfo: [NSLocalizedDescriptionKey: "Invite not found."])))
+                completion(.failure(NSError(domain: "Invite", code: 404, userInfo: [NSLocalizedDescriptionKey: "This invite link is no longer valid. Ask for a new one."])))
+                return
+            }
+
+            // A token written before expiresAt existed has no field at all and
+            // stays redeemable - same fallback posture as the rules' own
+            // notExpired(). Only an expiry that is actually present is enforced.
+            if let expiresAt = (data["expiresAt"] as? Timestamp)?.dateValue(), expiresAt <= Date() {
+                completion(.failure(NSError(domain: "Invite", code: 410, userInfo: [NSLocalizedDescriptionKey: "This invite link has expired. Ask for a new one."])))
+                return
+            }
+
+            // Single-use. Re-tapping your own link is idempotent rather than an
+            // error - you are already in sharedWith, so fall through and
+            // re-read the pitcher. Someone else's spent token is refused.
+            let redeemedByUid = data["redeemedByUid"] as? String
+            if let redeemedByUid, redeemedByUid != user.uid {
+                completion(.failure(NSError(domain: "Invite", code: 409, userInfo: [NSLocalizedDescriptionKey: "This invite link has already been used. Ask for a new one."])))
                 return
             }
 
@@ -1405,6 +1429,18 @@ class AuthManager: ObservableObject {
                     completion(.failure(err))
                     return
                 }
+
+                // Burn the token only after sharedWith actually took. Best
+                // effort: a failure here leaves a redeemable token, which is
+                // the old behaviour, and is better than reporting a join that
+                // succeeded as a failure.
+                if redeemedByUid == nil {
+                    tokenRef.setData([
+                        "redeemedByUid": user.uid,
+                        "redeemedAt": FieldValue.serverTimestamp()
+                    ], merge: true)
+                }
+
                 pitcherRef.getDocument { updatedSnap, readErr in
                     if let readErr {
                         completion(.failure(readErr))
@@ -1504,6 +1540,84 @@ class AuthManager: ObservableObject {
             }
         } catch {
             debugLog("❌ saveSharedPitcherEvent encode failed:", error.localizedDescription)
+        }
+    }
+
+    /// Revokes every share on a pitcher, returning it to sole ownership.
+    ///
+    /// Three things have to happen together or access survives the revoke:
+    ///
+    /// 1. `sharedWith` back to just the owner.
+    /// 2. **`claimedByUid` cleared.** The rules grant get/list on
+    ///    `claimedByUid == uid()` independently of `sharedWith`, so a
+    ///    recipient who had hit Reclaim keeps full read access - and stays
+    ///    active owner, locking the real owner out of their own pitcher in
+    ///    games - if this field is left behind.
+    /// 3. **Outstanding invite tokens deleted.** Otherwise the link the
+    ///    recipient already holds simply re-adds them.
+    ///
+    /// Keyed on `ownerUid`, not active ownership: if the recipient reclaimed,
+    /// the owner is no longer the active owner but is still the only one the
+    /// rules let do this.
+    func revokePitcherSharing(pitcherId: String, completion: @escaping (Result<Pitcher, Error>) -> Void) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+
+        let db = Firestore.firestore()
+        let pitcherRef = db.collection("pitchers").document(pitcherId)
+
+        pitcherRef.setData([
+            "sharedWith": [user.uid],
+            "claimedByUid": FieldValue.delete()
+        ], merge: true) { err in
+            if let err {
+                completion(.failure(err))
+                return
+            }
+
+            // Needs the owner-scoped list rule on /pitcherInviteTokens; the
+            // ownerUid predicate is load-bearing, not just a filter - without
+            // it the rule denies the whole query.
+            db.collection("pitcherInviteTokens")
+                .whereField("ownerUid", isEqualTo: user.uid)
+                .whereField("pitcherId", isEqualTo: pitcherId)
+                .getDocuments { tokenSnap, tokenErr in
+                    if let tokenErr {
+                        debugLog("⚠️ revokePitcherSharing token sweep failed:", tokenErr.localizedDescription)
+                    }
+                    // Same collection, same rule, all owner-owned, so one
+                    // batch is safe here - unlike the event copies, which
+                    // span three collections with three different rules.
+                    if let docs = tokenSnap?.documents, !docs.isEmpty {
+                        let batch = db.batch()
+                        for doc in docs { batch.deleteDocument(doc.reference) }
+                        batch.commit { batchErr in
+                            if let batchErr {
+                                debugLog("⚠️ revokePitcherSharing token delete failed:", batchErr.localizedDescription)
+                            }
+                        }
+                    }
+
+                    pitcherRef.getDocument { updatedSnap, readErr in
+                        if let readErr {
+                            completion(.failure(readErr))
+                            return
+                        }
+                        guard let updatedSnap, updatedSnap.exists else {
+                            completion(.failure(NSError(domain: "Pitcher", code: 404, userInfo: [NSLocalizedDescriptionKey: "Pitcher not found."])))
+                            return
+                        }
+                        Task { @MainActor in
+                            do {
+                                completion(.success(try updatedSnap.data(as: Pitcher.self)))
+                            } catch {
+                                completion(.failure(error))
+                            }
+                        }
+                    }
+                }
         }
     }
 

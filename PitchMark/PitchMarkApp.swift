@@ -17,7 +17,7 @@ private final class PitchMarkAppCheckProviderFactory: NSObject, AppCheckProvider
 }
 
 struct RootView: View {
-    private struct CheckoutAlert: Identifiable {
+    private struct RootAlert: Identifiable {
         let id = UUID()
         let title: String
         let message: String
@@ -28,7 +28,7 @@ struct RootView: View {
     @State private var showDisplayCover = false
     @State private var showDisplayOnboarding = false
     @State private var showProPaywall = false
-    @State private var checkoutAlert: CheckoutAlert? = nil
+    @State private var rootAlert: RootAlert? = nil
     @State private var isDemoMode = false
     @AppStorage(PitchTrackerView.DefaultsKeys.didShowDisplayOnboarding) private var didShowDisplayOnboarding = false
     private let displayAppSearchURL = URL(string: "https://apps.apple.com/us/search?term=Pitchmark%20Display")!
@@ -96,7 +96,7 @@ struct RootView: View {
             )
             .fixedAppDynamicType()
         }
-        .alert(item: $checkoutAlert) { alert in
+        .alert(item: $rootAlert) { alert in
             Alert(
                 title: Text(alert.title),
                 message: Text(alert.message),
@@ -186,7 +186,7 @@ struct RootView: View {
             NotificationCenter.default.post(name: .retailCheckoutSucceeded, object: nil)
             return true
         case "/stripe/cancel":
-            checkoutAlert = CheckoutAlert(
+            rootAlert = RootAlert(
                 title: "Checkout Canceled",
                 message: "No charge was made. You can return to the store and try again anytime."
             )
@@ -222,14 +222,25 @@ struct RootView: View {
         }
     }
 
+    /// Both paths report to the user. Previously success was silent and
+    /// failure was `debugLog` only, so tapping an invite looked identical
+    /// whether it worked, was expired, or was never a valid token.
     private func joinPitcherByInviteToken(_ token: String) {
         authManager.joinPitcherByInviteToken(token: token) { result in
             DispatchQueue.main.async {
                 switch result {
-                case .success:
+                case .success(let pitcher):
                     NotificationCenter.default.post(name: .pitcherSharedUpdated, object: nil)
+                    rootAlert = RootAlert(
+                        title: "Pitcher Shared",
+                        message: "\(pitcher.name) was added to your players. Their owner still records games with them - use Copy from the player's menu if you need your own profile."
+                    )
                 case .failure(let err):
                     debugLog("❌ Pitcher invite join failed:", err.localizedDescription)
+                    rootAlert = RootAlert(
+                        title: "Invite Not Accepted",
+                        message: err.localizedDescription
+                    )
                 }
             }
         }

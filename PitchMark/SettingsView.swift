@@ -656,6 +656,10 @@ struct SettingsView: View {
     @State private var copyPitcherTarget: Pitcher? = nil
     @State private var showCopyPitcherConfirm = false
 
+    @State private var revokePitcherTarget: Pitcher? = nil
+    @State private var showRevokePitcherConfirm = false
+    @State private var isRevokingPitcherSharing = false
+
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
 
     @State private var showPitcherShareSheet = false
@@ -1485,6 +1489,7 @@ struct SettingsView: View {
     /// actions the old horizontal pitcher strip in Settings exposed, now
     /// per-row. A non-pitching player has none of those (they're Pitcher-doc
     /// operations), so its menu opens the roster screen that does own it.
+    /// Owned/Reclaim+Copy split on active ownership; see the note on Copy.
     @ViewBuilder
     private func playerRowMenu(_ row: PlayerDirectoryRow) -> some View {
         if let pitcher = row.pitcher {
@@ -1505,10 +1510,12 @@ struct SettingsView: View {
             }
 
             if pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
+                // Was labelled "Owned", which read as a status badge rather
+                // than the action it is - this mints an invite link.
                 Button {
                     beginPitcherShare(pitcher)
                 } label: {
-                    Label(isGeneratingPitcherShare ? "Sharing…" : "Owned", systemImage: "person.crop.circle.badge.checkmark")
+                    Label(isGeneratingPitcherShare ? "Sharing…" : "Share Pitcher", systemImage: "person.crop.circle.badge.plus")
                 }
                 .disabled(isGeneratingPitcherShare)
             } else {
@@ -1517,15 +1524,38 @@ struct SettingsView: View {
                 } label: {
                     Label("Reclaim", systemImage: "arrow.uturn.backward.circle")
                 }
+
+                // Copy belongs to this branch only. Reclaim is zero-sum -
+                // `claimedByUid` is a single field, so taking active ownership
+                // takes the pitcher away from the coach who shared it, and
+                // without active ownership you can't select them in a game at
+                // all (applySelectedPitcher / pitcherPickerButton / "Owner
+                // only"). Copy is the non-destructive way out of that: both
+                // coaches keep a usable pitcher. On a pitcher you already own
+                // it has no such job and only mints a duplicate "X (Copy)"
+                // career record for the same kid.
+                Button {
+                    copyPitcherTarget = pitcher
+                    showCopyPitcherConfirm = true
+                } label: {
+                    Label(isCopyingPitcher ? "Copying…" : "Copy", systemImage: "doc.on.doc")
+                }
+                .disabled(isCopyingPitcher)
             }
 
-            Button {
-                copyPitcherTarget = pitcher
-                showCopyPitcherConfirm = true
-            } label: {
-                Label(isCopyingPitcher ? "Copying…" : "Copy", systemImage: "doc.on.doc")
+            // Outside the active-ownership branch on purpose: if a recipient
+            // hit Reclaim, the true owner is no longer the *active* owner, but
+            // they are still the only account the rules let revoke - and that
+            // is precisely the case where they most need to.
+            if isTrueOwner(of: pitcher), hasOtherParticipants(pitcher) {
+                Button(role: .destructive) {
+                    revokePitcherTarget = pitcher
+                    showRevokePitcherConfirm = true
+                } label: {
+                    Label(isRevokingPitcherSharing ? "Stopping…" : "Stop Sharing", systemImage: "person.crop.circle.badge.xmark")
+                }
+                .disabled(isRevokingPitcherSharing)
             }
-            .disabled(isCopyingPitcher)
 
             Button {
                 guard let id = pitcher.id else { return }
@@ -2270,6 +2300,46 @@ struct SettingsView: View {
                     self.sharePitcherLink = link
                     self.sharePitcherQR = self.qrImage(for: link)
                     self.showPitcherShareSheet = true
+                case .failure(let error):
+                    self.pitcherShareError = error.localizedDescription
+                    self.showPitcherShareError = true
+                }
+            }
+        }
+    }
+
+    /// True owner, i.e. `ownerUid` - distinct from `isActiveOwner`, which a
+    /// recipient takes over by hitting Reclaim.
+    private func isTrueOwner(of pitcher: Pitcher) -> Bool {
+        guard let uid = authManager.user?.uid else { return false }
+        return pitcher.ownerUid == uid
+    }
+
+    /// Is anyone other than the owner currently holding access? Covers both
+    /// routes in: `sharedWith` (invite redeemed) and `claimedByUid` (Reclaim).
+    private func hasOtherParticipants(_ pitcher: Pitcher) -> Bool {
+        if pitcher.sharedWith.contains(where: { $0 != pitcher.ownerUid }) { return true }
+        if let claimed = pitcher.claimedByUid, claimed != pitcher.ownerUid { return true }
+        return false
+    }
+
+    private func revokePitcherSharing(_ pitcher: Pitcher) {
+        guard let pitcherId = pitcher.id else { return }
+        guard !isRevokingPitcherSharing else { return }
+        isRevokingPitcherSharing = true
+        authManager.revokePitcherSharing(pitcherId: pitcherId) { result in
+            DispatchQueue.main.async {
+                self.isRevokingPitcherSharing = false
+                switch result {
+                case .success(let updated):
+                    if let id = updated.id, let idx = pitchers.firstIndex(where: { $0.id == id }) {
+                        pitchers[idx] = updated
+                    } else {
+                        authManager.loadPitchers { loaded in
+                            pitchers = loaded
+                        }
+                    }
+                    NotificationCenter.default.post(name: .pitcherSharedUpdated, object: nil)
                 case .failure(let error):
                     self.pitcherShareError = error.localizedDescription
                     self.showPitcherShareError = true
@@ -3308,7 +3378,6 @@ struct SettingsView: View {
                 title: "Copy pitcher?",
                 message: "This creates a new pitcher profile you own, with the same stats. It won’t affect the shared pitcher.",
                 primaryTitle: "Copy",
-                primaryRole: .destructive,
                 primaryAction: {
                     if let pitcher = copyPitcherTarget {
                         copyPitcher(pitcher)
@@ -3318,6 +3387,23 @@ struct SettingsView: View {
                 secondaryTitle: "Cancel",
                 secondaryAction: {
                     copyPitcherTarget = nil
+                }
+            )
+            .appConfirmationDialog(
+                isPresented: $showRevokePitcherConfirm,
+                title: "Stop sharing?",
+                message: "Anyone you shared this pitcher with loses access, and any invite links you sent stop working. Pitches they already recorded stay on the record.",
+                primaryTitle: "Stop Sharing",
+                primaryRole: .destructive,
+                primaryAction: {
+                    if let pitcher = revokePitcherTarget {
+                        revokePitcherSharing(pitcher)
+                    }
+                    revokePitcherTarget = nil
+                },
+                secondaryTitle: "Cancel",
+                secondaryAction: {
+                    revokePitcherTarget = nil
                 }
             )
             .toolbar {
