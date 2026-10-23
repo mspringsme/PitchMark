@@ -53,6 +53,23 @@ extension AuthManager {
         }
     }
 
+    /// Name-only merge write, so a rename made anywhere reaches the Hitter
+    /// doc without touching anything else on it. See
+    /// `propagatePlayerRename` (Player.swift) for why a rename has four
+    /// documents to visit.
+    func updateHitterName(id: String, name: String, completion: (() -> Void)? = nil) {
+        guard user != nil else {
+            completion?()
+            return
+        }
+        hittersCollection().document(id).setData(["name": name], merge: true) { error in
+            if let error {
+                debugLog("⚠️ updateHitterName failed:", error.localizedDescription)
+            }
+            completion?()
+        }
+    }
+
     func loadHitters(completion: @escaping ([Hitter]) -> Void) {
         guard let user = user else {
             DispatchQueue.main.async { completion([]) }

@@ -98,6 +98,18 @@ struct Game: Identifiable, Codable {
     // Lineup / participants
     var jerseyNumbers: [String] = []
     var batterIds: [String]? = nil
+    // Which jersey cell is which roster hitter: batterId (the cell's UUID
+    // string) -> TeamPlayer.hitterId. This is what lets the At Bat scroll
+    // scope itself to whoever is actually batting - without it every
+    // restored cell looks unlinked and the scroll fails open, showing both
+    // teams' cells on both sides of the Us/Them toggle.
+    //
+    // A map rather than a third parallel array on purpose: it needs no
+    // agreement with jerseyNumbers/batterIds ordering (the one invariant
+    // those two already have to maintain across seven rehydration sites and
+    // the live merge), stale keys are harmless, and a cell added on another
+    // device simply has no entry.
+    var hitterIdByBatterId: [String: String]? = nil
     var participants: [String: Bool] = [:]
     var selectedBatterId: String? = nil
     var selectedBatterJersey: String? = nil

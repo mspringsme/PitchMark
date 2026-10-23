@@ -155,7 +155,19 @@ final class TrackerUIState: ObservableObject {
     @Published var showTemplateChangeWarning: Bool = false
     @Published var pendingGameChoiceGameId: String? = nil
     @Published var pendingGameChoiceOwnerUid: String? = nil
-    @Published var pendingConfirmationPitcherId: String? = nil
+    /// Set once `loadTemplates` has come back, so "you have no code grid
+    /// key" can be told apart from "keys haven't arrived yet". Both leave
+    /// `selectedTemplate` nil, but only the first is worth telling the
+    /// coach about.
+    @Published var didLoadTemplates: Bool = false
+    /// Whether the active game has a grid key recorded of its *own* - an
+    /// entry in `lastTemplateByGameId`, or `lastTemplateId` on the game
+    /// doc. The top bar's Key control flashes `key.slash` while this is
+    /// false. Deliberately not derived from `selectedTemplate`:
+    /// `loadTemplates` falls back to the first visible key, so that is
+    /// almost never nil and a flash keyed off it would never fire.
+    /// Maintained by `refreshKeyPickedForActiveGame()`.
+    @Published var keyPickedForActiveGame: Bool = false
     @Published var isSelecting: Bool = false
     @Published var pitchFirst: Bool = true
     @Published var showCodeShareSheet: Bool = false

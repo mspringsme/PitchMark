@@ -108,10 +108,23 @@ private enum PitchMarkAppVariant: Equatable {
     // entitlements declare (PitchMark never claims pitchmark.app; Display
     // never claims the firebaseapp.com authDomain) makes each one the sole
     // candidate on its own link.
+    /// Both values must be **custom** Firebase Hosting domains connected to
+    /// this project. `linkDomain` rejects the project's default domains
+    /// outright - "The provided hosting link domain is not configured in
+    /// Firebase Hosting or is not owned by the current project. This cannot
+    /// be a default hosting domain (web.app or firebaseapp.com)" - which is
+    /// what `pitchmark-fb9f8.firebaseapp.com` was here until 2026-10-23,
+    /// failing every email sign-in on the live app. `firebaseapp.com` is the
+    /// project's *authDomain*, not a Hosting custom domain; the two look
+    /// alike and aren't.
+    ///
+    /// `mail.pitchmarkcode.com` satisfies the per-app exclusivity above as
+    /// well: PitchMark.entitlements already claims it, and Display's
+    /// entitlements don't.
     var emailSignInLinkDomain: String {
         switch self {
         case .live:
-            return "pitchmark-fb9f8.firebaseapp.com"
+            return "mail.pitchmarkcode.com"
         case .display:
             return "pitchmark.app"
         }
@@ -2220,6 +2233,28 @@ extension AuthManager {
             "batterIds": batterIds
         ]) { error in
             if let error = error { debugLog("Error updating lineup: \(error)") }
+        }
+    }
+
+    /// Companion to `updateGameLineup` for the lineup's roster-link map
+    /// (`Game.hitterIdByBatterId`): batterId -> hitterId.
+    ///
+    /// A targeted single-field write, **never** a whole-Game `saveGame`.
+    /// The delete paths update `jerseyNumbers`/`batterIds` through
+    /// `updateGameLineup` above and leave the in-memory `Game` struct's
+    /// copies stale, so encoding the whole document from that struct
+    /// pushes a stale lineup back over a fresh delete - the deleted jersey
+    /// reappears. This map changes *as part of* a delete (the prune), which
+    /// is exactly when that struct is most out of date.
+    func updateGameHitterLinks(ownerUserId: String?, gameId: String, links: [String: String]) {
+        guard let currentUid = user?.uid else { return }
+        if let ownerUserId, ownerUserId != currentUid {
+            debugLog("⏭️ Skipping updateGameHitterLinks (not owner). currentUid=\(currentUid) ownerUserId=\(ownerUserId)")
+            return
+        }
+        guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
+        ref.updateData(["hitterIdByBatterId": links]) { error in
+            if let error = error { debugLog("Error updating hitter links: \(error)") }
         }
     }
     

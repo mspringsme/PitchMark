@@ -10,6 +10,7 @@ import FirebaseFirestore
 import FirebaseAuth
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 private struct FocusableNotesTextView: UIViewRepresentable {
     @Binding var text: String
@@ -1451,6 +1452,57 @@ struct CalledPitchRecord: Identifiable, Codable {
     let mode: String
 }
 
+/// One team's slice of the lineup for the pin sheet's batter strip.
+///
+/// The strip shows *every* cell in the lineup, both teams' - which cell you
+/// can select and edit here is deliberately not scoped the way the At Bat
+/// scroll is. Without a break between them it reads as one undifferentiated
+/// row of numbers with no way to tell whose batter is whose.
+struct LineupBatterGroup: Identifiable {
+    let id: String
+    let title: String
+    /// The side currently at bat. Listed first and marked.
+    let isBatting: Bool
+    let cells: [JerseyCell]
+}
+
+/// Live reorder of the lineup strip while a jersey is being dragged by its
+/// handle.
+///
+/// `dropEntered` does the moving - the row rearranges under your finger, the
+/// standard feel - and `performDrop` is where the new order gets persisted,
+/// once, rather than on every crossing.
+///
+/// Scoped to one group: `groupIds` rejects a drag that started in the other
+/// team's row. Those rows come from the rosters, not from array order, so
+/// such a move couldn't change anything and the cell would just snap back.
+private struct LineupReorderDropDelegate: DropDelegate {
+    let target: JerseyCell
+    let groupIds: Set<UUID>
+    @Binding var dragging: JerseyCell?
+    let onReorder: (JerseyCell, JerseyCell) -> Void
+    let onCommit: () -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging,
+              dragging.id != target.id,
+              groupIds.contains(dragging.id),
+              groupIds.contains(target.id) else { return }
+        onReorder(dragging, target)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard dragging != nil else { return false }
+        dragging = nil
+        onCommit()
+        return true
+    }
+}
+
 struct PitchEventDetailPopover: View {
     let event: PitchEvent
     let allEvents: [PitchEvent]
@@ -1458,16 +1510,143 @@ struct PitchEventDetailPopover: View {
     let pitcherNameById: [String: String]
     let gameIdFilter: String?
     let lineupBatters: [JerseyCell]
+    /// Grouped view of `lineupBatters`. Empty, or a single group, renders
+    /// the original flat strip, so a one-team game looks exactly as before.
+    var lineupGroups: [LineupBatterGroup] = []
+    /// Cells with no roster link behind them - a bare jersey number typed
+    /// into the lineup, or one added before the link was recorded. They sit
+    /// in the batting team's row rather than a section of their own, and are
+    /// told apart by fill colour alone.
+    var unlinkedBatterIds: Set<UUID> = []
     let selectedLineupBatterId: UUID?
     let onSelectLineupBatter: (JerseyCell) -> Void
     let onEditLineupBatter: (JerseyCell) -> Void
-    let onMoveLineupBatterUp: (JerseyCell) -> Void
-    let onMoveLineupBatterDown: (JerseyCell) -> Void
+    /// Move `moving` to `target`'s position. Called repeatedly during a
+    /// drag, so it must only rearrange - persisting is `onCommitLineupOrder`.
+    let onReorderLineupBatter: (JerseyCell, JerseyCell) -> Void
+    /// The drag ended; write the order down.
+    let onCommitLineupOrder: () -> Void
     let onDeleteLineupBatter: (JerseyCell) -> Void
     let currentCountSeed: (balls: Int, strikes: Int)?
     let onCountChanged: ((Int, Int) -> Void)?
     @State private var batterNotes: String = ""
     @State private var isBatterNotesFocused: Bool = false
+    // Spray chart starts collapsed: it's a 330pt block, and the batters and
+    // pitch cards above it are what the sheet is opened for. Notes start
+    // expanded - they're one row at the bottom either way.
+    @State private var isSprayExpanded: Bool = false
+    @State private var isNotesExpanded: Bool = true
+    /// The jersey currently being dragged by its handle, if any.
+    @State private var draggingCell: JerseyCell? = nil
+
+    /// Selection still wins over the unassigned tint - otherwise an
+    /// unassigned batter you've selected would be the only cell in the strip
+    /// with no visible selection.
+    private func jerseyFill(isSelected: Bool, isUnlinked: Bool) -> Color {
+        if isSelected { return .blue }
+        return isUnlinked ? Color.orange.opacity(0.22) : Color(.systemGray6)
+    }
+
+    private func jerseyStroke(isSelected: Bool, isUnlinked: Bool) -> Color {
+        if isSelected { return Color.blue.opacity(0.95) }
+        return isUnlinked ? Color.orange.opacity(0.55) : Color.black.opacity(0.12)
+    }
+
+    /// The horizontal row of jersey buttons, shared by the flat and the
+    /// grouped renderings so the two can't drift.
+    private func lineupStrip(_ cells: [JerseyCell]) -> some View {
+        let groupIds = Set(cells.map { $0.id })
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(cells) { cell in
+                    let isSelected = cell.id == selectedLineupBatterId
+                    let isUnlinked = unlinkedBatterIds.contains(cell.id)
+                    VStack(spacing: 1) {
+                        jerseyChip(cell, isSelected: isSelected, isUnlinked: isUnlinked)
+                        dragHandle(for: cell)
+                    }
+                    // No dimming of the dragged cell: the system already
+                    // shows a lifted preview of it, and a drop that lands
+                    // outside every chip never reaches `performDrop`, which
+                    // would have left a cell dimmed with no way back.
+                    .onDrop(
+                        of: [UTType.text],
+                        delegate: LineupReorderDropDelegate(
+                            target: cell,
+                            groupIds: groupIds,
+                            dragging: $draggingCell,
+                            onReorder: onReorderLineupBatter,
+                            onCommit: onCommitLineupOrder
+                        )
+                    )
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 4)
+        }
+    }
+
+    /// The grab handle. Separate from the chip on purpose: the chip owns the
+    /// tap (select this batter) and the handle owns the drag, so the two
+    /// never compete for the same gesture. Sits *below* its chip, so it is
+    /// sized to the chip's width rather than standing beside it.
+    ///
+    /// `.onDrag` (UIKit drag-and-drop) rather than a `DragGesture` - it needs
+    /// a press-and-hold to begin, which is what leaves the horizontal scroll
+    /// still working. A DragGesture here would win the arena from the
+    /// ScrollView's pan and the strip would stop scrolling.
+    private func dragHandle(for cell: JerseyCell) -> some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(.secondary)
+            .frame(width: 36, height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color(.systemGray5))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .onDrag {
+                // Async so the write can't land inside a view update - this
+                // closure runs while SwiftUI is setting the drag session up.
+                // The lift animation takes long enough that it's always set
+                // before the first chip crossing.
+                DispatchQueue.main.async { draggingCell = cell }
+                return NSItemProvider(object: cell.id.uuidString as NSString)
+            }
+            .accessibilityLabel("Reorder batter \(cell.jerseyNumber)")
+    }
+
+    private func jerseyChip(_ cell: JerseyCell, isSelected: Bool, isUnlinked: Bool) -> some View {
+        Button {
+            onSelectLineupBatter(cell)
+        } label: {
+            // 25% smaller than the original 48x40, with the corner radius
+            // and type scaled to match so a two-digit number still fits.
+            Text(cell.jerseyNumber)
+                .font(.subheadline.weight(.semibold))
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .frame(width: 36, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(jerseyFill(isSelected: isSelected, isUnlinked: isUnlinked))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(
+                            jerseyStroke(isSelected: isSelected, isUnlinked: isUnlinked),
+                            lineWidth: isSelected ? 2 : 1
+                        )
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            isUnlinked
+            ? "Batter \(cell.jerseyNumber), not on a roster"
+            : "Batter \(cell.jerseyNumber)"
+        )
+    }
 
     private var activeLineupCell: JerseyCell? {
         if let id = selectedLineupBatterId,
@@ -1551,17 +1730,97 @@ struct PitchEventDetailPopover: View {
         return trimmed
     }
 
+    private var eventsWithCoords: [PitchEvent] {
+        batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil }
+    }
+
+    private var hasIdentity: Bool {
+        (batterEvents.first?.opponentBatterId?.isEmpty == false)
+            || (batterEvents.first?.opponentJersey?.isEmpty == false)
+    }
+
     var body: some View {
-        let eventsWithCoords = batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil }
-        let hasIdentity = (batterEvents.first?.opponentBatterId?.isEmpty == false) || (batterEvents.first?.opponentJersey?.isEmpty == false)
-        let playerEvents = batterEvents
-        
-        VStack(alignment: .leading, spacing: 16) {
-            // Keep notes editor outside the main scroll view so its tap/focus is not
-            // competing with nested sheet scroll gestures.
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Batter notes")
-                    .font(.subheadline.weight(.semibold))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // Batters first: picking which batter this sheet is about is
+                // what everything below it depends on.
+                battersSection
+                pitchCardsStrip
+                sprayChartSection
+                // Notes scroll with everything else, by request. The older
+                // arrangement kept this editor outside the scroll view
+                // because its tap/focus handling can compete with nested
+                // sheet scroll gestures - if typing in here ever starts
+                // fighting the scroll, that's the cause.
+                notesSection
+            }
+            // Breathing room between the first header and the top edge of
+            // the sheet.
+            .padding(.top, 10)
+            .frame(maxWidth: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear {
+            guard let key = batterNotesKey else { return }
+            batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
+        }
+        .onChange(of: batterNotesKey) { _, newKey in
+            guard let key = newKey else {
+                batterNotes = ""
+                return
+            }
+            batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
+        }
+        .onChange(of: batterNotes) { _, newValue in
+            guard let key = batterNotesKey else { return }
+            UserDefaults.standard.set(newValue, forKey: key)
+        }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+
+    /// Header row that doubles as the collapse control, so the whole strip
+    /// is the tap target rather than just a chevron.
+    private func collapsibleHeader(
+        title: String,
+        isExpanded: Bool,
+        trailing: String? = nil,
+        toggle: @escaping () -> Void
+    ) -> some View {
+        Button(action: toggle) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.subheadline).bold()
+                    .foregroundStyle(.primary)
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                Spacer()
+                if let trailing {
+                    Text(trailing)
+                        .font(.subheadline).bold()
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var notesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            collapsibleHeader(
+                title: "Batter notes",
+                isExpanded: isNotesExpanded,
+                trailing: isNotesExpanded ? nil : notesSummary
+            ) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isNotesExpanded.toggle()
+                }
+            }
+
+            if isNotesExpanded {
                 ZStack(alignment: .topLeading) {
                     FocusableNotesTextView(
                         text: $batterNotes,
@@ -1593,213 +1852,266 @@ struct PitchEventDetailPopover: View {
                     isBatterNotesFocused = true
                 }
             }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Batter spray chart")
-                            .font(.subheadline).bold()
-                        Spacer()
-                        if hasIdentity {
-                            let count = eventsWithCoords.count
-                            let hitLabel = (count == 1) ? "hit" : "hits"
-                            Text("\(count) \(hitLabel)")
-                                .font(.subheadline).bold()
-                        }
-                    }
-                    ZStack {
-                        // Background rounded container that clips content
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                            )
-                            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
-
-                        // Centered, size-aware spray overlay
-                        FieldSprayOverlay(
-                            fieldImageName: "FieldImage2",
-                            events: batterEvents.filter { $0.battedBallTapX != nil && $0.battedBallTapY != nil },
-                            homePlateNormalized: CGPoint(x: 0.5, y: 0.69),
-                            focalNormalized: CGPoint(x: 0.5, y: 0.45),
-                            overscan: 1.0
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .clipped()
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 330, maxHeight: 330)
-                    .clipped()
-                }
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(Array(playerEvents.reversed().enumerated()), id: \.offset) { item in
-                            let evt = item.element
-                            let isSource = (evt.id != nil && evt.id == event.id) || (evt.id == nil && event.id == nil && evt.timestamp == event.timestamp)
-                            HStack(alignment: .top, spacing: 10) {
-                                let calledLabel = evt.calledPitch.map { normalizeCardPitchDescription("\($0.type) \($0.location)") }
-                                let resultLabel: String = {
-                                    let loc = evt.location.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    let lowered = loc.lowercased()
-                                    // Avoid duplicating "Strike"/"Ball" when location already includes it.
-                                    if lowered.hasPrefix("strike ") || lowered == "strike" || lowered.hasPrefix("ball ") || lowered == "ball" {
-                                        return normalizeCardPitchDescription(loc)
-                                    }
-                                    return normalizeCardPitchDescription("\(evt.isStrike ? "Strike" : "Ball") \(loc)")
-                                }()
-                                let pitcherName: String = {
-                                    if let pid = evt.pitcherId,
-                                       let name = pitcherNameById[pid],
-                                       !name.isEmpty {
-                                        return name
-                                    }
-                                    return "-"
-                                }()
-                                VStack(alignment: .leading, spacing: 2) {
-                                    if let calledLabel {
-                                        Text("(Coach): \(calledLabel)")
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                            .multilineTextAlignment(.leading)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-                                    Text("(Result): \(resultLabel)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Text("(Pitcher): \(pitcherName)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                .frame(minWidth: 180, maxWidth: 220, alignment: .leading)
-                                .layoutPriority(1)
-
-                                OutcomeSummaryView(
-                                    lines: outcomeSummaryLines(for: evt),
-                                    jerseyNumber: evt.opponentJersey,
-                                    countText: evt.atBatCount,
-                                    minHeight: 0
-                                )
-                                .frame(width: 112)
-                            }
-                            .padding(12)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color(.systemBackground))
-                                    .shadow(color: isSource ? Color.blue.opacity(0.45) : Color.black.opacity(0.15), radius: isSource ? 6 : 6, x: 0, y: isSource ? 0 : 3)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(isSource ? Color.blue.opacity(0.6) : Color.black.opacity(0.08), lineWidth: isSource ? 2 : 1)
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 2)
-                    .padding(.vertical, 8)
-                }
-                .frame(minHeight: 160)
-
-                if !lineupBatters.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(lineupBatters) { cell in
-                                    let isSelected = cell.id == selectedLineupBatterId
-                                    Button {
-                                        onSelectLineupBatter(cell)
-                                    } label: {
-                                Text(cell.jerseyNumber)
-                                            .font(.headline.weight(.semibold))
-                                            .foregroundStyle(isSelected ? Color.white : Color.primary)
-                                            .frame(width: 48, height: 40)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                    .fill(isSelected ? Color.blue : Color(.systemGray6))
-                                            )
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                    .stroke(isSelected ? Color.blue.opacity(0.95) : Color.black.opacity(0.12), lineWidth: isSelected ? 2 : 1)
-                                            )
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.vertical, 4)
-                        }
-
-                        HStack(spacing: 8) {
-                            if let activeCell = activeLineupCell {
-                                Button {
-                                    onEditLineupBatter(activeCell)
-                                } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-
-                                Button {
-                                    onMoveLineupBatterUp(activeCell)
-                                } label: {
-                                    Label("Up", systemImage: "arrow.up")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-
-                                Button {
-                                    onMoveLineupBatterDown(activeCell)
-                                } label: {
-                                    Label("Down", systemImage: "arrow.down")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-
-                                Button(role: .destructive) {
-                                    onDeleteLineupBatter(activeCell)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                        .font(.caption)
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                            Spacer()
-                        }
-                    }
-                    .padding(.bottom, 0)
-                }
-                }
-                .frame(maxWidth: .infinity)
-            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear {
-            guard let key = batterNotesKey else { return }
-            batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
-        }
-        .onChange(of: batterNotesKey) { _, newKey in
-            guard let key = newKey else {
-                batterNotes = ""
-                return
-            }
-            batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
-        }
-        .onChange(of: batterNotes) { _, newValue in
-            guard let key = batterNotesKey else { return }
-            UserDefaults.standard.set(newValue, forKey: key)
-        }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
+
+    /// Collapsed, the header says whether there's anything in there at all -
+    /// otherwise notes already written would be invisible with no hint.
+    private var notesSummary: String? {
+        let trimmed = batterNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : "1 note"
+    }
+
+    @ViewBuilder
+    private var sprayChartSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            collapsibleHeader(
+                title: "Batter spray chart",
+                isExpanded: isSprayExpanded,
+                trailing: hasIdentity ? "\(eventsWithCoords.count) \(eventsWithCoords.count == 1 ? "hit" : "hits")" : nil
+            ) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isSprayExpanded.toggle()
+                }
+            }
+
+            if isSprayExpanded {
+                ZStack {
+                    // Background rounded container that clips content
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+
+                    // Centered, size-aware spray overlay.
+                    //
+                    // `allowsHitTesting(false)` is load-bearing, not tidiness:
+                    // FieldSprayOverlay deliberately renders an oversized,
+                    // cropping image (see its `overscan`), and `.clipped()`
+                    // clips *drawing* only - hit testing still covers the
+                    // full oversized frame. That overflow sat on top of the
+                    // section header above it and swallowed every tap, so
+                    // once this chart was expanded it could not be collapsed
+                    // again. The chart is display-only here, so it wants no
+                    // taps at all.
+                    FieldSprayOverlay(
+                        fieldImageName: "FieldImage2",
+                        events: eventsWithCoords,
+                        homePlateNormalized: CGPoint(x: 0.5, y: 0.69),
+                        focalNormalized: CGPoint(x: 0.5, y: 0.45),
+                        overscan: 1.0
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .allowsHitTesting(false)
+                }
+                .frame(maxWidth: .infinity, minHeight: 330, maxHeight: 330)
+                .clipped()
+                // Bounds hit testing to the container itself, for the same
+                // reason - `.clipped()` alone would not.
+                .contentShape(Rectangle())
+            }
+        }
+    }
+
+    private var pitchCardsStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                ForEach(Array(batterEvents.reversed().enumerated()), id: \.offset) { item in
+                    let evt = item.element
+                    let isSource = (evt.id != nil && evt.id == event.id) || (evt.id == nil && event.id == nil && evt.timestamp == event.timestamp)
+                    HStack(alignment: .top, spacing: 10) {
+                        let calledLabel = evt.calledPitch.map { normalizeCardPitchDescription("\($0.type) \($0.location)") }
+                        let resultLabel: String = {
+                            let loc = evt.location.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let lowered = loc.lowercased()
+                            // Avoid duplicating "Strike"/"Ball" when location already includes it.
+                            if lowered.hasPrefix("strike ") || lowered == "strike" || lowered.hasPrefix("ball ") || lowered == "ball" {
+                                return normalizeCardPitchDescription(loc)
+                            }
+                            return normalizeCardPitchDescription("\(evt.isStrike ? "Strike" : "Ball") \(loc)")
+                        }()
+                        let pitcherName: String = {
+                            if let pid = evt.pitcherId,
+                               let name = pitcherNameById[pid],
+                               !name.isEmpty {
+                                return name
+                            }
+                            return "-"
+                        }()
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let calledLabel {
+                                Text("(Coach): \(calledLabel)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Text("(Result): \(resultLabel)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("(Pitcher): \(pitcherName)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(minWidth: 180, maxWidth: 220, alignment: .leading)
+                        .layoutPriority(1)
+
+                        OutcomeSummaryView(
+                            lines: outcomeSummaryLines(for: evt),
+                            jerseyNumber: evt.opponentJersey,
+                            countText: evt.atBatCount,
+                            minHeight: 0
+                        )
+                        .frame(width: 112)
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(.systemBackground))
+                            .shadow(color: isSource ? Color.blue.opacity(0.45) : Color.black.opacity(0.15), radius: isSource ? 6 : 6, x: 0, y: isSource ? 0 : 3)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(isSource ? Color.blue.opacity(0.6) : Color.black.opacity(0.08), lineWidth: isSource ? 2 : 1)
+                    )
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 8)
+        }
+        .frame(minHeight: 160)
+    }
+
+    @ViewBuilder
+    private var battersSection: some View {
+        if !lineupBatters.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                if lineupGroups.count > 1 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(lineupGroups) { group in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Text(group.title)
+                                        .font(.subheadline.weight(.bold))
+                                        .foregroundStyle(group.isBatting ? Color.primary : Color.secondary)
+                                        .lineLimit(1)
+                                    if group.isBatting {
+                                        Text("at bat")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Capsule().fill(Color.pitchMarkActiveGray))
+                                    }
+                                }
+                                lineupStrip(group.cells)
+                            }
+                            if group.id != lineupGroups.last?.id {
+                                Divider()
+                            }
+                        }
+                    }
+                } else {
+                    lineupStrip(lineupBatters)
+                }
+
+                if let activeCell = activeLineupCell {
+                    batterActionRow(activeCell)
+                }
+            }
+            .padding(.bottom, 0)
+        }
+    }
+
+    /// Up/Down come first under the "Batting order" caption - that's all
+    /// they do, reorder the lineup - with a divider before # (rename) and
+    /// Delete, which act on the batter itself.
+    ///
+    /// Reordering moved onto the drag handles beside each jersey, so the
+    /// Up/Down buttons are gone and this row is just the two actions that
+    /// apply to the selected batter.
+    ///
+    /// `buttonBorderShape` is explicit because a large bordered button
+    /// defaults to a capsule, which on a one-glyph label like "#" renders as
+    /// a near-circle.
+    private func batterActionRow(_ activeCell: JerseyCell) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // A press-and-hold drag isn't self-evident, and it's the only
+            // way to reorder now that the arrows are gone.
+            Text("Batting order: press and hold a handle to drag")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            HStack(spacing: 8) {
+                batterLabelButton("#", systemImage: "pencil", fills: false) {
+                    onEditLineupBatter(activeCell)
+                }
+
+                Spacer(minLength: 8)
+
+                batterIconButton(
+                    "trash",
+                    accessibilityLabel: "Delete batter",
+                    role: .destructive
+                ) {
+                    onDeleteLineupBatter(activeCell)
+                }
+            }
+        }
+    }
+
+    private func batterIconButton(
+        _ systemImage: String,
+        accessibilityLabel: String,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.bold))
+                .frame(width: 30)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .buttonBorderShape(.roundedRectangle(radius: 10))
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    /// `fills: true` hands the button the row's leftover width; `false`
+    /// keeps it to its own content. Either way the label is one line at
+    /// full size - never scaled down, so nothing truncates.
+    private func batterLabelButton(
+        _ title: String,
+        systemImage: String,
+        role: ButtonRole? = nil,
+        fills: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: fills ? .infinity : nil)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .buttonBorderShape(.roundedRectangle(radius: 10))
+    }
+
 }
 
 struct FieldSprayOverlay: View {

@@ -219,13 +219,17 @@ struct PitchTrackerView: View {
     private var newMyTeamName: String { get { ui.newMyTeamName } nonmutating set { ui.newMyTeamName = newValue } }
     @State private var newMyTeamDesignation = TeamDesignationDraft()
     private var showChooseBattersStep: Bool { get { ui.showChooseBattersStep } nonmutating set { ui.showChooseBattersStep = newValue } }
-    // pitcherId -> every team name that pitcher's linked TeamPlayer shows up
-    // on, across all of the user's teams - lets the new-game pitcher picker
-    // disambiguate same-named pitchers from different teams. Loaded by
-    // fanning out loadTeamPlayers across loadMyTeams's result; no
-    // collectionGroup query exists for this (only /teams/{id}/members has
-    // one), so client-side fan-out is the lowest-risk option.
-    @State private var teamNamesByPitcherId: [String: [String]] = [:]
+    // Every roster row across every team the user is on, plus those teams.
+    // Both pitcher pickers render Home's Players rows from these
+    // (PlayerDirectory.swift), which is what lets them disambiguate
+    // same-named pitchers from different teams - the job the old
+    // pitcherId -> team-names map did as a subtitle string, before the rows
+    // carried the team and its designation themselves. Loaded by fanning
+    // loadTeamPlayers out across loadMyTeams's result; no collectionGroup
+    // query exists for this (only /teams/{id}/members has one), so
+    // client-side fan-out is the lowest-risk option.
+    @State private var rosterEntries: [PlayerRosterEntry] = []
+    @State private var directoryTeams: [Team] = []
     // Both team-setup sheets can now be reached two ways: from the Us/Them
     // toggle itself (where landing on that side afterward is the whole
     // point) or from the batter row's empty-state button while already on
@@ -396,27 +400,15 @@ struct PitchTrackerView: View {
     private var showTemplateChangeWarning: Bool { get { ui.showTemplateChangeWarning } nonmutating set { ui.showTemplateChangeWarning = newValue } }
     @State private var pendingTemplateSelection: PitchTemplate? = nil
     @State private var lastAppliedTemplateId: UUID? = nil
-    @State private var pendingGameConfirmation: PendingSessionConfirmation? = nil
     // Tapping a game row sets these and dismisses showGameSheet rather than
-    // presenting pendingGameConfirmation immediately - presenting a new
-    // sheet in the same transaction that dismisses another one is a known
-    // SwiftUI race (the new sheet can silently fail to appear, or flash and
-    // vanish), which is what "create a game, tap into it, it flashes and
-    // you can't get in" matched. showGameSheet's onDismiss now fires the
-    // confirmation request only once the first sheet has actually finished
-    // dismissing.
+    // entering the game immediately - doing both in one transaction is a
+    // known SwiftUI race, which is what "create a game, tap into it, it
+    // flashes and you can't get in" matched. showGameSheet's onDismiss
+    // enters the game only once the sheet has actually finished dismissing.
+    private var didLoadTemplates: Bool { get { ui.didLoadTemplates } nonmutating set { ui.didLoadTemplates = newValue } }
+    private var keyPickedForActiveGame: Bool { get { ui.keyPickedForActiveGame } nonmutating set { ui.keyPickedForActiveGame = newValue } }
     private var pendingGameChoiceGameId: String? { get { ui.pendingGameChoiceGameId } nonmutating set { ui.pendingGameChoiceGameId = newValue } }
     private var pendingGameChoiceOwnerUid: String? { get { ui.pendingGameChoiceOwnerUid } nonmutating set { ui.pendingGameChoiceOwnerUid = newValue } }
-    // Same shape of race, one step later: confirming the pitcher/template
-    // sheet used to call chooseGame (which flips isGame and swaps in the
-    // tracker, including the At Bat scroll's "+" button) in the same
-    // transaction that dismissed this sheet. That left the new button's
-    // gesture recognizer stuck unresponsive until a full app relaunch
-    // forced a clean re-layout. Deferred to this sheet's onDismiss instead.
-    @State private var deferredGameEntryAction: (() -> Void)? = nil
-    private var pendingConfirmationPitcherId: String? { get { ui.pendingConfirmationPitcherId } nonmutating set { ui.pendingConfirmationPitcherId = newValue } }
-    @State private var pendingConfirmationTemplateId: UUID? = nil
-    @State private var pendingConfirmationTrackingMode: TrackingMode = .coach
 
     // Added per instructions:
     @State private var encryptedSelectionByGameId: [String: Bool] = [:]
@@ -620,10 +612,6 @@ struct PitchTrackerView: View {
         showGameSheet = false
         showCodeShareSheet = false
         showCodeAssignmentSheet = false
-        // Included because leaving this set is worse than cancelling it:
-        // a non-nil pendingGameConfirmation with no sheet on screen blocks
-        // every later attempt to enter a game (see requestGameConfirmation).
-        pendingGameConfirmation = nil
         // NOTE: do NOT touch confirmSheetBinding/showConfirmSheet here unless you truly want to cancel it.
     }
 
@@ -678,6 +666,12 @@ struct PitchTrackerView: View {
                 self.authManager.migrateBatterIdsIfMissing(ownerUserId: ownerUid, gameId: gid)
             }
 
+            // The cells are back, so their roster links - and the two side
+            // rosters those links are matched against - have to come back
+            // too, or the At Bat scroll can't tell the two sides apart.
+            self.mergeHitterLinks(from: local)
+            self.loadSideContext(for: local)
+
             // Match your existing selection side-effects
             self.selectedBatterId = nil
             self.ownerTemplateName = self.selectedTemplate?.name
@@ -721,6 +715,9 @@ struct PitchTrackerView: View {
                         let gid = game.id ?? gameId
                         self.authManager.migrateBatterIdsIfMissing(ownerUserId: ownerUid, gameId: gid)
                     }
+
+                    self.mergeHitterLinks(from: game)
+                    self.loadSideContext(for: game)
 
                     self.selectedBatterId = nil
                     self.ownerTemplateName = self.selectedTemplate?.name
@@ -2775,6 +2772,48 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// Both sides' rosters, both side team names, and the away pitcher ids
+    /// for one game - lifted verbatim out of `chooseGame`, which was the
+    /// only place that loaded any of it.
+    ///
+    /// That was the second half of "the lineup doesn't swap after a cold
+    /// launch": a relaunch restores through `hydrateChosenGameUI` / the
+    /// deferred boot restore, neither of which went anywhere near this, so
+    /// both rosters stayed empty. `currentBattingHitterIds` deliberately
+    /// fails open on an empty roster (it can't tell "empty" from "still
+    /// loading"), so the At Bat scroll showed every cell on both sides no
+    /// matter what the link map said.
+    /// Takes the `Game` itself rather than an id on purpose: the slow
+    /// branch of `hydrateChosenGameUI` runs precisely because the game is
+    /// *not* in `games` yet, so an id lookup there would find nothing and
+    /// clear both rosters instead of loading them.
+    private func loadSideContext(for game: Game?) {
+        if let awayTeamId = game?.awayTeamId, !awayTeamId.isEmpty {
+            loadAwayPitcherIds(awayTeamId: awayTeamId)
+            refreshAwayRoster(awayTeamId: awayTeamId)
+            authManager.loadMyTeams { teams, _ in
+                if let match = teams.first(where: { $0.team.id == awayTeamId }) {
+                    self.activeAwayTeamName = match.team.name
+                }
+            }
+        } else {
+            awayPitcherIds = []
+            awayRoster = []
+            activeAwayTeamName = ""
+        }
+        if let teamId = game?.teamId, !teamId.isEmpty {
+            refreshHomeRoster(teamId: teamId)
+            authManager.loadMyTeams { teams, _ in
+                if let match = teams.first(where: { $0.team.id == teamId }) {
+                    self.activeHomeTeamName = match.team.name
+                }
+            }
+        } else {
+            homeRoster = []
+            activeHomeTeamName = ""
+        }
+    }
+
     private func refreshAwayRoster(awayTeamId: String, completion: (() -> Void)? = nil) {
         authManager.loadTeamPlayers(teamId: awayTeamId) { players in
             self.awayRoster = players
@@ -3304,6 +3343,10 @@ struct PitchTrackerView: View {
                 )
             }
         }
+
+        // This is the only writer of the per-game key map, so it is where
+        // the Key control's flash stops (or starts, if a key was cleared).
+        refreshKeyPickedForActiveGame()
     }
 
     private func persistSelectedPitcherId(_ id: String?) {
@@ -3377,6 +3420,36 @@ struct PitchTrackerView: View {
            hiddenTemplateIdSet.contains(selected.id.uuidString) {
             selectedTemplate = visibleTemplates.first ?? templates.first
         }
+        refreshKeyPickedForActiveGame()
+    }
+
+    /// Recomputes `keyPickedForActiveGame` from the only two places a
+    /// game's own key is recorded. Called from the two choke points where
+    /// either can change: the end of `applyStoredSelections(for:)` (game
+    /// entry, and templates arriving afterwards) and the end of
+    /// `persistSelectedTemplate(_:)`, which is the sole writer of the
+    /// per-game map.
+    ///
+    /// An id that no longer resolves to a loaded, visible template counts
+    /// as "not picked" - a key that was deleted or hidden since the game
+    /// last ran is exactly the case the coach needs prompting about.
+    private func refreshKeyPickedForActiveGame() {
+        guard let gameId = selectedGameId, !gameId.isEmpty else {
+            keyPickedForActiveGame = false
+            return
+        }
+
+        func isUsable(_ id: String?) -> Bool {
+            guard let id, !id.isEmpty, !hiddenTemplateIdSet.contains(id) else { return false }
+            return templates.contains(where: { $0.id.uuidString == id })
+        }
+
+        if let map = UserDefaults.standard.dictionary(forKey: DefaultsKeys.lastTemplateByGameId) as? [String: String],
+           isUsable(map[gameId]) {
+            keyPickedForActiveGame = true
+            return
+        }
+        keyPickedForActiveGame = isUsable(currentGame?.lastTemplateId)
     }
 
     private func restorePersistedTemplateIfPossible(from loadedTemplates: [PitchTemplate]) -> Bool {
@@ -3831,31 +3904,10 @@ struct PitchTrackerView: View {
         currentTrackingMode = games.first(where: { $0.id == gameId })?.trackingMode ?? .coach
         activeSide = .home
         selectedHitterId = nil
-        hitterIdByJerseyCellId = [:]
-        if let awayTeamId = games.first(where: { $0.id == gameId })?.awayTeamId, !awayTeamId.isEmpty {
-            loadAwayPitcherIds(awayTeamId: awayTeamId)
-            refreshAwayRoster(awayTeamId: awayTeamId)
-            authManager.loadMyTeams { teams, _ in
-                if let match = teams.first(where: { $0.team.id == awayTeamId }) {
-                    self.activeAwayTeamName = match.team.name
-                }
-            }
-        } else {
-            awayPitcherIds = []
-            awayRoster = []
-            activeAwayTeamName = ""
-        }
-        if let teamId = games.first(where: { $0.id == gameId })?.teamId, !teamId.isEmpty {
-            refreshHomeRoster(teamId: teamId)
-            authManager.loadMyTeams { teams, _ in
-                if let match = teams.first(where: { $0.team.id == teamId }) {
-                    self.activeHomeTeamName = match.team.name
-                }
-            }
-        } else {
-            homeRoster = []
-            activeHomeTeamName = ""
-        }
+        // Was an unconditional reset, which is what made the At Bat scroll
+        // stop scoping to the batting side after reopening a game.
+        seedHitterLinks(from: games.first(where: { $0.id == gameId }))
+        loadSideContext(for: games.first(where: { $0.id == gameId }))
         debugLog("🧭[PROG] chooseGame gid=\(gameId) owner=\(ownerUid)")
 
         isGame = true
@@ -3908,224 +3960,59 @@ struct PitchTrackerView: View {
         ensureAutoLiveSessionIfNeeded()
     }
 
-    fileprivate enum PendingSessionKind {
-        case game
-    }
-
-    fileprivate struct PendingSessionConfirmation: Identifiable {
-        let id = UUID()
-        let kind: PendingSessionKind
-        let gameId: String?
-        let ownerUid: String?
-        let opponentName: String?
-    }
-
+    /// Enters a game. Named for what it used to do: present a sheet asking
+    /// for the pitcher and grid key before letting you in. That sheet is
+    /// gone - `chooseGame` ends in `applyStoredSelections(for:)`, which
+    /// already restores this game's own last pitcher and key (the
+    /// `lastPitcherByGameId`/`lastTemplateByGameId` maps, with the game
+    /// doc's `lastPitcherId`/`lastTemplateId` as the cross-device
+    /// fallback), and `persistSelectedPitcherId`/`persistSelectedTemplate`
+    /// already write both of those every time either is picked inside the
+    /// tracker. So the sheet's own persistence was duplicating work that
+    /// happens anyway, and its tracking-mode picker was dead for games
+    /// (the confirm path forced `.coach` regardless).
+    ///
+    /// Deliberately does NOT fall back to the pitcher/key last used in
+    /// some *other* game the way the sheet's seeding did. A game with
+    /// nothing of its own stored now enters with the pitcher unset and
+    /// flashes for it (`MissingPitcherBadge` / `MissingKeyBadge`), which
+    /// is honest about it - silently carrying the previous game's pitcher
+    /// in is how pitches get logged against the wrong kid.
     private func requestGameConfirmation(gameId: String, ownerUid: String) {
-        // The "Account In Use" blocker is a root `.overlay`, and a sheet
-        // renders above that - so presenting this one while a conflict is up
-        // hides the only control that can resolve it. That is what made the
-        // pitcher/grid-key sheet appear on top of the takeover prompt.
+        // The "Account In Use" blocker is a root `.overlay`. Entering a
+        // game while a conflict is up would swap the tracker in underneath
+        // it, hiding the only control that can resolve the conflict.
         guard !showSessionConflictAlert else { return }
-        let game = games.first(where: { $0.id == gameId })
-        let opponent = game?.opponent ?? opponentName
-        pendingConfirmationTrackingMode = .coach
-        let defaults = UserDefaults.standard
-        if let map = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String],
-           let pitcherId = map[gameId] {
-            pendingConfirmationPitcherId = pitcherId
-        } else {
-            pendingConfirmationPitcherId = selectedPitcherId
-        }
-        if let map = defaults.dictionary(forKey: DefaultsKeys.lastTemplateByGameId) as? [String: String],
-           let templateId = map[gameId],
-           let uuid = UUID(uuidString: templateId) {
-            pendingConfirmationTemplateId = uuid
-        } else {
-            pendingConfirmationTemplateId = selectedTemplate?.id
-        }
-        if let selected = pendingConfirmationTemplateId,
-           hiddenTemplateIdSet.contains(selected.uuidString) {
-            pendingConfirmationTemplateId = nil
-        }
-        if pendingConfirmationTemplateId == nil, let first = visibleTemplates.first ?? templates.first {
-            pendingConfirmationTemplateId = first.id
-        }
-        if let selected = pendingConfirmationTemplateId,
-           !templates.contains(where: { $0.id == selected }),
-           let first = visibleTemplates.first ?? templates.first {
-            pendingConfirmationTemplateId = first.id
-        }
-        let pending = PendingSessionConfirmation(
-            kind: .game,
-            gameId: gameId,
-            ownerUid: ownerUid,
-            opponentName: opponent
-        )
 
-        // `.sheet(item:)` does not re-present on a non-nil -> non-nil
-        // change, and every path that clears this field requires the sheet
-        // to have actually presented (confirm, cancel, or SwiftUI's own
-        // dismissal write). So ONE dropped presentation wedges it forever:
-        // each later tap assigns over an already-non-nil item, nothing
-        // presents, nothing clears it, and entering a game stays dead
-        // until relaunch. Forcing a nil -> non-nil transition makes the
-        // path self-healing no matter why a presentation was dropped.
-        //
-        // Presentations do get dropped here: returning after 15+ minutes
-        // idle forces the Home tab (evaluateIdleAndMaybeShowSettings), so
-        // a game tap now asks a tab that is still mid-switch to present a
-        // sheet. The visible tell of the wedged state is the Games tab
-        // rendering blurred with no sheet on it, from the
-        // `pendingGameConfirmation != nil` blur.
-        if pendingGameConfirmation != nil {
-            pendingGameConfirmation = nil
+        // `chooseGame` flips `isGame`, which swaps the tracker UI in for
+        // the first time. One caller is `showGameSheet`'s onDismiss, and
+        // doing that in the same transaction as a sheet dismissal left
+        // controls on the newly-appeared tracker (the At Bat scroll's "+")
+        // with unresponsive gesture recognizers until a full relaunch
+        // forced a clean re-layout. Deferred a run-loop turn so the
+        // dismissal finishes first. This is the same deferral the old
+        // confirmation sheet got for free from its onDismiss.
+        DispatchQueue.main.async {
+            self.chooseGame(gameId: gameId, ownerUid: ownerUid)
+            self.refreshPlayerDirectory()
+
+            // Re-assert this game's stored pitcher/key once the game
+            // listeners started by chooseGame have settled - they can
+            // land a stale template or pitcher right after entry. The
+            // old confirm path re-asserted here for the same reason.
             DispatchQueue.main.async {
-                self.pendingGameConfirmation = pending
-                self.refreshTeamNamesByPitcherId()
-            }
-            return
-        }
-
-        pendingGameConfirmation = pending
-        refreshTeamNamesByPitcherId()
-    }
-
-    private func refreshTeamNamesByPitcherId() {
-        authManager.loadMyTeams { teams, _ in
-            guard !teams.isEmpty else {
-                self.teamNamesByPitcherId = [:]
-                return
-            }
-            var result: [String: [String]] = [:]
-            let group = DispatchGroup()
-            for entry in teams {
-                guard let teamId = entry.team.id else { continue }
-                group.enter()
-                self.authManager.loadTeamPlayers(teamId: teamId) { players in
-                    for player in players {
-                        guard let pid = player.pitcherId else { continue }
-                        result[pid, default: []].append(entry.team.name)
-                    }
-                    group.leave()
-                }
-            }
-            group.notify(queue: .main) {
-                self.teamNamesByPitcherId = result
+                self.applyStoredSelections(for: gameId)
             }
         }
     }
 
-    private func confirmSessionSelection(
-        _ item: PendingSessionConfirmation,
-        selectedPitcherId: String?,
-        selectedTemplateId: UUID?,
-        selectedTrackingMode: TrackingMode
-    ) {
-        let effectiveTrackingMode: TrackingMode = item.kind == .game ? .coach : selectedTrackingMode
-        let defaults = UserDefaults.standard
-
-        if case .game = item.kind, let gameId = item.gameId {
-            var templateMap = defaults.dictionary(forKey: DefaultsKeys.lastTemplateByGameId) as? [String: String] ?? [:]
-            if let templateId = selectedTemplateId {
-                templateMap[gameId] = templateId.uuidString
-            } else {
-                templateMap.removeValue(forKey: gameId)
-            }
-            defaults.set(templateMap, forKey: DefaultsKeys.lastTemplateByGameId)
-
-            var pitcherMap = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String] ?? [:]
-            if let pitcherId = selectedPitcherId {
-                pitcherMap[gameId] = pitcherId
-            } else {
-                pitcherMap.removeValue(forKey: gameId)
-            }
-            defaults.set(pitcherMap, forKey: DefaultsKeys.lastPitcherByGameId)
-
-            if let index = games.firstIndex(where: { $0.id == gameId }) {
-                games[index].lastTemplateId = selectedTemplateId?.uuidString
-                games[index].lastPitcherId = selectedPitcherId
-                games[index].trackingMode = effectiveTrackingMode
-                if !isDemoMode {
-                    authManager.saveGame(games[index])
-                }
-            }
+    /// The roster entries + teams both pitcher pickers build their Players
+    /// rows from.
+    private func refreshPlayerDirectory() {
+        authManager.loadPlayerDirectory { entries, teams in
+            self.directoryTeams = teams
+            self.rosterEntries = entries
         }
-
-        // chooseGame flips isGame, which swaps the tracker UI in for the
-        // first time - doing that in the same transaction that dismisses
-        // this confirmation sheet (pendingGameConfirmation = nil, below)
-        // left controls on the newly-appeared tracker (the At Bat scroll's
-        // "+") unresponsive until a full relaunch. Deferred to the sheet's
-        // onDismiss so the dismiss transition finishes first.
-        switch item.kind {
-        case .game:
-            deferredGameEntryAction = { [self] in
-                if let gid = item.gameId, let ownerUid = item.ownerUid {
-                    chooseGame(gameId: gid, ownerUid: ownerUid)
-                }
-                if let templateId = selectedTemplateId,
-                   let template = templates.first(where: { $0.id == templateId }) {
-                    applyTemplate(template)
-                }
-                if let pitcherId = selectedPitcherId,
-                   let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
-                    applySelectedPitcher(pitcher, allowTemplateOverride: selectedTemplateId == nil)
-                }
-
-                // Re-assert confirmed selections after game listeners settle to avoid stale post-confirm overwrites.
-                DispatchQueue.main.async {
-                    if let templateId = selectedTemplateId,
-                       let template = templates.first(where: { $0.id == templateId }) {
-                        applyTemplate(template)
-                    }
-                    if let pitcherId = selectedPitcherId,
-                       let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
-                        applySelectedPitcher(pitcher, allowTemplateOverride: selectedTemplateId == nil)
-                    }
-                }
-            }
-        }
-
-        persistSelectedTemplate(selectedTemplate)
-        persistSelectedPitcherId(self.selectedPitcherId)
-        currentTrackingMode = effectiveTrackingMode
-        resetScoutComposer()
-        pendingGameConfirmation = nil
-    }
-
-    private func resolvedGameName(for item: PendingSessionConfirmation) -> String {
-        if let gameId = item.gameId {
-            if let match = games.first(where: { $0.id == gameId })?.opponent, !match.isEmpty {
-                return match
-            }
-        }
-        if let opponent = item.opponentName, !opponent.isEmpty {
-            return opponent
-        }
-        return "Unknown"
-    }
-
-    private func resolvedTemplateName(for templateId: UUID?) -> String {
-        if let templateId,
-           let template = templates.first(where: { $0.id == templateId }) {
-            return template.name
-        }
-        if let template = selectedTemplate {
-            return template.name
-        }
-        return "Not set"
-    }
-
-    private func resolvedPitcherName(for pitcherId: String?) -> String {
-        if let pitcherId,
-           let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
-            return pitcher.name
-        }
-        if let pitcherId = selectedPitcherId,
-           let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
-            return pitcher.name
-        }
-        return "Not set"
     }
 
     // Tiny factory to reduce type-checker work when creating bindings
@@ -4851,6 +4738,14 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// A pitcher that IS selected and isn't ours stays locked, as before.
+    /// The "nothing selected" case now also passes when there's a top
+    /// action to fall back on: with the confirmation sheet gone, "no
+    /// pitcher yet" is an ordinary state the coach fixes by tapping the
+    /// flashing badge, and an account with no owned pitchers at all would
+    /// otherwise have that button disabled - making the "New Pitcher on
+    /// <team>" action it leads to unreachable. Same reasoning as
+    /// `noPitcherOptionsAvailable` below.
     private var canSelectPitcherInGame: Bool {
         guard isGame else { return true }
         let uid = authManager.user?.uid
@@ -4858,6 +4753,7 @@ struct PitchTrackerView: View {
             return current.isActiveOwner(currentUid: uid)
         }
         return pitchers.contains { $0.isActiveOwner(currentUid: uid) }
+            || !pitcherPickerTopActions.isEmpty
     }
 
     private var selectedPitcherForStats: Pitcher? {
@@ -5053,16 +4949,33 @@ struct PitchTrackerView: View {
         }
     }
 
-    private func moveBatterFromDetail(_ cell: JerseyCell, direction: Int) {
-        guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else { return }
-        let target = idx + direction
-        guard target >= 0, target < jerseyCells.count else { return }
-
+    /// Drag-handle reorder from the pin sheet's lineup strip. Rearranges
+    /// only - this runs repeatedly while a finger is moving, so the write
+    /// waits for `persistLineupFromDetail()` on drop.
+    ///
+    /// Replaced `moveBatterFromDetail(_:direction:)`, which the deleted
+    /// Up/Down buttons drove one step at a time.
+    private func reorderBatterFromDetail(_ moving: JerseyCell, to target: JerseyCell) {
+        guard let from = jerseyCells.firstIndex(where: { $0.id == moving.id }),
+              let to = jerseyCells.firstIndex(where: { $0.id == target.id }),
+              from != to else { return }
+        // `move(fromOffsets:toOffset:)`, not remove + insert.
+        //
+        // Remove + insert reads to `ForEach` as a delete *and* an insert, so
+        // for the length of the animation the same jersey is drawn in both
+        // places - the phantom extra chip that appeared mid-drag. A move is
+        // a single operation and animates as one.
+        //
+        // It also fixes an off-by-one that remove + insert had: `to` was
+        // computed before the removal, so a forward drag landed one position
+        // further than intended. The +1 below is this API's convention for
+        // a forward move.
         withAnimation {
-            let item = jerseyCells.remove(at: idx)
-            jerseyCells.insert(item, at: target)
+            jerseyCells.move(
+                fromOffsets: IndexSet(integer: from),
+                toOffset: to > from ? to + 1 : to
+            )
         }
-        persistLineupFromDetail()
     }
 
     private func deleteBatterFromDetail(_ cell: JerseyCell) {
@@ -5070,17 +4983,24 @@ struct PitchTrackerView: View {
         let removed = jerseyCells.remove(at: idx)
         persistLineupFromDetail()
 
-        if selectedBatterId == removed.id {
-            let fallback = jerseyCells.indices.contains(min(idx, max(jerseyCells.count - 1, 0)))
-                ? jerseyCells[min(idx, max(jerseyCells.count - 1, 0))]
-                : nil
-            syncSelectedBatterFromDetail(fallback)
-            if let fallback {
-                Task { await openJerseyDetail(for: fallback, keepSheetVisible: true) }
-            } else {
-                jerseyDetailPayload = nil
-            }
-        }
+        // The sheet always closes on a delete. It used to re-present itself
+        // on a fallback cell (openJerseyDetail(keepSheetVisible: true)),
+        // which read as "the pin sheet relaunches by itself showing a
+        // random jersey" - and the fallback was an index-based neighbour
+        // picked from the FULL lineup, so once the At Bat scroll became
+        // side-scoped it could even land on a batter from the other team,
+        // i.e. one not visible in the strip at all.
+        jerseyDetailPayload = nil
+
+        guard selectedBatterId == removed.id else { return }
+
+        // Keeping a batter selected is still worth doing (balls/strikes
+        // hang off one), but only one that's actually on the batting side.
+        let sameSide = visibleJerseyCells
+        let fallback = sameSide.indices.contains(idx)
+            ? sameSide[idx]
+            : sameSide.last
+        syncSelectedBatterFromDetail(fallback)
     }
 
     private func openJerseyDetail(for cell: JerseyCell, keepSheetVisible: Bool = false) async {
@@ -5760,14 +5680,124 @@ struct PitchTrackerView: View {
         }
     }
     
-    private var contentSectionDimmed: some View {
+    /// True while the content section is blurred *and* non-interactive for
+    /// want of any code grid key at all. `selectedTemplate` is only nil
+    /// when the account has zero keys or templates haven't loaded yet -
+    /// `loadTemplates` falls back to the first one otherwise - so this is
+    /// not the same thing as "this game has no key of its own"
+    /// (`needsKeyForThisGame`), which is an ordinary state with a live
+    /// tracker behind it.
+    ///
+    /// Shared so everything that would be pointless while nothing down
+    /// there can be tapped can stay quiet.
+    /// The card's own condition, and deliberately *not* the blur's. The
+    /// blur asks "is a key selected"; the card speaks about the key list,
+    /// so only the key list may answer it. Keying the card off the
+    /// selection is what let it keep insisting there was no key on a screen
+    /// whose picker was already offering one.
+    ///
+    /// `visibleTemplates`, not `templates`: archiving is a local hide, and
+    /// archiving your last key leaves `templates` full, `selectedTemplate`
+    /// nil (Archive clears it) and the tracker just as unusable as having
+    /// none at all. Testing `templates.isEmpty` there would blur the screen
+    /// and explain nothing.
+    ///
+    /// `didLoadTemplates` keeps it quiet during the launch window, when the
+    /// list is empty only because it hasn't arrived.
+    private var hasNoUsableCodeGridKey: Bool {
+        didLoadTemplates && visibleTemplates.isEmpty
+    }
+
+    /// Distinguishes "you've never made a key" from "all your keys are
+    /// archived" - same dead tracker, completely different fix.
+    private var allCodeGridKeysAreArchived: Bool {
+        hasNoUsableCodeGridKey && !templates.isEmpty
+    }
+
+    private var isContentSectionInert: Bool {
         let isActiveLiveParticipant = (activeLiveId != nil && isGame && !isOwnerForActiveGame)
-        let isDimmed = (selectedTemplate == nil && !isActiveLiveParticipant)
+        return selectedTemplate == nil && !isActiveLiveParticipant
+    }
+
+    private var contentSectionDimmed: some View {
+        let isDimmed = isContentSectionInert
         return contentSection
             .opacity(isDimmed ? 0.6 : 1.0)
             .blur(radius: isDimmed ? 4 : 0)
             .allowsHitTesting(!isDimmed)
             .animation(.easeInOut(duration: 0.3), value: selectedTemplate)
+            // Attached AFTER .allowsHitTesting(false), which is the only
+            // reason this stays tappable: the overlay is a sibling of the
+            // disabled content, not a child of it. It also has to sit here,
+            // at the root of the whole section - SwiftUI clips an overlay's
+            // hit-testing to its parent's frame, so hanging it off a
+            // subview would render it full-screen but accept taps in only
+            // that subview's rows (the Sign Out dialog bug in CLAUDE.md).
+            //
+            // Gated on templates having actually loaded: `selectedTemplate`
+            // is nil for the whole launch window before `loadTemplates`
+            // returns, and announcing "no key" at every launch would be a
+            // lie that then disappears.
+            .overlay {
+                if isDimmed && hasNoUsableCodeGridKey {
+                    NoCodeGridKeyBlocker(
+                        allArchived: allCodeGridKeysAreArchived,
+                        onOpenKeys: { requestCodeGridKeys(createNew: !allCodeGridKeysAreArchived) }
+                    )
+                }
+            }
+    }
+
+    /// Takes the tracker out of its keyless state the moment a key exists,
+    /// by whatever route it arrived - created in Home, pulled in by a
+    /// reload, purchased, shared in.
+    ///
+    /// Without this the tracker stayed blurred behind
+    /// `NoCodeGridKeyBlocker` after the coach created their very first key.
+    /// `handleSavedTemplate` appends to the `templates` binding - which is
+    /// why the Key picker could already select the new key - but never
+    /// touches `selectedTemplate`, and `isContentSectionInert` keys off
+    /// `selectedTemplate`, not off whether any key exists. So the fix
+    /// belongs here rather than at that one save site: every other way a
+    /// first key can appear had the same hole.
+    ///
+    /// `applyTemplate` rather than a bare assignment so the pitch chips and
+    /// code assignments come with it (a bare `selectedTemplate = x` lifts
+    /// the blur onto an unusable strike zone). Source `.live` because the
+    /// app chose this, not the coach - `.user` would lock the live template
+    /// override and publish the choice to a live room.
+    /// `visibleTemplates` only - never `templates`. Adopting a hidden key
+    /// here would silently undo an Archive the coach had just performed,
+    /// and leave the tracker running on a key they'd deliberately put away.
+    /// With everything archived the right outcome is the blur plus the card
+    /// telling them so.
+    private func adoptFirstTemplateIfNoneSelected() {
+        guard selectedTemplate == nil else { return }
+        guard let first = visibleTemplates.first else { return }
+        applyTemplate(first, source: .live)
+    }
+
+    /// The one action that clears a keyless tracker. Switches to the Home
+    /// tab and asks it to open Code Grid Keys with a fresh key editor.
+    ///
+    /// The post is deferred a run-loop turn because the Home tab's body -
+    /// and so its `.onReceive` - isn't subscribed until the TabView has
+    /// actually selected it. Worst case the notification is missed and the
+    /// coach lands on Home with the section collapsed, one tap from the
+    /// same place; the tab switch itself is what guarantees they're never
+    /// stuck behind the blur.
+    /// `createNew: false` when keys exist but are all archived - opening a
+    /// blank editor would be the wrong answer there, so Home just expands
+    /// Code Grid Keys with the archived list revealed, where Unhide sits.
+    private func requestCodeGridKeys(createNew: Bool) {
+        activeHomeArea = .home
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .createCodeGridKeyRequested,
+                object: nil,
+                userInfo: ["createNew": createNew]
+            )
+        }
     }
 
     private var shouldBlurForPitchResultSelection: Bool {
@@ -5971,12 +6001,25 @@ struct PitchTrackerView: View {
     /// same place (`settingsButton`'s action was just `activeHomeArea = .home`).
     private var topBarMenu: some View {
         Menu {
-            Button {
-                showGridKeySheet = true
-            } label: {
-                Label("Key", systemImage: "key.fill")
+            // With no keys to choose from, the Key item used to be present
+            // but disabled - the control the coach reaches for when the
+            // tracker is blurred, doing nothing. Offer the fix instead.
+            if visibleTemplates.isEmpty {
+                Button {
+                    requestCodeGridKeys(createNew: !allCodeGridKeysAreArchived)
+                } label: {
+                    Label(
+                        allCodeGridKeysAreArchived ? "Open Code Grid Keys" : "Create a Key",
+                        systemImage: "key.badge.plus"
+                    )
+                }
+            } else {
+                Button {
+                    showGridKeySheet = true
+                } label: {
+                    Label("Key", systemImage: "key.fill")
+                }
             }
-            .disabled(visibleTemplates.isEmpty)
 
             Button {
                 triggerAssistantCodeLink()
@@ -6056,25 +6099,14 @@ struct PitchTrackerView: View {
             }
             .opacity(0)
 
-            // Visible current label
-            HStack(spacing: 6) {
-                Text(keyPrefix + currentLabel)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .allowsTightening(true)
-                    .foregroundStyle(Color.accentColor)
-                if currentTrackingMode != .scout && !currentTemplateVersionLabel.isEmpty {
-                    Text(currentTemplateVersionLabel)
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .foregroundStyle(Color.gray)
-                        .background(Color.gray.opacity(0.15))
-                        .clipShape(Capsule())
-                        .accessibilityLabel("Template version \(currentTemplateVersionLabel)")
-                }
-            }
+            // Visible current label, or the flash when this game has no key
+            TopBarKeyLabel(
+                prefix: keyPrefix,
+                name: currentLabel,
+                versionLabel: currentTemplateVersionLabel,
+                showVersion: currentTrackingMode != .scout,
+                needsKey: needsKeyForThisGame
+            )
         }
         .frame(maxWidth: 150, alignment: .leading)
         .padding(.horizontal, 14)
@@ -6089,6 +6121,30 @@ struct PitchTrackerView: View {
         .opacity(visibleTemplates.isEmpty ? 0.6 : 1.0)
         .contentShape(Capsule())
         .animation(.easeInOut(duration: 0.2), value: selectedTemplate?.id)
+    }
+
+    /// Flashes whenever the active game has no usable key - including the
+    /// case where no key exists at all, which is the state that most needs
+    /// explaining. Tapping it always leads somewhere now: the Menu offers
+    /// "Create a Key" when there is nothing to pick from. A participant's
+    /// key comes from the owner's live override, so they aren't asked.
+    private var needsKeyForThisGame: Bool {
+        isGame && isOwnerForActiveGame && !keyPickedForActiveGame
+    }
+
+    /// True while this game still needs a pitcher. An id that doesn't
+    /// resolve against the loaded roster counts as unset - that's the same
+    /// test the button's own label uses to decide what to draw, so the
+    /// badge and the name underneath it can't disagree.
+    ///
+    /// Silent while the content section is inert: the pitcher button is
+    /// behind the blur there, so a flash on it would be an instruction the
+    /// coach cannot follow. `NoCodeGridKeyBlocker` is the live control in
+    /// that state, and it should be the only thing asking for attention.
+    private var needsPitcherForThisGame: Bool {
+        guard isGame, !isLiveParticipantViewingGame, !isContentSectionInert else { return false }
+        guard let pid = selectedPitcherId, !pid.isEmpty else { return true }
+        return !pitchers.contains(where: { $0.id == pid })
     }
 
     /// True while this device is a live-session participant (not the owner)
@@ -6132,17 +6188,10 @@ struct PitchTrackerView: View {
         )
     }
 
-    /// Jersey number for a pitcher, from whichever roster is relevant to the
-    /// current side - a plain Settings-created Pitcher with no linked
-    /// TeamPlayer just shows no subtitle. The row's main source of "who is
-    /// this" detail, since Pitcher itself carries no jersey/roster info.
-    private func jerseyNumber(forPitcherId pitcherId: String?) -> String? {
-        guard let pitcherId else { return nil }
-        let roster = activeSide == .away ? awayRoster : homeRoster
-        guard let jersey = roster.first(where: { $0.pitcherId == pitcherId })?.jerseyNumber,
-              !jersey.isEmpty else { return nil }
-        return "#\(jersey)"
-    }
+    // jerseyNumber(forPitcherId:) is gone with the one-line subtitle it fed:
+    // the Players row carries the jersey in its own caption ("Hadley 33"),
+    // sourced from the roster entry rather than from whichever side happens
+    // to be active.
 
     /// Lets either roster be built from inside the picker itself, rather
     /// than only being addable by leaving the game - the actual fix for
@@ -6175,21 +6224,40 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// The selectable pitchers as Home's Players rows - avatar, name/jersey,
+    /// team and designation - instead of a bare list of names. Rows come
+    /// from the cross-team roster so two same-named kids are tellable apart;
+    /// a standalone Pitcher with no roster entry still appears (no team).
+    private func pitcherPickerRows(for pitchers: [Pitcher]) -> [PlayerDirectoryRow] {
+        let allowedIds = Set(pitchers.compactMap { $0.id })
+        return PlayerDirectory.rows(rosterEntries: rosterEntries, pitchers: pitchers)
+            .filter { row in
+                guard let pitcherId = row.pitcherId else { return false }
+                return allowedIds.contains(pitcherId)
+            }
+    }
+
     private var pitcherPickerButton: some View {
         let pitchersForMenu = isGame
             ? sideFilteredPitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
             : sideFilteredPitchers
         let isParticipantViewing = isLiveParticipantViewingGame
-        return ScrollableSelectionMenuButton(
+        return PlayerPickerButton(
             title: "Select Pitcher",
-            items: pitchersForMenu,
+            rows: pitcherPickerRows(for: pitchersForMenu),
+            teams: directoryTeams,
             topActions: pitcherPickerTopActions,
-            itemTitle: { $0.name },
-            itemSubtitle: { jerseyNumber(forPitcherId: $0.id) },
-            isSelected: { $0.id == selectedPitcherId },
-            onSelect: { pitcher in
+            emptyMessage: "No pitchers for this side yet.",
+            isSelected: { $0.pitcherId == selectedPitcherId },
+            onSelect: { row in
+                guard let pitcherId = row.pitcherId,
+                      let pitcher = pitchers.first(where: { $0.id == pitcherId }) else { return }
                 applySelectedPitcher(pitcher)
-            }
+            },
+            // The roster this list is built from is a cached snapshot, and a
+            // player added from Home while this view stayed mounted (it is
+            // the permanent root, never torn down) wouldn't be in it.
+            onOpen: { refreshPlayerDirectory() }
         ) {
             let currentPitcher = isParticipantViewing
                 ? liveParticipantDisplayPitcher
@@ -6197,7 +6265,11 @@ struct PitchTrackerView: View {
 
             VStack(alignment: .center, spacing: 4) {
                 ZStack(alignment: .bottomTrailing) {
-                    PitcherAvatarView(pitcher: currentPitcher, size: 44)
+                    PitcherAvatarOrMissingBadge(
+                        pitcher: currentPitcher,
+                        needsSelection: needsPitcherForThisGame,
+                        size: 44
+                    )
 
                     if !isParticipantViewing {
                         Image(systemName: "chevron.down")
@@ -6238,41 +6310,6 @@ struct PitchTrackerView: View {
         sideFilteredPitchers.isEmpty && pitcherPickerTopActions.isEmpty
     }
 
-    private func sessionConfirmationSheet(
-        pending: PendingSessionConfirmation
-    ) -> some View {
-        let confirmationPitchers: [Pitcher] = {
-            visiblePitchers.filter { $0.isActiveOwner(currentUid: authManager.user?.uid) }
-        }()
-
-        return SessionConfirmationSheet(
-            pending: pending,
-            pitchers: confirmationPitchers,
-            teamNamesByPitcherId: teamNamesByPitcherId,
-            templates: visibleTemplates,
-            selectedPitcherId: $ui.pendingConfirmationPitcherId,
-            selectedTemplateId: $pendingConfirmationTemplateId,
-            selectedTrackingMode: $pendingConfirmationTrackingMode,
-            resolvedPitcherName: resolvedPitcherName(for: pendingConfirmationPitcherId),
-            resolvedTemplateName: resolvedTemplateName(for: pendingConfirmationTemplateId),
-            resolvedGameName: resolvedGameName(for: pending),
-            onConfirm: {
-                confirmSessionSelection(
-                    pending,
-                    selectedPitcherId: pendingConfirmationPitcherId,
-                    selectedTemplateId: pendingConfirmationTemplateId,
-                    selectedTrackingMode: pendingConfirmationTrackingMode
-                )
-            },
-            onCancel: {
-                pendingGameConfirmation = nil
-                DispatchQueue.main.async {
-                    activeHomeArea = .home
-                }
-            }
-        )
-    }
-    
     private var mainStrikeZoneSection: some View {
         let deviceWidth = effectiveScreenSize.width
         let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
@@ -6516,6 +6553,160 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// The whole lineup split by the team each cell belongs to, for the pin
+    /// sheet's batter strip. Nothing is dropped - the strip there is not
+    /// side-scoped the way the At Bat scroll is, so both teams' batters stay
+    /// selectable and editable; they're just separated and labelled instead
+    /// of running together as one row of numbers.
+    ///
+    /// A cell with no roster link (a bare jersey number typed in, or one
+    /// added before the link was recorded) rides along in the batting team's
+    /// row - a section of its own for one or two stray numbers cost more
+    /// vertical space than it was worth. `unlinkedBatterIdsForDetail` is
+    /// what tells them apart there, by fill colour.
+    private var lineupGroupsForDetail: [LineupBatterGroup] {
+        let battingRoster = activeSide == .home ? awayRoster : homeRoster
+        let pitchingRoster = activeSide == .home ? homeRoster : awayRoster
+        let battingHitterIds = Set(battingRoster.compactMap { $0.hitterId })
+        let pitchingHitterIds = Set(pitchingRoster.compactMap { $0.hitterId })
+
+        var batting: [JerseyCell] = []
+        var fielding: [JerseyCell] = []
+        var unlinked: [JerseyCell] = []
+        for cell in jerseyCells {
+            guard let hitterId = hitterIdByJerseyCellId[cell.id] else {
+                unlinked.append(cell)
+                continue
+            }
+            if battingHitterIds.contains(hitterId) {
+                batting.append(cell)
+            } else if pitchingHitterIds.contains(hitterId) {
+                fielding.append(cell)
+            } else {
+                unlinked.append(cell)
+            }
+        }
+
+        // Unassigned numbers join the batting side's row, after its own
+        // players, keeping the lineup's order within each part.
+        let battingRow = batting + unlinked
+
+        var groups: [LineupBatterGroup] = []
+        if !battingRow.isEmpty {
+            groups.append(
+                LineupBatterGroup(
+                    id: "batting",
+                    title: battingTeamDisplayName,
+                    isBatting: true,
+                    cells: battingRow
+                )
+            )
+        }
+        if !fielding.isEmpty {
+            groups.append(
+                LineupBatterGroup(
+                    id: "fielding",
+                    title: pitchingTeamDisplayName,
+                    isBatting: false,
+                    cells: fielding
+                )
+            )
+        }
+        return groups
+    }
+
+    /// Lineup cells with no roster link behind them. Same classification as
+    /// `lineupGroupsForDetail` above - the pin sheet tints these rather than
+    /// separating them out.
+    private var unlinkedBatterIdsForDetail: Set<UUID> {
+        let linkedHitterIds = Set(
+            (homeRoster + awayRoster).compactMap { $0.hitterId }
+        )
+        var ids: Set<UUID> = []
+        for cell in jerseyCells {
+            guard let hitterId = hitterIdByJerseyCellId[cell.id],
+                  linkedHitterIds.contains(hitterId) else {
+                ids.insert(cell.id)
+                continue
+            }
+        }
+        return ids
+    }
+
+    /// Writes the current cell -> hitter map onto the selected game.
+    ///
+    /// Owner-only: a participant has no write access to the owner's game
+    /// doc, and its own copy of the lineup comes from the live room anyway.
+    /// Demo mode never persists. Called from the two places the map
+    /// changes - adding a roster-linked cell, and the prune that follows a
+    /// cell deletion - so no other lineup path needs to know about it.
+    ///
+    /// Goes through `updateGameHitterLinks` (one field) rather than
+    /// `saveGame` (the whole encoded Game). Using the latter here
+    /// resurrected deleted batters: the delete paths write
+    /// jerseyNumbers/batterIds straight to the doc via `updateGameLineup`
+    /// and leave `games[index]`'s copies stale, and this runs from the
+    /// prune a delete triggers - so the whole-doc write landed a stale
+    /// lineup on top of the delete that had just happened.
+    private func persistHitterLinks() {
+        guard !isDemoMode,
+              isOwnerForActiveGame,
+              let gid = selectedGameId else { return }
+        let links = Dictionary(
+            uniqueKeysWithValues: hitterIdByJerseyCellId.map { ($0.key.uuidString, $0.value) }
+        )
+        if let index = games.firstIndex(where: { $0.id == gid }) {
+            guard games[index].hitterIdByBatterId != links else { return }
+            // Local struct only - the write below is the one that persists.
+            games[index].hitterIdByBatterId = links
+        }
+        authManager.updateGameHitterLinks(
+            ownerUserId: effectiveGameOwnerUserId,
+            gameId: gid,
+            links: links
+        )
+    }
+
+    /// Adds whatever the game has stored without discarding anything held
+    /// in memory, for the paths that rebuild `jerseyCells` *without* being
+    /// a deliberate game switch - `hydrateChosenGameUI` (both its fast
+    /// local path and its slow fetch) and the deferred boot restore.
+    ///
+    /// This is the cold-launch case: those paths never call `chooseGame`,
+    /// so before this the restored lineup came back with an empty link map,
+    /// every cell read as unlinked, and the At Bat scroll failed open -
+    /// showing a stale-looking list that didn't change when the Us/Them
+    /// toggle moved, until a trip back to Home re-entered through
+    /// `chooseGame`.
+    ///
+    /// In-memory entries win on a key collision (they're the fresher of the
+    /// two), and keys for cells that no longer exist are dropped by the
+    /// prune on the next `jerseyCells` change.
+    private func mergeHitterLinks(from game: Game?) {
+        guard let stored = game?.hitterIdByBatterId, !stored.isEmpty else { return }
+        for (batterId, hitterId) in stored {
+            guard let cellId = UUID(uuidString: batterId),
+                  hitterIdByJerseyCellId[cellId] == nil else { continue }
+            hitterIdByJerseyCellId[cellId] = hitterId
+        }
+    }
+
+    /// Replaces the map with the game's stored one. Only for `chooseGame`,
+    /// where the coach deliberately switched games and another game's
+    /// annotations must not carry over.
+    private func seedHitterLinks(from game: Game?) {
+        guard let stored = game?.hitterIdByBatterId, !stored.isEmpty else {
+            hitterIdByJerseyCellId = [:]
+            return
+        }
+        var seeded: [UUID: String] = [:]
+        for (batterId, hitterId) in stored {
+            guard let cellId = UUID(uuidString: batterId) else { continue }
+            seeded[cellId] = hitterId
+        }
+        hitterIdByJerseyCellId = seeded
+    }
+
     private var battingTeamSetupMenuLabel: String {
         if currentBattingTeamId != nil {
             return "Change \(battingTeamDisplayName)…"
@@ -6534,18 +6725,20 @@ struct PitchTrackerView: View {
     /// duplicating the well-understood persistence shape is lower risk
     /// than restructuring the working path underneath it.
     ///
-    /// Known, accepted limitation: the roster-link annotation itself
-    /// (hitterIdByJerseyCellId) is session-local, not written to Game -
-    /// the jersey cell survives a relaunch (existing persistence), but
-    /// which cells were roster-linked does not. Threading that through
-    /// would mean touching jerseyCells' seven separate rehydration call
-    /// sites, including the live-transactional merge path - a much larger
-    /// and riskier change than this round's actual ask.
+    /// The roster-link annotation is persisted too, as
+    /// `Game.hitterIdByBatterId` (see `persistHitterLinks`). It used to be
+    /// session-local, which meant reopening a game left every restored cell
+    /// looking unlinked - and because `visibleJerseyCells` fails open on an
+    /// unlinked cell, the At Bat scroll then showed both teams' cells on
+    /// both sides of the Us/Them toggle instead of scoping to whoever was
+    /// batting. Keyed by cell id rather than threaded through jerseyCells'
+    /// seven rehydration sites, so none of that fragile ordering moves.
     private func addJerseyCellForRosterPlayer(displayNumber: String, hitterId: String?) {
         let newCell = JerseyCell(jerseyNumber: displayNumber)
         jerseyCells.append(newCell)
         if let hitterId {
             hitterIdByJerseyCellId[newCell.id] = hitterId
+            persistHitterLinks()
         }
 
         if let liveId = activeLiveId, !liveId.isEmpty {
@@ -9666,6 +9859,7 @@ struct PitchTrackerView: View {
             if templates.isEmpty {
                 authManager.loadTemplates { loaded in
                     self.templates = loaded
+                    self.didLoadTemplates = true
                     if self.selectedTemplate == nil {
                         let restored = self.restorePersistedTemplateIfPossible(from: loaded)
                         if !restored {
@@ -9766,6 +9960,7 @@ struct PitchTrackerView: View {
         authManager.loadTemplates { loadedTemplates in
             debugLog("✅ Loaded templates:", loadedTemplates.count)
             self.templates = loadedTemplates
+            self.didLoadTemplates = true
             if self.selectedTemplate == nil {
                 let restored = self.restorePersistedTemplateIfPossible(from: loadedTemplates)
                 if !restored {
@@ -9774,15 +9969,6 @@ struct PitchTrackerView: View {
             } else if let current = self.selectedTemplate,
                       self.hiddenTemplateIdSet.contains(current.id.uuidString) {
                 self.selectedTemplate = self.visibleTemplates.first ?? loadedTemplates.first
-            }
-            if self.pendingGameConfirmation != nil {
-                let hasMatch = self.pendingConfirmationTemplateId.flatMap { id in
-                    loadedTemplates.first(where: { $0.id == id })
-                } != nil
-                if self.pendingConfirmationTemplateId == nil || !hasMatch {
-                    let fallback = self.visibleTemplates.first ?? loadedTemplates.first
-                    self.pendingConfirmationTemplateId = fallback?.id
-                }
             }
             self.applyPendingLiveTemplateIfPossible()
             if let gameId = self.selectedGameId {
@@ -9817,6 +10003,14 @@ struct PitchTrackerView: View {
                 } else {
                     self.jerseyCells = game.jerseyNumbers.map { JerseyCell(jerseyNumber: $0) }
                 }
+
+                // Same reason as chooseGame: the cells are back, so their
+                // roster links have to come back with them or the At Bat
+                // scroll can't tell the two sides apart. Merging, not
+                // seeding - this restore can land after the coach has
+                // already linked a batter this launch.
+                self.mergeHitterLinks(from: game)
+                self.loadSideContext(for: game)
 
                 self.pendingRestoreGameId = nil
                 self.ensureAutoLiveSessionIfNeeded()
@@ -11130,6 +11324,17 @@ struct PitchTrackerView: View {
                     colorRefreshToken = UUID()
                 }
             }
+            // `.task(id:)` rather than `.onChange(of:)` on purpose: this
+            // runs on appear as well as on change. The key that clears this
+            // state is created in the Home tab, and the Games tab doesn't
+            // re-evaluate while Home is selected - an onChange here fired
+            // unreliably across that gap, leaving the tracker blurred after
+            // the first key was made. A task keyed on the count re-runs
+            // whenever the tab comes back with a different count than the
+            // one it last ran for.
+            .task(id: templates.count) {
+                adoptFirstTemplateIfNoneSelected()
+            }
             .onChange(of: overlayTab) { _, newValue in
                 if newValue == .progress {
                     progressRefreshToken = UUID()
@@ -11264,7 +11469,14 @@ struct PitchTrackerView: View {
                 // they were no longer actually in the lineup - only a full
                 // relaunch (which resets this map in chooseGame) cleared it.
                 let validSet = Set(validIds)
-                hitterIdByJerseyCellId = hitterIdByJerseyCellId.filter { validSet.contains($0.key) }
+                let pruned = hitterIdByJerseyCellId.filter { validSet.contains($0.key) }
+                guard pruned.count != hitterIdByJerseyCellId.count else { return }
+                hitterIdByJerseyCellId = pruned
+                // The map is persisted now, so a delete has to reach the
+                // stored copy too - otherwise the deleted batter comes back
+                // as a link on the next game open and stays excluded from
+                // "Add From Team" forever.
+                persistHitterLinks()
             }
             .sheet(isPresented: $ui.showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }) {
                 // Defaulted to the system's full-size sheet before, which
@@ -11386,7 +11598,6 @@ struct PitchTrackerView: View {
 
         // Keep alerts + the rest of your observers, then erase one last time
         let gamesTabContent = AnyView(v9b
-            .blur(radius: pendingGameConfirmation != nil ? 5 : 0)
             .allowsHitTesting(!showSessionConflictAlert)
             .appConfirmationDialog(
                 isPresented: $ui.showProGateAlert,
@@ -11460,6 +11671,8 @@ struct PitchTrackerView: View {
                     pitcherNameById: pitcherNameById,
                     gameIdFilter: selectedGameId,
                     lineupBatters: jerseyCells,
+                    lineupGroups: lineupGroupsForDetail,
+                    unlinkedBatterIds: unlinkedBatterIdsForDetail,
                     selectedLineupBatterId: selectedBatterId,
                     onSelectLineupBatter: { cell in
                         syncSelectedBatterFromDetail(cell)
@@ -11470,11 +11683,11 @@ struct PitchTrackerView: View {
                         showAddJerseyPopover = true
                         jerseyDetailPayload = nil
                     },
-                    onMoveLineupBatterUp: { cell in
-                        moveBatterFromDetail(cell, direction: -1)
+                    onReorderLineupBatter: { moving, target in
+                        reorderBatterFromDetail(moving, to: target)
                     },
-                    onMoveLineupBatterDown: { cell in
-                        moveBatterFromDetail(cell, direction: 1)
+                    onCommitLineupOrder: {
+                        persistLineupFromDetail()
                     },
                     onDeleteLineupBatter: { cell in
                         deleteBatterFromDetail(cell)
@@ -11501,13 +11714,6 @@ struct PitchTrackerView: View {
             }
             .fullScreenCover(isPresented: displayCoverBinding) {
                 displayCoverView
-                    .fixedAppDynamicType()
-            }
-            .sheet(item: $pendingGameConfirmation, onDismiss: {
-                deferredGameEntryAction?()
-                deferredGameEntryAction = nil
-            }) { item in
-                sessionConfirmationSheet(pending: item)
                     .fixedAppDynamicType()
             }
             .appConfirmationDialog(
@@ -12765,60 +12971,77 @@ struct JerseyRow: View {
                     primaryTitle: "Delete",
                     primaryRole: .destructive,
                     primaryAction: {
-                        guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else {
-                            showActionsSheet = false
-                            return
-                        }
-
-                        let removedId = jerseyCells[idx].id
-                        jerseyCells.remove(at: idx)
-
-                        if selectedBatterId == removedId {
-                            selectedBatterId = nil
-                        }
-
-                        let jerseys = jerseyCells.map { $0.jerseyNumber }
-                        let batterIds = jerseyCells.map { $0.id.uuidString }
-
-                        if let liveId = activeLiveId, !liveId.isEmpty {
-                            LiveGameService.shared.updateLiveFields(
-                                liveId: liveId,
-                                fields: [
-                                    "jerseyNumbers": jerseys,
-                                    "batterIds": batterIds
-                                ]
-                            )
-                            if let owner = effectiveGameOwnerUserId,
-                               let gameId = selectedGameId,
-                               let myUid = authManager.user?.uid,
-                               !owner.isEmpty,
-                               owner == myUid {
-                                authManager.updateGameLineup(
-                                    ownerUserId: owner,
-                                    gameId: gameId,
-                                    jerseyNumbers: jerseys,
-                                    batterIds: batterIds
-                                )
-                            }
-                        } else if let gameId = selectedGameId,
-                                  let owner = effectiveGameOwnerUserId,
-                                  !owner.isEmpty {
-                            authManager.updateGameLineup(
-                                ownerUserId: owner,
-                                gameId: gameId,
-                                jerseyNumbers: jerseys,
-                                batterIds: batterIds
-                            )
-                        } else {
-                            debugLog("⚠️ Cannot persist delete: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
-                        }
-
+                        // Close this row's sheet BEFORE removing the row,
+                        // and let the dismissal settle before mutating the
+                        // lineup. Deleting in the same update as the
+                        // teardown removed the presenting row while its
+                        // `showActionsSheet` was still true, and that
+                        // still-true @State landed on whichever cell
+                        // inherited this row's state slot in the ForEach -
+                        // so the pin sheet immediately re-presented,
+                        // titled with some other batter's number.
                         showActionsSheet = false
+                        DispatchQueue.main.async {
+                            deleteThisBatter()
+                        }
                     },
                     secondaryTitle: "Cancel"
                 )
             }
     }
+
+    /// The pin sheet's Delete, run one runloop turn after the sheet has
+    /// been dismissed (see the call site). Re-finds the cell by id rather
+    /// than trusting an index captured before that hop.
+    private func deleteThisBatter() {
+            guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else {
+                return
+            }
+
+            let removedId = jerseyCells[idx].id
+            jerseyCells.remove(at: idx)
+
+            if selectedBatterId == removedId {
+                selectedBatterId = nil
+            }
+
+            let jerseys = jerseyCells.map { $0.jerseyNumber }
+            let batterIds = jerseyCells.map { $0.id.uuidString }
+
+            if let liveId = activeLiveId, !liveId.isEmpty {
+                LiveGameService.shared.updateLiveFields(
+                    liveId: liveId,
+                    fields: [
+                        "jerseyNumbers": jerseys,
+                        "batterIds": batterIds
+                    ]
+                )
+                if let owner = effectiveGameOwnerUserId,
+                   let gameId = selectedGameId,
+                   let myUid = authManager.user?.uid,
+                   !owner.isEmpty,
+                   owner == myUid {
+                    authManager.updateGameLineup(
+                        ownerUserId: owner,
+                        gameId: gameId,
+                        jerseyNumbers: jerseys,
+                        batterIds: batterIds
+                    )
+                }
+            } else if let gameId = selectedGameId,
+                      let owner = effectiveGameOwnerUserId,
+                      !owner.isEmpty {
+                authManager.updateGameLineup(
+                    ownerUserId: owner,
+                    gameId: gameId,
+                    jerseyNumbers: jerseys,
+                    batterIds: batterIds
+                )
+            } else {
+                debugLog("⚠️ Cannot persist delete: missing activeLiveId (live) or selectedGameId/effectiveGameOwnerUserId (non-live)")
+            }
+    }
+
     private func syncSelection(_ nextSelection: UUID?) {
         let selectedCell = nextSelection.flatMap { id in jerseyCells.first(where: { $0.id == id }) }
         selectedBatterId = nextSelection
@@ -14292,6 +14515,194 @@ struct GameSelectionSheet: View {
 // Keep new strike-zone decorations as structs here. Do not move them back
 // to computed properties on PitchTrackerView.
 
+// MARK: - "Still needs picking" flashes
+//
+// These replaced the pitcher/grid-key confirmation sheet that used to gate
+// game entry (see `requestGameConfirmation`). Entering a game no longer
+// asks; the tracker flashes for whichever of the two is missing.
+//
+// Each owns its own `@State` pulse, and that is the whole point of them
+// being structs. A pulse driven from `PitchTrackerView`'s own state
+// invalidates all ~15k lines of that view on every tick - which is exactly
+// what `atBatPulse` does, listed in CLAUDE.md as a real performance defect.
+// Confined here, each tick redraws one small concrete view. Same reasoning
+// as the strike-zone decorations below; don't fold these back into
+// computed properties on PitchTrackerView.
+
+/// The shared pulse timing, so the two badges can't drift apart.
+private enum MissingSelectionPulse {
+    static let fade: Double = 0.7
+    /// Must outlast `fade`, or toggles pile up on each other mid-animation.
+    static let tick: UInt64 = 750_000_000
+    static let dimmed: Double = 0.3
+}
+
+/// Flashes in the pitcher button while the active game has no pitcher
+/// selected.
+struct MissingPitcherBadge: View {
+    var size: CGFloat = 44
+    @State private var pulse = false
+
+    var body: some View {
+        Image(systemName: "person.crop.circle.badge.plus")
+            .font(.system(size: size * 0.62, weight: .semibold))
+            .foregroundStyle(Color.red)
+            .frame(width: size, height: size)
+            .opacity(pulse ? 1.0 : MissingSelectionPulse.dimmed)
+            .task {
+                pulse = false
+                while !Task.isCancelled {
+                    withAnimation(.easeInOut(duration: MissingSelectionPulse.fade)) {
+                        pulse.toggle()
+                    }
+                    try? await Task.sleep(nanoseconds: MissingSelectionPulse.tick)
+                }
+            }
+            .accessibilityLabel("No pitcher selected. Tap to choose one.")
+    }
+}
+
+/// The pitcher button's avatar slot: the portrait, or the flash. One struct
+/// for the branch so it doesn't add another `_ConditionalContent` layer to
+/// `PitchTrackerView`'s opaque context.
+struct PitcherAvatarOrMissingBadge: View {
+    let pitcher: Pitcher?
+    let needsSelection: Bool
+    var size: CGFloat = 44
+
+    var body: some View {
+        if needsSelection {
+            MissingPitcherBadge(size: size)
+        } else {
+            PitcherAvatarView(pitcher: pitcher, size: size)
+        }
+    }
+}
+
+/// The top bar's Key capsule contents: the current key's name and version
+/// pill, or a flashing `key.slash` when this game has no key of its own.
+struct TopBarKeyLabel: View {
+    let prefix: String
+    let name: String
+    let versionLabel: String
+    let showVersion: Bool
+    let needsKey: Bool
+
+    @State private var pulse = false
+
+    var body: some View {
+        if needsKey {
+            HStack(spacing: 5) {
+                Image(systemName: "key.slash")
+                    .font(.subheadline.weight(.bold))
+                Text("Key")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .foregroundStyle(Color.red)
+            .opacity(pulse ? 1.0 : MissingSelectionPulse.dimmed)
+            .task {
+                pulse = false
+                while !Task.isCancelled {
+                    withAnimation(.easeInOut(duration: MissingSelectionPulse.fade)) {
+                        pulse.toggle()
+                    }
+                    try? await Task.sleep(nanoseconds: MissingSelectionPulse.tick)
+                }
+            }
+            .accessibilityLabel("No grid key chosen for this game. Tap to choose one.")
+        } else {
+            HStack(spacing: 6) {
+                Text(prefix + name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .allowsTightening(true)
+                    .foregroundStyle(Color.accentColor)
+                if showVersion && !versionLabel.isEmpty {
+                    Text(versionLabel)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .foregroundStyle(Color.gray)
+                        .background(Color.gray.opacity(0.15))
+                        .clipShape(Capsule())
+                        .accessibilityLabel("Template version \(versionLabel)")
+                }
+            }
+        }
+    }
+}
+
+/// Why the tracker is blurred, and the one button that fixes it. Shown over
+/// the content section when the account has no code grid key at all - that
+/// state blurs the section *and* turns off its hit-testing, so without this
+/// the coach is looking at a dead screen whose only explanation is a dimmed
+/// "Select a template" capsule over a menu item that's disabled.
+///
+/// Deliberately not a "dismiss" affordance: there is nothing to dismiss to.
+/// The Home tab underneath is still live, so this is a shortcut to the fix
+/// rather than the only escape.
+struct NoCodeGridKeyBlocker: View {
+    /// Keys exist, they're just all archived - a local hide, so the fix is
+    /// to unarchive one rather than build another from scratch.
+    let allArchived: Bool
+    let onOpenKeys: () -> Void
+
+    private var title: String {
+        allArchived ? "No Active Code Grid Key" : "No Code Grid Key Yet"
+    }
+
+    private var message: String {
+        allArchived
+        ? "All of your keys are archived. Unarchive one, or make a new key."
+        : "The tracker needs a key before it can call or record a pitch."
+    }
+
+    private var actionTitle: String {
+        allArchived ? "Open Code Grid Keys" : "Create a Key"
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "key.slash")
+                .font(.system(size: 34, weight: .semibold))
+                .foregroundStyle(Color.red)
+
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button(action: onOpenKeys) {
+                Label(actionTitle, systemImage: "key.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .background(Capsule().fill(Color.pitchMarkActiveGray))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
+        .padding(22)
+        .frame(maxWidth: 300)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.35), radius: 10, x: 0, y: 6)
+        .padding(.horizontal, 24)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// The "vs. opponent" bubble at the zone's bottom edge.
 private struct ZoneOpponentLabel: View {
     let opponentName: String?
@@ -14727,152 +15138,6 @@ struct AddGameCard: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 90)
-            }
-        }
-    }
-}
-
-private struct SessionConfirmationSheet: View {
-    let pending: PitchTrackerView.PendingSessionConfirmation
-    let pitchers: [Pitcher]
-    let teamNamesByPitcherId: [String: [String]]
-    let templates: [PitchTemplate]
-    @Binding var selectedPitcherId: String?
-    @Binding var selectedTemplateId: UUID?
-    @Binding var selectedTrackingMode: TrackingMode
-    let resolvedPitcherName: String
-    let resolvedTemplateName: String
-    let resolvedGameName: String
-    let onConfirm: () -> Void
-    let onCancel: () -> Void
-
-    private var headerText: String {
-        "Confirm Game"
-    }
-
-    private var sessionLabel: String {
-        "Game: \(resolvedGameName)"
-    }
-
-    private func normalizePitcherSelection() {
-        if let selectedPitcherId,
-           pitchers.contains(where: { $0.id == selectedPitcherId }) {
-            return
-        }
-        selectedPitcherId = pitchers.first?.id
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(headerText)
-                .font(.headline)
-                .padding(.top, 13)
-
-            Text(sessionLabel)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Pitcher")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.black)
-
-                    ScrollableSelectionMenuButton(
-                        title: "Pitcher",
-                        items: pitchers,
-                        topActions: [
-                            SelectionSheetAction(
-                                title: "Not set",
-                                systemImage: selectedPitcherId == nil ? "checkmark" : nil
-                            ) {
-                                selectedPitcherId = nil
-                            }
-                        ],
-                        itemTitle: { $0.name },
-                        itemSubtitle: { teamNamesByPitcherId[$0.id ?? ""]?.joined(separator: ", ") },
-                        isSelected: { $0.id == selectedPitcherId },
-                        onSelect: { pitcher in
-                            selectedPitcherId = pitcher.id
-                        }
-                    ) {
-                        Text(selectedPitcherId.flatMap { id in pitchers.first(where: { $0.id == id })?.name } ?? "Not set")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Grid Key")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.black)
-
-                    ScrollableSelectionMenuButton(
-                        title: "Grid Key",
-                        items: templates,
-                        topActions: [
-                            SelectionSheetAction(
-                                title: "Not set",
-                                systemImage: selectedTemplateId == nil ? "checkmark" : nil
-                            ) {
-                                selectedTemplateId = nil
-                            }
-                        ],
-                        itemTitle: { $0.name },
-                        isSelected: { $0.id == selectedTemplateId },
-                        onSelect: { template in
-                            selectedTemplateId = template.id
-                        }
-                    ) {
-                        Text(selectedTemplateId.flatMap { id in templates.first(where: { $0.id == id })?.name } ?? "Not set")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-
-            HStack(spacing: 12) {
-                Button("Cancel", role: .cancel) {
-                    onCancel()
-                }
-                Spacer()
-                Button("Confirm") {
-                    onConfirm()
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-        .padding()
-        .presentationDetents([.fraction(0.45)])
-        .presentationDragIndicator(.visible)
-        .onAppear {
-            normalizePitcherSelection()
-            if selectedTemplateId == nil, let first = templates.first {
-                selectedTemplateId = first.id
-            } else if let selected = selectedTemplateId,
-                      !templates.contains(where: { $0.id == selected }),
-                      let first = templates.first {
-                selectedTemplateId = first.id
-            }
-        }
-        .onChange(of: pitchers.count) { _, _ in
-            normalizePitcherSelection()
-        }
-        .onChange(of: templates.count) { _, _ in
-            if selectedTemplateId == nil, let first = templates.first {
-                selectedTemplateId = first.id
-            } else if let selected = selectedTemplateId,
-                      !templates.contains(where: { $0.id == selected }),
-                      let first = templates.first {
-                selectedTemplateId = first.id
             }
         }
     }

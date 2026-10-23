@@ -18,6 +18,15 @@ extension Notification.Name {
     // down), so the game - and the teams/players on it - become deletable.
     static let activeGameShouldClose = Notification.Name("activeGameShouldClose")
 
+    // Fired by the tracker when creating a code grid key is the only thing
+    // that can clear the screen the coach is looking at (no key exists, so
+    // the tracker's content section is blurred and non-interactive). Home
+    // responds by expanding Code Grid Keys and opening a new-key editor -
+    // the same thing that section's own "+" does. The tracker switches to
+    // the Home tab either way, so a missed notification costs the coach one
+    // extra tap rather than stranding them.
+    static let createCodeGridKeyRequested = Notification.Name("createCodeGridKeyRequested")
+
     // Fired to request that progress be reset for a given session (or general)
     static let practiceProgressReset = Notification.Name("practiceProgressReset")
 

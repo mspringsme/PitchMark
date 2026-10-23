@@ -564,12 +564,13 @@ struct SettingsView: View {
     // Home's Players section - the pitcher roster that used to live inside
     // the gear/Settings sheet, plus every non-pitching roster player under
     // the "All" scope.
-    @State private var playersScope: PlayersScope = .pitchers
+    // The row model, row view, scope, filter and loader all live in
+    // PlayerDirectory.swift - the pitcher picker and "Link Existing Player"
+    // render the same rows from the same code.
+    @State private var playersScope: PlayerDirectoryScope = .pitchers
     @State private var showPlayersFilterSheet = false
-    @State private var playerFilterTeamIds: Set<String> = []
-    @State private var playerFilterAgeGroups: Set<TeamAgeGroup> = []
-    @State private var playerFilterDivisions: Set<TeamDivision> = []
-    @State private var rosterEntries: [RosterEntry] = []
+    @State private var playerFilter = PlayerDirectoryFilter()
+    @State private var rosterEntries: [PlayerRosterEntry] = []
     @State private var myHitters: [Hitter] = []
     @State private var statsHitter: Hitter? = nil
     @State private var isRefreshingPlayers = false
@@ -618,7 +619,6 @@ struct SettingsView: View {
     @State private var templateActionTargetId: UUID? = nil
     @State private var pitcherActionTargetId: String? = nil
     @State private var showHiddenTemplates = false
-    @State private var showHiddenPitchers = false
     @State private var statsPitcher: Pitcher? = nil
 
     @State private var showInviteJoinSheet = false
@@ -1044,60 +1044,6 @@ struct SettingsView: View {
         case templates
     }
 
-    /// What the Players section's Pitchers/All toggle switches between.
-    /// `.pitchers` is the old Settings-sheet pitcher roster; `.all` adds
-    /// every other player on your teams - kids who only bat - whose Stats
-    /// button points at hitting stats instead of pitching stats.
-    private enum PlayersScope: Hashable {
-        case pitchers
-        case all
-    }
-
-    /// One `TeamPlayer` row paired with the team it came from, so a player
-    /// row can show the team's designation without a second lookup.
-    private struct RosterEntry: Identifiable {
-        let id: String
-        let teamPlayer: TeamPlayer
-        let team: Team
-    }
-
-    /// One row in the Players list - one *person*, not one roster entry. A
-    /// player linked from two teams collapses into a single row carrying
-    /// both teams, rather than appearing twice under a name you'd have to
-    /// read the designation to tell apart.
-    private struct PlayerListRow: Identifiable {
-        let id: String
-        var name: String
-        var jersey: String?
-        var pitcher: Pitcher?
-        var hitterId: String?
-        var teams: [Team]
-        /// Union of the roster positions this player is listed at, across
-        /// every team they're linked from.
-        var positions: Set<FieldPosition>
-        /// True when this row came from a standalone `Pitcher` record with no
-        /// roster entry behind it - i.e. something created straight from this
-        /// section's + button, or shared in. Those are pitchers by
-        /// construction; there's no roster row to carry a position.
-        var isStandalonePitcher: Bool
-
-        /// **Not** `pitcher != nil`. Every `Player` in this app is created
-        /// with both a linked Pitcher and a linked Hitter, always
-        /// (`createPlayer`, and `ensureTeamPlayerHasPitcherAndHitter`
-        /// backfills older ones), so `pitcherId` is non-nil for essentially
-        /// everyone and tells you nothing. The only real signal is whether
-        /// the coach listed P among their positions.
-        var isPitcher: Bool {
-            isStandalonePitcher || positions.contains(.pitcher)
-        }
-
-        /// "Hadley 33" - the caption under the avatar in the row.
-        var captionName: String {
-            guard let jersey, !jersey.isEmpty else { return name }
-            return "\(name) \(jersey)"
-        }
-    }
-
     /// Shared collapsible-header row for Home's two accordion sections -
     /// the title+chevron toggles expand/collapse (and auto-closes the other
     /// section); the trailing icon button is a separate tap target for
@@ -1325,28 +1271,8 @@ struct SettingsView: View {
             return
         }
         isRefreshingPlayers = true
-        var collected: [RosterEntry] = []
-        let group = DispatchGroup()
-        for team in teams {
-            guard let teamId = team.id else { continue }
-            group.enter()
-            // loadTeamPlayers already completes on the main queue, so the
-            // appends below are serialized without a lock.
-            authManager.loadTeamPlayers(teamId: teamId) { players in
-                for player in players where player.archivedAt == nil {
-                    collected.append(
-                        RosterEntry(
-                            id: "\(teamId)|\(player.id ?? UUID().uuidString)",
-                            teamPlayer: player,
-                            team: team
-                        )
-                    )
-                }
-                group.leave()
-            }
-        }
-        group.notify(queue: .main) {
-            self.rosterEntries = collected
+        authManager.loadPlayerRosterEntries(for: teams) { entries in
+            self.rosterEntries = entries
             self.isRefreshingPlayers = false
         }
     }
@@ -1357,114 +1283,20 @@ struct SettingsView: View {
         }
     }
 
-    /// Roster rows and standalone Pitchers folded into one row per person.
-    /// Keyed by pitcherId first so the Pitcher doc and the roster entry that
-    /// links it collapse together instead of listing the same kid twice.
-    private var playerRows: [PlayerListRow] {
-        var rows: [String: PlayerListRow] = [:]
-        var order: [String] = []
-        var pitchersById: [String: Pitcher] = [:]
-        for pitcher in sortedPitchers {
-            if let id = pitcher.id { pitchersById[id] = pitcher }
-        }
-
-        for entry in rosterEntries {
-            let teamPlayer = entry.teamPlayer
-            guard let key = teamPlayer.pitcherId ?? teamPlayer.playerId ?? teamPlayer.id else { continue }
-            if var existing = rows[key] {
-                if !existing.teams.contains(where: { $0.id == entry.team.id }) {
-                    existing.teams.append(entry.team)
-                }
-                if existing.jersey == nil { existing.jersey = teamPlayer.jerseyNumber }
-                if existing.hitterId == nil { existing.hitterId = teamPlayer.hitterId }
-                existing.positions.formUnion(teamPlayer.positions ?? [])
-                rows[key] = existing
-            } else {
-                rows[key] = PlayerListRow(
-                    id: key,
-                    name: teamPlayer.name,
-                    jersey: teamPlayer.jerseyNumber,
-                    pitcher: teamPlayer.pitcherId.flatMap { pitchersById[$0] },
-                    hitterId: teamPlayer.hitterId,
-                    teams: [entry.team],
-                    positions: Set(teamPlayer.positions ?? []),
-                    isStandalonePitcher: false
-                )
-                order.append(key)
-            }
-        }
-
-        // A Pitcher created straight from this section's +, or shared in by
-        // someone else, has no roster row of its own but still belongs here.
-        for pitcher in sortedPitchers {
-            guard let id = pitcher.id, rows[id] == nil else { continue }
-            rows[id] = PlayerListRow(
-                id: id,
-                name: pitcher.name,
-                jersey: nil,
-                pitcher: pitcher,
-                hitterId: nil,
-                teams: [],
-                positions: [],
-                isStandalonePitcher: true
-            )
-            order.append(id)
-        }
-
-        return order
-            .compactMap { rows[$0] }
-            .filter { passesPlayerFilters($0) }
-            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    /// Every person in the directory, unscoped and unfiltered - the Pitchers
+    /// scope's empty message needs to know whether there are rows at all.
+    private var playerRows: [PlayerDirectoryRow] {
+        PlayerDirectory.rows(rosterEntries: rosterEntries, pitchers: sortedPitchers)
+            .filter { PlayerDirectory.passes($0, filter: playerFilter, archivedPitcherIds: hiddenPitcherIds) }
     }
 
     /// What the list actually shows, after the Pitchers/All scope.
-    private var scopedPlayerRows: [PlayerListRow] {
+    private var scopedPlayerRows: [PlayerDirectoryRow] {
         playerRows.filter { playersScope == .all || $0.isPitcher }
     }
 
-    private func passesPlayerFilters(_ row: PlayerListRow) -> Bool {
-        // Archive is a local, per-device notion and only pitchers have one.
-        if let pitcherId = row.pitcher?.id, hiddenPitcherIds.contains(pitcherId), !showHiddenPitchers {
-            return false
-        }
-        if !playerFilterTeamIds.isEmpty {
-            let matchesTeam = row.teams.contains { playerFilterTeamIds.contains($0.id ?? "") }
-            let matchesNoTeam = row.teams.isEmpty && playerFilterTeamIds.contains(Self.noTeamFilterId)
-            if !matchesTeam && !matchesNoTeam { return false }
-        }
-        if !playerFilterAgeGroups.isEmpty {
-            let matches = row.teams.contains { team in
-                guard let group = team.ageGroup else { return false }
-                return playerFilterAgeGroups.contains(group)
-            }
-            if !matches { return false }
-        }
-        if !playerFilterDivisions.isEmpty {
-            let matches = row.teams.contains { team in
-                guard let division = team.division else { return false }
-                return playerFilterDivisions.contains(division)
-            }
-            if !matches { return false }
-        }
-        return true
-    }
-
-    /// Sentinel id for the filter sheet's "No team" row - a real team id can
-    /// never be empty, so it can share the same `Set<String>`.
-    private static let noTeamFilterId = ""
-
     private var hasActivePlayerFilter: Bool {
-        !playerFilterTeamIds.isEmpty
-            || !playerFilterAgeGroups.isEmpty
-            || !playerFilterDivisions.isEmpty
-            || showHiddenPitchers
-    }
-
-    private func clearPlayerFilters() {
-        playerFilterTeamIds = []
-        playerFilterAgeGroups = []
-        playerFilterDivisions = []
-        showHiddenPitchers = false
+        playerFilter.isActive
     }
 
     private func beginAddPlayerFromHome() {
@@ -1503,7 +1335,7 @@ struct SettingsView: View {
             Spacer(minLength: 4)
 
             CapsuleSegmentedControl(
-                options: [("Pitchers", PlayersScope.pitchers), ("All", PlayersScope.all)],
+                options: [("Pitchers", PlayerDirectoryScope.pitchers), ("All", PlayerDirectoryScope.all)],
                 selection: $playersScope,
                 segmentMinWidth: 52
             )
@@ -1568,7 +1400,7 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func playersScrollBody(_ rows: [PlayerListRow]) -> some View {
+    private func playersScrollBody(_ rows: [PlayerDirectoryRow]) -> some View {
         let content = VStack(spacing: 8) {
             ForEach(rows) { row in
                 playerListRowView(row)
@@ -1605,79 +1437,11 @@ struct SettingsView: View {
         }
     }
 
-    /// Non-pitching players have no portrait store of their own (portraits
-    /// are keyed by pitcherId), so they get an initials circle instead of
-    /// `PitcherAvatarView`.
-    @ViewBuilder
-    private func playerAvatar(_ row: PlayerListRow, size: CGFloat) -> some View {
-        if let pitcher = row.pitcher {
-            PitcherAvatarView(pitcher: pitcher, size: size)
-        } else {
-            ZStack {
-                Circle().fill(Color(.systemGray3))
-                Text(playerInitials(row.name))
-                    .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: size, height: size)
-            .overlay(Circle().stroke(Color.white.opacity(0.18), lineWidth: 1))
-        }
-    }
-
-    private func playerInitials(_ name: String) -> String {
-        let parts = name.split(whereSeparator: { $0.isWhitespace }).prefix(2)
-        let initials = parts.compactMap { $0.first }.map(String.init).joined()
-        return initials.isEmpty ? "?" : initials.uppercased()
-    }
-
-    private func playerListRowView(_ row: PlayerListRow) -> some View {
+    /// The row itself is `PlayerDirectoryRowView` (PlayerDirectory.swift);
+    /// Home's contribution is the trailing Stats button + gear menu.
+    private func playerListRowView(_ row: PlayerDirectoryRow) -> some View {
         let isArchived = row.pitcher?.id.map { hiddenPitcherIds.contains($0) } ?? false
-        return HStack(spacing: 10) {
-            VStack(spacing: 4) {
-                playerAvatar(row, size: 52)
-                Text(row.captionName)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .allowsTightening(true)
-                    .frame(width: 70)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                if let team = row.teams.first {
-                    HStack(spacing: 4) {
-                        Text(team.name)
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        if row.teams.count > 1 {
-                            Text("+\(row.teams.count - 1)")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    TeamDesignationBadge(designation: team.designation, alignment: .leading)
-                } else {
-                    Text("No team")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if !row.isPitcher {
-                    Text("Bats only")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                if isArchived {
-                    Text("Archived")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Spacer(minLength: 4)
-
+        return PlayerDirectoryRowView(row: row, isArchived: isArchived) {
             Button("Stats") {
                 openStats(for: row)
             }
@@ -1697,26 +1461,18 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
     }
 
     /// Routes on `isPitcher`, not on `pitcher != nil` - every player has a
     /// linked Pitcher record whether or not they pitch, so keying off that
     /// sent every non-pitcher to the pitching stats sheet.
-    private func canOpenStats(for row: PlayerListRow) -> Bool {
+    private func canOpenStats(for row: PlayerDirectoryRow) -> Bool {
         if row.isPitcher, row.pitcher != nil { return true }
         guard let hitterId = row.hitterId else { return false }
         return myHitters.contains { $0.id == hitterId }
     }
 
-    private func openStats(for row: PlayerListRow) {
+    private func openStats(for row: PlayerDirectoryRow) {
         if row.isPitcher, let pitcher = row.pitcher {
             statsPitcher = pitcher
             return
@@ -1730,7 +1486,7 @@ struct SettingsView: View {
     /// per-row. A non-pitching player has none of those (they're Pitcher-doc
     /// operations), so its menu opens the roster screen that does own it.
     @ViewBuilder
-    private func playerRowMenu(_ row: PlayerListRow) -> some View {
+    private func playerRowMenu(_ row: PlayerDirectoryRow) -> some View {
         if let pitcher = row.pitcher {
             let isArchived = pitcher.id.map { hiddenPitcherIds.contains($0) } ?? false
 
@@ -1795,111 +1551,19 @@ struct SettingsView: View {
         }
     }
 
-    /// Sheet-hosted `List`, not a `Menu`: Home re-renders constantly from the
-    /// pitcher listeners, and a `Menu`'s contents are a transient `UIMenu`
-    /// that loses its scroll position on every one of those re-renders
-    /// (same reason the cards filter UI is a List - see CLAUDE.md).
-    @ViewBuilder
+    /// The filter list itself lives in PlayerDirectory.swift, shared with
+    /// the pickers. Sheet-hosted `List`, not a `Menu`: Home re-renders
+    /// constantly from the pitcher listeners, and a `Menu`'s contents are a
+    /// transient `UIMenu` that loses its scroll position on every one of
+    /// those re-renders (same reason the cards filter UI is a List - see
+    /// CLAUDE.md).
     private var playersFilterSheetView: some View {
-        NavigationView {
-            List {
-                Section("Team") {
-                    ForEach(myTeams, id: \.team.id) { entry in
-                        let teamId = entry.team.id ?? ""
-                        filterToggleRow(
-                            title: entry.team.name,
-                            subtitle: entry.team.designation?.inlineText,
-                            isOn: playerFilterTeamIds.contains(teamId)
-                        ) {
-                            toggleMembership(teamId, in: &playerFilterTeamIds)
-                        }
-                    }
-                    filterToggleRow(
-                        title: "No team",
-                        subtitle: "Players not on any roster",
-                        isOn: playerFilterTeamIds.contains(Self.noTeamFilterId)
-                    ) {
-                        toggleMembership(Self.noTeamFilterId, in: &playerFilterTeamIds)
-                    }
-                }
-
-                Section("Age Group") {
-                    ForEach(TeamAgeGroup.allCases) { group in
-                        filterToggleRow(
-                            title: group.displayName,
-                            subtitle: nil,
-                            isOn: playerFilterAgeGroups.contains(group)
-                        ) {
-                            toggleMembership(group, in: &playerFilterAgeGroups)
-                        }
-                    }
-                }
-
-                Section("Division") {
-                    ForEach(TeamDivision.allCases) { division in
-                        filterToggleRow(
-                            title: division.displayName,
-                            subtitle: nil,
-                            isOn: playerFilterDivisions.contains(division)
-                        ) {
-                            toggleMembership(division, in: &playerFilterDivisions)
-                        }
-                    }
-                }
-
-                Section {
-                    Toggle("Show archived", isOn: $showHiddenPitchers)
-                        .tint(Color.pitchMarkActiveGray)
-                    Button("Clear All Filters") {
-                        clearPlayerFilters()
-                    }
-                    .disabled(!hasActivePlayerFilter)
-                }
-            }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Filter Players")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { showPlayersFilterSheet = false }
-                }
-            }
+        PlayerDirectoryFilterSheet(
+            teams: myTeams.map { $0.team },
+            filter: $playerFilter
+        ) {
+            showPlayersFilterSheet = false
         }
-    }
-
-    private func toggleMembership<T: Hashable>(_ value: T, in set: inout Set<T>) {
-        if set.contains(value) {
-            set.remove(value)
-        } else {
-            set.insert(value)
-        }
-    }
-
-    private func filterToggleRow(
-        title: String,
-        subtitle: String?,
-        isOn: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                    if let subtitle {
-                        Text(subtitle)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                Image(systemName: isOn ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isOn ? Color.pitchMarkActiveGray : Color.secondary)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     // The gear's Settings sheet is gone (2026-10-21). Everything it held
@@ -2384,6 +2048,24 @@ struct SettingsView: View {
         } else {
             templates.append(updatedTemplate)
         }
+
+        // Adopt the first key the account ever gets. Both of these are
+        // bindings onto the tracker's own state, and until this line only
+        // `templates` was written - so after creating a first key the
+        // tracker had a key to offer in its picker while `selectedTemplate`
+        // stayed nil, which is the condition it blurs and shows
+        // "No Code Grid Key Yet" for. The card stayed up on a screen that
+        // was otherwise ready to use.
+        //
+        // Assignment is enough: the tracker's `.onChange(of:
+        // selectedTemplate?.id)` turns it into a full `applyTemplate`, so
+        // the pitch chips and code assignments come with it. Guarded on nil
+        // so saving a second key never steals the selection from the one in
+        // use.
+        if selectedTemplate == nil {
+            selectedTemplate = updatedTemplate
+        }
+
         authManager.saveTemplate(updatedTemplate)
     }
 
@@ -2480,6 +2162,13 @@ struct SettingsView: View {
                     updatePitcherInMemory(updated)
                 }
                 dismissPitcherEditor()
+                // The Pitcher doc is only one of four places this person's
+                // name lives. Without this, the row right under this sheet
+                // (and the in-game pitcher picker, which reads the same
+                // roster rows) kept showing the old name.
+                authManager.propagatePlayerRename(name: name, pitcherId: pid) {
+                    refreshRosterEntries()
+                }
             }
         } else {
             let templateId = selectedTemplate?.id.uuidString
@@ -2738,16 +2427,28 @@ struct SettingsView: View {
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 12)
-        } else if visibleTemplates.isEmpty {
-            Text("No visible templates")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 12)
         } else {
             let selected = visibleTemplates.first(where: { $0.id == templateActionTargetId })
 
             VStack(alignment: .leading, spacing: 12) {
+                // Archiving every key used to render this message and
+                // nothing else: the "Show Archived" toggle lives in the
+                // chip row below, and that row only existed while at least
+                // one key was still visible. So the archived keys became
+                // unreachable from Home - the one control that could bring
+                // them back was hidden by the same condition that hid them.
+                // (They were still reachable from the tracker's "Open Code
+                // Grid Keys", which sets showHiddenTemplates directly,
+                // which is how this got noticed.) The row now renders
+                // whether or not any key is visible.
+                if visibleTemplates.isEmpty {
+                    Text("Every key is archived.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 12)
+                }
+
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(visibleTemplates) { template in
@@ -3494,6 +3195,26 @@ struct SettingsView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .gameOrSessionDeleted)) { _ in
                 refreshActiveGameId()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .createCodeGridKeyRequested)) { note in
+                // Sent by the tracker when it is blurred for want of a
+                // usable key.
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    expandedHomeOverviewSection = .templates
+                }
+                // createNew == false means keys exist but are all archived:
+                // reveal the archived list, where Unhide is, instead of
+                // opening a blank editor they didn't ask for.
+                if (note.userInfo?["createNew"] as? Bool) ?? true {
+                    editorTemplate = PitchTemplate(
+                        id: UUID(),
+                        name: "",
+                        pitches: [],
+                        codeAssignments: []
+                    )
+                } else {
+                    showHiddenTemplates = true
+                }
             }
             .onDisappear {
                 ownedPitchersListener?.remove()

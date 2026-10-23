@@ -82,6 +82,178 @@ extension AuthManager {
             }
     }
 
+    /// Links someone who has **no canonical `Player` doc** onto `teamId` -
+    /// a roster row created before Player existed (`playerId == nil`, and
+    /// `ensureTeamPlayerHasPitcherAndHitter` backfills the pitcher/hitter
+    /// links but never this one), or a `Pitcher` created straight from
+    /// Home's + with no roster row at all. Both show up in Home's Players
+    /// list, so both have to be linkable, or "Link Existing Player" silently
+    /// lists fewer people than Home does.
+    ///
+    /// The Player doc is minted **around their existing Pitcher/Hitter**
+    /// rather than via `createPlayer`, which would mint new ones - and a new
+    /// Pitcher means a new `pitchEvents` collection, i.e. the kid's whole
+    /// career history abandoned on the old document. Whichever of the two is
+    /// genuinely missing is created, keeping `createPlayer`'s
+    /// both-links-always invariant.
+    func adoptAndLinkPlayer(
+        teamId: String,
+        name: String,
+        pitcherId: String?,
+        hitterId: String?,
+        positions: [FieldPosition]? = nil,
+        battingSide: BattingSide? = nil,
+        jerseyNumber: String?,
+        completion: @escaping (Result<TeamPlayer, Error>) -> Void
+    ) {
+        guard let user = user else {
+            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
+            return
+        }
+
+        func mintPlayer(pitcherId: String?, hitterId: String?) {
+            let ref = self.playersCollection().document()
+            let player = Player(
+                id: ref.documentID,
+                name: name,
+                ownerUid: user.uid,
+                pitcherId: pitcherId,
+                hitterId: hitterId,
+                positions: positions,
+                battingSide: battingSide,
+                createdAt: Date()
+            )
+            do {
+                try ref.setData(from: player) { error in
+                    if let error {
+                        completion(.failure(error))
+                        return
+                    }
+                    self.backfillPlayerIdOnRosterRows(
+                        playerId: ref.documentID,
+                        pitcherId: pitcherId,
+                        hitterId: hitterId
+                    )
+                    self.addTeamPlayerLinkingPlayer(
+                        teamId: teamId,
+                        player: player,
+                        jerseyNumber: jerseyNumber,
+                        completion: completion
+                    )
+                }
+            } catch {
+                completion(.failure(error))
+            }
+        }
+
+        if pitcherId == nil {
+            createPitcher(name: name, templateId: nil) { pitcher in
+                if hitterId == nil {
+                    self.createHitter(name: name) { hitter in
+                        mintPlayer(pitcherId: pitcher?.id, hitterId: hitter?.id)
+                    }
+                } else {
+                    mintPlayer(pitcherId: pitcher?.id, hitterId: hitterId)
+                }
+            }
+        } else if hitterId == nil {
+            createHitter(name: name) { hitter in
+                mintPlayer(pitcherId: pitcherId, hitterId: hitter?.id)
+            }
+        } else {
+            mintPlayer(pitcherId: pitcherId, hitterId: hitterId)
+        }
+    }
+
+    /// A person's name is denormalized into up to four documents: the
+    /// `Pitcher`, the `Hitter`, the canonical `Player`, and one `TeamPlayer`
+    /// row per team they're linked from. Renaming only one of them is what
+    /// made Home's Players row (and the pitcher picker, which reads the same
+    /// roster rows) keep showing the old name while the Edit sheet - which
+    /// reads the Pitcher doc - showed the new one.
+    ///
+    /// Best-effort by design: a `TeamPlayer` row on a team someone else
+    /// created is not writable by this user (firestore.rules gates roster
+    /// writes on `isTeamCreator`), so a denial there is logged and skipped
+    /// rather than failing the rename. Every write is a name-only merge, so
+    /// nothing else on any of those documents is touched.
+    ///
+    /// `playerId`/`hitterId` are optional because a caller that starts from
+    /// a Pitcher has no backlink to them - they're harvested from whichever
+    /// roster row links the same pitcher.
+    func propagatePlayerRename(
+        name: String,
+        pitcherId: String?,
+        playerId: String? = nil,
+        hitterId: String? = nil,
+        completion: (() -> Void)? = nil
+    ) {
+        guard user != nil, !name.isEmpty else {
+            completion?()
+            return
+        }
+
+        if let pitcherId {
+            Firestore.firestore().collection("pitchers").document(pitcherId)
+                .setData(["name": name], merge: true) { error in
+                    if let error {
+                        debugLog("⚠️ propagatePlayerRename pitcher failed:", error.localizedDescription)
+                    }
+                }
+        }
+
+        loadMyTeams { entries, _ in
+            var resolvedPlayerId = playerId
+            var resolvedHitterId = hitterId
+            let group = DispatchGroup()
+
+            for entry in entries {
+                guard let teamId = entry.team.id else { continue }
+                group.enter()
+                self.loadTeamPlayers(teamId: teamId) { players in
+                    for teamPlayer in players {
+                        let matches = (pitcherId != nil && teamPlayer.pitcherId == pitcherId)
+                            || (playerId != nil && teamPlayer.playerId == playerId)
+                        guard matches, let rowId = teamPlayer.id else { continue }
+                        if resolvedPlayerId == nil { resolvedPlayerId = teamPlayer.playerId }
+                        if resolvedHitterId == nil { resolvedHitterId = teamPlayer.hitterId }
+                        guard teamPlayer.name != name else { continue }
+                        group.enter()
+                        self.updateTeamPlayer(
+                            teamId: teamId,
+                            playerId: rowId,
+                            name: name,
+                            jerseyNumber: teamPlayer.jerseyNumber,
+                            positions: teamPlayer.positions,
+                            battingSide: teamPlayer.battingSide
+                        ) { result in
+                            if case .failure(let error) = result {
+                                debugLog("⚠️ propagatePlayerRename roster row failed:", error.localizedDescription)
+                            }
+                            group.leave()
+                        }
+                    }
+                    group.leave()
+                }
+            }
+
+            group.notify(queue: .main) {
+                if let resolvedPlayerId {
+                    self.playersCollection().document(resolvedPlayerId)
+                        .setData(["name": name], merge: true) { error in
+                            if let error {
+                                debugLog("⚠️ propagatePlayerRename player failed:", error.localizedDescription)
+                            }
+                        }
+                }
+                if let resolvedHitterId {
+                    self.updateHitterName(id: resolvedHitterId, name: name)
+                }
+                completion?()
+            }
+        }
+    }
+
     /// Creates the Player doc with both a linked Pitcher and a linked
     /// Hitter, always - no role designation to pick, since a player might
     /// pitch, bat, or both over a season and there's no reason to make a

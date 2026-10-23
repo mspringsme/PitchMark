@@ -60,6 +60,10 @@ struct TeamRosterView: View {
     @State private var addPlayerErrorMessage: String? = nil
     @State private var showLinkPlayerSheet = false
     @State private var myPlayers: [Player] = []
+    // Cross-team roster rows + their teams, so "Link Existing Player" can
+    // render the same Players rows Home does (PlayerDirectory.swift).
+    @State private var rosterEntries: [PlayerRosterEntry] = []
+    @State private var directoryTeams: [Team] = []
 
     // For the "View Stats" actions - PitcherStatsSheetView/HitterStatsView
     // need the actual Pitcher/Hitter objects and the owner's full
@@ -195,7 +199,7 @@ struct TeamRosterView: View {
             authManager.loadPitchers { myPitchers = $0 }
             authManager.loadHitters { myHitters = $0 }
             authManager.loadGames { myGames = $0 }
-            authManager.loadMyTeams { teams, _ in myTeams = teams }
+            refreshPlayerDirectory()
         }
         .confirmationDialog(
             teamName,
@@ -295,6 +299,7 @@ struct TeamRosterView: View {
         }
         .sheet(isPresented: $showLinkPlayerSheet) {
             linkExistingPlayerSheet
+                .fixedAppDynamicType()
         }
         .sheet(item: $statsPitcher) { pitcher in
             PitcherStatsSheetView(
@@ -425,42 +430,112 @@ struct TeamRosterView: View {
         }
     }
 
+    /// Everyone Home's Players list shows, minus whoever is already on this
+    /// roster. Built from the identical inputs Home uses (every team's
+    /// roster rows + every Pitcher doc), because scoping this to *owned
+    /// `Player` docs* silently dropped two whole groups that Home lists: a
+    /// roster row created before `Player` existed (`playerId == nil`) and a
+    /// Pitcher created straight from Home's + (no roster row at all).
+    /// `linkPlayerRow` mints the missing identity for those on selection.
+    private var linkCandidateRows: [PlayerDirectoryRow] {
+        let linkedPlayerIds = Set(players.compactMap { $0.playerId })
+        let linkedPitcherIds = Set(players.compactMap { $0.pitcherId })
+        let linkedRowIds = Set(players.compactMap { $0.id })
+
+        var rows = PlayerDirectory.rows(rosterEntries: rosterEntries, pitchers: myPitchers)
+            .filter { row in
+                if let playerId = row.playerId, linkedPlayerIds.contains(playerId) { return false }
+                if let pitcherId = row.pitcherId, linkedPitcherIds.contains(pitcherId) { return false }
+                // Catches a row so old it has neither link - its directory
+                // key is then the TeamPlayer id itself.
+                return !linkedRowIds.contains(row.id)
+            }
+
+        // A Player whose only roster entry was deleted, and whose Pitcher
+        // was archived out of `myPitchers`, has no row above but is still
+        // perfectly linkable - carry it in from the Player doc.
+        // Dedupe on the pitcher too, or a roster row that has no playerId
+        // and a Player doc pointing at that same pitcher list the one kid
+        // twice.
+        let covered = Set(rows.compactMap { $0.playerId })
+        let coveredPitchers = Set(rows.compactMap { $0.pitcherId })
+        for player in myPlayers {
+            guard let id = player.id,
+                  !covered.contains(id),
+                  !linkedPlayerIds.contains(id),
+                  !(player.pitcherId.map { coveredPitchers.contains($0) } ?? false) else { continue }
+            rows.append(
+                PlayerDirectoryRow(
+                    id: id,
+                    name: player.name,
+                    jersey: nil,
+                    pitcher: player.pitcherId.flatMap { pid in myPitchers.first(where: { $0.id == pid }) },
+                    pitcherId: player.pitcherId,
+                    playerId: id,
+                    hitterId: player.hitterId,
+                    teams: [],
+                    positions: Set(player.positions ?? []),
+                    isStandalonePitcher: false
+                )
+            )
+        }
+
+        return rows.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    /// Two link paths, same tap: an existing canonical `Player` links
+    /// directly; anyone without one gets that identity minted around their
+    /// existing Pitcher/Hitter first, so their career stats carry over
+    /// instead of starting from scratch on new documents.
+    private func linkPlayerRow(_ row: PlayerDirectoryRow) {
+        if let playerId = row.playerId,
+           let player = myPlayers.first(where: { $0.id == playerId }) {
+            linkExistingPlayer(player)
+            return
+        }
+
+        guard let teamId = selection.team.id else { return }
+        let jersey = newPlayerJersey.trimmingCharacters(in: .whitespaces)
+        authManager.adoptAndLinkPlayer(
+            teamId: teamId,
+            name: row.name,
+            pitcherId: row.pitcherId,
+            hitterId: row.hitterId,
+            positions: row.positions.isEmpty ? nil : Array(row.positions),
+            jerseyNumber: jersey.isEmpty ? nil : jersey
+        ) { result in
+            switch result {
+            case .success:
+                newPlayerJersey = ""
+                showLinkPlayerSheet = false
+                refreshPlayers()
+                refreshPlayerDirectory()
+                authManager.loadMyPlayers { myPlayers = $0 }
+                authManager.loadPitchers { myPitchers = $0 }
+                authManager.loadHitters { myHitters = $0 }
+            case .failure(let error):
+                addPlayerErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
     /// The actual cross-team mechanism: pick one of the signed-in user's own
     /// Players (from any team) instead of creating a new one, so the same
     /// kid's stats span both rosters. Deliberately explicit, no name
     /// matching/auto-linking.
     private var linkExistingPlayerSheet: some View {
-        let alreadyLinkedIds = Set(players.compactMap { $0.playerId })
-        let candidates = myPlayers.filter { !alreadyLinkedIds.contains($0.id ?? "") }
-
-        return NavigationView {
-            List {
-                if candidates.isEmpty {
-                    Text("No other players to link yet - players you add (with \"Create new\") on any team show up here afterward.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(candidates, id: \.id) { player in
-                        Button {
-                            linkExistingPlayer(player)
-                        } label: {
-                            Text(player.name)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.primary)
-                        }
-                    }
-                }
+        PlayerPickerSheet(
+            title: "Link Existing Player",
+            rows: linkCandidateRows,
+            teams: directoryTeams,
+            emptyMessage: "No other players to link yet - players you add (with \"Add\" above) on any team show up here afterward.",
+            // Linking has nothing to do with pitching: a catcher with no P
+            // on their positions must not be hidden behind the toggle.
+            initialScope: .all,
+            onSelect: { row in
+                linkPlayerRow(row)
             }
-            .navigationTitle("Link Existing Player")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Cancel") {
-                        showLinkPlayerSheet = false
-                    }
-                }
-            }
-        }
+        )
     }
 
     private func editPlayerSheet(_ player: TeamPlayer) -> some View {
@@ -508,6 +583,20 @@ struct TeamRosterView: View {
         }
     }
 
+    /// `myTeams` (memberships included - the stats sheets need them) plus
+    /// every team's roster, which is what the link picker's rows are built
+    /// from.
+    private func refreshPlayerDirectory() {
+        authManager.loadMyTeams { teams, _ in
+            myTeams = teams
+            let justTeams = teams.map { $0.team }
+            directoryTeams = justTeams
+            authManager.loadPlayerRosterEntries(for: justTeams) { entries in
+                rosterEntries = entries
+            }
+        }
+    }
+
     private func refreshPlayers() {
         guard let teamId = selection.team.id else { return }
         authManager.loadTeamPlayers(teamId: teamId) { loaded in
@@ -543,6 +632,7 @@ struct TeamRosterView: View {
                 newPlayerPositions = []
                 newPlayerBattingSide = nil
                 refreshPlayers()
+                refreshPlayerDirectory()
                 authManager.loadMyPlayers { myPlayers = $0 }
                 authManager.loadPitchers { myPitchers = $0 }
                 authManager.loadHitters { myHitters = $0 }
@@ -564,6 +654,7 @@ struct TeamRosterView: View {
                 newPlayerJersey = ""
                 showLinkPlayerSheet = false
                 refreshPlayers()
+                refreshPlayerDirectory()
             }
         }
     }
@@ -584,6 +675,23 @@ struct TeamRosterView: View {
             case .success:
                 editingPlayer = nil
                 refreshPlayers()
+                // Positions and batting side stay team-local on purpose
+                // (see TeamPlayer in Team.swift), but a *name* does not: the
+                // Pitcher/Hitter/Player docs and this kid's rows on other
+                // teams all show it, so they move together.
+                if name != player.name {
+                    authManager.propagatePlayerRename(
+                        name: name,
+                        pitcherId: player.pitcherId,
+                        playerId: player.playerId,
+                        hitterId: player.hitterId
+                    ) {
+                        refreshPlayerDirectory()
+                        authManager.loadMyPlayers { myPlayers = $0 }
+                        authManager.loadPitchers { myPitchers = $0 }
+                        authManager.loadHitters { myHitters = $0 }
+                    }
+                }
             case .failure(let error):
                 editPlayerErrorMessage = error.localizedDescription
             }

@@ -311,6 +311,39 @@ extension AuthManager {
         }
     }
 
+    /// Stamps a freshly minted `playerId` onto every roster row that links
+    /// the same Pitcher but has no canonical identity yet, so the next team
+    /// to link this kid links *that* Player instead of minting a second one.
+    /// Best-effort: a roster row on a team someone else created isn't
+    /// writable here (firestore.rules gates roster writes on
+    /// `isTeamCreator`), and a denial is logged, not surfaced.
+    func backfillPlayerIdOnRosterRows(playerId: String, pitcherId: String?, hitterId: String?) {
+        guard let pitcherId else { return }
+        loadMyTeams { entries, _ in
+            for entry in entries {
+                guard let teamId = entry.team.id else { continue }
+                self.loadTeamPlayers(teamId: teamId) { rows in
+                    for row in rows where row.pitcherId == pitcherId && row.playerId == nil {
+                        guard let rowId = row.id else { continue }
+                        var data: [String: Any] = ["playerId": playerId]
+                        if row.hitterId == nil, let hitterId {
+                            data["hitterId"] = hitterId
+                        }
+                        self.teamsCollection()
+                            .document(teamId)
+                            .collection("players")
+                            .document(rowId)
+                            .updateData(data) { error in
+                                if let error {
+                                    debugLog("⚠️ backfillPlayerIdOnRosterRows failed:", error.localizedDescription)
+                                }
+                            }
+                    }
+                }
+            }
+        }
+    }
+
     /// Self-healing backfill for players created before every player always
     /// got both a Pitcher and Hitter: creates whichever is missing and
     /// writes it onto both this TeamPlayer row and (when linked) the
