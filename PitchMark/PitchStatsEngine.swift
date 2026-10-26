@@ -96,7 +96,7 @@ enum PitchStatsCalculator {
                 guard let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines), !outcome.isEmpty else { return false }
                 return outcome == "BB" || outcome == "Walk"
             }.count,
-            hitCount: events.filter(pitchEventCountsAsHit).count,
+            hitCount: events.filter(pitchEventIsCreditedHit).count,
             wildPitchCount: events.filter { $0.wildPitch }.count,
             passedBallCount: events.filter { $0.passedBall }.count,
             firstPitchStrike: sharedFirstPitchStrikeMetrics(for: events),

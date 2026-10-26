@@ -593,6 +593,7 @@ struct SettingsView: View {
     @State private var inlineNewGameOpponentTeamId: String? = nil
     @State private var createGameError: String? = nil
     @State private var showArchivedGames = false
+    @State private var pendingArchiveGame: Game? = nil
     @State private var pendingDeleteGameId: String? = nil
     @State private var pendingDeleteGameName: String = ""
     @State private var showDeleteGameConfirm = false
@@ -998,15 +999,13 @@ struct SettingsView: View {
                         } label: {
                             Label("Unarchive Game", systemImage: "archivebox")
                         }
+                        archivedGameStatsToggle(menuGame)
                     } else {
                         Button {
-                            guard let id = menuGame.id, !id.isEmpty else { return }
-                            authManager.archiveGame(gameId: id)
-                            if let idx = games.firstIndex(where: { $0.id == id }) {
-                                games[idx].archivedAt = Date()
-                            }
+                            guard !(menuGame.id ?? "").isEmpty else { return }
+                            pendingArchiveGame = menuGame
                         } label: {
-                            Label("Archive Game", systemImage: "archivebox")
+                            Label("Archive Game…", systemImage: "archivebox")
                         }
                     }
 
@@ -1524,12 +1523,7 @@ struct SettingsView: View {
     private func playerListRowView(_ row: PlayerDirectoryRow) -> some View {
         let isArchived = row.isArchived(in: hiddenPitcherIds)
         return PlayerDirectoryRowView(row: row, isArchived: isArchived) {
-            Button("Stats") {
-                openStats(for: row)
-            }
-            .buttonStyle(.bordered)
-            .font(.caption.weight(.semibold))
-            .disabled(!canOpenStats(for: row))
+            statsControl(for: row)
 
             Menu {
                 playerRowMenu(row)
@@ -1545,22 +1539,56 @@ struct SettingsView: View {
         }
     }
 
-    /// Routes on `isPitcher`, not on `pitcher != nil` - every player has a
+    /// A two-way player gets a Stats menu (Pitching / Hitting); anyone else
+    /// keeps the single button straight into the one sheet that applies.
+    @ViewBuilder
+    private func statsControl(for row: PlayerDirectoryRow) -> some View {
+        let canPitch = canOpenPitchingStats(for: row)
+        let canHit = canOpenHittingStats(for: row)
+        if canPitch && canHit {
+            Menu {
+                Button("Pitching Stats") { openPitchingStats(for: row) }
+                Button("Hitting Stats") { openHittingStats(for: row) }
+            } label: {
+                Text("Stats")
+            }
+            .menuStyle(.button)
+            .buttonStyle(.bordered)
+            .font(.caption.weight(.semibold))
+        } else {
+            Button("Stats") {
+                if canPitch {
+                    openPitchingStats(for: row)
+                } else {
+                    openHittingStats(for: row)
+                }
+            }
+            .buttonStyle(.bordered)
+            .font(.caption.weight(.semibold))
+            .disabled(!canPitch && !canHit)
+        }
+    }
+
+    /// Keys off `isPitcher`, not `pitcher != nil` - every player has a
     /// linked Pitcher record whether or not they pitch, so keying off that
     /// sent every non-pitcher to the pitching stats sheet.
-    private func canOpenStats(for row: PlayerDirectoryRow) -> Bool {
-        if row.isPitcher, row.pitcher != nil { return true }
+    private func canOpenPitchingStats(for row: PlayerDirectoryRow) -> Bool {
+        row.isPitcher && row.pitcher != nil
+    }
+
+    private func canOpenHittingStats(for row: PlayerDirectoryRow) -> Bool {
         guard let hitterId = row.hitterId else { return false }
         return myHitters.contains { $0.id == hitterId }
     }
 
-    private func openStats(for row: PlayerDirectoryRow) {
-        if row.isPitcher, let pitcher = row.pitcher {
-            statsPitcherIds = row.pitcherIds
-            statsTeams = row.teams.sorted(by: Team.listOrder)
-            statsPitcher = pitcher
-            return
-        }
+    private func openPitchingStats(for row: PlayerDirectoryRow) {
+        guard let pitcher = row.pitcher else { return }
+        statsPitcherIds = row.pitcherIds
+        statsTeams = row.teams.sorted(by: Team.listOrder)
+        statsPitcher = pitcher
+    }
+
+    private func openHittingStats(for row: PlayerDirectoryRow) {
         guard let hitterId = row.hitterId else { return }
         statsHitterIds = row.hitterIds
         statsTeams = row.teams.sorted(by: Team.listOrder)
@@ -2036,6 +2064,18 @@ struct SettingsView: View {
                 self.createGameError = "Couldn't save \"\(name)\": \(error.localizedDescription)"
                 debugLog("❌ create game failed:", error.localizedDescription)
             }
+        }
+    }
+
+    private func archivedGameStatsToggle(_ game: Game) -> some View {
+        Toggle(isOn: Binding(
+            get: { authManager.gameCountsInStats(game) },
+            set: { include in
+                guard let id = game.id, !id.isEmpty else { return }
+                authManager.setArchivedGame(id, includedInStats: include)
+            }
+        )) {
+            Label("Include in Stats", systemImage: "chart.bar")
         }
     }
 
@@ -3279,6 +3319,13 @@ struct SettingsView: View {
             } message: {
                 Text("This device doesn’t have a camera available.")
             }
+            .archiveGameDialog(game: $pendingArchiveGame, title: matchupTitle) { game, keepInStats in
+                guard let id = game.id, !id.isEmpty else { return }
+                authManager.archiveGame(gameId: id, keepInStats: keepInStats)
+                if let idx = games.firstIndex(where: { $0.id == id }) {
+                    games[idx].archivedAt = Date()
+                }
+            }
             .appConfirmationDialog(
                 isPresented: $showCameraPermissionAlert,
                 title: "Camera Access Needed",
@@ -3891,12 +3938,19 @@ struct PitcherStatsSheetView: View {
         var id: String { rawValue }
     }
 
+    /// Every game that counts toward this viewer's stats - archived ones
+    /// only when they chose to keep them (see `gameCountsInStats`).
     private var activeGames: [Game] {
-        games.filter { !$0.isArchived }
+        games.filter { authManager.gameCountsInStats($0) }
     }
 
+    /// Includes the stats choice so flipping it re-runs the selection and
+    /// load exactly like an archive does.
     private var gameStateSignature: [String] {
-        games.map { "\($0.id ?? "")|\($0.archivedAt?.timeIntervalSince1970 ?? 0)" }
+        games.map { game in
+            let counts = authManager.gameCountsInStats(game) ? 1 : 0
+            return "\(game.id ?? "")|\(game.archivedAt?.timeIntervalSince1970 ?? 0)|\(counts)"
+        }
     }
 
     private var sortedGames: [Game] {
@@ -3959,8 +4013,12 @@ struct PitcherStatsSheetView: View {
         Set(gamesForSelectedTeams.compactMap { $0.id })
     }
 
+    /// The locked game always counts: opening an excluded archived game
+    /// and asking for its own stats should still show them.
     private var validGameIds: Set<String> {
-        Set(sortedGames.compactMap { $0.id })
+        var ids = Set(sortedGames.compactMap { $0.id })
+        if let lockToGameId { ids.insert(lockToGameId) }
+        return ids
     }
 
     private func formattedDate(_ date: Date) -> String {
@@ -4119,7 +4177,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private func eventCountsAsHit(_ event: PitchEvent) -> Bool {
-        pitchEventCountsAsHit(event)
+        pitchEventIsCreditedHit(event)
     }
 
     private var hitSpotCount: Int {
@@ -5092,7 +5150,7 @@ struct PitcherStatsSheetView: View {
                 }
             ],
             itemTitle: { game in
-                "vs \(game.opponent) • \(formattedDate(game.date))"
+                "vs \(game.opponent) • \(formattedDate(game.date))\(game.isArchived ? " • Archived" : "")"
             },
             isSelected: { game in
                 guard let id = game.id else { return false }
@@ -5694,5 +5752,44 @@ struct PitcherStatsSheetView: View {
             batterId,
             jersey
         ].joined(separator: "|")
+    }
+}
+
+
+// MARK: - Archive Game dialog
+
+extension View {
+    /// The one place a game gets archived, from Home or the game picker.
+    /// Archiving never deletes; the only question is whether this user's
+    /// stats keep counting the game (every pitch in it, both teams). The
+    /// answer stays changeable from the archived game's menu.
+    func archiveGameDialog(
+        game: Binding<Game?>,
+        title: @escaping (Game) -> String,
+        onArchive: @escaping (Game, _ keepInStats: Bool) -> Void
+    ) -> some View {
+        // Captured now: the dialog clears `isPresented` (and so the binding)
+        // before it runs the chosen action.
+        let current = game.wrappedValue
+        let name = current.map(title) ?? ""
+        return appConfirmationDialog(
+            isPresented: Binding(
+                get: { game.wrappedValue != nil },
+                set: { if !$0 { game.wrappedValue = nil } }
+            ),
+            title: "Archive Game?",
+            message: (name.isEmpty ? "This game" : "\"\(name)\"")
+                + " will be hidden from your games. Nothing is deleted, and you can unarchive it anytime.\n\n"
+                + "Should its pitches still count in your players' stats? This covers both teams in this game. You can change it later from the game's menu.",
+            primaryTitle: "Archive, Keep Stats",
+            primaryAction: {
+                if let current { onArchive(current, true) }
+            },
+            secondaryTitle: "Cancel",
+            alternateTitle: "Archive, Remove from Stats",
+            alternateAction: {
+                if let current { onArchive(current, false) }
+            }
+        )
     }
 }

@@ -321,6 +321,13 @@ class AuthManager: ObservableObject {
     @Published private(set) var authenticationErrorMessage: String? = nil
     @Published private(set) var isRetailAdmin: Bool = false
     @Published private(set) var accountDeletionAcknowledgementID: UUID? = nil
+    /// The archived games this user has chosen to keep counting in stats.
+    /// Stored per user (`users/{uid}/meta/statsPreferences`), never on the
+    /// game itself, so each viewer decides for themselves. Archived games
+    /// are excluded unless listed here - which is also what every game
+    /// archived before this existed starts as, with no migration.
+    @Published private(set) var archivedGameIdsIncludedInStats: Set<String> = []
+    private var statsPreferencesListener: ListenerRegistration?
 
     private var authStateHandle: AuthStateDidChangeListenerHandle?
     private var currentAppleNonce: String? = nil
@@ -354,10 +361,12 @@ class AuthManager: ObservableObject {
                     debugLog("🔐 Auth -> SIGNED IN uid=\(user.uid) email=\(user.email ?? "")")
                     self.refreshRetailAdminStatus(for: user)
                     self.probeUserPrivateCollections(tag: "authStateDidChangeListener")
+                    self.startStatsPreferencesListener(uid: user.uid)
 
                 } else {
                     debugLog("🔐 Auth -> SIGNED OUT")
                     self.isRetailAdmin = false
+                    self.stopStatsPreferencesListener()
                 }
             }
         }
@@ -2413,12 +2422,73 @@ extension AuthManager {
         }
     }
 
-    func archiveGame(gameId: String) {
+    /// Archiving never deletes anything - `keepInStats` only decides
+    /// whether this user's stats keep counting the game's pitches (both
+    /// teams'), and it stays changeable via `setArchivedGame(_:includedInStats:)`.
+    func archiveGame(gameId: String, keepInStats: Bool) {
+        setArchivedGame(gameId, includedInStats: keepInStats)
         setGameArchivedState(gameId: gameId, isArchived: true)
     }
 
+    /// An unarchived game counts like any other, so its entry is dropped -
+    /// archiving it again asks the stats question afresh.
     func unarchiveGame(gameId: String) {
+        setArchivedGame(gameId, includedInStats: false)
         setGameArchivedState(gameId: gameId, isArchived: false)
+    }
+
+    /// The one rule every stats screen applies.
+    func gameCountsInStats(_ game: Game) -> Bool {
+        guard game.isArchived else { return true }
+        guard let id = game.id else { return false }
+        return archivedGameIdsIncludedInStats.contains(id)
+    }
+
+    func setArchivedGame(_ gameId: String, includedInStats: Bool) {
+        guard let user = user, !gameId.isEmpty else { return }
+        // Optimistic: the stats sheets read this directly, and the listener
+        // will echo the same value back.
+        if includedInStats {
+            archivedGameIdsIncludedInStats.insert(gameId)
+        } else {
+            archivedGameIdsIncludedInStats.remove(gameId)
+        }
+        let change = includedInStats
+            ? FieldValue.arrayUnion([gameId])
+            : FieldValue.arrayRemove([gameId])
+        statsPreferencesRef(uid: user.uid)
+            .setData(["archivedGameIdsIncludedInStats": change], merge: true) { error in
+                if let error {
+                    debugLog("⚠️ setArchivedGame(includedInStats:) failed:", error.localizedDescription)
+                }
+            }
+    }
+
+    private func statsPreferencesRef(uid: String) -> DocumentReference {
+        Firestore.firestore()
+            .collection("users").document(uid)
+            .collection("meta").document("statsPreferences")
+    }
+
+    private func startStatsPreferencesListener(uid: String) {
+        stopStatsPreferencesListener()
+        statsPreferencesListener = statsPreferencesRef(uid: uid).addSnapshotListener { [weak self] snapshot, error in
+            guard let self else { return }
+            if let error {
+                debugLog("⚠️ statsPreferences listener error:", error.localizedDescription)
+                return
+            }
+            let ids = snapshot?.data()?["archivedGameIdsIncludedInStats"] as? [String] ?? []
+            DispatchQueue.main.async {
+                self.archivedGameIdsIncludedInStats = Set(ids)
+            }
+        }
+    }
+
+    private func stopStatsPreferencesListener() {
+        statsPreferencesListener?.remove()
+        statsPreferencesListener = nil
+        archivedGameIdsIncludedInStats = []
     }
 
     private func setGameArchivedState(gameId: String, isArchived: Bool) {

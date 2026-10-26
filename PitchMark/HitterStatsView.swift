@@ -37,6 +37,9 @@ struct HitterStatsView: View {
     var combinedHitterIds: [String] = []
     let games: [Game]
     let teams: [Team]
+    /// Set when opened from inside a game: adds a This Game / All Games
+    /// switch, starting on This Game.
+    var focusGameId: String? = nil
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -45,6 +48,11 @@ struct HitterStatsView: View {
     @State private var isLoading = false
     @State private var dateFilter: DateRangeFilter = .all
     @State private var selectedTeamIds: Set<String> = []
+    @State private var showsFocusGameOnly = true
+
+    private var isFocusedOnGame: Bool {
+        focusGameId != nil && showsFocusGameOnly
+    }
 
     private var dateRange: ClosedRange<Date>? {
         switch dateFilter {
@@ -60,8 +68,26 @@ struct HitterStatsView: View {
         return Set(games.filter { TeamFilterChips.game($0, belongsTo: selectedTeamIds) }.compactMap { $0.id })
     }
 
+    /// Archived games this viewer chose to remove from stats. Events from
+    /// games not in `games` (another coach's) are left as they were.
+    private var excludedGameIds: Set<String> {
+        Set(games.filter { !authManager.gameCountsInStats($0) }.compactMap { $0.id })
+    }
+
     private var filteredEvents: [PitchEvent] {
+        // This Game is exactly the open game's pitches - archive, date and
+        // team filters don't apply to it.
+        if isFocusedOnGame, let focusGameId {
+            return allEvents.filter { $0.gameId == focusGameId }
+        }
         var result = allEvents
+        let excluded = excludedGameIds
+        if !excluded.isEmpty {
+            result = result.filter { event in
+                guard let gid = event.gameId, !gid.isEmpty else { return true }
+                return !excluded.contains(gid)
+            }
+        }
         if let range = dateRange {
             result = result.filter { range.contains($0.timestamp) }
         }
@@ -85,16 +111,27 @@ struct HitterStatsView: View {
                     }
                     .padding(.horizontal)
 
-                    Picker("Date Range", selection: $dateFilter) {
-                        ForEach(DateRangeFilter.allCases) { range in
-                            Text(range.rawValue).tag(range)
+                    if focusGameId != nil {
+                        Picker("Scope", selection: $showsFocusGameOnly) {
+                            Text("This Game").tag(true)
+                            Text("All Games").tag(false)
                         }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
                     }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal)
 
-                    if !teams.isEmpty {
-                        TeamFilterChips(teams: teams, selectedTeamIds: $selectedTeamIds)
+                    if !isFocusedOnGame {
+                        Picker("Date Range", selection: $dateFilter) {
+                            ForEach(DateRangeFilter.allCases) { range in
+                                Text(range.rawValue).tag(range)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal)
+
+                        if !teams.isEmpty {
+                            TeamFilterChips(teams: teams, selectedTeamIds: $selectedTeamIds)
+                        }
                     }
 
                     Text("\(filteredEvents.count) pitch\(filteredEvents.count == 1 ? "" : "es") tracked")
@@ -112,6 +149,8 @@ struct HitterStatsView: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal)
                     } else {
+                        statLineGrid(HittingStatLine(events: filteredEvents))
+                            .padding(.horizontal)
                         StrikeZoneHeatmapView(events: filteredEvents)
                             .padding(.horizontal)
                     }
@@ -127,6 +166,55 @@ struct HitterStatsView: View {
             }
             .onAppear { loadEvents() }
         }
+    }
+
+    private func statLineGrid(_ line: HittingStatLine) -> some View {
+        let rates: [(String, String)] = [
+            ("AVG", HittingStatLine.formatRate(line.average)),
+            ("OBP", HittingStatLine.formatRate(line.onBase)),
+            ("SLG", HittingStatLine.formatRate(line.slugging))
+        ]
+        let counts: [(String, Int)] = [
+            ("PA", line.plateAppearances), ("AB", line.atBats), ("H", line.hits),
+            ("1B", line.singles), ("2B", line.doubles), ("3B", line.triples), ("HR", line.homeRuns),
+            ("BB", line.walks), ("HBP", line.hitByPitch), ("K", line.strikeouts),
+            ("ROE", line.reachedOnError)
+        ]
+        let columns = [GridItem(.adaptive(minimum: 64), spacing: 8)]
+        return VStack(alignment: .leading, spacing: 8) {
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(rates, id: \.0) { label, value in
+                    statTile(label: label, value: value, emphasized: true)
+                }
+            }
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(counts, id: \.0) { label, value in
+                    statTile(label: label, value: "\(value)", emphasized: false)
+                }
+            }
+            if line.unspecifiedHits > 0 {
+                Text("SLG needs every hit marked 1B, 2B, 3B or HR - \(line.unspecifiedHits) \(line.unspecifiedHits == 1 ? "was" : "were") saved as just \"Hit\".")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func statTile(label: String, value: String, emphasized: Bool) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(emphasized ? .title3.weight(.bold) : .headline)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func loadEvents() {

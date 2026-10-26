@@ -207,4 +207,8 @@ final class TrackerUIState: ObservableObject {
     @Published var didSeedOwnerGameEventsForLive: Bool = false
     @Published var didSeedLivePitchEventsFromOwnerGame: Bool = false
     @Published var liveSessionRenewalInFlight: Bool = false
+    /// The lineup (gear) sheet's Player Details / Hitting Stats, presented
+    /// on top of it by `LineupPlayerSheets`.
+    @Published var lineupEditTarget: LineupEditTarget? = nil
+    @Published var lineupStatsTarget: LineupStatsTarget? = nil
 }

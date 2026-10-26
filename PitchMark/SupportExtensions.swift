@@ -26,7 +26,10 @@ extension View {
         primaryRole: AppConfirmationDialogRole = .primary,
         primaryAction: @escaping () -> Void,
         secondaryTitle: String,
-        secondaryAction: (() -> Void)? = nil
+        secondaryAction: (() -> Void)? = nil,
+        alternateTitle: String? = nil,
+        alternateRole: AppConfirmationDialogRole = .primary,
+        alternateAction: (() -> Void)? = nil
     ) -> some View {
         modifier(
             AppConfirmationDialogModifier(
@@ -37,7 +40,10 @@ extension View {
                 primaryRole: primaryRole,
                 primaryAction: primaryAction,
                 secondaryTitle: secondaryTitle,
-                secondaryAction: secondaryAction
+                secondaryAction: secondaryAction,
+                alternateTitle: alternateTitle,
+                alternateRole: alternateRole,
+                alternateAction: alternateAction
             )
         )
     }
@@ -58,6 +64,12 @@ private struct AppConfirmationDialogModifier: ViewModifier {
     let primaryAction: () -> Void
     let secondaryTitle: String
     let secondaryAction: (() -> Void)?
+    /// Optional second choice, drawn between primary and cancel - for
+    /// dialogs that need two ways to proceed (e.g. archive keeping stats
+    /// vs. archive removing them).
+    let alternateTitle: String?
+    let alternateRole: AppConfirmationDialogRole
+    let alternateAction: (() -> Void)?
 
     func body(content: Content) -> some View {
         content
@@ -93,6 +105,21 @@ private struct AppConfirmationDialogModifier: ViewModifier {
                                 .buttonStyle(.plain)
                                 .foregroundStyle(primaryRole == .destructive ? .red : .primary)
                                 .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                                if let alternateTitle {
+                                    Button {
+                                        isPresented = false
+                                        alternateAction?()
+                                    } label: {
+                                        Text(alternateTitle)
+                                            .font(.headline.weight(.semibold))
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 14)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(alternateRole == .destructive ? .red : .primary)
+                                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                }
 
                                 Button {
                                     dismissSecondary()

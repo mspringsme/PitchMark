@@ -116,6 +116,23 @@ func pitchEventCountsAsHit(_ event: PitchEvent) -> Bool {
     return descriptorTokens.contains("hit")
 }
 
+/// Scoring rule for *stats*: a hit is only a hit when there was no error on
+/// the play (an error makes it reached-on-error), and the Hit tag can't
+/// override an explicit non-hit result recorded alongside it.
+///
+/// Deliberately separate from `pitchEventCountsAsHit`, which the pitch
+/// editors use to decide whether an edited pitch keeps its 1B/2B/... -
+/// tightening that one would strip the base off a reached-on-error play the
+/// moment it was edited.
+func pitchEventIsCreditedHit(_ event: PitchEvent) -> Bool {
+    guard pitchEventCountsAsHit(event), !event.errorOnPlay else { return false }
+    let outcome = (event.outcome ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    let nonHitOutcomes: Set<String> = ["out", "k", "ꓘ", "walk", "bb", "hbp"]
+    return !nonHitOutcomes.contains(outcome)
+}
+
 func isSuccessful(_ event: PitchEvent) -> Bool {
     guard let call = event.calledPitch else { return false }
     return call.isStrike == event.isStrike

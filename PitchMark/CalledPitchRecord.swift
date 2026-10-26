@@ -1464,6 +1464,28 @@ struct LineupBatterGroup: Identifiable {
     /// The side currently at bat. Listed first and marked.
     let isBatting: Bool
     let cells: [JerseyCell]
+    /// This team's roster players who aren't in the game, shown in a Bench
+    /// row under its In Game row. Empty when the team has no roster.
+    var bench: [LineupBenchPlayer] = []
+}
+
+/// A roster player on the bench, in terms this file can hold - it is also
+/// compiled into the Display target, which has no Team/TeamPlayer.
+struct LineupBenchPlayer: Identifiable, Equatable {
+    /// The TeamPlayer id.
+    let id: String
+    /// What the chip shows: the jersey, or initials when there's none.
+    let label: String
+    let name: String
+    /// Whether the player has a hitting record to show stats for.
+    let hasHitterRecord: Bool
+}
+
+/// Whichever chip is highlighted in the lineup sheet - a batter in the game
+/// or a player on the bench. The action row and Hitting Stats act on it.
+enum LineupPlayerTarget {
+    case batter(JerseyCell)
+    case bench(LineupBenchPlayer)
 }
 
 /// Live reorder of the lineup strip while a jersey is being dragged by its
@@ -1529,6 +1551,14 @@ struct PitchEventDetailPopover: View {
     let onDeleteLineupBatter: (JerseyCell) -> Void
     let currentCountSeed: (balls: Int, strikes: Int)?
     let onCountChanged: ((Int, Int) -> Void)?
+    /// Display names for in-game cells that are roster players.
+    var batterNameById: [UUID: String] = [:]
+    /// Take a roster batter out of the game, onto their team's bench. When
+    /// nil (or for a bare jersey number) the row keeps the Delete button.
+    var onBenchLineupBatter: ((JerseyCell) -> Void)? = nil
+    var onPutInGame: ((LineupBenchPlayer) -> Void)? = nil
+    var onEditBenchPlayer: ((LineupBenchPlayer) -> Void)? = nil
+    var onHittingStats: ((LineupPlayerTarget) -> Void)? = nil
     @State private var batterNotes: String = ""
     @State private var isBatterNotesFocused: Bool = false
     // Spray chart starts collapsed: it's a 330pt block, and the batters and
@@ -1538,6 +1568,10 @@ struct PitchEventDetailPopover: View {
     @State private var isNotesExpanded: Bool = true
     /// The jersey currently being dragged by its handle, if any.
     @State private var draggingCell: JerseyCell? = nil
+    /// A bench chip that's been tapped. Bench players aren't batters, so
+    /// this is the sheet's own highlight rather than the game's selection;
+    /// it wins over the selected batter while set.
+    @State private var highlightedBenchId: String? = nil
 
     /// Selection still wins over the unassigned tint - otherwise an
     /// unassigned batter you've selected would be the only cell in the strip
@@ -1559,7 +1593,7 @@ struct PitchEventDetailPopover: View {
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(cells) { cell in
-                    let isSelected = cell.id == selectedLineupBatterId
+                    let isSelected = highlightedBenchId == nil && cell.id == selectedLineupBatterId
                     let isUnlinked = unlinkedBatterIds.contains(cell.id)
                     VStack(spacing: 1) {
                         jerseyChip(cell, isSelected: isSelected, isUnlinked: isUnlinked)
@@ -1618,6 +1652,7 @@ struct PitchEventDetailPopover: View {
 
     private func jerseyChip(_ cell: JerseyCell, isSelected: Bool, isUnlinked: Bool) -> some View {
         Button {
+            highlightedBenchId = nil
             onSelectLineupBatter(cell)
         } label: {
             // 25% smaller than the original 48x40, with the corner radius
@@ -1995,9 +2030,10 @@ struct PitchEventDetailPopover: View {
 
     @ViewBuilder
     private var battersSection: some View {
-        if !lineupBatters.isEmpty {
+        let showsGroups = lineupGroups.count > 1 || lineupGroups.contains { !$0.bench.isEmpty }
+        if !lineupBatters.isEmpty || showsGroups {
             VStack(alignment: .leading, spacing: 10) {
-                if lineupGroups.count > 1 {
+                if showsGroups {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(lineupGroups) { group in
                             VStack(alignment: .leading, spacing: 4) {
@@ -2015,7 +2051,16 @@ struct PitchEventDetailPopover: View {
                                             .background(Capsule().fill(Color.pitchMarkActiveGray))
                                     }
                                 }
-                                lineupStrip(group.cells)
+                                rowCaption("In Game")
+                                if group.cells.isEmpty {
+                                    emptyRowNote("No one in the game yet.")
+                                } else {
+                                    lineupStrip(group.cells)
+                                }
+                                if !group.bench.isEmpty {
+                                    rowCaption("Bench")
+                                    benchStrip(group.bench)
+                                }
                             }
                             if group.id != lineupGroups.last?.id {
                                 Divider()
@@ -2026,11 +2071,114 @@ struct PitchEventDetailPopover: View {
                     lineupStrip(lineupBatters)
                 }
 
-                if let activeCell = activeLineupCell {
-                    batterActionRow(activeCell)
+                if let benchPlayer = highlightedBenchPlayer {
+                    benchActionRow(benchPlayer)
+                } else if let selectedCell = selectedLineupCell {
+                    batterActionRow(selectedCell)
+                } else {
+                    Text("Tap a player to edit them, see their hitting stats, or move them between the game and the bench.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .padding(.bottom, 0)
+        }
+    }
+
+    /// Only an explicit selection - unlike `activeLineupCell`, never falls
+    /// back to the first batter, so the action row can't act on someone
+    /// who isn't highlighted.
+    private var selectedLineupCell: JerseyCell? {
+        guard let id = selectedLineupBatterId else { return nil }
+        return lineupBatters.first(where: { $0.id == id })
+    }
+
+    private var highlightedBenchPlayer: LineupBenchPlayer? {
+        guard let highlightedBenchId else { return nil }
+        return lineupGroups.lazy.flatMap(\.bench).first(where: { $0.id == highlightedBenchId })
+    }
+
+    private func rowCaption(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    private func emptyRowNote(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 6)
+    }
+
+    /// Bench chips: same size as the lineup's, outlined rather than filled
+    /// so the two rows read differently at a glance. No drag handles - the
+    /// bench has no batting order.
+    private func benchStrip(_ players: [LineupBenchPlayer]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(players) { player in
+                    let isSelected = player.id == highlightedBenchId
+                    Button {
+                        highlightedBenchId = isSelected ? nil : player.id
+                    } label: {
+                        Text(player.label)
+                            .font(.subheadline.weight(.semibold))
+                            .minimumScaleFactor(0.7)
+                            .lineLimit(1)
+                            .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                            .frame(width: 36, height: 30)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(isSelected ? Color.blue : Color.clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(
+                                        isSelected ? Color.blue.opacity(0.95) : Color.secondary.opacity(0.5),
+                                        style: StrokeStyle(lineWidth: isSelected ? 2 : 1, dash: isSelected ? [] : [3, 2])
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(player.name), on the bench")
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func benchActionRow(_ player: LineupBenchPlayer) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(player.name) · on the bench")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            HStack(spacing: 8) {
+                if let onEditBenchPlayer {
+                    batterLabelButton("#", systemImage: "pencil", fills: false) {
+                        onEditBenchPlayer(player)
+                    }
+                }
+                if let onHittingStats, player.hasHitterRecord {
+                    batterLabelButton("Hitting", systemImage: "chart.bar", fills: false) {
+                        onHittingStats(.bench(player))
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                if let onPutInGame {
+                    batterLabelButton("Put In Game", systemImage: "arrow.up", fills: false) {
+                        highlightedBenchId = nil
+                        onPutInGame(player)
+                    }
+                }
+            }
         }
     }
 
@@ -2049,7 +2197,8 @@ struct PitchEventDetailPopover: View {
         VStack(alignment: .leading, spacing: 6) {
             // A press-and-hold drag isn't self-evident, and it's the only
             // way to reorder now that the arrows are gone.
-            Text("Batting order: press and hold a handle to drag")
+            Text(batterNameById[activeCell.id].map { "\($0) · in the game. Drag a handle to reorder." }
+                 ?? "Batting order: press and hold a handle to drag")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -2059,15 +2208,30 @@ struct PitchEventDetailPopover: View {
                 batterLabelButton("#", systemImage: "pencil", fills: false) {
                     onEditLineupBatter(activeCell)
                 }
+                let isRosterPlayer = !unlinkedBatterIds.contains(activeCell.id)
+                if let onHittingStats, isRosterPlayer {
+                    batterLabelButton("Hitting", systemImage: "chart.bar", fills: false) {
+                        onHittingStats(.batter(activeCell))
+                    }
+                }
 
                 Spacer(minLength: 8)
 
-                batterIconButton(
-                    "trash",
-                    accessibilityLabel: "Delete batter",
-                    role: .destructive
-                ) {
-                    onDeleteLineupBatter(activeCell)
+                // A roster player goes back to the bench - they still exist
+                // on the team. A bare jersey number has no bench to go to,
+                // so it keeps Delete.
+                if let onBenchLineupBatter, isRosterPlayer {
+                    batterLabelButton("Bench", systemImage: "arrow.down", fills: false) {
+                        onBenchLineupBatter(activeCell)
+                    }
+                } else {
+                    batterIconButton(
+                        "trash",
+                        accessibilityLabel: "Delete batter",
+                        role: .destructive
+                    ) {
+                        onDeleteLineupBatter(activeCell)
+                    }
                 }
             }
         }

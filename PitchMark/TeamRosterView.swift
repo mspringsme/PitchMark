@@ -10,10 +10,10 @@
 //  code - never through a team row.
 //
 //  Owner-only (the team's actual creator, see isTeamOwner below) edit/delete
-//  added for both the team itself and its players - tap a player row for
-//  View Stats/Edit, swipe to delete it (deliberately separate from tap, so
-//  delete is never one accidental tap away, same reasoning AssetLibraryView
-//  already uses).
+//  added for both the team itself and its players - tap a player row to
+//  open Player Details (stats buttons sit beside the name), swipe to
+//  delete it (deliberately separate from tap, so delete is never one
+//  accidental tap away, same reasoning AssetLibraryView already uses).
 //
 //  Adding a player creates a real cross-team `Player` (Player.swift) with
 //  both a linked Pitcher and a linked Hitter, always - no role designation
@@ -83,9 +83,6 @@ struct TeamRosterView: View {
     /// row lists exactly these.
     @State private var statsTeams: [Team] = []
 
-    @State private var playerActionTarget: TeamPlayer? = nil
-    @State private var showPlayerActionsDialog = false
-
     @State private var teamName: String = ""
     /// Mirrors `teamName`: the sheet's own copy, so an edit shows up here
     /// without waiting for the presenting list to reload.
@@ -93,11 +90,6 @@ struct TeamRosterView: View {
     @State private var editTeamDesignation = TeamDesignationDraft()
 
     @State private var editingPlayer: TeamPlayer? = nil
-    @State private var editPlayerName: String = ""
-    @State private var editPlayerJersey: String = ""
-    @State private var editPlayerPositions: Set<FieldPosition> = []
-    @State private var editPlayerBattingSide: BattingSide? = nil
-    @State private var editPlayerErrorMessage: String? = nil
 
     @State private var playerPendingDelete: TeamPlayer? = nil
     @State private var showDeletePlayerDialog = false
@@ -145,7 +137,7 @@ struct TeamRosterView: View {
 
                         TextField("Jersey #", text: $newPlayerJersey)
 
-                        positionToggleRow(selected: $newPlayerPositions)
+                        PositionToggleRow(selected: $newPlayerPositions)
 
                         Picker("Batting Side", selection: $newPlayerBattingSide) {
                             Text("Not Set").tag(BattingSide?.none)
@@ -272,43 +264,19 @@ struct TeamRosterView: View {
             primaryAction: { leaveTeam() },
             secondaryTitle: "Cancel"
         )
-        .confirmationDialog(
-            playerActionTarget?.name ?? "Player",
-            isPresented: $showPlayerActionsDialog,
-            titleVisibility: .visible
-        ) {
-            if let player = playerActionTarget {
-                if player.pitcherId != nil {
-                    Button("View Pitching Stats") {
-                        statsPitcherIds = person(for: player)?.pitcherIds ?? []
-                        statsTeams = teamsForStats(player)
-                        statsPitcher = myPitchers.first(where: { $0.id == player.pitcherId })
-                    }
-                }
-                if player.hitterId != nil {
-                    Button("View Hitting Stats") {
-                        statsHitterIds = person(for: player)?.hitterIds ?? []
-                        statsTeams = teamsForStats(player)
-                        statsHitter = myHitters.first(where: { $0.id == player.hitterId })
-                    }
-                }
-                Button("Edit") {
-                    editingPlayer = player
-                    editPlayerName = player.name
-                    editPlayerJersey = player.jerseyNumber ?? ""
-                    editPlayerPositions = Set(player.positions ?? [])
-                    editPlayerBattingSide = player.battingSide
-                    editPlayerErrorMessage = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { playerActionTarget = nil }
-        }
         .sheet(isPresented: $isRenamingTeam) {
             renameTeamSheet
         }
         .sheet(item: $editingPlayer) { player in
             editPlayerSheet(player)
         }
+    }
+
+    /// Presented from inside Player Details (the only place the stats
+    /// buttons live), not from the roster root - a sheet can't present on a
+    /// view that already has one up.
+    private func statsSheets<Content: View>(_ content: Content) -> some View {
+        content
         .sheet(item: $statsPitcher) { pitcher in
             PitcherStatsSheetView(
                 pitcher: pitcher,
@@ -328,31 +296,6 @@ struct TeamRosterView: View {
             )
             .environmentObject(authManager)
             .fixedAppDynamicType()
-        }
-    }
-
-    /// Capsule multi-select for FieldPosition, same visual language as the
-    /// Teams filter row in PitcherStatsSheetView and the Us/Them control in
-    /// PitchTrackerView (Color.pitchMarkActiveGray when selected).
-    private func positionToggleRow(selected: Binding<Set<FieldPosition>>) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(FieldPosition.allCases, id: \.self) { position in
-                    let isSelected = selected.wrappedValue.contains(position)
-                    Button(position.rawValue) {
-                        if isSelected {
-                            selected.wrappedValue.remove(position)
-                        } else {
-                            selected.wrappedValue.insert(position)
-                        }
-                    }
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
-                    .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
-                }
-            }
         }
     }
 
@@ -390,8 +333,7 @@ struct TeamRosterView: View {
 
         if isTeamOwner {
             Button {
-                playerActionTarget = player
-                showPlayerActionsDialog = true
+                beginEditing(player)
             } label: {
                 label.contentShape(Rectangle())
             }
@@ -477,83 +419,70 @@ struct TeamRosterView: View {
         authManager.loadHitters { myHitters = $0 }
     }
 
-    /// Labelled by reach, because the two behave differently and used to sit
-    /// side by side with nothing saying so: the name is the *person's* and
-    /// changes on every team (`propagatePlayerRename`); jersey, positions and
-    /// batting side are this roster's alone. Cross-team links are shown, not
-    /// edited, here - that all lives in Link Profiles.
+    /// Player Details itself lives in PlayerDetailsSheet.swift, shared with
+    /// the game screen's lineup sheet; this roster adds only the stats
+    /// buttons beside the name.
     private func editPlayerSheet(_ player: TeamPlayer) -> some View {
         let otherTeams = person(for: player)?.otherTeams(than: selection.team.id) ?? []
-        return NavigationView {
-            Form {
-                Section {
-                    TextField("Name", text: $editPlayerName)
-                        .textInputAutocapitalization(.words)
-                } header: {
-                    Text("Name")
-                } footer: {
-                    Text(otherTeams.isEmpty
-                         ? "Renaming also updates their stats."
-                         : "Changes on every team they're on.")
-                }
-
-                Section {
-                    TextField("Jersey #", text: $editPlayerJersey)
-                    positionToggleRow(selected: $editPlayerPositions)
-                    Picker("Batting Side", selection: $editPlayerBattingSide) {
-                        Text("Not Set").tag(BattingSide?.none)
-                        ForEach(BattingSide.allCases, id: \.self) { side in
-                            Text(side.displayName).tag(BattingSide?.some(side))
-                        }
+        return statsSheets(
+            PlayerDetailsSheet(
+                player: player,
+                teamId: selection.team.id ?? "",
+                teamName: teamName,
+                otherTeams: otherTeams,
+                nameAccessory: {
+                    if player.pitcherId != nil {
+                        statsButton("Pitching") { openPitchingStats(player) }
                     }
-                    .pickerStyle(.segmented)
-                } header: {
-                    Text("On \(teamName) Only")
-                } footer: {
-                    Text("Jersey number, positions and batting side are set separately on each team.")
-                }
-
-                Section {
-                    if otherTeams.isEmpty {
-                        Text("Only on \(teamName).")
-                            .foregroundStyle(.secondary)
+                    if player.hitterId != nil {
+                        statsButton("Hitting") { openHittingStats(player) }
+                    }
+                },
+                onCancel: { editingPlayer = nil },
+                onSaved: { _, renamed in
+                    if renamed {
+                        refreshPlayerDirectory()
+                        authManager.loadMyPlayers { myPlayers = $0 }
+                        authManager.loadPitchers { myPitchers = $0 }
+                        authManager.loadHitters { myHitters = $0 }
                     } else {
-                        ForEach(otherTeams, id: \.id) { team in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(team.name)
-                                    .font(.subheadline.weight(.semibold))
-                                TeamDesignationBadge(designation: team.designation, alignment: .leading)
-                            }
-                        }
-                    }
-                } header: {
-                    Text(otherTeams.isEmpty ? "Other Teams" : "Also On")
-                } footer: {
-                    Text("To link a player across teams, merge a duplicate or delete a player everywhere, use Link Profiles on Home.")
-                }
-
-                if let editPlayerErrorMessage {
-                    Text(editPlayerErrorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-            .navigationTitle("Edit Player")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
                         editingPlayer = nil
+                        refreshPlayers()
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
-                        saveEditedPlayer(player)
-                    }
-                    .disabled(editPlayerName.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
+            )
+        )
+    }
+
+    /// Borderless so two buttons can share a Form row - with the default
+    /// style the whole row is one tap target and fires both.
+    private func statsButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .foregroundStyle(Color.white)
+                .background(Capsule().fill(Color.pitchMarkActiveGray))
         }
+        .buttonStyle(.borderless)
+        .fixedSize()
+    }
+
+    private func beginEditing(_ player: TeamPlayer) {
+        editingPlayer = player
+    }
+
+    private func openPitchingStats(_ player: TeamPlayer) {
+        statsPitcherIds = person(for: player)?.pitcherIds ?? []
+        statsTeams = teamsForStats(player)
+        statsPitcher = myPitchers.first(where: { $0.id == player.pitcherId })
+    }
+
+    private func openHittingStats(_ player: TeamPlayer) {
+        statsHitterIds = person(for: player)?.hitterIds ?? []
+        statsTeams = teamsForStats(player)
+        statsHitter = myHitters.first(where: { $0.id == player.hitterId })
     }
 
     /// `myTeams` (memberships included - the stats sheets need them) plus
@@ -605,45 +534,6 @@ struct TeamRosterView: View {
                 reloadEverything()
             case .failure(let error):
                 addPlayerErrorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func saveEditedPlayer(_ player: TeamPlayer) {
-        guard let teamId = selection.team.id, let playerId = player.id else { return }
-        let name = editPlayerName.trimmingCharacters(in: .whitespaces)
-        let jersey = editPlayerJersey.trimmingCharacters(in: .whitespaces)
-        authManager.updateTeamPlayer(
-            teamId: teamId,
-            playerId: playerId,
-            name: name,
-            jerseyNumber: jersey.isEmpty ? nil : jersey,
-            positions: editPlayerPositions.isEmpty ? nil : Array(editPlayerPositions),
-            battingSide: editPlayerBattingSide
-        ) { result in
-            switch result {
-            case .success:
-                editingPlayer = nil
-                refreshPlayers()
-                // Positions and batting side stay team-local on purpose
-                // (see TeamPlayer in Team.swift), but a *name* does not: the
-                // Pitcher/Hitter/Player docs and this kid's rows on other
-                // teams all show it, so they move together.
-                if name != player.name {
-                    authManager.propagatePlayerRename(
-                        name: name,
-                        pitcherId: player.pitcherId,
-                        playerId: player.playerId,
-                        hitterId: player.hitterId
-                    ) {
-                        refreshPlayerDirectory()
-                        authManager.loadMyPlayers { myPlayers = $0 }
-                        authManager.loadPitchers { myPitchers = $0 }
-                        authManager.loadHitters { myHitters = $0 }
-                    }
-                }
-            case .failure(let error):
-                editPlayerErrorMessage = error.localizedDescription
             }
         }
     }
