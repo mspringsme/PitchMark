@@ -50,6 +50,17 @@ enum TeamSeason: String, Codable, CaseIterable, Identifiable, Hashable {
     }
 
     static let cycleOrder: [TeamSeason] = [.fall, .winter, .spring, .summer]
+
+    /// Position within a calendar year - what "newer" means when two teams
+    /// share a year: Summer '26 is older than Fall '26.
+    var calendarIndex: Int {
+        switch self {
+        case .winter: return 0
+        case .spring: return 1
+        case .summer: return 2
+        case .fall: return 3
+        }
+    }
 }
 
 /// A start season plus an end season at or after it in the cycle. Every

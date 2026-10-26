@@ -213,6 +213,25 @@ struct PitchTrackerView: View {
     // on a roster can say whose roster it is instead of leaving the coach
     // to infer it from which side is currently pitching.
     private var activeHomeTeamName: String { get { ui.activeHomeTeamName } nonmutating set { ui.activeHomeTeamName = newValue } }
+    private var activeHomeTeamClass: String { get { ui.activeHomeTeamClass } nonmutating set { ui.activeHomeTeamClass = newValue } }
+    private var activeAwayTeamClass: String { get { ui.activeAwayTeamClass } nonmutating set { ui.activeAwayTeamClass = newValue } }
+    /// Under the strike zone: both sides with their class - "Reds 14U B vs.
+    /// Hawks 15U A". Until the side teams have loaded (or for a participant
+    /// who isn't on either team), falls back to the stored opponent text as
+    /// it always read: "vs. Hawks".
+    private var zoneMatchupTitle: String {
+        func side(_ name: String, _ teamClass: String) -> String {
+            teamClass.isEmpty ? name : "\(name) \(teamClass)"
+        }
+        let away = activeAwayTeamName.isEmpty
+            ? (opponentName ?? "")
+            : side(activeAwayTeamName, activeAwayTeamClass)
+        guard !activeHomeTeamName.isEmpty else {
+            return "vs. \(away.isEmpty ? "Game" : away)"
+        }
+        let home = side(activeHomeTeamName, activeHomeTeamClass)
+        return away.isEmpty ? home : "\(home) vs. \(away)"
+    }
     @State private var homeRoster: [TeamPlayer] = []
     private var showSetMyTeamSheet: Bool { get { ui.showSetMyTeamSheet } nonmutating set { ui.showSetMyTeamSheet = newValue } }
     @State private var myTeamCandidates: [(team: Team, membership: TeamMembership)] = []
@@ -2677,6 +2696,7 @@ struct PitchTrackerView: View {
             authManager.saveGame(games[index])
         }
         activeAwayTeamName = team.name
+        activeAwayTeamClass = team.classLabel ?? ""
         refreshAwayRoster(awayTeamId: teamId)
         // Don't flip to Them until the roster is actually loaded - doing it
         // immediately left a brief window where the main screen (visible
@@ -2794,23 +2814,27 @@ struct PitchTrackerView: View {
             authManager.loadMyTeams { teams, _ in
                 if let match = teams.first(where: { $0.team.id == awayTeamId }) {
                     self.activeAwayTeamName = match.team.name
+                    self.activeAwayTeamClass = match.team.classLabel ?? ""
                 }
             }
         } else {
             awayPitcherIds = []
             awayRoster = []
             activeAwayTeamName = ""
+            activeAwayTeamClass = ""
         }
         if let teamId = game?.teamId, !teamId.isEmpty {
             refreshHomeRoster(teamId: teamId)
             authManager.loadMyTeams { teams, _ in
                 if let match = teams.first(where: { $0.team.id == teamId }) {
                     self.activeHomeTeamName = match.team.name
+                    self.activeHomeTeamClass = match.team.classLabel ?? ""
                 }
             }
         } else {
             homeRoster = []
             activeHomeTeamName = ""
+            activeHomeTeamClass = ""
         }
     }
 
@@ -2877,6 +2901,7 @@ struct PitchTrackerView: View {
             authManager.saveGame(games[index])
         }
         activeHomeTeamName = team.name
+        activeHomeTeamClass = team.classLabel ?? ""
         refreshHomeRoster(teamId: teamId)
         if teamSetupShouldFlipSide {
             activeSide = .home
@@ -6230,7 +6255,16 @@ struct PitchTrackerView: View {
     /// a standalone Pitcher with no roster entry still appears (no team).
     private func pitcherPickerRows(for pitchers: [Pitcher]) -> [PlayerDirectoryRow] {
         let allowedIds = Set(pitchers.compactMap { $0.id })
-        return PlayerDirectory.rows(rosterEntries: rosterEntries, pitchers: pitchers)
+        // `.pitchingRecord`, not `.person`: this picker selects a Pitcher
+        // doc, and a kid whose two separately-entered roster entries were
+        // linked together still has two of them (see
+        // PlayerDirectoryCollapse). Collapsing by person here would leave
+        // the second season's pitching record unselectable.
+        return PlayerDirectory.rows(
+            rosterEntries: rosterEntries,
+            pitchers: pitchers,
+            collapse: .pitchingRecord
+        )
             .filter { row in
                 guard let pitcherId = row.pitcherId else { return false }
                 return allowedIds.contains(pitcherId)
@@ -8221,7 +8255,7 @@ struct PitchTrackerView: View {
         // is just setting state.
         var decoratedCard: AnyView = card
         decoratedCard = AnyView(decoratedCard.overlay(
-            ZoneOpponentLabel(opponentName: opponentName),
+            ZoneOpponentLabel(title: zoneMatchupTitle),
             alignment: .bottomLeading
         ))
         decoratedCard = AnyView(decoratedCard.overlay(
@@ -14705,15 +14739,17 @@ struct NoCodeGridKeyBlocker: View {
 
 /// The "vs. opponent" bubble at the zone's bottom edge.
 private struct ZoneOpponentLabel: View {
-    let opponentName: String?
+    /// "Reds 14U B vs. Hawks 15U A", or "vs. Hawks" before both sides'
+    /// teams have loaded - see `zoneMatchupTitle`.
+    let title: String
 
     var body: some View {
-        Text("vs. \(opponentName ?? "Game")")
+        Text(title)
             .font(.subheadline.weight(.semibold))
             .lineLimit(1)
-            .minimumScaleFactor(0.6)
+            .minimumScaleFactor(0.5)
             .foregroundStyle(.primary)
-            .frame(maxWidth: 130, alignment: .center)
+            .frame(maxWidth: 230, alignment: .center)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(.ultraThinMaterial)

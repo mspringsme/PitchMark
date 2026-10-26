@@ -32,6 +32,9 @@ struct HitterStatsView: View {
     }
 
     let hitter: Hitter
+    /// Every hitting record of the same person - more than one once two
+    /// entries with tracked history were linked. Read as one history.
+    var combinedHitterIds: [String] = []
     let games: [Game]
     let teams: [Team]
 
@@ -54,7 +57,7 @@ struct HitterStatsView: View {
 
     private var gameIdsForSelectedTeams: Set<String>? {
         guard !selectedTeamIds.isEmpty else { return nil }
-        return Set(games.filter { selectedTeamIds.contains($0.teamId ?? "") }.compactMap { $0.id })
+        return Set(games.filter { TeamFilterChips.game($0, belongsTo: selectedTeamIds) }.compactMap { $0.id })
     }
 
     private var filteredEvents: [PitchEvent] {
@@ -91,7 +94,7 @@ struct HitterStatsView: View {
                     .padding(.horizontal)
 
                     if !teams.isEmpty {
-                        teamFilterRow
+                        TeamFilterChips(teams: teams, selectedTeamIds: $selectedTeamIds)
                     }
 
                     Text("\(filteredEvents.count) pitch\(filteredEvents.count == 1 ? "" : "es") tracked")
@@ -126,36 +129,62 @@ struct HitterStatsView: View {
         }
     }
 
-    private var teamFilterRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Teams")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Button("All Teams") {
-                    selectedTeamIds.removeAll()
+    private func loadEvents() {
+        guard let hitterId = hitter.id else { return }
+        let hitterIds = combinedHitterIds.contains(hitterId) ? combinedHitterIds : [hitterId]
+        isLoading = true
+        var collected: [PitchEvent] = []
+        let group = DispatchGroup()
+        for id in hitterIds {
+            group.enter()
+            authManager.loadHitterEvents(hitterId: id) { events in
+                DispatchQueue.main.async {
+                    collected.append(contentsOf: events)
+                    group.leave()
                 }
-                .font(.caption)
             }
-            .padding(.horizontal)
+        }
+        group.notify(queue: .main) {
+            self.allEvents = collected.sorted { $0.timestamp < $1.timestamp }
+            self.isLoading = false
+        }
+    }
+}
+
+// MARK: - Team filter chips
+
+/// The Teams row on both stats screens (this one and PitcherStatsSheetView).
+/// "All" first and selected on open - the whole career across every team the
+/// player is linked on. Tapping a team narrows to just that team; tapping
+/// more adds them; "All" goes back. Each chip carries its season, since a
+/// linked player's teams are often the same name a season apart.
+struct TeamFilterChips: View {
+    let teams: [Team]
+    /// Empty means All.
+    @Binding var selectedTeamIds: Set<String>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Teams")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(teams, id: \.id) { team in
-                        let isSelected = selectedTeamIds.contains(team.id ?? "")
-                        Button(team.name) {
-                            guard let tid = team.id else { return }
+                    chip("All", isSelected: selectedTeamIds.isEmpty) {
+                        selectedTeamIds.removeAll()
+                    }
+                    ForEach(teams.sorted(by: Team.listOrder), id: \.id) { team in
+                        let id = team.id ?? ""
+                        let isSelected = selectedTeamIds.contains(id)
+                        chip(Self.label(for: team), isSelected: isSelected) {
+                            guard !id.isEmpty else { return }
                             if isSelected {
-                                selectedTeamIds.remove(tid)
+                                selectedTeamIds.remove(id)
                             } else {
-                                selectedTeamIds.insert(tid)
+                                selectedTeamIds.insert(id)
                             }
                         }
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(isSelected ? Color.white : Color.primary)
-                        .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
                     }
                 }
                 .padding(.horizontal)
@@ -163,12 +192,28 @@ struct HitterStatsView: View {
         }
     }
 
-    private func loadEvents() {
-        guard let hitterId = hitter.id else { return }
-        isLoading = true
-        authManager.loadHitterEvents(hitterId: hitterId) { events in
-            self.allEvents = events
-            self.isLoading = false
-        }
+    private func chip(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
+    }
+
+    /// "Bombers · Fall '26" / "Bombers · Fall–Winter '26–'27"; just the name
+    /// for a team with no season set.
+    static func label(for team: Team) -> String {
+        guard let designation = team.designation else { return team.name }
+        return "\(team.name) · \(designation.seasonText) \(designation.yearText)"
+    }
+
+    /// A game counts for a team whichever side that team was on - a player
+    /// linked on an opponent's roster has their games under `awayTeamId`.
+    static func game(_ game: Game, belongsTo teamIds: Set<String>) -> Bool {
+        if let id = game.teamId, teamIds.contains(id) { return true }
+        if let id = game.awayTeamId, teamIds.contains(id) { return true }
+        return false
     }
 }

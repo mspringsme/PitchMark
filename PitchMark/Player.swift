@@ -55,6 +55,15 @@ struct Player: Identifiable, Codable {
     var positions: [FieldPosition]? = nil
     var battingSide: BattingSide? = nil
     var createdAt: Date = Date()
+    /// Extra Pitcher/Hitter records that belong to this person - left behind
+    /// when Link Profiles combined profiles that each already had tracked
+    /// history (events are never moved). Stats read them together with
+    /// `pitcherId`/`hitterId`. Genuinely Optional so older docs still decode.
+    var linkedPitcherIds: [String]? = nil
+    var linkedHitterIds: [String]? = nil
+
+    var allPitcherIds: [String] { PlayerLinks.uniqueOrdered([pitcherId].compactMap { $0 } + (linkedPitcherIds ?? [])) }
+    var allHitterIds: [String] { PlayerLinks.uniqueOrdered([hitterId].compactMap { $0 } + (linkedHitterIds ?? [])) }
 }
 
 // MARK: - AuthManager CRUD
@@ -106,6 +115,39 @@ extension AuthManager {
         jerseyNumber: String?,
         completion: @escaping (Result<TeamPlayer, Error>) -> Void
     ) {
+        mintPlayerAroundExistingRecords(
+            name: name,
+            pitcherId: pitcherId,
+            hitterId: hitterId,
+            positions: positions,
+            battingSide: battingSide
+        ) { result in
+            switch result {
+            case .success(let player):
+                self.addTeamPlayerLinkingPlayer(
+                    teamId: teamId,
+                    player: player,
+                    jerseyNumber: jerseyNumber,
+                    completion: completion
+                )
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// `adoptAndLinkPlayer` minus the roster row - the minting half on its
+    /// own, for the linking paths that need a canonical identity for someone
+    /// who has none but must *not* gain a roster entry as a side effect (see
+    /// `mergePeople`, where every row involved already exists).
+    func mintPlayerAroundExistingRecords(
+        name: String,
+        pitcherId: String?,
+        hitterId: String?,
+        positions: [FieldPosition]? = nil,
+        battingSide: BattingSide? = nil,
+        completion: @escaping (Result<Player, Error>) -> Void
+    ) {
         guard let user = user else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
             return
@@ -134,12 +176,7 @@ extension AuthManager {
                         pitcherId: pitcherId,
                         hitterId: hitterId
                     )
-                    self.addTeamPlayerLinkingPlayer(
-                        teamId: teamId,
-                        player: player,
-                        jerseyNumber: jerseyNumber,
-                        completion: completion
-                    )
+                    completion(.success(player))
                 }
             } catch {
                 completion(.failure(error))
@@ -162,6 +199,18 @@ extension AuthManager {
             }
         } else {
             mintPlayer(pitcherId: pitcherId, hitterId: hitterId)
+        }
+    }
+
+    func loadPlayer(id: String, completion: @escaping (Player?) -> Void) {
+        playersCollection().document(id).getDocument { snapshot, error in
+            if let error {
+                debugLog("❌ loadPlayer error:", error.localizedDescription)
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let player = snapshot.flatMap { try? $0.data(as: Player.self) }
+            DispatchQueue.main.async { completion(player) }
         }
     }
 
@@ -250,6 +299,221 @@ extension AuthManager {
                     self.updateHitterName(id: resolvedHitterId, name: name)
                 }
                 completion?()
+            }
+        }
+    }
+
+    // MARK: - Linking an existing player onto another team
+
+    /// True when this Pitcher's career collection has at least one event -
+    /// `limit(to: 1)`, so this stays one tiny read however long a career is.
+    /// The question linking has to answer before it may repoint a roster row
+    /// off a Pitcher doc: a record with history can never be quietly
+    /// abandoned, an empty one is just the duplicate the coach is cleaning up.
+    func pitcherHasRecordedEvents(pitcherId: String, completion: @escaping (Bool) -> Void) {
+        Firestore.firestore().collection("pitchers").document(pitcherId)
+            .collection("pitchEvents").limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error {
+                    debugLog("⚠️ pitcherHasRecordedEvents failed:", error.localizedDescription)
+                    // Assume history on a failed read - the safe direction is
+                    // keeping a record, never deleting one on a guess.
+                    DispatchQueue.main.async { completion(true) }
+                    return
+                }
+                DispatchQueue.main.async { completion(!(snapshot?.documents.isEmpty ?? true)) }
+            }
+    }
+
+    /// `pitcherHasRecordedEvents` for the Hitter side - `/hitters/{id}/
+    /// pitchEvents` accumulates the same PitchEvent rows filtered by
+    /// hitterId (see Hitter.swift), so a hitting record can carry history
+    /// the pitching one doesn't and the two are checked independently.
+    func hitterHasRecordedEvents(hitterId: String, completion: @escaping (Bool) -> Void) {
+        Firestore.firestore().collection("hitters").document(hitterId)
+            .collection("pitchEvents").limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error {
+                    debugLog("⚠️ hitterHasRecordedEvents failed:", error.localizedDescription)
+                    DispatchQueue.main.async { completion(true) }
+                    return
+                }
+                DispatchQueue.main.async { completion(!(snapshot?.documents.isEmpty ?? true)) }
+            }
+    }
+
+    /// Folds a roster row that was entered as its own person onto `player`'s
+    /// identity. `playerId` always moves across - that is what makes the two
+    /// stop being two people in every Players list - and so does the name,
+    /// so the row reads the same as the person it now belongs to.
+    ///
+    /// The Pitcher/Hitter links move only when the duplicate's own records
+    /// are *empty*. A record with recorded history stays exactly where it is
+    /// and that team's row keeps pointing at it: repointing would strand a
+    /// whole career on a document nothing references any more, and moving
+    /// the events would mean rewriting every one in `/pitchers` and in the
+    /// owner's games. The coach never sees the two records as two: every
+    /// person-level stats entry point hands the stats sheets *all* of a
+    /// person's records (`PlayerDirectoryRow.pitcherIds`/`hitterIds`,
+    /// `PlayerProfile`) and they read them as one history.
+    ///
+    /// Whatever the duplicate leaves behind is then cleaned up by
+    /// `cleanupOrphanedPlayerIdentity`, which only deletes what nothing
+    /// references and what holds no history.
+    func mergeTeamPlayerIntoPlayer(
+        teamId: String,
+        duplicate: TeamPlayer,
+        player: Player,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        guard let rowId = duplicate.id, let playerId = player.id else {
+            completion(.failure(NSError(
+                domain: "Player",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "That roster entry can't be linked."]
+            )))
+            return
+        }
+
+        recordsToKeepSeparate(for: duplicate, canonical: player) { keptPitcherId, keptHitterId in
+            var data: [String: Any] = ["playerId": playerId, "name": player.name]
+            if keptPitcherId == nil, let canonicalPitcherId = player.pitcherId {
+                data["pitcherId"] = canonicalPitcherId
+            }
+            if keptHitterId == nil, let canonicalHitterId = player.hitterId {
+                data["hitterId"] = canonicalHitterId
+            }
+
+            Firestore.firestore()
+                .collection("teams").document(teamId)
+                .collection("players").document(rowId)
+                .updateData(data) { error in
+                    if let error {
+                        completion(.failure(error))
+                        return
+                    }
+                    self.cleanupOrphanedPlayerIdentity(
+                        playerId: duplicate.playerId == playerId ? nil : duplicate.playerId,
+                        pitcherId: keptPitcherId == nil ? duplicate.pitcherId : nil,
+                        hitterId: keptHitterId == nil ? duplicate.hitterId : nil,
+                        canonical: player
+                    )
+                    completion(.success(()))
+                }
+        }
+    }
+
+    /// Which of the duplicate's records must stay put because they already
+    /// hold history. A record that *is* the canonical one, or isn't there at
+    /// all, is nothing to keep separate.
+    private func recordsToKeepSeparate(
+        for duplicate: TeamPlayer,
+        canonical: Player,
+        completion: @escaping (String?, String?) -> Void
+    ) {
+        func checkHitter(keptPitcherId: String?) {
+            guard let hitterId = duplicate.hitterId, hitterId != canonical.hitterId else {
+                completion(keptPitcherId, nil)
+                return
+            }
+            hitterHasRecordedEvents(hitterId: hitterId) { hasHistory in
+                completion(keptPitcherId, hasHistory ? hitterId : nil)
+            }
+        }
+
+        guard let pitcherId = duplicate.pitcherId, pitcherId != canonical.pitcherId else {
+            checkHitter(keptPitcherId: nil)
+            return
+        }
+        pitcherHasRecordedEvents(pitcherId: pitcherId) { hasHistory in
+            checkHitter(keptPitcherId: hasHistory ? pitcherId : nil)
+        }
+    }
+
+    /// Deletes what a merge left behind - but only ever what no roster row
+    /// still points at, and (for Pitcher/Hitter docs) only what holds no
+    /// recorded history. Three guards earn that:
+    ///
+    /// 1. The canonical player's own records are excluded outright.
+    /// 2. The reference scan bails unless it actually saw roster rows -
+    ///    `loadTeamPlayers` reports a failed read as an empty roster, and
+    ///    "no rows anywhere" would otherwise read as "nothing references
+    ///    this", which is precisely the input that would delete a `Player`
+    ///    doc three other teams still link.
+    /// 3. A duplicate identity can itself span several teams; merging one of
+    ///    its rows leaves the rest, and the scan sees them.
+    ///
+    /// Best-effort and silent either way: an orphan that survives is a
+    /// stray row in Home's Players, which is cosmetic. Deleting something
+    /// live is not, so every ambiguity resolves toward keeping.
+    func cleanupOrphanedPlayerIdentity(
+        playerId: String?,
+        pitcherId: String?,
+        hitterId: String?,
+        canonical: Player
+    ) {
+        let playerId = playerId.flatMap { $0 == canonical.id ? nil : $0 }
+        let pitcherId = pitcherId.flatMap { $0 == canonical.pitcherId ? nil : $0 }
+        let hitterId = hitterId.flatMap { $0 == canonical.hitterId ? nil : $0 }
+        guard playerId != nil || pitcherId != nil || hitterId != nil else { return }
+
+        loadMyTeams { entries, error in
+            guard error == nil, !entries.isEmpty else { return }
+
+            var referencedPlayerIds: Set<String> = []
+            var referencedPitcherIds: Set<String> = []
+            var referencedHitterIds: Set<String> = []
+            var sawAnyRow = false
+            let group = DispatchGroup()
+
+            for entry in entries {
+                guard let teamId = entry.team.id else { continue }
+                group.enter()
+                // loadTeamPlayers completes on the main queue, so these
+                // mutations are serialized without a lock.
+                self.loadTeamPlayers(teamId: teamId) { rows in
+                    for row in rows {
+                        sawAnyRow = true
+                        if let id = row.playerId { referencedPlayerIds.insert(id) }
+                        if let id = row.pitcherId { referencedPitcherIds.insert(id) }
+                        if let id = row.hitterId { referencedHitterIds.insert(id) }
+                    }
+                    group.leave()
+                }
+            }
+
+            group.notify(queue: .main) {
+                guard sawAnyRow else { return }
+
+                if let playerId, !referencedPlayerIds.contains(playerId) {
+                    self.playersCollection().document(playerId).delete { error in
+                        if let error {
+                            debugLog("⚠️ cleanupOrphanedPlayerIdentity player failed:", error.localizedDescription)
+                        }
+                    }
+                }
+
+                if let pitcherId, !referencedPitcherIds.contains(pitcherId) {
+                    self.pitcherHasRecordedEvents(pitcherId: pitcherId) { hasHistory in
+                        guard !hasHistory else { return }
+                        Firestore.firestore().collection("pitchers").document(pitcherId).delete { error in
+                            if let error {
+                                debugLog("⚠️ cleanupOrphanedPlayerIdentity pitcher failed:", error.localizedDescription)
+                            }
+                        }
+                    }
+                }
+
+                if let hitterId, !referencedHitterIds.contains(hitterId) {
+                    self.hitterHasRecordedEvents(hitterId: hitterId) { hasHistory in
+                        guard !hasHistory else { return }
+                        Firestore.firestore().collection("hitters").document(hitterId).delete { error in
+                            if let error {
+                                debugLog("⚠️ cleanupOrphanedPlayerIdentity hitter failed:", error.localizedDescription)
+                            }
+                        }
+                    }
+                }
             }
         }
     }

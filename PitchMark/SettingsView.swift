@@ -569,6 +569,12 @@ struct SettingsView: View {
     // render the same rows from the same code.
     @State private var playersScope: PlayerDirectoryScope = .pitchers
     @State private var showPlayersFilterSheet = false
+    @State private var showLinkProfiles = false
+    /// Set by tapping a team row's circle; drives `teamImageEditor`.
+    @State private var teamImageEditTarget: Team? = nil
+    /// Canonical `Player` docs - the Players rows need them to fold in
+    /// records a Link Profiles link attached through the Player doc alone.
+    @State private var myPlayers: [Player] = []
     @State private var playerFilter = PlayerDirectoryFilter()
     @State private var rosterEntries: [PlayerRosterEntry] = []
     @State private var myHitters: [Hitter] = []
@@ -620,6 +626,12 @@ struct SettingsView: View {
     @State private var pitcherActionTargetId: String? = nil
     @State private var showHiddenTemplates = false
     @State private var statsPitcher: Pitcher? = nil
+    /// The row's full set of records - see `PlayerDirectoryRow.pitcherIds`.
+    @State private var statsPitcherIds: [String] = []
+    @State private var statsHitterIds: [String] = []
+    /// Only the teams this player is on - the stats sheets' Teams filter
+    /// row lists exactly these.
+    @State private var statsTeams: [Team] = []
 
     @State private var showInviteJoinSheet = false
     @State private var inviteJoinText: String = ""
@@ -893,6 +905,20 @@ struct SettingsView: View {
         return "\(game.opponent)|\(game.date.timeIntervalSince1970)"
     }
 
+    /// "Reds 14U B vs. Hawks 15U A" - both sides with their class, so two
+    /// games against same-named teams in different classes can be told
+    /// apart. Falls back to the stored opponent text for whichever side
+    /// isn't one of my teams (or a game created before teams were linked).
+    private func matchupTitle(for game: Game) -> String {
+        func team(_ id: String?) -> Team? {
+            guard let id, !id.isEmpty else { return nil }
+            return myTeams.first(where: { $0.team.id == id })?.team
+        }
+        let away = team(game.awayTeamId)?.nameWithClass ?? game.opponent
+        guard let home = team(game.teamId) else { return away }
+        return away.isEmpty ? home.nameWithClass : "\(home.nameWithClass) vs. \(away)"
+    }
+
     private struct QuickLaunchGame: Identifiable {
         let id: String
         let game: Game
@@ -930,7 +956,8 @@ struct SettingsView: View {
                         Text(opponent)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.85)
                         if let dateText {
                             Text(dateText)
                                 .font(.caption2)
@@ -1096,30 +1123,46 @@ struct SettingsView: View {
         // from a dropped multi-person-per-team direction. One person can
         // coach one team and be a parent-follower on another; a team itself
         // carries no role, so nothing belongs next to its name.
-        Button {
-            selectedTeamEntry = TeamEntrySelection(team: entry.team, membership: entry.membership)
-        } label: {
-            HStack(spacing: 10) {
-                Text(entry.team.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                // Right-justified designation. Renders nothing for a team
-                // created before designations existed.
-                TeamDesignationBadge(designation: entry.team.designation)
+        // Two separate buttons, layered rather than nested: the row opens
+        // the team, the circle in its center edits the team photo. A Button
+        // inside another Button's label doesn't reliably get its own tap.
+        ZStack {
+            Button {
+                selectedTeamEntry = TeamEntrySelection(team: entry.team, membership: entry.membership)
+            } label: {
+                HStack(spacing: 10) {
+                    Text(entry.team.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Room for the circle, which sits on top in the ZStack.
+                    Color.clear.frame(width: 40, height: 40)
+                    // Right-justified designation. Renders nothing for a team
+                    // created before designations existed.
+                    TeamDesignationBadge(designation: entry.team.designation)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            Button {
+                teamImageEditTarget = entry.team
+            } label: {
+                TeamAvatarView(team: entry.team, size: 40)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Team photo for \(entry.team.name)")
         }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -1275,6 +1318,7 @@ struct SettingsView: View {
             return
         }
         isRefreshingPlayers = true
+        authManager.loadMyPlayers { myPlayers = $0 }
         authManager.loadPlayerRosterEntries(for: teams) { entries in
             self.rosterEntries = entries
             self.isRefreshingPlayers = false
@@ -1290,7 +1334,7 @@ struct SettingsView: View {
     /// Every person in the directory, unscoped and unfiltered - the Pitchers
     /// scope's empty message needs to know whether there are rows at all.
     private var playerRows: [PlayerDirectoryRow] {
-        PlayerDirectory.rows(rosterEntries: rosterEntries, pitchers: sortedPitchers)
+        PlayerDirectory.rows(rosterEntries: rosterEntries, pitchers: sortedPitchers, players: myPlayers)
             .filter { PlayerDirectory.passes($0, filter: playerFilter, archivedPitcherIds: hiddenPitcherIds) }
     }
 
@@ -1336,14 +1380,16 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
 
-            Spacer(minLength: 4)
-
+            // Sits right against the title (no spacer between them); the
+            // spacer goes after it, pushing filter and + to the trailing edge.
             CapsuleSegmentedControl(
                 options: [("Pitchers", PlayerDirectoryScope.pitchers), ("All", PlayerDirectoryScope.all)],
                 selection: $playersScope,
-                segmentMinWidth: 52
+                segmentMinWidth: 70
             )
             .font(.caption)
+
+            Spacer(minLength: 4)
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -1370,6 +1416,38 @@ struct SettingsView: View {
             .accessibilityLabel("Add player")
         }
         .padding(.horizontal)
+    }
+
+    /// Its own card, deliberately outside Teams and Players: linking,
+    /// merging and deleting are a separate flow (LinkProfilesView), and the
+    /// lists above simply show the result when the coach comes back.
+    private var linkProfilesCard: some View {
+        Button {
+            showLinkProfiles = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "link")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Color.pitchMarkActiveGray)
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Link Profiles")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text("Link players across teams, merge duplicates, delete players")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -1444,7 +1522,7 @@ struct SettingsView: View {
     /// The row itself is `PlayerDirectoryRowView` (PlayerDirectory.swift);
     /// Home's contribution is the trailing Stats button + gear menu.
     private func playerListRowView(_ row: PlayerDirectoryRow) -> some View {
-        let isArchived = row.pitcher?.id.map { hiddenPitcherIds.contains($0) } ?? false
+        let isArchived = row.isArchived(in: hiddenPitcherIds)
         return PlayerDirectoryRowView(row: row, isArchived: isArchived) {
             Button("Stats") {
                 openStats(for: row)
@@ -1478,10 +1556,14 @@ struct SettingsView: View {
 
     private func openStats(for row: PlayerDirectoryRow) {
         if row.isPitcher, let pitcher = row.pitcher {
+            statsPitcherIds = row.pitcherIds
+            statsTeams = row.teams.sorted(by: Team.listOrder)
             statsPitcher = pitcher
             return
         }
         guard let hitterId = row.hitterId else { return }
+        statsHitterIds = row.hitterIds
+        statsTeams = row.teams.sorted(by: Team.listOrder)
         statsHitter = myHitters.first(where: { $0.id == hitterId })
     }
 
@@ -1743,7 +1825,7 @@ struct SettingsView: View {
                     let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
                     ForEach(quickGames) { item in
                         gameRow(
-                            opponent: item.game.opponent,
+                            opponent: matchupTitle(for: item.game),
                             dateText: quickLaunchDateCaption(for: item.game),
                             isLive: false,
                             menuGame: item.game
@@ -1784,7 +1866,7 @@ struct SettingsView: View {
                             let archived = archivedGames.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
                             ForEach(archived) { item in
                                 gameRow(
-                                    opponent: item.game.opponent,
+                                    opponent: matchupTitle(for: item.game),
                                     dateText: quickLaunchDateCaption(for: item.game),
                                     isLive: false,
                                     menuGame: item.game
@@ -3121,6 +3203,10 @@ struct SettingsView: View {
                         }
 
                         sectionCard {
+                            linkProfilesCard
+                        }
+
+                        sectionCard {
                             templatesOverviewSection
                         }
 
@@ -3161,10 +3247,13 @@ struct SettingsView: View {
                     isInActiveGame: isTeamInActiveGame(entry.team.id),
                     onDeleted: { deletedTeamId in
                         myTeams.removeAll { $0.team.id == deletedTeamId }
+                        removeLocalTeamImage(teamId: deletedTeamId)
                     }
                 )
                 .environmentObject(authManager)
             }
+            // Root of Home, not the row - see CLAUDE.md's Dialogs section.
+            .teamImageEditor(team: $teamImageEditTarget)
             .fullScreenCover(isPresented: $showQRScanner) {
                 ZStack(alignment: .bottom) {
                     QRScannerView { scanned in
@@ -3492,8 +3581,9 @@ struct SettingsView: View {
             .sheet(item: $statsPitcher) { pitcher in
                 PitcherStatsSheetView(
                     pitcher: pitcher,
+                    combinedPitcherIds: statsPitcherIds,
                     games: games,
-                    teams: myTeams.map { $0.team }
+                    teams: statsTeams
                 )
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
@@ -3501,9 +3591,18 @@ struct SettingsView: View {
             .sheet(item: $statsHitter) { hitter in
                 HitterStatsView(
                     hitter: hitter,
+                    combinedHitterIds: statsHitterIds,
                     games: games,
-                    teams: myTeams.map { $0.team }
+                    teams: statsTeams
                 )
+                .environmentObject(authManager)
+                .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showLinkProfiles) {
+                LinkProfilesView(onChanged: {
+                    refreshMyTeams()
+                    refreshMyHitters()
+                })
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
@@ -3714,6 +3813,12 @@ struct PitcherStatsSheetView: View {
 
     let pitcher: Pitcher
     let availablePitchers: [Pitcher]
+    /// Every pitching record of the same *person* - more than one once two
+    /// separately-entered roster entries with tracked history were linked
+    /// (`mergeTeamPlayerIntoPlayer` never moves events). Outside a locked
+    /// game they're read together as one history; inside one, the tracker's
+    /// per-record selection still applies.
+    let combinedPitcherIds: [String]
     let games: [Game]
     let lockToGameId: String?
     let liveId: String?
@@ -3730,6 +3835,7 @@ struct PitcherStatsSheetView: View {
     init(
         pitcher: Pitcher,
         availablePitchers: [Pitcher]? = nil,
+        combinedPitcherIds: [String] = [],
         games: [Game],
         lockToGameId: String? = nil,
         liveId: String? = nil,
@@ -3738,6 +3844,7 @@ struct PitcherStatsSheetView: View {
     ) {
         self.pitcher = pitcher
         self.availablePitchers = availablePitchers ?? [pitcher]
+        self.combinedPitcherIds = combinedPitcherIds
         self.games = games
         self.lockToGameId = lockToGameId
         self.liveId = liveId
@@ -3753,13 +3860,16 @@ struct PitcherStatsSheetView: View {
     @State private var endDate: Date = Date()
 
     @State private var selectedGameIds: Set<String> = []
+    /// The Teams chips. Empty means All - every team, career-wide.
+    @State private var selectedTeamIds: Set<String> = []
     @State private var cachedGameIdsWithEvents: Set<String> = []
 
     @State private var gameEvents: [PitchEvent] = []
     @State private var liveEvents: [PitchEvent] = []
     @State private var sharedGameEvents: [PitchEvent] = []
     @State private var liveEventsListener: ListenerRegistration? = nil
-    @State private var sharedPitcherEventsListener: ListenerRegistration? = nil
+    @State private var sharedPitcherEventsListeners: [ListenerRegistration] = []
+    @State private var sharedEventsByPitcherId: [String: [PitchEvent]] = [:]
     @State private var cachedStats: PitcherStatsDoc? = nil
     @State private var isLoading = false
     @State private var hasLoadedEvents = false
@@ -3816,6 +3926,16 @@ struct PitcherStatsSheetView: View {
         activePitcher.id
     }
 
+    /// The records this sheet reads: the selected one, plus the rest of the
+    /// same person's when not locked to a game.
+    private var activePitcherIds: Set<String> {
+        guard let activePitcherId else { return [] }
+        guard lockToGameId == nil, combinedPitcherIds.contains(activePitcherId) else {
+            return [activePitcherId]
+        }
+        return Set(combinedPitcherIds)
+    }
+
     private var gamesWithPitcherEvents: [Game] {
         let gameIdsWithEvents: Set<String> = {
             if !cachedGameIdsWithEvents.isEmpty {
@@ -3829,8 +3949,14 @@ struct PitcherStatsSheetView: View {
         }
     }
 
+    /// `gamesWithPitcherEvents` narrowed to the selected Teams chips.
+    private var gamesForSelectedTeams: [Game] {
+        guard !selectedTeamIds.isEmpty else { return gamesWithPitcherEvents }
+        return gamesWithPitcherEvents.filter { TeamFilterChips.game($0, belongsTo: selectedTeamIds) }
+    }
+
     private var allGameIds: Set<String> {
-        Set(gamesWithPitcherEvents.compactMap { $0.id })
+        Set(gamesForSelectedTeams.compactMap { $0.id })
     }
 
     private var validGameIds: Set<String> {
@@ -3879,7 +4005,9 @@ struct PitcherStatsSheetView: View {
             return pitcherFiltered.filter { range.contains($0.timestamp) }
         }
 
-        let effectiveGameIds = selectedGameIds.isEmpty ? allGameIds : selectedGameIds
+        // Intersected with the Teams chips' games, so an empty game selection
+        // (read as "all") can never widen past the chosen teams.
+        let effectiveGameIds = (selectedGameIds.isEmpty ? allGameIds : selectedGameIds).intersection(allGameIds)
         let byScopeSelection: [PitchEvent] = {
             if effectiveGameIds.isEmpty { return [] }
             return combinedGameEvents.filter { event in
@@ -3897,14 +4025,15 @@ struct PitcherStatsSheetView: View {
     }
 
     private func filterEventsForActivePitcher(_ events: [PitchEvent]) -> [PitchEvent] {
-        guard let pitcherId = activePitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !pitcherId.isEmpty else {
+        let pitcherIds = Set(activePitcherIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        guard !pitcherIds.isEmpty else {
             return events
         }
         return events.filter { event in
             guard let eventPitcherId = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines), !eventPitcherId.isEmpty else {
                 return false
             }
-            return eventPitcherId == pitcherId
+            return pitcherIds.contains(eventPitcherId)
         }
     }
 
@@ -4676,6 +4805,10 @@ struct PitcherStatsSheetView: View {
                 loadEvents()
                 loadCachedStats()
             }
+            .onChange(of: selectedTeamIds) { _, _ in
+                // Every game of the chosen teams (all games for All).
+                selectedGameIds = allGameIds
+            }
             .onChange(of: scope) { _, _ in
                 if lockToGameId != nil {
                     scope = .games
@@ -4949,7 +5082,7 @@ struct PitcherStatsSheetView: View {
     private var scopeSelectionMenu: some View {
         ScrollableSelectionMenuButton(
             title: "Games",
-            items: gamesWithPitcherEvents,
+            items: gamesForSelectedTeams,
             topActions: [
                 SelectionSheetAction(
                     title: "All Games",
@@ -4988,16 +5121,6 @@ struct PitcherStatsSheetView: View {
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal)
-    }
-
-    private var filterSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Filters")
-                .font(.headline)
-                .padding(.horizontal)
-
-            gameFilterList
-        }
     }
 
     private var dateRangeSection: some View {
@@ -5045,98 +5168,12 @@ struct PitcherStatsSheetView: View {
         }
     }
 
-    /// Toggle chips, one per team, that add/remove that team's whole set of
-    /// games from `selectedGameIds` at once - reuses the exact same state
-    /// `gameFilterList`'s per-game chips already drive, so `filteredEvents`
-    /// needs no changes at all. None selected still means "all games"
-    /// (today's existing default), which now reads as career-wide.
+    /// Shared with HitterStatsView. Narrowing to teams also narrows the
+    /// Games menu and resets the game selection to those teams' games.
     @ViewBuilder
     private var teamFilterRow: some View {
         if !teams.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Teams")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Button("All Teams") {
-                        selectedGameIds = allGameIds
-                    }
-                    .font(.caption)
-                }
-                .padding(.horizontal)
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(teams, id: \.id) { team in
-                            let teamGameIds = Set(gamesWithPitcherEvents.filter { $0.teamId == team.id }.compactMap { $0.id })
-                            let isSelected = !teamGameIds.isEmpty && teamGameIds.isSubset(of: selectedGameIds)
-                            Button(team.name) {
-                                guard !teamGameIds.isEmpty else { return }
-                                if isSelected {
-                                    selectedGameIds.subtract(teamGameIds)
-                                } else {
-                                    selectedGameIds.formUnion(teamGameIds)
-                                }
-                            }
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .foregroundStyle(isSelected ? Color.white : Color.primary)
-                            .background(
-                                Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6))
-                            )
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-            }
-        }
-    }
-
-    private var gameFilterList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Games")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Button("All") {
-                    selectedGameIds = Set(sortedGames.compactMap { $0.id })
-                }
-                .font(.caption)
-                Button("Clear") {
-                    selectedGameIds.removeAll()
-                }
-                .font(.caption)
-            }
-            .padding(.horizontal)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(sortedGames) { game in
-                        let gid = game.id ?? ""
-                        let isSelected = selectedGameIds.contains(gid)
-                        Button("\(game.opponent)") {
-                            guard !gid.isEmpty else { return }
-                            if isSelected {
-                                selectedGameIds.remove(gid)
-                            } else {#imageLiteral(resourceName: "simulator_screenshot_B02F9BF3-0AE2-4CFF-8739-8DA9109E9856.png")
-                                selectedGameIds.insert(gid)
-                            }
-                        }
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Capsule().fill(isSelected ? Color.black.opacity(0.14) : Color.clear)
-                        )
-                        .overlay(
-                            Capsule().stroke(Color.black, lineWidth: 1)
-                        )
-                    }
-                }
-                .padding(.horizontal)
-            }
+            TeamFilterChips(teams: teams, selectedTeamIds: $selectedTeamIds)
         }
     }
 
@@ -5379,7 +5416,8 @@ struct PitcherStatsSheetView: View {
     }
 
     private func loadEvents() {
-        guard let pitcherId = activePitcherId else { return }
+        let pitcherIds = activePitcherIds
+        guard !pitcherIds.isEmpty else { return }
         let requestToken = UUID()
         loadEventsToken = requestToken
 
@@ -5389,7 +5427,7 @@ struct PitcherStatsSheetView: View {
         liveEvents = []
         sharedGameEvents = []
 
-        authManager.loadPitcherEvents(pitcherId: pitcherId) { events in
+        loadCareerEvents(pitcherIds: Array(pitcherIds)) { events in
             guard loadEventsToken == requestToken else { return }
 
             var sharedGameBucket: [PitchEvent] = []
@@ -5422,7 +5460,7 @@ struct PitcherStatsSheetView: View {
             authManager.loadPitchEvents { events in
                 guard loadEventsToken == requestToken else { group.leave(); return }
                 let filtered = events.filter {
-                    $0.pitcherId == pitcherId && ($0.mode == .game || ($0.gameId?.isEmpty == false))
+                    pitcherIds.contains($0.pitcherId ?? "") && ($0.mode == .game || ($0.gameId?.isEmpty == false))
                 }
                 DispatchQueue.main.async {
                     let unique = filtered.filter { !seenIdentities.contains($0.identity) }
@@ -5441,7 +5479,7 @@ struct PitcherStatsSheetView: View {
                 group.enter()
                 authManager.loadGamePitchEvents(ownerUserId: ownerUid, gameId: gameId) { events in
                     guard loadEventsToken == requestToken else { group.leave(); return }
-                    let filtered = events.filter { $0.pitcherId == pitcherId }
+                    let filtered = events.filter { pitcherIds.contains($0.pitcherId ?? "") }
                     DispatchQueue.main.async {
                         let unique = filtered.filter { !seenIdentities.contains($0.identity) }
                         seenIdentities.formUnion(unique.map { $0.identity })
@@ -5461,6 +5499,23 @@ struct PitcherStatsSheetView: View {
                 self.hasLoadedEvents = true
             }
         }
+    }
+
+    /// `loadPitcherEvents` for each record, concatenated. Each record's
+    /// collection holds different pitches, so there's nothing to dedupe.
+    private func loadCareerEvents(pitcherIds: [String], completion: @escaping ([PitchEvent]) -> Void) {
+        var collected: [PitchEvent] = []
+        let group = DispatchGroup()
+        for pitcherId in pitcherIds {
+            group.enter()
+            authManager.loadPitcherEvents(pitcherId: pitcherId) { events in
+                DispatchQueue.main.async {
+                    collected.append(contentsOf: events)
+                    group.leave()
+                }
+            }
+        }
+        group.notify(queue: .main) { completion(collected) }
     }
 
     private var combinedGameEvents: [PitchEvent] {
@@ -5486,7 +5541,8 @@ struct PitcherStatsSheetView: View {
 
     private func loadCachedStats() {
         cachedStats = nil
-        guard let pitcherId = activePitcherId else { return }
+        // Cached aggregates are per record; with several, wait for events.
+        guard activePitcherIds.count == 1, let pitcherId = activePitcherId else { return }
         guard let key = statsScopeKey() else { return }
 
         let docId: String = {
@@ -5526,7 +5582,8 @@ struct PitcherStatsSheetView: View {
     private func startLiveListener() {
         stopLiveListener()
         liveEvents = []
-        guard let liveId, !liveId.isEmpty, let pitcherId = activePitcherId else { return }
+        let pitcherIds = activePitcherIds
+        guard let liveId, !liveId.isEmpty, !pitcherIds.isEmpty else { return }
 
         let ref = Firestore.firestore()
             .collection("liveGames").document(liveId)
@@ -5543,7 +5600,7 @@ struct PitcherStatsSheetView: View {
                 PitchEvent.decodeFirestoreDocument(doc)
             } ?? []
 
-            let filtered = events.filter { $0.pitcherId == pitcherId }
+            let filtered = events.filter { pitcherIds.contains($0.pitcherId ?? "") }
             DispatchQueue.main.async {
                 self.liveEvents = filtered
             }
@@ -5558,42 +5615,46 @@ struct PitcherStatsSheetView: View {
     private func startSharedPitcherListener() {
         stopSharedPitcherListener()
         sharedGameEvents = []
+        sharedEventsByPitcherId = [:]
 
-        guard let pitcherId = activePitcherId else { return }
+        for pitcherId in activePitcherIds.sorted() {
+            let ref = Firestore.firestore()
+                .collection("pitchers").document(pitcherId)
+                .collection("pitchEvents")
+                .order(by: "timestamp", descending: false)
 
-        let ref = Firestore.firestore()
-            .collection("pitchers").document(pitcherId)
-            .collection("pitchEvents")
-            .order(by: "timestamp", descending: false)
+            let listener = ref.addSnapshotListener { snapshot, error in
+                if let error {
+                    debugLog("❌ shared pitcherEvents listener error:", error.localizedDescription)
+                    return
+                }
 
-        sharedPitcherEventsListener = ref.addSnapshotListener { snapshot, error in
-            if let error {
-                debugLog("❌ shared pitcherEvents listener error:", error.localizedDescription)
-                return
+                let docs = snapshot?.documents ?? []
+                debugLog("🧾 shared pitcherEvents snapshot count=\(docs.count) pitcherId=\(pitcherId)")
+
+                let events: [PitchEvent] = docs.compactMap { doc in
+                    PitchEvent.decodeFirestoreDocument(doc)
+                }
+
+                let sharedGame = events.filter { $0.mode == .game || ($0.gameId?.isEmpty == false) }
+
+                if let sample = events.last {
+                    debugLog("🧾 shared pitcherEvents sample gameId=\(sample.gameId ?? "<nil>") mode=\(sample.mode.rawValue) pitcherId=\(sample.pitcherId ?? "<nil>") location=\(sample.location)")
+                }
+
+                DispatchQueue.main.async {
+                    self.sharedEventsByPitcherId[pitcherId] = sharedGame
+                    self.sharedGameEvents = self.sharedEventsByPitcherId.keys.sorted()
+                        .flatMap { self.sharedEventsByPitcherId[$0] ?? [] }
+                }
             }
-
-            let docs = snapshot?.documents ?? []
-            debugLog("🧾 shared pitcherEvents snapshot count=\(docs.count) pitcherId=\(pitcherId)")
-
-            let events: [PitchEvent] = docs.compactMap { doc in
-                PitchEvent.decodeFirestoreDocument(doc)
-            }
-
-            let sharedGame = events.filter { $0.mode == .game || ($0.gameId?.isEmpty == false) }
-
-            if let sample = events.last {
-                debugLog("🧾 shared pitcherEvents sample gameId=\(sample.gameId ?? "<nil>") mode=\(sample.mode.rawValue) pitcherId=\(sample.pitcherId ?? "<nil>") location=\(sample.location)")
-            }
-
-            DispatchQueue.main.async {
-                self.sharedGameEvents = sharedGame
-            }
+            sharedPitcherEventsListeners.append(listener)
         }
     }
 
     private func stopSharedPitcherListener() {
-        sharedPitcherEventsListener?.remove()
-        sharedPitcherEventsListener = nil
+        sharedPitcherEventsListeners.forEach { $0.remove() }
+        sharedPitcherEventsListeners = []
     }
 
     private func mergeUnique(_ groups: [[PitchEvent]]) -> [PitchEvent] {

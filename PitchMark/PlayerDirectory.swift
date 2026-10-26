@@ -69,6 +69,22 @@ struct PlayerDirectoryFilter: Equatable {
 
 // MARK: - Row model
 
+/// What counts as "one row" when the same person carries more than one
+/// pitching record - which happens once a coach links two separately-entered
+/// roster entries together (`mergeTeamPlayerIntoPlayer`, Player.swift) and
+/// both already had recorded history, so neither career could be discarded.
+enum PlayerDirectoryCollapse {
+    /// One row per *person*: keyed by the canonical `Player` first, so two
+    /// roster entries that were folded onto one identity show up once even
+    /// though they still point at two different Pitcher docs. What Home and
+    /// the link pickers want.
+    case person
+    /// One row per *pitching record*: keyed by `pitcherId` first. What the
+    /// tracker's pitcher picker wants - it selects a Pitcher, so a person
+    /// with two of them has to be able to reach either.
+    case pitchingRecord
+}
+
 /// One row in a Players list - one *person*, not one roster entry.
 struct PlayerDirectoryRow: Identifiable {
     let id: String
@@ -90,6 +106,15 @@ struct PlayerDirectoryRow: Identifiable {
     /// no roster row to carry a position.
     var isStandalonePitcher: Bool
 
+    /// Every distinct Pitcher/Hitter record this person's roster entries
+    /// point at, primary first. More than one only after two
+    /// separately-entered roster rows were linked together and both already
+    /// had recorded history (see `PlayerDirectoryCollapse.person`); the Stats
+    /// sheets are handed all of them and read them as one history. `pitcherId`/`hitterId` above stay the primary, so every
+    /// existing single-record call site is unaffected.
+    var pitcherIds: [String] = []
+    var hitterIds: [String] = []
+
     /// **Not** `pitcher != nil`. Every `Player` in this app is created with
     /// both a linked Pitcher and a linked Hitter, always (`createPlayer`, and
     /// `ensureTeamPlayerHasPitcherAndHitter` backfills older ones), so
@@ -100,31 +125,70 @@ struct PlayerDirectoryRow: Identifiable {
         isStandalonePitcher || positions.contains(.pitcher)
     }
 
-    /// "Hadley 33" - the caption under the avatar.
-    var captionName: String {
-        guard let jersey, !jersey.isEmpty else { return name }
-        return "\(name) \(jersey)"
+    /// Archived only when *every* pitching record is - a linked player
+    /// whose older record was archived is still an active player. Keying on
+    /// the primary record alone hid the whole person the moment a link made
+    /// an archived record primary.
+    func isArchived(in archivedPitcherIds: Set<String>) -> Bool {
+        let ids = pitcherIds.isEmpty ? [pitcherId].compactMap { $0 } : pitcherIds
+        return !ids.isEmpty && ids.allSatisfy { archivedPitcherIds.contains($0) }
     }
 }
 
 enum PlayerDirectory {
-    /// Roster rows and standalone Pitchers folded into one row per person.
-    /// Keyed by pitcherId first so the Pitcher doc and the roster entry that
-    /// links it collapse together instead of listing the same kid twice.
+    /// Roster rows and standalone Pitchers folded into one row per person
+    /// (`.person`) or per pitching record (`.pitchingRecord`) - see
+    /// `PlayerDirectoryCollapse`. Either way the Pitcher doc and the roster
+    /// entry that links it collapse together instead of listing the same kid
+    /// twice, via `keyForPitcherId` below.
+    ///
+    /// Entries are folded oldest-roster-row-first so the result is stable:
+    /// which of two linked entries supplies the row's primary pitcher,
+    /// jersey and name must not depend on the order the per-team roster
+    /// reads happened to complete in.
+    ///
+    /// `players` (`.person` only) folds in records that belong to a person
+    /// through their `Player` doc rather than a roster row - what Link
+    /// Profiles leaves in `linkedPitcherIds`/`linkedHitterIds` when combined
+    /// profiles each had tracked history, or a standalone Pitcher linked to a
+    /// roster player. Without it those would list as separate "No team" rows.
     static func rows(
         rosterEntries: [PlayerRosterEntry],
-        pitchers: [Pitcher]
+        pitchers: [Pitcher],
+        players: [Player] = [],
+        collapse: PlayerDirectoryCollapse = .person
     ) -> [PlayerDirectoryRow] {
+        // One person = one Link Profiles profile, by construction. This used
+        // to key each roster row on a single id (playerId, else pitcherId),
+        // so an older row with no playerId and a newer linked row on another
+        // team became two rows - and Stats only saw the older team.
+        if collapse == .person {
+            return PlayerLinks.profiles(rosterEntries: rosterEntries, pitchers: pitchers, players: players)
+                .map(personRow(from:))
+                .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+        }
+
         var rows: [String: PlayerDirectoryRow] = [:]
         var order: [String] = []
+        /// Which row key each Pitcher doc already belongs to, so the
+        /// standalone pass below doesn't list a pitcher that a roster entry
+        /// has already folded in.
+        var keyForPitcherId: [String: String] = [:]
         var pitchersById: [String: Pitcher] = [:]
         for pitcher in pitchers {
             if let id = pitcher.id { pitchersById[id] = pitcher }
         }
 
-        for entry in rosterEntries {
+        let orderedEntries = rosterEntries.sorted {
+            $0.teamPlayer.createdAt < $1.teamPlayer.createdAt
+        }
+
+        for entry in orderedEntries {
             let teamPlayer = entry.teamPlayer
-            guard let key = teamPlayer.pitcherId ?? teamPlayer.playerId ?? teamPlayer.id else { continue }
+            // `.pitchingRecord` from here on (`.person` returned above).
+            let candidateKey = teamPlayer.pitcherId ?? teamPlayer.playerId ?? teamPlayer.id
+            guard let key = candidateKey else { continue }
+            if let pitcherId = teamPlayer.pitcherId { keyForPitcherId[pitcherId] = key }
             // The linked Pitcher's name wins over the roster row's copy.
             // `propagatePlayerRename` keeps the two in step from now on, but
             // a rename made before that existed left them disagreeing - and
@@ -141,6 +205,12 @@ enum PlayerDirectory {
                 if existing.jersey == nil { existing.jersey = teamPlayer.jerseyNumber }
                 if existing.hitterId == nil { existing.hitterId = teamPlayer.hitterId }
                 if existing.playerId == nil { existing.playerId = teamPlayer.playerId }
+                if let pitcherId = teamPlayer.pitcherId, !existing.pitcherIds.contains(pitcherId) {
+                    existing.pitcherIds.append(pitcherId)
+                }
+                if let hitterId = teamPlayer.hitterId, !existing.hitterIds.contains(hitterId) {
+                    existing.hitterIds.append(hitterId)
+                }
                 // Same precedence as the fresh-row branch: once any entry
                 // for this person resolves a Pitcher doc, its name and
                 // portrait are the row's.
@@ -162,16 +232,24 @@ enum PlayerDirectory {
                     hitterId: teamPlayer.hitterId,
                     teams: [entry.team],
                     positions: Set(teamPlayer.positions ?? []),
-                    isStandalonePitcher: false
+                    isStandalonePitcher: false,
+                    pitcherIds: [teamPlayer.pitcherId].compactMap { $0 },
+                    hitterIds: [teamPlayer.hitterId].compactMap { $0 }
                 )
                 order.append(key)
             }
         }
 
         // A Pitcher created straight from Home's +, or shared in by someone
-        // else, has no roster row of its own but still belongs here.
+        // else, has no roster row of its own but still belongs here. A
+        // pitcher a roster entry above already claimed is skipped via
+        // `keyForPitcherId` - checking `rows[id]` alone would miss it in
+        // `.person` mode, where that row is keyed by playerId instead and
+        // the pitcher would be listed a second time as a "No team" person.
         for pitcher in pitchers {
-            guard let id = pitcher.id, rows[id] == nil else { continue }
+            guard let id = pitcher.id else { continue }
+            if let claimedKey = keyForPitcherId[id], rows[claimedKey] != nil { continue }
+            guard rows[id] == nil else { continue }
             rows[id] = PlayerDirectoryRow(
                 id: id,
                 name: pitcher.name,
@@ -182,14 +260,39 @@ enum PlayerDirectory {
                 hitterId: nil,
                 teams: [],
                 positions: [],
-                isStandalonePitcher: true
+                isStandalonePitcher: true,
+                pitcherIds: [id],
+                hitterIds: []
             )
+            keyForPitcherId[id] = id
             order.append(id)
         }
 
         return order
             .compactMap { rows[$0] }
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    private static func personRow(from profile: PlayerProfile) -> PlayerDirectoryRow {
+        let primaryPitcherId = profile.entries.first?.teamPlayer.pitcherId ?? profile.pitcherIds.first
+        let primaryPitcher = profile.pitchers.first(where: { $0.id == primaryPitcherId }) ?? profile.pitchers.first
+        let positions = profile.entries.reduce(into: Set<FieldPosition>()) { result, entry in
+            result.formUnion(entry.teamPlayer.positions ?? [])
+        }
+        return PlayerDirectoryRow(
+            id: profile.playerIds.first ?? profile.pitcherIds.first ?? profile.id,
+            name: profile.name,
+            jersey: profile.jersey,
+            pitcher: primaryPitcher,
+            pitcherId: primaryPitcherId,
+            playerId: profile.playerIds.first,
+            hitterId: profile.entries.first?.teamPlayer.hitterId ?? profile.hitterIds.first,
+            teams: profile.teams,
+            positions: positions,
+            isStandalonePitcher: profile.entries.isEmpty,
+            pitcherIds: profile.pitcherIds,
+            hitterIds: profile.hitterIds
+        )
     }
 
     static func filtered(
@@ -209,7 +312,7 @@ enum PlayerDirectory {
         filter: PlayerDirectoryFilter,
         archivedPitcherIds: Set<String>
     ) -> Bool {
-        if let pitcherId = row.pitcher?.id, archivedPitcherIds.contains(pitcherId), !filter.showArchived {
+        if row.isArchived(in: archivedPitcherIds), !filter.showArchived {
             return false
         }
         if !filter.teamIds.isEmpty {
@@ -288,9 +391,9 @@ struct PlayerDirectoryRowView<Accessory: View>: View {
         HStack(spacing: 10) {
             VStack(spacing: 4) {
                 PlayerDirectoryAvatar(row: row, size: 52)
-                Text(row.captionName)
+                Text(teamCaption)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(row.teams.isEmpty ? .secondary : .primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .allowsTightening(true)
@@ -298,23 +401,20 @@ struct PlayerDirectoryRowView<Accessory: View>: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                if let team = row.teams.first {
-                    HStack(spacing: 4) {
-                        Text(team.name)
+                HStack(spacing: 4) {
+                    Text(row.name)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let jersey = row.jersey, !jersey.isEmpty {
+                        Text("#\(jersey)")
                             .font(.subheadline.weight(.bold))
                             .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        if row.teams.count > 1 {
-                            Text("+\(row.teams.count - 1)")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
                     }
+                }
+                // One team's season would be misleading under "Multiple".
+                if row.teams.count == 1, let team = row.teams.first {
                     TeamDesignationBadge(designation: team.designation, alignment: .leading)
-                } else {
-                    Text("No team")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 if !row.isPitcher {
@@ -345,6 +445,13 @@ struct PlayerDirectoryRowView<Accessory: View>: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(isSelected ? Color.pitchMarkActiveGray.opacity(0.55) : Color.white.opacity(0.08), lineWidth: 1)
         )
+    }
+
+    /// Under the avatar: the team, or "Multiple" for a player linked on
+    /// more than one.
+    private var teamCaption: String {
+        guard let team = row.teams.first else { return "No team" }
+        return row.teams.count > 1 ? "Multiple" : team.name
     }
 }
 
@@ -622,8 +729,7 @@ struct PlayerPickerSheet: View {
     }
 
     private func isArchived(_ row: PlayerDirectoryRow) -> Bool {
-        guard let id = row.pitcher?.id else { return false }
-        return archivedPitcherIds.contains(id)
+        row.isArchived(in: archivedPitcherIds)
     }
 
     private func actionRow(_ action: SelectionSheetAction) -> some View {

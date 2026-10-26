@@ -20,11 +20,12 @@
 //  to pick, since a kid might pitch, bat, or both over a season. A player
 //  created before this existed gets backfilled with whichever is missing
 //  the moment the roster loads (ensureTeamPlayerHasPitcherAndHitter),
-//  silently - no edit action required. "Link Existing Player" is the
-//  cross-team mechanism itself - pick one of your own Players from any team
-//  instead of creating a new one, so the same kid's stats (via View Stats
-//  on their row) span every team they're linked from, filterable per-team/
-//  combined/career-wide.
+//  silently - no edit action required.
+//
+//  Linking a kid across teams, merging an accidental duplicate and deleting
+//  a player everywhere are a separate flow - Link Profiles
+//  (LinkProfilesView.swift), its own card on Home. This screen only *shows*
+//  the result ("Also on 14U").
 //
 
 import SwiftUI
@@ -58,12 +59,11 @@ struct TeamRosterView: View {
     @State private var newPlayerPositions: Set<FieldPosition> = []
     @State private var newPlayerBattingSide: BattingSide? = nil
     @State private var addPlayerErrorMessage: String? = nil
-    @State private var showLinkPlayerSheet = false
     @State private var myPlayers: [Player] = []
-    // Cross-team roster rows + their teams, so "Link Existing Player" can
-    // render the same Players rows Home does (PlayerDirectory.swift).
+    // Cross-team roster rows, so each row can say which other teams this
+    // same kid is on ("Also on 14U") and View Stats can read all of a
+    // linked kid's records.
     @State private var rosterEntries: [PlayerRosterEntry] = []
-    @State private var directoryTeams: [Team] = []
 
     // For the "View Stats" actions - PitcherStatsSheetView/HitterStatsView
     // need the actual Pitcher/Hitter objects and the owner's full
@@ -74,6 +74,14 @@ struct TeamRosterView: View {
     @State private var myTeams: [(team: Team, membership: TeamMembership)] = []
     @State private var statsPitcher: Pitcher? = nil
     @State private var statsHitter: Hitter? = nil
+    /// Every record of the person whose stats are open - more than one once
+    /// two entries with tracked history were linked (see
+    /// `mergeTeamPlayerIntoPlayer`); the stats sheets read them as one.
+    @State private var statsPitcherIds: [String] = []
+    @State private var statsHitterIds: [String] = []
+    /// Only the teams this player is on - the stats sheets' Teams filter
+    /// row lists exactly these.
+    @State private var statsTeams: [Team] = []
 
     @State private var playerActionTarget: TeamPlayer? = nil
     @State private var showPlayerActionsDialog = false
@@ -131,8 +139,10 @@ struct TeamRosterView: View {
                 }
 
                 if isTeamOwner {
-                    Section("Add Player") {
+                    Section {
                         TextField("Name", text: $newPlayerName)
+                            .textInputAutocapitalization(.words)
+
                         TextField("Jersey #", text: $newPlayerJersey)
 
                         positionToggleRow(selected: $newPlayerPositions)
@@ -155,10 +165,8 @@ struct TeamRosterView: View {
                                 .font(.caption)
                                 .foregroundStyle(.red)
                         }
-
-                        Button("Link Existing Player…") {
-                            showLinkPlayerSheet = true
-                        }
+                    } header: {
+                        Text("Add Player")
                     }
                 }
             }
@@ -272,11 +280,15 @@ struct TeamRosterView: View {
             if let player = playerActionTarget {
                 if player.pitcherId != nil {
                     Button("View Pitching Stats") {
+                        statsPitcherIds = person(for: player)?.pitcherIds ?? []
+                        statsTeams = teamsForStats(player)
                         statsPitcher = myPitchers.first(where: { $0.id == player.pitcherId })
                     }
                 }
                 if player.hitterId != nil {
                     Button("View Hitting Stats") {
+                        statsHitterIds = person(for: player)?.hitterIds ?? []
+                        statsTeams = teamsForStats(player)
                         statsHitter = myHitters.first(where: { $0.id == player.hitterId })
                     }
                 }
@@ -297,15 +309,12 @@ struct TeamRosterView: View {
         .sheet(item: $editingPlayer) { player in
             editPlayerSheet(player)
         }
-        .sheet(isPresented: $showLinkPlayerSheet) {
-            linkExistingPlayerSheet
-                .fixedAppDynamicType()
-        }
         .sheet(item: $statsPitcher) { pitcher in
             PitcherStatsSheetView(
                 pitcher: pitcher,
+                combinedPitcherIds: statsPitcherIds,
                 games: myGames,
-                teams: myTeams.map { $0.team }
+                teams: statsTeams
             )
             .environmentObject(authManager)
             .fixedAppDynamicType()
@@ -313,8 +322,9 @@ struct TeamRosterView: View {
         .sheet(item: $statsHitter) { hitter in
             HitterStatsView(
                 hitter: hitter,
+                combinedHitterIds: statsHitterIds,
                 games: myGames,
-                teams: myTeams.map { $0.team }
+                teams: statsTeams
             )
             .environmentObject(authManager)
             .fixedAppDynamicType()
@@ -375,6 +385,7 @@ struct TeamRosterView: View {
                 Spacer()
             }
             playerSecondaryCaption(player)
+            crossTeamCaption(player)
         }
 
         if isTeamOwner {
@@ -430,125 +441,65 @@ struct TeamRosterView: View {
         }
     }
 
-    /// Everyone Home's Players list shows, minus whoever is already on this
-    /// roster. Built from the identical inputs Home uses (every team's
-    /// roster rows + every Pitcher doc), because scoping this to *owned
-    /// `Player` docs* silently dropped two whole groups that Home lists: a
-    /// roster row created before `Player` existed (`playerId == nil`) and a
-    /// Pitcher created straight from Home's + (no roster row at all).
-    /// `linkPlayerRow` mints the missing identity for those on selection.
-    private var linkCandidateRows: [PlayerDirectoryRow] {
-        let linkedPlayerIds = Set(players.compactMap { $0.playerId })
-        let linkedPitcherIds = Set(players.compactMap { $0.pitcherId })
-        let linkedRowIds = Set(players.compactMap { $0.id })
+    // MARK: - Cross-team
 
-        var rows = PlayerDirectory.rows(rosterEntries: rosterEntries, pitchers: myPitchers)
-            .filter { row in
-                if let playerId = row.playerId, linkedPlayerIds.contains(playerId) { return false }
-                if let pitcherId = row.pitcherId, linkedPitcherIds.contains(pitcherId) { return false }
-                // Catches a row so old it has neither link - its directory
-                // key is then the TeamPlayer id itself.
-                return !linkedRowIds.contains(row.id)
-            }
-
-        // A Player whose only roster entry was deleted, and whose Pitcher
-        // was archived out of `myPitchers`, has no row above but is still
-        // perfectly linkable - carry it in from the Player doc.
-        // Dedupe on the pitcher too, or a roster row that has no playerId
-        // and a Player doc pointing at that same pitcher list the one kid
-        // twice.
-        let covered = Set(rows.compactMap { $0.playerId })
-        let coveredPitchers = Set(rows.compactMap { $0.pitcherId })
-        for player in myPlayers {
-            guard let id = player.id,
-                  !covered.contains(id),
-                  !linkedPlayerIds.contains(id),
-                  !(player.pitcherId.map { coveredPitchers.contains($0) } ?? false) else { continue }
-            rows.append(
-                PlayerDirectoryRow(
-                    id: id,
-                    name: player.name,
-                    jersey: nil,
-                    pitcher: player.pitcherId.flatMap { pid in myPitchers.first(where: { $0.id == pid }) },
-                    pitcherId: player.pitcherId,
-                    playerId: id,
-                    hitterId: player.hitterId,
-                    teams: [],
-                    positions: Set(player.positions ?? []),
-                    isStandalonePitcher: false
-                )
-            )
-        }
-
-        return rows.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    private var profiles: [PlayerProfile] {
+        PlayerLinks.profiles(rosterEntries: rosterEntries, pitchers: myPitchers, players: myPlayers)
     }
 
-    /// Two link paths, same tap: an existing canonical `Player` links
-    /// directly; anyone without one gets that identity minted around their
-    /// existing Pitcher/Hitter first, so their career stats carry over
-    /// instead of starting from scratch on new documents.
-    private func linkPlayerRow(_ row: PlayerDirectoryRow) {
-        if let playerId = row.playerId,
-           let player = myPlayers.first(where: { $0.id == playerId }) {
-            linkExistingPlayer(player)
-            return
-        }
+    private func person(for player: TeamPlayer) -> PlayerProfile? {
+        PlayerLinks.profile(containing: player, in: profiles)
+    }
 
-        guard let teamId = selection.team.id else { return }
-        let jersey = newPlayerJersey.trimmingCharacters(in: .whitespaces)
-        authManager.adoptAndLinkPlayer(
-            teamId: teamId,
-            name: row.name,
-            pitcherId: row.pitcherId,
-            hitterId: row.hitterId,
-            positions: row.positions.isEmpty ? nil : Array(row.positions),
-            jerseyNumber: jersey.isEmpty ? nil : jersey
-        ) { result in
-            switch result {
-            case .success:
-                newPlayerJersey = ""
-                showLinkPlayerSheet = false
-                refreshPlayers()
-                refreshPlayerDirectory()
-                authManager.loadMyPlayers { myPlayers = $0 }
-                authManager.loadPitchers { myPitchers = $0 }
-                authManager.loadHitters { myHitters = $0 }
-            case .failure(let error):
-                addPlayerErrorMessage = error.localizedDescription
-            }
+    /// Every team this player is on (this one included), for the stats
+    /// sheets' Teams filter row.
+    private func teamsForStats(_ player: TeamPlayer) -> [Team] {
+        let teams = person(for: player)?.teams ?? []
+        return (teams.isEmpty ? [selection.team] : teams).sorted(by: Team.listOrder)
+    }
+
+    /// "Also on 14U" under a roster row.
+    @ViewBuilder
+    private func crossTeamCaption(_ player: TeamPlayer) -> some View {
+        let others = person(for: player)?.otherTeams(than: selection.team.id) ?? []
+        if !others.isEmpty {
+            Label("Also on \(PlayerLinks.teamList(others))", systemImage: "link")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 
-    /// The actual cross-team mechanism: pick one of the signed-in user's own
-    /// Players (from any team) instead of creating a new one, so the same
-    /// kid's stats span both rosters. Deliberately explicit, no name
-    /// matching/auto-linking.
-    private var linkExistingPlayerSheet: some View {
-        PlayerPickerSheet(
-            title: "Link Existing Player",
-            rows: linkCandidateRows,
-            teams: directoryTeams,
-            emptyMessage: "No other players to link yet - players you add (with \"Add\" above) on any team show up here afterward.",
-            // Linking has nothing to do with pitching: a catcher with no P
-            // on their positions must not be hidden behind the toggle.
-            initialScope: .all,
-            onSelect: { row in
-                linkPlayerRow(row)
-            }
-        )
+    private func reloadEverything() {
+        refreshPlayers()
+        refreshPlayerDirectory()
+        authManager.loadMyPlayers { myPlayers = $0 }
+        authManager.loadPitchers { myPitchers = $0 }
+        authManager.loadHitters { myHitters = $0 }
     }
 
+    /// Labelled by reach, because the two behave differently and used to sit
+    /// side by side with nothing saying so: the name is the *person's* and
+    /// changes on every team (`propagatePlayerRename`); jersey, positions and
+    /// batting side are this roster's alone. Cross-team links are shown, not
+    /// edited, here - that all lives in Link Profiles.
     private func editPlayerSheet(_ player: TeamPlayer) -> some View {
-        NavigationView {
+        let otherTeams = person(for: player)?.otherTeams(than: selection.team.id) ?? []
+        return NavigationView {
             Form {
-                TextField("Name", text: $editPlayerName)
-                TextField("Jersey #", text: $editPlayerJersey)
-
-                Section("Positions") {
-                    positionToggleRow(selected: $editPlayerPositions)
+                Section {
+                    TextField("Name", text: $editPlayerName)
+                        .textInputAutocapitalization(.words)
+                } header: {
+                    Text("Name")
+                } footer: {
+                    Text(otherTeams.isEmpty
+                         ? "Renaming also updates their stats."
+                         : "Changes on every team they're on.")
                 }
 
-                Section("Batting Side") {
+                Section {
+                    TextField("Jersey #", text: $editPlayerJersey)
+                    positionToggleRow(selected: $editPlayerPositions)
                     Picker("Batting Side", selection: $editPlayerBattingSide) {
                         Text("Not Set").tag(BattingSide?.none)
                         ForEach(BattingSide.allCases, id: \.self) { side in
@@ -556,7 +507,29 @@ struct TeamRosterView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .labelsHidden()
+                } header: {
+                    Text("On \(teamName) Only")
+                } footer: {
+                    Text("Jersey number, positions and batting side are set separately on each team.")
+                }
+
+                Section {
+                    if otherTeams.isEmpty {
+                        Text("Only on \(teamName).")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(otherTeams, id: \.id) { team in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(team.name)
+                                    .font(.subheadline.weight(.semibold))
+                                TeamDesignationBadge(designation: team.designation, alignment: .leading)
+                            }
+                        }
+                    }
+                } header: {
+                    Text(otherTeams.isEmpty ? "Other Teams" : "Also On")
+                } footer: {
+                    Text("To link a player across teams, merge a duplicate or delete a player everywhere, use Link Profiles on Home.")
                 }
 
                 if let editPlayerErrorMessage {
@@ -584,13 +557,11 @@ struct TeamRosterView: View {
     }
 
     /// `myTeams` (memberships included - the stats sheets need them) plus
-    /// every team's roster, which is what the link picker's rows are built
-    /// from.
+    /// every team's roster, which the "Also on" captions are built from.
     private func refreshPlayerDirectory() {
         authManager.loadMyTeams { teams, _ in
             myTeams = teams
             let justTeams = teams.map { $0.team }
-            directoryTeams = justTeams
             authManager.loadPlayerRosterEntries(for: justTeams) { entries in
                 rosterEntries = entries
             }
@@ -631,30 +602,9 @@ struct TeamRosterView: View {
                 newPlayerJersey = ""
                 newPlayerPositions = []
                 newPlayerBattingSide = nil
-                refreshPlayers()
-                refreshPlayerDirectory()
-                authManager.loadMyPlayers { myPlayers = $0 }
-                authManager.loadPitchers { myPitchers = $0 }
-                authManager.loadHitters { myHitters = $0 }
+                reloadEverything()
             case .failure(let error):
                 addPlayerErrorMessage = error.localizedDescription
-            }
-        }
-    }
-
-    private func linkExistingPlayer(_ player: Player) {
-        guard let teamId = selection.team.id else { return }
-        let jersey = newPlayerJersey.trimmingCharacters(in: .whitespaces)
-        authManager.addTeamPlayerLinkingPlayer(
-            teamId: teamId,
-            player: player,
-            jerseyNumber: jersey.isEmpty ? nil : jersey
-        ) { result in
-            if case .success = result {
-                newPlayerJersey = ""
-                showLinkPlayerSheet = false
-                refreshPlayers()
-                refreshPlayerDirectory()
             }
         }
     }
@@ -704,6 +654,9 @@ struct TeamRosterView: View {
             if case .success = result {
                 playerPendingDelete = nil
                 refreshPlayers()
+                // The "Also on" captions are built
+                // from the cross-team rows, which still list the deleted one.
+                refreshPlayerDirectory()
             }
         }
     }

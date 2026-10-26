@@ -72,6 +72,9 @@ final class TrackerUIState: ObservableObject {
     @Published var activeAwayTeamName: String = ""
     @Published var newAwayPitcherName: String = ""
     @Published var activeHomeTeamName: String = ""
+    /// "14U B" for each side - shown with the names under the strike zone.
+    @Published var activeHomeTeamClass: String = ""
+    @Published var activeAwayTeamClass: String = ""
     @Published var showSetMyTeamSheet: Bool = false
     @Published var newMyTeamName: String = ""
     @Published var showChooseBattersStep: Bool = false

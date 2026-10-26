@@ -50,6 +50,56 @@ struct Team: Identifiable, Codable {
     /// All-or-nothing on purpose: a half-filled stamp ("16U" with no season)
     /// is worse than none, since the whole point is telling two same-named
     /// teams apart.
+    /// How every team list is ordered: newest season first - by start year,
+    /// then where the start season falls in that calendar year (Fall '26
+    /// above Summer '26 above Spring '26), then by end (a Fall–Winter team
+    /// running into '27 above a plain Fall '26), then name A-Z. Teams with
+    /// no designation (created before it existed) go last, by name. The id
+    /// breaks a full tie so the order is always stable.
+    static func listOrder(_ lhs: Team, _ rhs: Team) -> Bool {
+        let l = lhs.chronologyKey, r = rhs.chronologyKey
+        switch (l, r) {
+        case let (l?, r?) where l != r:
+            return l.lexicographicallyPrecedes(r) == false
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            let byName = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if byName != .orderedSame { return byName == .orderedAscending }
+            return (lhs.id ?? "") < (rhs.id ?? "")
+        }
+    }
+
+    /// [start year, start season, end year, end season] - compared
+    /// newest-first by `listOrder`. A season that's missing sorts as the
+    /// earliest point of its year.
+    private var chronologyKey: [Int]? {
+        guard let startYear else { return nil }
+        let endYear = designation?.endYear ?? startYear
+        return [
+            startYear,
+            seasonStart?.calendarIndex ?? -1,
+            endYear,
+            seasonEnd?.calendarIndex ?? -1
+        ]
+    }
+
+    /// "14U B" / "16U Open" - the class, for telling two sides of a game
+    /// apart. Nil for a team with no age group set.
+    var classLabel: String? {
+        guard let ageGroup else { return nil }
+        guard let division else { return ageGroup.rawValue }
+        return "\(ageGroup.rawValue) \(division.rawValue)"
+    }
+
+    /// "Reds 14U B", or just "Reds" with no class set.
+    var nameWithClass: String {
+        guard let classLabel else { return name }
+        return "\(name) \(classLabel)"
+    }
+
     var designation: TeamDesignation? {
         guard let seasonStart, let seasonEnd, let startYear, let ageGroup, let division else { return nil }
         return TeamDesignation(
@@ -215,7 +265,10 @@ extension AuthManager {
                 }
 
                 group.notify(queue: .main) {
-                    completion(results, nil)
+                    // Each team doc is a separate read and they finish in a
+                    // different order every time, so without this the list
+                    // reshuffled on every reload (e.g. closing a team).
+                    completion(results.sorted { Team.listOrder($0.team, $1.team) }, nil)
                 }
             }
     }
