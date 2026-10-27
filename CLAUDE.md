@@ -199,6 +199,40 @@ progress snapshot it must also stay in `LocalProgressSnapshot`, or a relaunched
 device restores its old revision, skips the room snapshot as not-newer, keeps
 outs at 0, and republishes that 0 over the other device's real count.
 
+## Archive, never delete
+
+Games, teams and players are never deleted from the app - stat history is the
+product. Each has an archive instead:
+
+- **Game:** `Game.archivedAt` on the owner's game. Archiving asks whether the
+  game still counts in *this viewer's* stats (both teams, that game only);
+  the answer lives in `users/{uid}/meta/statsPreferences` and stays
+  changeable. Every stats screen goes through `AuthManager.gameCountsInStats`.
+- **Team / player:** per user, in `users/{uid}/meta/archive` (`teamIds`,
+  `pitcherIds` - players are keyed by Pitcher id). Hide-only; never touches
+  stats. Per user because teams are shared between coaches.
+- **Roster row:** `TeamPlayer.archivedAt` - team-level, creator-only, shown
+  under the roster's Show Removed with Restore.
+
+Real deletes remain only for account deletion (server-side), individual pitch
+events (undo/corrections), a bare jersey number in a lineup, and Merge
+Duplicates' cleanup of rows/records it has folded into another profile.
+`firestore.rules` denies deleting a team document outright.
+
+**Nothing on the open game's teams can be archived.** While a game is open in
+the tracker, `OpenGameLock` (SettingsView.swift) refuses player archive,
+roster Remove and Archive Team for either side's team, and offers Close Game.
+Unarchive and Restore are never locked. Every new archive path needs the same
+check.
+
+**A player archive hides them from games, so it must never be silent.**
+Every archive confirms with the names `ArchiveScope` reads off the roster
+rows - more than one name means kids share records. The team roster marks
+archived players (swipe right to unarchive) and the lineup sheet names who
+it left off the bench. Do not migrate the old device-local `hiddenPitcherIds`
+into the account archive: it meant "hide from the pitcher picker", and
+converting it (2026-10-26) silently pulled five kids out of a roster's games.
+
 ## Dialogs
 
 Use `appConfirmationDialog` (in `SupportExtensions.swift`), not SwiftUI's
@@ -316,6 +350,16 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   presentation modifiers — splitting it into segment properties would move its
   3808 B into separate frames. Remaining `@State` on the view: ~110 (arrays,
   dictionaries, model types).
+
+- **Home (SettingsView) has its own depth limit: generic type nesting.**
+  `EXC_BAD_ACCESS code=2` inside `decodeMangledType` / `decodeGenericArgs`
+  (dozens of alternating frames), raised from a `SettingsView` section getter,
+  is the runtime recursing through one enormous concrete view type until the
+  stack runs out. Unlike the PitchTrackerView entry above, `AnyView` *does* fix
+  this one, because the problem is the depth of the type itself. `gameRow` and
+  `gamesOverviewSection` return `AnyView` for this reason (2026-10-27, crashed
+  tapping Home from a game). A row helper reused by several `ForEach`es is the
+  first thing to erase.
 
 ## Known open items
 

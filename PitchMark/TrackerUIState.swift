@@ -75,6 +75,11 @@ final class TrackerUIState: ObservableObject {
     /// "14U B" for each side - shown with the names under the strike zone.
     @Published var activeHomeTeamClass: String = ""
     @Published var activeAwayTeamClass: String = ""
+    /// "Fall '26" - shown beside each team in the lineup sheet, because a
+    /// coach can have two same-named teams a season apart and the game may
+    /// be linked to the other one.
+    @Published var activeHomeTeamSeason: String = ""
+    @Published var activeAwayTeamSeason: String = ""
     @Published var showSetMyTeamSheet: Bool = false
     @Published var newMyTeamName: String = ""
     @Published var showChooseBattersStep: Bool = false

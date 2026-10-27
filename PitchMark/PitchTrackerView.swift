@@ -215,6 +215,8 @@ struct PitchTrackerView: View {
     private var activeHomeTeamName: String { get { ui.activeHomeTeamName } nonmutating set { ui.activeHomeTeamName = newValue } }
     private var activeHomeTeamClass: String { get { ui.activeHomeTeamClass } nonmutating set { ui.activeHomeTeamClass = newValue } }
     private var activeAwayTeamClass: String { get { ui.activeAwayTeamClass } nonmutating set { ui.activeAwayTeamClass = newValue } }
+    private var activeHomeTeamSeason: String { get { ui.activeHomeTeamSeason } nonmutating set { ui.activeHomeTeamSeason = newValue } }
+    private var activeAwayTeamSeason: String { get { ui.activeAwayTeamSeason } nonmutating set { ui.activeAwayTeamSeason = newValue } }
     /// Under the strike zone: both sides with their class - "Reds 14U B vs.
     /// Hawks 15U A". Until the side teams have loaded (or for a participant
     /// who isn't on either team), falls back to the stored opponent text as
@@ -2598,7 +2600,7 @@ struct PitchTrackerView: View {
     }
 
     private var hiddenPitcherIdSet: Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: DefaultsKeys.hiddenPitcherIds) ?? [])
+        authManager.archivedPitcherIds
     }
 
     private var visibleTemplates: [PitchTemplate] {
@@ -2638,7 +2640,7 @@ struct PitchTrackerView: View {
             return
         }
         authManager.loadTeamPlayers(teamId: awayTeamId) { players in
-            self.awayPitcherIds = Set(players.compactMap { $0.pitcherId })
+            self.awayPitcherIds = Set(players.filter { $0.archivedAt == nil }.compactMap { $0.pitcherId })
             completion?()
         }
     }
@@ -2680,7 +2682,7 @@ struct PitchTrackerView: View {
     private func refreshOpponentTeamCandidates() {
         let myTeamId = activeGameForBatterSetup?.teamId
         authManager.loadMyTeams { teams, _ in
-            self.opponentTeamCandidates = teams.filter { $0.team.id != myTeamId }
+            self.opponentTeamCandidates = teams.filter { $0.team.id != myTeamId && !self.authManager.archivedTeamIds.contains($0.team.id ?? "") }
         }
     }
 
@@ -2697,6 +2699,7 @@ struct PitchTrackerView: View {
         }
         activeAwayTeamName = team.name
         activeAwayTeamClass = team.classLabel ?? ""
+        activeAwayTeamSeason = Self.seasonText(for: team)
         refreshAwayRoster(awayTeamId: teamId)
         // Don't flip to Them until the roster is actually loaded - doing it
         // immediately left a brief window where the main screen (visible
@@ -2815,6 +2818,7 @@ struct PitchTrackerView: View {
                 if let match = teams.first(where: { $0.team.id == awayTeamId }) {
                     self.activeAwayTeamName = match.team.name
                     self.activeAwayTeamClass = match.team.classLabel ?? ""
+                    self.activeAwayTeamSeason = Self.seasonText(for: match.team)
                 }
             }
         } else {
@@ -2822,6 +2826,7 @@ struct PitchTrackerView: View {
             awayRoster = []
             activeAwayTeamName = ""
             activeAwayTeamClass = ""
+            activeAwayTeamSeason = ""
         }
         if let teamId = game?.teamId, !teamId.isEmpty {
             refreshHomeRoster(teamId: teamId)
@@ -2829,26 +2834,66 @@ struct PitchTrackerView: View {
                 if let match = teams.first(where: { $0.team.id == teamId }) {
                     self.activeHomeTeamName = match.team.name
                     self.activeHomeTeamClass = match.team.classLabel ?? ""
+                    self.activeHomeTeamSeason = Self.seasonText(for: match.team)
                 }
             }
         } else {
             homeRoster = []
             activeHomeTeamName = ""
             activeHomeTeamClass = ""
+            activeHomeTeamSeason = ""
         }
     }
 
+    /// Both rosters drop rows taken off the team (`archivedAt`) - removed
+    /// players aren't selectable in a game or listed on its bench.
+    ///
+    /// Rows missing a Hitter link get the same self-healing backfill
+    /// TeamRosterView runs. The game screen only lists hitter-linked rows,
+    /// so without it an older player showed on Home's roster (which lists
+    /// every row) but never reached this game's bench or batter picker.
     private func refreshAwayRoster(awayTeamId: String, completion: (() -> Void)? = nil) {
         authManager.loadTeamPlayers(teamId: awayTeamId) { players in
-            self.awayRoster = players
+            self.awayRoster = players.filter { $0.archivedAt == nil }
+            self.backfillRosterLinks(teamId: awayTeamId, isHome: false)
             completion?()
         }
     }
 
     private func refreshHomeRoster(teamId: String, completion: (() -> Void)? = nil) {
         authManager.loadTeamPlayers(teamId: teamId) { players in
-            self.homeRoster = players
+            self.homeRoster = players.filter { $0.archivedAt == nil }
+            self.backfillRosterLinks(teamId: teamId, isHome: true)
             completion?()
+        }
+    }
+
+    private func backfillRosterLinks(teamId: String, isHome: Bool) {
+        let roster = isHome ? homeRoster : awayRoster
+        for player in roster where player.pitcherId == nil || player.hitterId == nil {
+            authManager.ensureTeamPlayerHasPitcherAndHitter(teamId: teamId, teamPlayer: player) { updated in
+                if isHome {
+                    if let index = self.homeRoster.firstIndex(where: { $0.id == updated.id }) {
+                        self.homeRoster[index] = updated
+                    }
+                } else if let index = self.awayRoster.firstIndex(where: { $0.id == updated.id }) {
+                    self.awayRoster[index] = updated
+                }
+            }
+        }
+    }
+
+    /// Re-reads both sides' rosters. The cached arrays otherwise only
+    /// refresh when a game's teams are set or the game is switched, and
+    /// the tracker stays mounted under Home - so a player added, removed
+    /// or restored on Home's roster never reached the lineup sheet.
+    private func refreshLineupRosters() {
+        guard let game = activeGameForBatterSetup else { return }
+        if let awayTeamId = game.awayTeamId, !awayTeamId.isEmpty {
+            refreshAwayRoster(awayTeamId: awayTeamId)
+        }
+        if let teamId = game.teamId, !teamId.isEmpty {
+            refreshHomeRoster(teamId: teamId)
         }
     }
 
@@ -2889,7 +2934,7 @@ struct PitchTrackerView: View {
     private func refreshMyTeamCandidates() {
         let awayTeamId = activeGameForBatterSetup?.awayTeamId
         authManager.loadMyTeams { teams, _ in
-            self.myTeamCandidates = teams.filter { $0.team.id != awayTeamId }
+            self.myTeamCandidates = teams.filter { $0.team.id != awayTeamId && !self.authManager.archivedTeamIds.contains($0.team.id ?? "") }
         }
     }
 
@@ -2902,6 +2947,7 @@ struct PitchTrackerView: View {
         }
         activeHomeTeamName = team.name
         activeHomeTeamClass = team.classLabel ?? ""
+        activeHomeTeamSeason = Self.seasonText(for: team)
         refreshHomeRoster(teamId: teamId)
         if teamSetupShouldFlipSide {
             activeSide = .home
@@ -2925,22 +2971,26 @@ struct PitchTrackerView: View {
     /// batter is the opponent's player (away roster); when Them is
     /// pitching, the batter is ours (home roster). Only hitter-capable
     /// (linked) entries show up - a player added with role Pitcher alone
-    /// has no `hitterId` and is correctly excluded. On the away side only,
-    /// a coach can further narrow a large roster down to just the batters
-    /// worth tracking (Game.activeAwayBatterIds) - unset/empty means no
-    /// restriction, matching every game's behavior before this existed.
+    /// has no `hitterId` and is correctly excluded.
+    ///
+    /// Not narrowed by `Game.activeAwayBatterIds` any more. That list is
+    /// a snapshot of the checklist ticked at Choose Batters to Track, so
+    /// anyone added to the opponent's roster afterwards was never on it and
+    /// could never be picked - a six-player roster offered three. Choosing
+    /// batters now puts them straight in the lineup, and the lineup sheet's
+    /// bench lists the whole roster, so the picker matches the bench.
+    /// A player this user archived (per-user, by Pitcher id) is hidden from
+    /// new picks, the same way `visiblePitchers` hides them as pitchers.
+    private func isArchivedPlayer(_ player: TeamPlayer) -> Bool {
+        player.pitcherId.map { authManager.archivedPitcherIds.contains($0) } ?? false
+    }
+
     private var activeBatterRosterCandidates: [TeamPlayer] {
         switch activeSide {
         case .home:
-            let hitterCapable = awayRoster.filter { $0.hitterId != nil }
-            guard let activeIds = selectedGameId.flatMap({ gid in games.first(where: { $0.id == gid })?.activeAwayBatterIds }),
-                  !activeIds.isEmpty else {
-                return hitterCapable
-            }
-            let activeIdSet = Set(activeIds)
-            return hitterCapable.filter { activeIdSet.contains($0.id ?? "") }
+            return awayRoster.filter { $0.hitterId != nil && !isArchivedPlayer($0) }
         case .away:
-            return homeRoster.filter { $0.hitterId != nil }
+            return homeRoster.filter { $0.hitterId != nil && !isArchivedPlayer($0) }
         }
     }
 
@@ -4974,6 +5024,49 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// Taking one chip out of the lineup (Bench, or trash on a bare
+    /// number). In a live room this has to be a transactional remove-by-id,
+    /// not `persistLineupFromDetail`'s whole-array overwrite: Put In Game
+    /// appends inside a transaction that reads the room from the server,
+    /// and if it ran before the overwrite had landed it read the benched
+    /// chip back, wrote it back, and the room's snapshot then restored it
+    /// here with its roster link gone - an orange duplicate per Bench /
+    /// Put In Game round trip (2026-10-27). Remove and append now commute.
+    private func persistLineupRemoval(cellId: UUID) {
+        guard let liveId = activeLiveId, !liveId.isEmpty else {
+            persistLineupFromDetail()
+            return
+        }
+        let removedId = cellId.uuidString
+        // Captured here: the mutate closure runs on Firestore's queue.
+        let localJerseys = jerseyCells.map { $0.jerseyNumber }
+        let localIds = jerseyCells.map { $0.id.uuidString }
+        LiveGameService.shared.mutateLiveLineup(liveId: liveId) { jerseys, batterIds in
+            guard jerseys.count == batterIds.count else {
+                // Malformed room lineup - fall back to what this device has.
+                jerseys = localJerseys
+                batterIds = localIds
+                return
+            }
+            while let index = batterIds.firstIndex(of: removedId) {
+                batterIds.remove(at: index)
+                jerseys.remove(at: index)
+            }
+        } completion: { result in
+            guard case .success(let merged) = result,
+                  let gameId = selectedGameId,
+                  let owner = effectiveGameOwnerUserId,
+                  !owner.isEmpty,
+                  isOwnerForActiveGame else { return }
+            authManager.updateGameLineup(
+                ownerUserId: owner,
+                gameId: gameId,
+                jerseyNumbers: merged.jerseys,
+                batterIds: merged.batterIds
+            )
+        }
+    }
+
     /// Drag-handle reorder from the pin sheet's lineup strip. Rearranges
     /// only - this runs repeatedly while a finger is moving, so the write
     /// waits for `persistLineupFromDetail()` on drop.
@@ -5006,7 +5099,7 @@ struct PitchTrackerView: View {
     private func deleteBatterFromDetail(_ cell: JerseyCell) {
         guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else { return }
         let removed = jerseyCells.remove(at: idx)
-        persistLineupFromDetail()
+        persistLineupRemoval(cellId: removed.id)
 
         // The sheet always closes on a delete. It used to re-present itself
         // on a fallback cell (openJerseyDetail(keepSheetVisible: true)),
@@ -5041,6 +5134,7 @@ struct PitchTrackerView: View {
             }
             // Open immediately so no-data batters don't wait on fetch/listener retries.
             jerseyDetailPayload = JerseyDetailPayload(event: placeholder)
+            refreshLineupRosters()
         }
 
         if isGame {
@@ -6598,6 +6692,16 @@ struct PitchTrackerView: View {
     /// row - a section of its own for one or two stray numbers cost more
     /// vertical space than it was worth. `unlinkedBatterIdsForDetail` is
     /// what tells them apart there, by fill colour.
+    private static func seasonText(for team: Team) -> String {
+        guard let designation = team.designation else { return "" }
+        return "\(designation.seasonText) \(designation.yearText)"
+    }
+
+    /// "Reds · Fall '26" for the lineup sheet's team rows.
+    private func lineupTeamTitle(_ name: String, season: String) -> String {
+        season.isEmpty ? name : "\(name) · \(season)"
+    }
+
     private var lineupGroupsForDetail: [LineupBatterGroup] {
         let battingRoster = activeSide == .home ? awayRoster : homeRoster
         let pitchingRoster = activeSide == .home ? homeRoster : awayRoster
@@ -6626,27 +6730,37 @@ struct PitchTrackerView: View {
         let battingRow = batting + unlinked
         let battingBench = benchPlayers(from: battingRoster)
         let fieldingBench = benchPlayers(from: pitchingRoster)
+        let battingArchived = archivedBenchNames(from: battingRoster)
+        let fieldingArchived = archivedBenchNames(from: pitchingRoster)
 
         var groups: [LineupBatterGroup] = []
-        if !battingRow.isEmpty || !battingBench.isEmpty {
+        if !battingRow.isEmpty || !battingBench.isEmpty || !battingArchived.isEmpty {
             groups.append(
                 LineupBatterGroup(
                     id: "batting",
-                    title: battingTeamDisplayName,
+                    title: lineupTeamTitle(
+                        battingTeamDisplayName,
+                        season: activeSide == .home ? activeAwayTeamSeason : activeHomeTeamSeason
+                    ),
                     isBatting: true,
                     cells: battingRow,
-                    bench: battingBench
+                    bench: battingBench,
+                    archivedNames: battingArchived
                 )
             )
         }
-        if !fielding.isEmpty || !fieldingBench.isEmpty {
+        if !fielding.isEmpty || !fieldingBench.isEmpty || !fieldingArchived.isEmpty {
             groups.append(
                 LineupBatterGroup(
                     id: "fielding",
-                    title: pitchingTeamDisplayName,
+                    title: lineupTeamTitle(
+                        pitchingTeamDisplayName,
+                        season: activeSide == .home ? activeHomeTeamSeason : activeAwayTeamSeason
+                    ),
                     isBatting: false,
                     cells: fielding,
-                    bench: fieldingBench
+                    bench: fieldingBench,
+                    archivedNames: fieldingArchived
                 )
             )
         }
@@ -6662,13 +6776,26 @@ struct PitchTrackerView: View {
         return roster.compactMap { player in
             guard let id = player.id,
                   let hitterId = player.hitterId,
-                  !inGameHitterIds.contains(hitterId) else { return nil }
+                  !inGameHitterIds.contains(hitterId),
+                  !isArchivedPlayer(player) else { return nil }
             return LineupBenchPlayer(
                 id: id,
                 label: lineupDisplayNumber(for: player),
                 name: player.name,
                 hasHitterRecord: true
             )
+        }
+    }
+
+    /// Hitter-capable roster players kept off the bench only because they're
+    /// archived - and not already in the game, where they still show.
+    private func archivedBenchNames(from roster: [TeamPlayer]) -> [String] {
+        let inGameHitterIds = Set(jerseyCells.compactMap { hitterIdByJerseyCellId[$0.id] })
+        return roster.compactMap { player in
+            guard let hitterId = player.hitterId,
+                  !inGameHitterIds.contains(hitterId),
+                  isArchivedPlayer(player) else { return nil }
+            return player.name
         }
     }
 
@@ -6734,6 +6861,7 @@ struct PitchTrackerView: View {
         placeholder.opponentBatterId = nil
         jerseyDetailEvent = placeholder
         jerseyDetailPayload = JerseyDetailPayload(event: placeholder)
+        refreshLineupRosters()
     }
 
     /// The pencil on a lineup chip: a roster player gets Player Details,
@@ -6771,7 +6899,7 @@ struct PitchTrackerView: View {
         if hitterIdByJerseyCellId.removeValue(forKey: removed.id) != nil {
             persistHitterLinks()
         }
-        persistLineupFromDetail()
+        persistLineupRemoval(cellId: removed.id)
 
         guard selectedBatterId == removed.id else { return }
         let sameSide = visibleJerseyCells
@@ -6785,6 +6913,11 @@ struct PitchTrackerView: View {
     private func putBenchPlayerInGame(_ bench: LineupBenchPlayer) {
         guard let context = lineupRosterContext(where: { $0.id == bench.id }) else { return }
         let player = context.player
+        // A second tap before the bench redraws must not add them twice.
+        if let hitterId = player.hitterId,
+           jerseyCells.contains(where: { hitterIdByJerseyCellId[$0.id] == hitterId }) {
+            return
+        }
         if awayRoster.contains(where: { $0.id == player.id }) {
             addToActiveAwayBatterIdsIfCurated(player.id)
         }
@@ -7004,9 +7137,11 @@ struct PitchTrackerView: View {
     }
 
     /// Already-in-the-lineup roster players are excluded so the picker
-    /// doesn't offer someone twice.
+    /// doesn't offer someone twice. Read off the current cells, as
+    /// `benchPlayers` does - the link map keeps keys for removed cells,
+    /// which held anyone ever taken out of the lineup out of this picker.
     private var atBatRosterPickerCandidates: [TeamPlayer] {
-        let alreadyAdded = Set(hitterIdByJerseyCellId.values)
+        let alreadyAdded = Set(jerseyCells.compactMap { hitterIdByJerseyCellId[$0.id] })
         return activeBatterRosterCandidates.filter { !alreadyAdded.contains($0.hitterId ?? "") }
     }
 
@@ -14343,10 +14478,6 @@ struct GameSelectionSheet: View {
     @State private var myTeamsForNewGame: [Team] = []
 
     @State private var createGameError: String? = nil
-    @State private var pendingDeleteGameId: String? = nil
-    @State private var pendingDeleteGameName: String = ""
-    @State private var showDeleteGameConfirm: Bool = false
-    @State private var showFinalDeleteGameConfirm: Bool = false
     @State private var pendingArchiveGame: Game? = nil
 
     @Environment(\.dismiss) private var dismiss
@@ -14447,19 +14578,6 @@ struct GameSelectionSheet: View {
                         Label("Archive Game…", systemImage: "archivebox")
                     }
                 }
-
-                Button(role: .destructive) {
-                    if isDemoMode {
-                        onRequireSignIn()
-                        return
-                    }
-                    guard let id = game.id, !id.isEmpty else { return }
-                    pendingDeleteGameId = id
-                    pendingDeleteGameName = game.opponent
-                    showDeleteGameConfirm = true
-                } label: {
-                    Label("Delete Game…", systemImage: "trash")
-                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.title3)
@@ -14552,7 +14670,7 @@ struct GameSelectionSheet: View {
                             newGameTeamId = nil
                             newGameOpponentTeamId = nil
                             authManager.loadMyTeams { teams, _ in
-                                myTeamsForNewGame = teams.map { $0.team }
+                                myTeamsForNewGame = teams.map { $0.team }.filter { !authManager.archivedTeamIds.contains($0.id ?? "") }
                                 // A coach with exactly one team shouldn't
                                 // have to pick it every game.
                                 if myTeamsForNewGame.count == 1 {
@@ -14579,52 +14697,6 @@ struct GameSelectionSheet: View {
                 games[idx].archivedAt = Date()
             }
         }
-        .appConfirmationDialog(
-            isPresented: $showDeleteGameConfirm,
-            title: "Delete Game?",
-            message: pendingDeleteGameName.isEmpty
-                ? "This will remove the game and its lineup."
-                : "This will remove \"\(pendingDeleteGameName)\" and its lineup.",
-            primaryTitle: "Continue",
-            primaryRole: .destructive,
-            primaryAction: {
-                showFinalDeleteGameConfirm = true
-            },
-            secondaryTitle: "Cancel",
-            secondaryAction: {
-                pendingDeleteGameId = nil
-                pendingDeleteGameName = ""
-            }
-        )
-        .appConfirmationDialog(
-            isPresented: $showFinalDeleteGameConfirm,
-            title: "Delete Game and Stats?",
-            message: pendingDeleteGameName.isEmpty
-                ? "This will permanently delete the game, all pitch events for that game, and pitcher stats linked to it. This cannot be undone."
-                : "This will permanently delete \"\(pendingDeleteGameName)\", all pitch events for that game, and pitcher stats linked to it. This cannot be undone.",
-            primaryTitle: "Delete Everything",
-            primaryRole: .destructive,
-            primaryAction: {
-                if let id = pendingDeleteGameId {
-                    if let idx = games.firstIndex(where: { $0.id == id }) {
-                        games.remove(at: idx)
-                    }
-                    authManager.deleteGameCascade(gameId: id) { result in
-                        if case .failure(let error) = result {
-                            debugLog("❌ deleteGameCascade failed:", error.localizedDescription)
-                        }
-                    }
-                    NotificationCenter.default.post(name: .gameOrSessionDeleted, object: nil, userInfo: ["type": "game", "gameId": id])
-                }
-                pendingDeleteGameId = nil
-                pendingDeleteGameName = ""
-            },
-            secondaryTitle: "Cancel",
-            secondaryAction: {
-                pendingDeleteGameId = nil
-                pendingDeleteGameName = ""
-            }
-        )
         .overlay(
             Group {
                 if showAddGamePopover {

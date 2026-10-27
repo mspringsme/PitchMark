@@ -25,6 +25,47 @@ import SwiftUI
 
 /// One `TeamPlayer` paired with the team it came from, so a row can show the
 /// team's designation without a second lookup.
+/// Everyone an archive of these Pitcher ids would hide, by name. The game
+/// screen hides any roster row whose `pitcherId` is archived, so this reads
+/// the roster rows themselves rather than trusting one row's label - if
+/// two kids ever ended up sharing a record, both names show up here before
+/// anything is hidden, instead of the second kid silently vanishing.
+enum ArchiveScope {
+    static func names(hiddenBy pitcherIds: [String], rosterEntries: [PlayerRosterEntry], pitchers: [Pitcher]) -> [String] {
+        let ids = Set(pitcherIds)
+        var seen = Set<String>()
+        var names: [String] = []
+        func add(_ name: String) {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(trimmed.lowercased()).inserted else { return }
+            names.append(trimmed)
+        }
+        var coveredByRoster = Set<String>()
+        for entry in rosterEntries {
+            if let id = entry.teamPlayer.pitcherId, ids.contains(id) {
+                add(entry.teamPlayer.name)
+                coveredByRoster.insert(id)
+            }
+        }
+        // A Pitcher doc's name only counts when no roster row carries it -
+        // a rename that hasn't reached the doc yet would otherwise read as
+        // a second kid.
+        for pitcher in pitchers {
+            if let id = pitcher.id, ids.contains(id), !coveredByRoster.contains(id) { add(pitcher.name) }
+        }
+        return names
+    }
+
+    /// "Hidden: Maci." / "Hidden: Maci, Colbie and Ella."
+    static func sentence(_ names: [String]) -> String {
+        switch names.count {
+        case 0: return ""
+        case 1: return names[0]
+        default: return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+        }
+    }
+}
+
 struct PlayerRosterEntry: Identifiable {
     let id: String
     let teamPlayer: TeamPlayer

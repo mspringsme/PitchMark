@@ -1467,6 +1467,9 @@ struct LineupBatterGroup: Identifiable {
     /// This team's roster players who aren't in the game, shown in a Bench
     /// row under its In Game row. Empty when the team has no roster.
     var bench: [LineupBenchPlayer] = []
+    /// Roster players left off the bench because this user archived them.
+    /// Named under the bench so a short bench never looks like a bug.
+    var archivedNames: [String] = []
 }
 
 /// A roster player on the bench, in terms this file can hold - it is also
@@ -2030,7 +2033,7 @@ struct PitchEventDetailPopover: View {
 
     @ViewBuilder
     private var battersSection: some View {
-        let showsGroups = lineupGroups.count > 1 || lineupGroups.contains { !$0.bench.isEmpty }
+        let showsGroups = lineupGroups.count > 1 || lineupGroups.contains { !$0.bench.isEmpty || !$0.archivedNames.isEmpty }
         if !lineupBatters.isEmpty || showsGroups {
             VStack(alignment: .leading, spacing: 10) {
                 if showsGroups {
@@ -2060,6 +2063,15 @@ struct PitchEventDetailPopover: View {
                                 if !group.bench.isEmpty {
                                     rowCaption("Bench")
                                     benchStrip(group.bench)
+                                }
+                                if !group.archivedNames.isEmpty {
+                                    Label(
+                                        "Archived, not shown: \(group.archivedNames.joined(separator: ", ")). Unarchive from the team roster on Home.",
+                                        systemImage: "archivebox"
+                                    )
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                             if group.id != lineupGroups.last?.id {

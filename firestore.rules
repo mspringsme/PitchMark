@@ -265,7 +265,13 @@ service cloud.firestore {
       allow list: if false; // fetched individually via the members collectionGroup query
 
       allow create: if signedIn() && request.resource.data.createdByUid == uid();
-      allow update, delete: if signedIn() && resource.data.createdByUid == uid();
+      allow update: if signedIn() && resource.data.createdByUid == uid();
+      // Teams are never deleted from the app - they're archived per user
+      // (users/{uid}/meta/archive) - so no client may delete one. Account
+      // deletion runs server-side with admin access and is unaffected.
+      // Subcollections (members, players) keep their own delete rules:
+      // Leave Team and Merge Duplicates still need them.
+      allow delete: if false;
 
       match /members/{memberUid} {
         allow get: if signedIn() && (memberUid == uid() || isTeamCreator());

@@ -328,6 +328,14 @@ class AuthManager: ObservableObject {
     /// archived before this existed starts as, with no migration.
     @Published private(set) var archivedGameIdsIncludedInStats: Set<String> = []
     private var statsPreferencesListener: ListenerRegistration?
+    /// Teams and players this user has archived - hidden from their own
+    /// lists and pickers, never deleted, never affecting stats. Per user
+    /// (`users/{uid}/meta/archive`) because teams are shared: one coach
+    /// archiving last season's team mustn't hide it from a co-coach.
+    /// Players are keyed by Pitcher id, which every player has.
+    @Published private(set) var archivedTeamIds: Set<String> = []
+    @Published private(set) var archivedPitcherIds: Set<String> = []
+    private var archiveListener: ListenerRegistration?
 
     private var authStateHandle: AuthStateDidChangeListenerHandle?
     private var currentAppleNonce: String? = nil
@@ -362,11 +370,13 @@ class AuthManager: ObservableObject {
                     self.refreshRetailAdminStatus(for: user)
                     self.probeUserPrivateCollections(tag: "authStateDidChangeListener")
                     self.startStatsPreferencesListener(uid: user.uid)
+                    self.startArchiveListener(uid: user.uid)
 
                 } else {
                     debugLog("🔐 Auth -> SIGNED OUT")
                     self.isRetailAdmin = false
                     self.stopStatsPreferencesListener()
+                    self.stopArchiveListener()
                 }
             }
         }
@@ -2382,46 +2392,6 @@ extension AuthManager {
     }
     
     
-    private func deleteDocumentsInBatches(
-        _ docs: [QueryDocumentSnapshot],
-        db: Firestore,
-        completion: @escaping (Error?) -> Void
-    ) {
-        guard !docs.isEmpty else {
-            completion(nil)
-            return
-        }
-
-        let chunk = Array(docs.prefix(450))
-        let batch = db.batch()
-        for doc in chunk {
-            batch.deleteDocument(doc.reference)
-        }
-
-        batch.commit { error in
-            if let error {
-                completion(error)
-                return
-            }
-            let remaining = Array(docs.dropFirst(chunk.count))
-            self.deleteDocumentsInBatches(remaining, db: db, completion: completion)
-        }
-    }
-
-    func deleteGame(gameId: String) {
-        guard let user = user else { return }
-        let ref = Firestore.firestore()
-            .collection("users").document(user.uid)
-            .collection("games").document(gameId)
-        ref.delete { error in
-            if let error = error {
-                debugLog("Error deleting game: \(error)")
-            } else {
-                debugLog("Game \(gameId) deleted successfully")
-            }
-        }
-    }
-
     /// Archiving never deletes anything - `keepInStats` only decides
     /// whether this user's stats keep counting the game's pitches (both
     /// teams'), and it stays changeable via `setArchivedGame(_:includedInStats:)`.
@@ -2485,6 +2455,74 @@ extension AuthManager {
         }
     }
 
+    // MARK: Archived teams / players
+
+    func setTeam(_ teamId: String, archived: Bool) {
+        guard !teamId.isEmpty else { return }
+        if archived { archivedTeamIds.insert(teamId) } else { archivedTeamIds.remove(teamId) }
+        writeArchive(field: "teamIds", ids: [teamId], add: archived)
+    }
+
+    /// A person can have more than one Pitcher record after a link, so
+    /// archive takes them all - `PlayerDirectoryRow.isArchived` only hides
+    /// a row once every one of its records is archived.
+    func setPitchers(_ pitcherIds: [String], archived: Bool) {
+        let ids = pitcherIds.filter { !$0.isEmpty }
+        guard !ids.isEmpty else { return }
+        if archived { archivedPitcherIds.formUnion(ids) } else { archivedPitcherIds.subtract(ids) }
+        writeArchive(field: "pitcherIds", ids: ids, add: archived)
+    }
+
+    private func writeArchive(field: String, ids: [String], add: Bool, completion: ((Error?) -> Void)? = nil) {
+        guard let user = user else { return }
+        let change = add ? FieldValue.arrayUnion(ids) : FieldValue.arrayRemove(ids)
+        archiveRef(uid: user.uid).setData([field: change], merge: true) { error in
+            if let error {
+                debugLog("⚠️ archive write (\(field)) failed:", error.localizedDescription)
+            }
+            completion?(error)
+        }
+    }
+
+    private func archiveRef(uid: String) -> DocumentReference {
+        Firestore.firestore()
+            .collection("users").document(uid)
+            .collection("meta").document("archive")
+    }
+
+    private func startArchiveListener(uid: String) {
+        stopArchiveListener()
+        archiveListener = archiveRef(uid: uid).addSnapshotListener { [weak self] snapshot, error in
+            guard let self else { return }
+            if let error {
+                debugLog("⚠️ archive listener error:", error.localizedDescription)
+                return
+            }
+            let data = snapshot?.data() ?? [:]
+            let teams = Set(data["teamIds"] as? [String] ?? [])
+            let pitchers = Set(data["pitcherIds"] as? [String] ?? [])
+            DispatchQueue.main.async {
+                self.archivedTeamIds = teams
+                self.archivedPitcherIds = pitchers
+            }
+        }
+    }
+
+    // The old device-local "hiddenPitcherIds" is deliberately NOT carried
+    // into the account archive. It meant "hide from the pitcher picker" -
+    // routine for non-pitchers, since every player gets a Pitcher record -
+    // while an account archive also hides the player from every game's
+    // bench and batter picker. Migrating it (briefly, 2026-10-26) silently
+    // pulled five kids out of a roster's games. A stale hide just reappears
+    // in the pitcher list, which is harmless and re-archivable.
+
+    private func stopArchiveListener() {
+        archiveListener?.remove()
+        archiveListener = nil
+        archivedTeamIds = []
+        archivedPitcherIds = []
+    }
+
     private func stopStatsPreferencesListener() {
         statsPreferencesListener?.remove()
         statsPreferencesListener = nil
@@ -2510,62 +2548,6 @@ extension AuthManager {
         }
     }
 
-    func deleteGameCascade(gameId: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard let user = user else {
-            completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
-            return
-        }
-
-        let db = Firestore.firestore()
-        let ownerUid = user.uid
-        let gameRef = db.collection("users").document(ownerUid)
-            .collection("games").document(gameId)
-
-        let gameEventsRef = gameRef.collection("pitchEvents")
-        gameEventsRef.getDocuments { snapshot, error in
-            if let error {
-                completion(.failure(error))
-                return
-            }
-
-            let gameDocs = snapshot?.documents ?? []
-            self.deleteDocumentsInBatches(gameDocs, db: db) { deleteError in
-                if let deleteError {
-                    completion(.failure(deleteError))
-                    return
-                }
-
-                gameRef.delete { deleteGameError in
-                    if let deleteGameError {
-                        completion(.failure(deleteGameError))
-                        return
-                    }
-
-                    db.collectionGroup("pitchEvents")
-                        .whereField("gameId", isEqualTo: gameId)
-                        .getDocuments { pitchSnapshot, pitchError in
-                            if let pitchError {
-                                completion(.failure(pitchError))
-                                return
-                            }
-
-                            let allDocs = pitchSnapshot?.documents ?? []
-                            let pitcherDocs = allDocs.filter { doc in
-                                doc.reference.path.contains("/pitchers/")
-                            }
-
-                            self.deleteDocumentsInBatches(pitcherDocs, db: db) { pitcherDeleteError in
-                                if let pitcherDeleteError {
-                                    completion(.failure(pitcherDeleteError))
-                                    return
-                                }
-                                completion(.success(()))
-                            }
-                        }
-                }
-            }
-        }
-    }
     
     // MARK: - Game field updates
     func updateGameInning(ownerUserId: String?, gameId: String, inning: Int) {

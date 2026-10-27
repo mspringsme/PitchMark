@@ -501,38 +501,4 @@ extension AuthManager {
         }
         group.notify(queue: .main, execute: completion)
     }
-
-    /// Delete Player: every roster row, the Player doc(s), and the Pitcher/
-    /// Hitter records. Pitches already recorded inside games stay in those
-    /// games - this removes the kid, not the games they appeared in.
-    /// Callers must only offer it for `isFullyEditable` profiles.
-    func deleteProfile(_ profile: PlayerProfile, completion: @escaping (Result<Void, Error>) -> Void) {
-        let db = Firestore.firestore()
-        var firstError: Error? = nil
-        let group = DispatchGroup()
-
-        func run(_ ref: DocumentReference) {
-            group.enter()
-            ref.delete { error in
-                if let error, firstError == nil { firstError = error }
-                group.leave()
-            }
-        }
-
-        for entry in profile.entries {
-            guard let teamId = entry.team.id, let rowId = entry.teamPlayer.id else { continue }
-            run(db.collection("teams").document(teamId).collection("players").document(rowId))
-        }
-        for id in profile.playerIds { run(db.collection("players").document(id)) }
-        for id in profile.pitcherIds { run(db.collection("pitchers").document(id)) }
-        for id in profile.hitterIds { run(db.collection("hitters").document(id)) }
-
-        group.notify(queue: .main) {
-            if let firstError {
-                completion(.failure(firstError))
-            } else {
-                completion(.success(()))
-            }
-        }
-    }
 }

@@ -13,7 +13,9 @@
 //    stats show together.
 //  - Merge Duplicates: for a player accidentally created twice. A dialog says
 //    so before anything else; then pick the two profiles.
-//  - Delete Players: pick players, confirm, gone from every team.
+//  - Archive Players: pick players, confirm, hidden from this account's
+//    Players list and pickers. Nothing is deleted; their teams, rosters and
+//    stats are untouched, and Players -> Show Archived brings them back.
 //
 //  Every path ends back on the start screen with a one-line confirmation.
 //  The model and writes live in PlayerLinks.swift.
@@ -79,6 +81,10 @@ final class LinkProfilesStore: ObservableObject {
 struct LinkProfilesView: View {
     /// Runs on close if anything changed, so Home reloads underneath.
     var onChanged: () -> Void = {}
+    /// Both teams of the game open in the tracker; players on them can't be
+    /// archived until it's closed (`OpenGameLock`).
+    var openGameTeamIds: Set<String> = []
+    var onCloseGame: () -> Void = {}
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -148,9 +154,9 @@ struct LinkProfilesView: View {
                 Section {
                     NavigationLink(value: Route.deletePick) {
                         optionRow(
-                            title: "Delete Players",
-                            icon: "trash",
-                            detail: "Remove players from every team, along with their stats."
+                            title: "Archive Players",
+                            icon: "archivebox",
+                            detail: "Hide players you no longer track. Their teams and stats are kept."
                         )
                     }
                 }
@@ -218,7 +224,13 @@ struct LinkProfilesView: View {
         case .mergePick:
             MergePickScreen(store: store, currentUid: uid, onDone: finish)
         case .deletePick:
-            DeletePickScreen(store: store, currentUid: uid, onDone: finish)
+            DeletePickScreen(
+                store: store,
+                currentUid: uid,
+                openGameTeamIds: openGameTeamIds,
+                onCloseGame: onCloseGame,
+                onDone: finish
+            )
         }
     }
 
@@ -709,19 +721,29 @@ private struct MergePickScreen: View {
     }
 }
 
-// MARK: - Delete
+// MARK: - Archive
 
+/// Archive is per account (`AuthManager.setPitchers(_:archived:)`), so
+/// unlike Merge there's no other-coach restriction: it only changes what
+/// this user sees. Still called `deletePick` in `Route` - renaming a route
+/// case buys nothing.
 private struct DeletePickScreen: View {
     @ObservedObject var store: LinkProfilesStore
     let currentUid: String?
+    let openGameTeamIds: Set<String>
+    let onCloseGame: () -> Void
     let onDone: (String) -> Void
 
     @EnvironmentObject var authManager: AuthManager
 
     @State private var selectedIds: Set<String> = []
     @State private var showConfirm = false
-    @State private var isWorking = false
-    @State private var errorMessage: String? = nil
+    @State private var openGameLockMessage: String? = nil
+
+    /// Selected players on a team in the open game.
+    private var lockedSelection: [PlayerProfile] {
+        selected.filter { !openGameTeamIds.isDisjoint(with: $0.teams.compactMap(\.id)) }
+    }
 
     private var selected: [PlayerProfile] {
         store.profiles.filter { selectedIds.contains($0.id) }
@@ -729,64 +751,68 @@ private struct DeletePickScreen: View {
 
     var body: some View {
         ProfilePickerList(
-            prompt: "Select the players to delete.",
+            prompt: "Select the players to archive.",
             store: store,
             mode: .multi($selectedIds)
         )
-        .navigationTitle("Delete Players")
+        .navigationTitle("Archive Players")
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
             BottomActionBar(
-                caption: selectedIds.isEmpty ? "Select players to delete" : "\(selectedIds.count) selected",
-                title: selectedIds.count > 1 ? "Delete \(selectedIds.count) Players" : "Delete Player",
-                isDestructive: true,
-                isEnabled: !selectedIds.isEmpty && !isWorking,
-                errorMessage: errorMessage
+                caption: selectedIds.isEmpty ? "Select players to archive" : "\(selectedIds.count) selected",
+                title: selectedIds.count > 1 ? "Archive \(selectedIds.count) Players" : "Archive Player",
+                isEnabled: !selectedIds.isEmpty,
+                errorMessage: nil
             ) {
-                let locked = selected.filter { !$0.isFullyEditable(by: currentUid) }
+                let locked = lockedSelection
                 if locked.isEmpty {
-                    errorMessage = nil
                     showConfirm = true
                 } else {
-                    errorMessage = "\(locked.map(\.labelWithTeams).joined(separator: ", ")) comes from another coach's account, so it can't be deleted here."
+                    let names = locked.map(\.name).joined(separator: ", ")
+                    openGameLockMessage = OpenGameLock.message(for: names, plural: locked.count > 1)
                 }
             }
         }
-        .overlay {
-            if isWorking { SavingOverlay(text: "Deleting…") }
-        }
+        .appConfirmationDialog(
+            isPresented: Binding(
+                get: { openGameLockMessage != nil },
+                set: { if !$0 { openGameLockMessage = nil } }
+            ),
+            title: OpenGameLock.title,
+            message: openGameLockMessage ?? "",
+            primaryTitle: "Close Game",
+            primaryAction: { onCloseGame() },
+            secondaryTitle: "Not Now"
+        )
         .appConfirmationDialog(
             isPresented: $showConfirm,
-            title: selected.count > 1 ? "Delete \(selected.count) Players?" : "Delete \(selected.first?.name ?? "Player")?",
-            message: "\(selected.map(\.labelWithTeams).joined(separator: "\n"))\n\nRemoves them from every team and deletes their player profile and stats. Pitches already recorded in your games stay in those games. This can't be undone.",
-            primaryTitle: "Delete",
-            primaryRole: .destructive,
-            primaryAction: { deleteSelected() },
+            title: selected.count > 1 ? "Archive \(selected.count) Players?" : "Archive \(selected.first?.name ?? "Player")?",
+            message: archiveMessage,
+            primaryTitle: "Archive",
+            primaryAction: { archiveSelected() },
             secondaryTitle: "Cancel"
         )
     }
 
-    private func deleteSelected() {
+    /// Lists everyone the archive hides, read off the roster rows rather
+    /// than the profile labels (`ArchiveScope`) - so a profile that has
+    /// wrongly folded two kids together shows both names here first.
+    private var archiveMessage: String {
         let chosen = selected
-        isWorking = true
-        errorMessage = nil
-        var remaining = chosen
-        func next() {
-            guard !remaining.isEmpty else {
-                isWorking = false
-                onDone(chosen.count == 1 ? "Deleted \(chosen[0].name)." : "Deleted \(chosen.count) players.")
-                return
-            }
-            let profile = remaining.removeFirst()
-            authManager.deleteProfile(profile) { result in
-                if case .failure(let error) = result {
-                    isWorking = false
-                    errorMessage = "Couldn't delete \(profile.name): \(error.localizedDescription)"
-                    return
-                }
-                next()
-            }
-        }
-        next()
+        let names = ArchiveScope.names(
+            hiddenBy: chosen.flatMap(\.pitcherIds),
+            rosterEntries: chosen.flatMap(\.entries),
+            pitchers: chosen.flatMap(\.pitchers)
+        )
+        let effect = "Hidden from your Players list, pitcher pickers, and every game's bench and batter list. Nothing is deleted: they stay on their teams' rosters and keep all their stats. Bring them back anytime from Players → Show Archived, or swipe right on a team roster."
+        let list = chosen.map(\.labelWithTeams).joined(separator: "\n")
+        guard names.count > chosen.count else { return list + "\n\n" + effect }
+        return list + "\n\nThis will hide \(names.count) players: \(ArchiveScope.sentence(names)). Some of them share records - if that's more than you meant, cancel and fix the link first.\n\n" + effect
+    }
+
+    private func archiveSelected() {
+        let chosen = selected
+        authManager.setPitchers(chosen.flatMap(\.pitcherIds), archived: true)
+        onDone(chosen.count == 1 ? "Archived \(chosen[0].name)." : "Archived \(chosen.count) players.")
     }
 }

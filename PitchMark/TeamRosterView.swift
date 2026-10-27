@@ -39,16 +39,11 @@ struct TeamEntrySelection: Identifiable {
 
 struct TeamRosterView: View {
     let selection: TeamEntrySelection
-    /// True when this team is one of the two sides of the game currently
-    /// open in the Games tab. Deleting it out from under a live tracking
-    /// session would strand that game's roster mid-game.
-    var isInActiveGame: Bool = false
-    /// Lets the presenting list drop the row immediately. Without it the
-    /// only signal was a `loadMyTeams` reload on dismiss, which races the
-    /// delete it is meant to reflect - so the deleted team stayed on
-    /// screen until some later interaction happened to reload after the
-    /// write had propagated.
-    var onDeleted: ((String) -> Void)? = nil
+    /// True when this team is either side of the game open in the tracker.
+    /// Its players can't be removed and the team can't be archived until
+    /// that game is closed (`OpenGameLock`).
+    var isInOpenGame: Bool = false
+    var onCloseGame: () -> Void = {}
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -91,16 +86,15 @@ struct TeamRosterView: View {
 
     @State private var editingPlayer: TeamPlayer? = nil
 
-    @State private var playerPendingDelete: TeamPlayer? = nil
-    @State private var showDeletePlayerDialog = false
+    @State private var playerPendingRemoval: TeamPlayer? = nil
+    @State private var showRemovedPlayers = false
 
     @State private var showTeamActionsDialog = false
     @State private var isRenamingTeam = false
     @State private var renameTeamText: String = ""
-    @State private var showDeleteTeamDialog = false
-    @State private var showCantDeleteTeamDialog = false
-    @State private var showCantDeleteActiveTeamDialog = false
+    @State private var showArchiveTeamDialog = false
     @State private var showLeaveTeamDialog = false
+    @State private var openGameLockMessage: String? = nil
 
     /// Management rights (add/edit/delete) are gated on actually being the
     /// team's creator - matching exactly what firestore.rules enforces
@@ -115,18 +109,54 @@ struct TeamRosterView: View {
         return selection.team.createdByUid == uid
     }
 
+    /// Nothing here is ever deleted: a player taken off the roster is an
+    /// archived row (`setTeamPlayerArchived`), kept for Restore and so their
+    /// stats keep their team.
+    private var activePlayers: [TeamPlayer] { players.filter { $0.archivedAt == nil } }
+    private var removedPlayers: [TeamPlayer] { players.filter { $0.archivedAt != nil } }
+
+    private var isTeamArchived: Bool {
+        selection.team.id.map { authManager.archivedTeamIds.contains($0) } ?? false
+    }
+
     var body: some View {
         NavigationView {
             List {
                 Section("Roster") {
-                    if players.isEmpty {
+                    if activePlayers.isEmpty {
                         Text(isTeamOwner ? "No players yet - add your first one below." : "No players on this roster yet.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(players, id: \.id) { player in
+                        ForEach(activePlayers, id: \.id) { player in
                             playerRow(player)
                         }
+                    }
+                }
+
+                if !removedPlayers.isEmpty {
+                    Section {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { showRemovedPlayers.toggle() }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(showRemovedPlayers ? "Hide Removed" : "Show Removed (\(removedPlayers.count))")
+                                    .font(.subheadline.weight(.semibold))
+                                Image(systemName: "chevron.down")
+                                    .font(.caption.weight(.semibold))
+                                    .rotationEffect(.degrees(showRemovedPlayers ? 0 : -90))
+                            }
+                            .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+
+                        if showRemovedPlayers {
+                            ForEach(removedPlayers, id: \.id) { player in
+                                removedPlayerRow(player)
+                            }
+                        }
+                    } footer: {
+                        Text("Removed players keep their stats. Restore puts them back on this roster.")
                     }
                 }
 
@@ -174,13 +204,17 @@ struct TeamRosterView: View {
                         }
                     }
                 } else {
-                    // The only action available to a member who isn't the
-                    // creator - everything else (add/edit/delete players,
-                    // rename/delete the team) is owner-only, matching what
-                    // firestore.rules actually permits them to do.
+                    // A member who isn't the creator can archive (it's their
+                    // own view) and leave; editing the team and its roster
+                    // is owner-only, matching what firestore.rules permits.
                     ToolbarItem(placement: .topBarLeading) {
-                        Button("Leave Team", role: .destructive) {
-                            showLeaveTeamDialog = true
+                        Menu {
+                            archiveTeamButton
+                            Button("Leave Team", role: .destructive) {
+                                showLeaveTeamDialog = true
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
                         }
                     }
                 }
@@ -211,49 +245,43 @@ struct TeamRosterView: View {
                 editTeamDesignation = TeamDesignationDraft(teamDesignation)
                 isRenamingTeam = true
             }
-            Button("Delete Team", role: .destructive) {
-                if isInActiveGame {
-                    showCantDeleteActiveTeamDialog = true
-                } else if players.isEmpty {
-                    showDeleteTeamDialog = true
-                } else {
-                    showCantDeleteTeamDialog = true
-                }
-            }
+            archiveTeamButton
             Button("Cancel", role: .cancel) { }
         }
-        .confirmationDialog(
-            "Remove all players from the roster before deleting the team.",
-            isPresented: $showCantDeleteTeamDialog,
-            titleVisibility: .visible
-        ) {
-            Button("OK") { }
-        }
-        .confirmationDialog(
-            "This team is in the game you have open. On Home, open that game's ••• menu and tap \"Close Game\" first, then come back here.",
-            isPresented: $showCantDeleteActiveTeamDialog,
-            titleVisibility: .visible
-        ) {
-            Button("OK") { }
-        }
         .appConfirmationDialog(
-            isPresented: $showDeleteTeamDialog,
-            title: "Delete \(teamName)?",
-            message: "This can't be undone.",
-            primaryTitle: "Delete",
-            primaryRole: .destructive,
-            primaryAction: { deleteTeam() },
+            isPresented: $showArchiveTeamDialog,
+            title: "Archive \(teamName)?",
+            message: "It'll be hidden from your Teams list and team pickers. Nothing is deleted: its roster, games and stats stay as they are, and other coaches on the team still see it. Unarchive it anytime from Teams → Show Archived.",
+            primaryTitle: "Archive",
+            primaryAction: {
+                guard let teamId = selection.team.id else { return }
+                authManager.setTeam(teamId, archived: true)
+                dismiss()
+            },
             secondaryTitle: "Cancel"
         )
         .appConfirmationDialog(
-            isPresented: $showDeletePlayerDialog,
-            title: "Delete \(playerPendingDelete?.name ?? "this player")?",
-            message: "This removes them from the roster. Any linked pitcher and its pitch history stay intact.",
-            primaryTitle: "Delete",
+            isPresented: Binding(
+                get: { playerPendingRemoval != nil },
+                set: { if !$0 { playerPendingRemoval = nil } }
+            ),
+            title: "Remove \(playerPendingRemoval?.name ?? "this player") from \(teamName)?",
+            message: "They come off this roster but nothing is deleted - they stay in your Players list with all their stats. You can restore them from Show Removed.",
+            primaryTitle: "Remove",
             primaryRole: .destructive,
-            primaryAction: { deletePendingPlayer() },
-            secondaryTitle: "Cancel",
-            secondaryAction: { playerPendingDelete = nil }
+            primaryAction: { removePendingPlayer() },
+            secondaryTitle: "Cancel"
+        )
+        .appConfirmationDialog(
+            isPresented: Binding(
+                get: { openGameLockMessage != nil },
+                set: { if !$0 { openGameLockMessage = nil } }
+            ),
+            title: OpenGameLock.title,
+            message: openGameLockMessage ?? "",
+            primaryTitle: "Close Game",
+            primaryAction: { onCloseGame() },
+            secondaryTitle: "Not Now"
         )
         .appConfirmationDialog(
             isPresented: $showLeaveTeamDialog,
@@ -329,6 +357,11 @@ struct TeamRosterView: View {
             }
             playerSecondaryCaption(player)
             crossTeamCaption(player)
+            if isPlayerArchived(player) {
+                Label("Archived - not shown in games. Swipe right to unarchive.", systemImage: "archivebox")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
         }
 
         if isTeamOwner {
@@ -340,14 +373,46 @@ struct TeamRosterView: View {
             .buttonStyle(.plain)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) {
-                    playerPendingDelete = player
-                    showDeletePlayerDialog = true
+                    if isInOpenGame {
+                        openGameLockMessage = OpenGameLock.message(for: player.name)
+                    } else {
+                        playerPendingRemoval = player
+                    }
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label("Remove", systemImage: "person.fill.xmark")
                 }
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                unarchivePlayerAction(player)
             }
         } else {
             label
+                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                    unarchivePlayerAction(player)
+                }
+        }
+    }
+
+    /// Archiving a player (Home's Players list or Link Profiles) is per
+    /// user and hides them from every game's bench and batter picker, but
+    /// the roster still lists them - so it has to say so, or a roster of
+    /// six that offers one in a game looks broken. Same rule the game
+    /// screen applies (`isArchivedPlayer` in PitchTrackerView).
+    private func isPlayerArchived(_ player: TeamPlayer) -> Bool {
+        player.pitcherId.map { authManager.archivedPitcherIds.contains($0) } ?? false
+    }
+
+    @ViewBuilder
+    private func unarchivePlayerAction(_ player: TeamPlayer) -> some View {
+        if isPlayerArchived(player) {
+            Button {
+                // Every record of the person, matching what Archive hid.
+                let ids = person(for: player)?.pitcherIds ?? []
+                authManager.setPitchers(ids.isEmpty ? [player.pitcherId].compactMap { $0 } : ids, archived: false)
+            } label: {
+                Label("Unarchive", systemImage: "archivebox")
+            }
+            .tint(.orange)
         }
     }
 
@@ -538,15 +603,62 @@ struct TeamRosterView: View {
         }
     }
 
-    private func deletePendingPlayer() {
-        guard let teamId = selection.team.id, let playerId = playerPendingDelete?.id else { return }
-        authManager.deleteTeamPlayer(teamId: teamId, playerId: playerId) { result in
+    private func removePendingPlayer() {
+        guard let player = playerPendingRemoval else { return }
+        setArchived(player, archived: true)
+        playerPendingRemoval = nil
+    }
+
+    private func setArchived(_ player: TeamPlayer, archived: Bool) {
+        guard let teamId = selection.team.id, let playerId = player.id else { return }
+        authManager.setTeamPlayerArchived(teamId: teamId, playerId: playerId, archived: archived) { result in
             if case .success = result {
-                playerPendingDelete = nil
                 refreshPlayers()
-                // The "Also on" captions are built
-                // from the cross-team rows, which still list the deleted one.
+                // The "Also on" captions are built from the cross-team rows,
+                // which skip archived ones.
                 refreshPlayerDirectory()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func removedPlayerRow(_ player: TeamPlayer) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(player.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if let jersey = player.jerseyNumber, !jersey.isEmpty {
+                    Text("#\(jersey)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if isTeamOwner {
+                Button("Restore") { setArchived(player, archived: false) }
+                    .buttonStyle(.bordered)
+                    .font(.caption.weight(.semibold))
+            }
+        }
+    }
+
+    /// Per-user, so any member can archive - it only changes their own
+    /// Teams list.
+    @ViewBuilder
+    private var archiveTeamButton: some View {
+        if isTeamArchived {
+            Button("Unarchive Team") {
+                guard let teamId = selection.team.id else { return }
+                authManager.setTeam(teamId, archived: false)
+            }
+        } else {
+            Button("Archive Team") {
+                if isInOpenGame {
+                    openGameLockMessage = "\(teamName) is playing in the game that's open right now. Close the game first, then archive."
+                } else {
+                    showArchiveTeamDialog = true
+                }
             }
         }
     }
@@ -559,24 +671,6 @@ struct TeamRosterView: View {
                 teamName = name
                 teamDesignation = editTeamDesignation.designation ?? teamDesignation
                 isRenamingTeam = false
-            }
-        }
-    }
-
-    private func deleteTeam() {
-        guard let teamId = selection.team.id else { return }
-        authManager.deleteTeam(teamId: teamId) { result in
-            switch result {
-            case .success:
-                // Tell the presenting list before dismissing: its own
-                // onDismiss reload is a fresh Firestore read that can
-                // easily still return this team, which is why a deleted
-                // team used to linger until some unrelated interaction
-                // reloaded late enough to miss it.
-                onDeleted?(teamId)
-                dismiss()
-            case .failure(let error):
-                debugLog("❌ deleteTeam failed:", error.localizedDescription)
             }
         }
     }

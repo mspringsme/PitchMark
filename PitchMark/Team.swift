@@ -487,8 +487,9 @@ extension AuthManager {
         }
     }
 
-    /// Only removes the roster entry - a linked Pitcher (and its pitch
-    /// history) is left alone, same reasoning as team deletion below.
+    /// A real delete - used only by Merge Duplicates, for a duplicate's row
+    /// on a team the kept profile already covers. Taking a player off a
+    /// roster is `setTeamPlayerArchived`.
     func deleteTeamPlayer(teamId: String, playerId: String, completion: @escaping (Result<Void, Error>) -> Void) {
         guard user != nil else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
@@ -528,28 +529,30 @@ extension AuthManager {
         }
     }
 
-    /// Blocked (not cascading) if the team still has players - the caller
-    /// is expected to have already checked this and only call through when
-    /// it's actually empty, but this re-checks server-side too rather than
-    /// trusting a possibly-stale local `players` array.
-    func deleteTeam(teamId: String, completion: @escaping (Result<Void, Error>) -> Void) {
+    /// Takes a player off (or back onto) this team's roster without
+    /// deleting anything: the row, the Player, and their stats all stay.
+    /// Team-level, unlike team/player archive - the roster is the team's
+    /// shared record, so firestore.rules lets only the creator change it.
+    /// `loadPlayerRosterEntries` already drops archived rows.
+    func setTeamPlayerArchived(
+        teamId: String,
+        playerId: String,
+        archived: Bool,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
         guard user != nil else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
             return
         }
-        loadTeamPlayers(teamId: teamId) { players in
-            guard players.isEmpty else {
-                completion(.failure(NSError(domain: "Team", code: 409, userInfo: [NSLocalizedDescriptionKey: "Remove all players before deleting this team."])))
-                return
-            }
-            self.teamsCollection().document(teamId).delete { error in
+        let value: Any = archived ? FieldValue.serverTimestamp() : FieldValue.delete()
+        teamsCollection().document(teamId).collection("players").document(playerId)
+            .updateData(["archivedAt": value]) { error in
                 if let error {
                     completion(.failure(error))
                 } else {
                     completion(.success(()))
                 }
             }
-        }
     }
 
     /// Removes the signed-in user's own membership - the only team action a

@@ -593,11 +593,14 @@ struct SettingsView: View {
     @State private var inlineNewGameOpponentTeamId: String? = nil
     @State private var createGameError: String? = nil
     @State private var showArchivedGames = false
+    @State private var showArchivedTeams = false
     @State private var pendingArchiveGame: Game? = nil
-    @State private var pendingDeleteGameId: String? = nil
-    @State private var pendingDeleteGameName: String = ""
-    @State private var showDeleteGameConfirm = false
-    @State private var showFinalDeleteGameConfirm = false
+    /// Set when an archive was refused because the player is on a team in
+    /// the open game (`OpenGameLock`); drives that explanation dialog.
+    @State private var openGameLockMessage: String? = nil
+    /// A player archive waiting on its confirmation, which names everyone
+    /// it would hide (`ArchiveScope`).
+    @State private var pendingPlayerArchive: PendingPlayerArchive? = nil
     // Accordion: expanding one of Home's two collapsible sections closes
     // the other. nil means both collapsed; .games is the default open one.
     @State private var expandedHomeOverviewSection: HomeOverviewSection? = .games
@@ -622,7 +625,8 @@ struct SettingsView: View {
     @State private var isCheckingPurchasedTemplate = false
     @State private var isRefreshingTemplates = false
     @State private var hiddenTemplateIds: Set<String> = []
-    @State private var hiddenPitcherIds: Set<String> = []
+    /// Archived players, synced per account (was device-local).
+    private var hiddenPitcherIds: Set<String> { authManager.archivedPitcherIds }
     @State private var templateActionTargetId: UUID? = nil
     @State private var pitcherActionTargetId: String? = nil
     @State private var showHiddenTemplates = false
@@ -732,15 +736,10 @@ struct SettingsView: View {
 
     private func loadHiddenIds() {
         hiddenTemplateIds = Set(UserDefaults.standard.stringArray(forKey: PitchTrackerView.DefaultsKeys.hiddenTemplateIds) ?? [])
-        hiddenPitcherIds = Set(UserDefaults.standard.stringArray(forKey: PitchTrackerView.DefaultsKeys.hiddenPitcherIds) ?? [])
     }
 
     private func saveHiddenTemplateIds() {
         UserDefaults.standard.set(Array(hiddenTemplateIds), forKey: PitchTrackerView.DefaultsKeys.hiddenTemplateIds)
-    }
-
-    private func saveHiddenPitcherIds() {
-        UserDefaults.standard.set(Array(hiddenPitcherIds), forKey: PitchTrackerView.DefaultsKeys.hiddenPitcherIds)
     }
 
     private var visibleTemplates: [PitchTemplate] {
@@ -929,17 +928,23 @@ struct SettingsView: View {
     /// game. Vertical (not the old horizontal scroll strip) deliberately
     /// leaves room to the right of the name/date for future per-game
     /// metadata (score, record, etc.) without needing another redesign.
-    /// `menuGame` adds the per-game Archive/Delete menu. Live-session rows
-    /// pass nil: a joined session isn't ours to archive or delete.
-    @ViewBuilder
+    /// `menuGame` adds the per-game Archive menu. Live-session rows pass
+    /// nil: a joined session isn't ours to archive.
+    ///
+    /// Returns `AnyView` on purpose. This row is used by three `ForEach`es
+    /// in `gamesOverviewSection`, and its concrete type (Button + Menu +
+    /// conditionals) was spelled out inside each - Home's body type got so
+    /// deep that the Swift runtime overflowed the stack demangling it
+    /// (`EXC_BAD_ACCESS code=2` in `decodeMangledType`, 2026-10-27, tapping
+    /// Home from a game). Erasing here keeps each ForEach's type shallow.
     private func gameRow(
         opponent: String,
         dateText: String?,
         isLive: Bool,
         menuGame: Game? = nil,
         action: @escaping () -> Void
-    ) -> some View {
-        HStack(spacing: 6) {
+    ) -> AnyView {
+        AnyView(HStack(spacing: 6) {
             Button(action: action) {
                 HStack(spacing: 10) {
                     if isLive {
@@ -1009,26 +1014,14 @@ struct SettingsView: View {
                         }
                     }
 
-                    // The open game isn't deletable - pulling it out from
-                    // under the tracker would leave it mid-session with no
-                    // game. Rather than a dead "can't delete" row, the menu
-                    // now offers the way out: Close Game takes it out of
-                    // in-use status (and with it, its teams/players), and
-                    // Delete becomes available on the next open of this menu.
+                    // Games are never deleted (archive instead - see
+                    // archiveGameDialog). Close Game takes the open one out
+                    // of in-use status.
                     if isActiveGame(menuGame) {
                         Button {
                             closeActiveGame(menuGame)
                         } label: {
                             Label("Close Game (in use)", systemImage: "xmark.circle")
-                        }
-                    } else {
-                        Button(role: .destructive) {
-                            guard let id = menuGame.id, !id.isEmpty else { return }
-                            pendingDeleteGameId = id
-                            pendingDeleteGameName = menuGame.opponent
-                            showDeleteGameConfirm = true
-                        } label: {
-                            Label("Delete Game…", systemImage: "trash")
                         }
                     }
                 } label: {
@@ -1041,7 +1034,7 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
             }
-        }
+        })
     }
 
     private var activeGames: [Game] {
@@ -1204,8 +1197,39 @@ struct SettingsView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(myTeams, id: \.team.id) { entry in
+                        ForEach(activeTeamEntries, id: \.team.id) { entry in
                             teamRow(entry)
+                        }
+                        if activeTeamEntries.isEmpty, !showInlineNewTeam {
+                            Text("All your teams are archived.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if !archivedTeamEntries.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) { showArchivedTeams.toggle() }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(showArchivedTeams ? "Hide Archived" : "Show Archived (\(archivedTeamEntries.count))")
+                                    .font(.caption.weight(.semibold))
+                                Image(systemName: "chevron.down")
+                                    .font(.caption2.weight(.semibold))
+                                    .rotationEffect(.degrees(showArchivedTeams ? 0 : -90))
+                            }
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+
+                        if showArchivedTeams {
+                            ForEach(archivedTeamEntries, id: \.team.id) { entry in
+                                teamRow(entry)
+                                    .opacity(0.6)
+                            }
                         }
                     }
                 }
@@ -1220,6 +1244,17 @@ struct SettingsView: View {
             // another device.
             refreshMyTeams()
         }
+    }
+
+    /// `myTeams` itself stays whole - game titles, stats filters and team
+    /// names on old games still resolve archived teams. Only the list and
+    /// the pickers for new choices hide them.
+    private var activeTeamEntries: [(team: Team, membership: TeamMembership)] {
+        myTeams.filter { !authManager.archivedTeamIds.contains($0.team.id ?? "") }
+    }
+
+    private var archivedTeamEntries: [(team: Team, membership: TeamMembership)] {
+        myTeams.filter { authManager.archivedTeamIds.contains($0.team.id ?? "") }
     }
 
     private var newTeamCard: some View {
@@ -1603,7 +1638,8 @@ struct SettingsView: View {
     @ViewBuilder
     private func playerRowMenu(_ row: PlayerDirectoryRow) -> some View {
         if let pitcher = row.pitcher {
-            let isArchived = pitcher.id.map { hiddenPitcherIds.contains($0) } ?? false
+            let isArchived = row.isArchived(in: hiddenPitcherIds)
+                || (pitcher.id.map { hiddenPitcherIds.contains($0) } ?? false)
 
             Button {
                 beginPitcherPortraitSelection(for: pitcher)
@@ -1669,12 +1705,22 @@ struct SettingsView: View {
 
             Button {
                 guard let id = pitcher.id else { return }
-                if isArchived {
-                    hiddenPitcherIds.remove(id)
-                } else {
-                    hiddenPitcherIds.insert(id)
+                if !isArchived, !openGameTeamIds.isDisjoint(with: row.teams.compactMap(\.id)) {
+                    openGameLockMessage = OpenGameLock.message(for: row.name)
+                    return
                 }
-                saveHiddenPitcherIds()
+                // Every record of the person, or a linked player with two
+                // would stay visible after "archiving".
+                let ids = row.pitcherIds.isEmpty ? [id] : row.pitcherIds
+                if isArchived {
+                    authManager.setPitchers(ids, archived: false)
+                } else {
+                    let names = ArchiveScope.names(hiddenBy: ids, rosterEntries: rosterEntries, pitchers: sortedPitchers)
+                    pendingPlayerArchive = PendingPlayerArchive(
+                        pitcherIds: ids,
+                        names: names.isEmpty ? [row.name] : names
+                    )
+                }
                 if pitcherActionTargetId == id { pitcherActionTargetId = nil }
             } label: {
                 Label(isArchived ? "Unarchive" : "Archive", systemImage: "archivebox")
@@ -1786,9 +1832,11 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var gamesOverviewSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    /// `AnyView` for the same reason as `gameRow`: this section's concrete
+    /// type was inlined into Home's body type deeply enough to overflow the
+    /// stack when the runtime demangled it.
+    private var gamesOverviewSection: AnyView {
+        AnyView(VStack(alignment: .leading, spacing: 10) {
             collapsibleSectionHeader(
                 title: "Games",
                 section: .games,
@@ -1818,7 +1866,7 @@ struct SettingsView: View {
                             opponentName: $inlineNewGameName,
                             gameDate: $inlineNewGameDate,
                             trackingMode: $inlineNewGameTrackingMode,
-                            myTeams: myTeams.map { $0.team },
+                            myTeams: activeTeamEntries.map { $0.team },
                             ourTeamId: $inlineNewGameTeamId,
                             opponentTeamId: $inlineNewGameOpponentTeamId,
                             onCreateTeam: { name, designation, completion in
@@ -1907,31 +1955,7 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal)
             }
-        }
-        .appConfirmationDialog(
-            isPresented: $showDeleteGameConfirm,
-            title: "Delete Game?",
-            message: pendingDeleteGameName.isEmpty
-                ? "This will remove the game and its lineup."
-                : "This will remove \"\(pendingDeleteGameName)\" and its lineup.",
-            primaryTitle: "Continue",
-            primaryRole: .destructive,
-            primaryAction: { showFinalDeleteGameConfirm = true },
-            secondaryTitle: "Cancel",
-            secondaryAction: { clearPendingGameDeletion() }
-        )
-        .appConfirmationDialog(
-            isPresented: $showFinalDeleteGameConfirm,
-            title: "Delete Game and Stats?",
-            message: pendingDeleteGameName.isEmpty
-                ? "This will permanently delete the game, all pitch events for that game, and pitcher stats linked to it. This cannot be undone."
-                : "This will permanently delete \"\(pendingDeleteGameName)\", all pitch events for that game, and pitcher stats linked to it. This cannot be undone.",
-            primaryTitle: "Delete Everything",
-            primaryRole: .destructive,
-            primaryAction: { confirmDeletePendingGame() },
-            secondaryTitle: "Cancel",
-            secondaryAction: { clearPendingGameDeletion() }
-        )
+        })
     }
 
     private var archivedGames: [Game] {
@@ -1976,6 +2000,17 @@ struct SettingsView: View {
         refreshActiveGameId()
     }
 
+    /// Both teams of the open game. Archiving a player or team on either
+    /// waits until the game is closed - see `OpenGameLock`.
+    private var openGameTeamIds: Set<String> {
+        OpenGameLock.teamIds(activeGameId: activeGameId, games: games)
+    }
+
+    private func closeOpenGame() {
+        guard let activeGameId, let game = games.first(where: { $0.id == activeGameId }) else { return }
+        closeActiveGame(game)
+    }
+
     private func isActiveGame(_ game: Game) -> Bool {
         guard let id = game.id, let activeGameId else { return false }
         return id == activeGameId
@@ -1983,14 +2018,6 @@ struct SettingsView: View {
 
     /// A team counts as in-use when it's either side of the open game -
     /// ours or the opponent's.
-    private func isTeamInActiveGame(_ teamId: String?) -> Bool {
-        guard let teamId, !teamId.isEmpty,
-              let activeGameId,
-              let game = games.first(where: { $0.id == activeGameId })
-        else { return false }
-        return game.teamId == teamId || game.awayTeamId == teamId
-    }
-
     /// Tapping + while the section is collapsed should open the section
     /// too, otherwise the form it just revealed would be hidden.
     private func toggleInlineNewGame() {
@@ -2077,35 +2104,6 @@ struct SettingsView: View {
         )) {
             Label("Include in Stats", systemImage: "chart.bar")
         }
-    }
-
-    private func clearPendingGameDeletion() {
-        pendingDeleteGameId = nil
-        pendingDeleteGameName = ""
-    }
-
-    private func confirmDeletePendingGame() {
-        guard let id = pendingDeleteGameId else { return }
-        // Re-checked here, not just when building the menu: the game can
-        // become the active one between opening this dialog and confirming.
-        guard id != activeGameId else {
-            clearPendingGameDeletion()
-            return
-        }
-        if let idx = games.firstIndex(where: { $0.id == id }) {
-            games.remove(at: idx)
-        }
-        authManager.deleteGameCascade(gameId: id) { result in
-            if case .failure(let error) = result {
-                debugLog("❌ deleteGameCascade failed:", error.localizedDescription)
-            }
-        }
-        NotificationCenter.default.post(
-            name: .gameOrSessionDeleted,
-            object: nil,
-            userInfo: ["type": "game", "gameId": id]
-        )
-        clearPendingGameDeletion()
     }
 
     /// Re-enters a game joined as a partner, using the same
@@ -3284,11 +3282,8 @@ struct SettingsView: View {
             .sheet(item: $selectedTeamEntry, onDismiss: { refreshMyTeams() }) { entry in
                 TeamRosterView(
                     selection: entry,
-                    isInActiveGame: isTeamInActiveGame(entry.team.id),
-                    onDeleted: { deletedTeamId in
-                        myTeams.removeAll { $0.team.id == deletedTeamId }
-                        removeLocalTeamImage(teamId: deletedTeamId)
-                    }
+                    isInOpenGame: openGameTeamIds.contains(entry.team.id ?? ""),
+                    onCloseGame: { closeOpenGame() }
                 )
                 .environmentObject(authManager)
             }
@@ -3326,6 +3321,31 @@ struct SettingsView: View {
                     games[idx].archivedAt = Date()
                 }
             }
+            .appConfirmationDialog(
+                isPresented: Binding(
+                    get: { openGameLockMessage != nil },
+                    set: { if !$0 { openGameLockMessage = nil } }
+                ),
+                title: OpenGameLock.title,
+                message: openGameLockMessage ?? "",
+                primaryTitle: "Close Game",
+                primaryAction: { closeOpenGame() },
+                secondaryTitle: "Not Now"
+            )
+            .appConfirmationDialog(
+                isPresented: Binding(
+                    get: { pendingPlayerArchive != nil },
+                    set: { if !$0 { pendingPlayerArchive = nil } }
+                ),
+                title: pendingPlayerArchive?.title ?? "Archive Player?",
+                message: pendingPlayerArchive?.message ?? "",
+                primaryTitle: "Archive",
+                primaryAction: {
+                    guard let pending = pendingPlayerArchive else { return }
+                    authManager.setPitchers(pending.pitcherIds, archived: true)
+                },
+                secondaryTitle: "Cancel"
+            )
             .appConfirmationDialog(
                 isPresented: $showCameraPermissionAlert,
                 title: "Camera Access Needed",
@@ -3646,10 +3666,14 @@ struct SettingsView: View {
                 .fixedAppDynamicType()
             }
             .sheet(isPresented: $showLinkProfiles) {
-                LinkProfilesView(onChanged: {
-                    refreshMyTeams()
-                    refreshMyHitters()
-                })
+                LinkProfilesView(
+                    onChanged: {
+                        refreshMyTeams()
+                        refreshMyHitters()
+                    },
+                    openGameTeamIds: openGameTeamIds,
+                    onCloseGame: { closeOpenGame() }
+                )
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
@@ -5755,6 +5779,45 @@ struct PitcherStatsSheetView: View {
     }
 }
 
+
+// MARK: - Player archive confirmation
+
+struct PendingPlayerArchive {
+    let pitcherIds: [String]
+    /// Everyone this hides - normally one name. More than one means the
+    /// records are shared between kids, and the dialog says so.
+    let names: [String]
+
+    var title: String {
+        names.count > 1 ? "Archive \(names.count) Players?" : "Archive \(names.first ?? "Player")?"
+    }
+
+    var message: String {
+        let effect = "Hidden from your Players list, pitcher pickers, and every game's bench and batter list. Nothing is deleted - stats stay, and you can unarchive anytime (Players → Show Archived, or swipe right on a team roster)."
+        guard names.count > 1 else { return effect }
+        return "This will hide \(ArchiveScope.sentence(names)) - they share records. If you meant only one of them, cancel and fix the link in Link Profiles first.\n\n" + effect
+    }
+}
+
+// MARK: - Open game lock
+
+/// While a game is open in the tracker, the players and teams on either
+/// side of it can't be archived or taken off a roster - the lineup, bench
+/// and batter pickers are using them. Close Game (Home's Games menu, or
+/// the button on this dialog) releases the lock. Unarchiving and Restore
+/// are never locked.
+enum OpenGameLock {
+    static let title = "Game in Progress"
+
+    static func teamIds(activeGameId: String?, games: [Game]) -> Set<String> {
+        guard let activeGameId, let game = games.first(where: { $0.id == activeGameId }) else { return [] }
+        return Set([game.teamId, game.awayTeamId].compactMap { $0 }.filter { !$0.isEmpty })
+    }
+
+    static func message(for subject: String, plural: Bool = false) -> String {
+        "\(subject) \(plural ? "are" : "is") on a team in the game that's open right now. Close the game first, then archive."
+    }
+}
 
 // MARK: - Archive Game dialog
 
