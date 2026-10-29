@@ -151,7 +151,14 @@ extension HittingStatLine {
                 storedStrikes: event.atBatStrikes,
                 descriptor: event.descriptor
             ) else { continue }
-            record(terminal, outcome: event.outcome, errorOnPlay: event.errorOnPlay)
+            // A single that took 2nd on an error is still a single; only an
+            // explicit reached-on-error (or a legacy error with no play
+            // recorded) is ROE. See BaseRunnerRules.isReachedOnError.
+            record(
+                terminal,
+                outcome: event.outcome,
+                errorOnPlay: BaseRunnerRules.isReachedOnError(errorOnPlay: event.errorOnPlay, play: event.play)
+            )
         }
     }
 }

@@ -327,7 +327,7 @@ struct PitchTrackerView: View {
     @State private var sharedBatterJerseyOverrides: [String: String] = [:]
     private var showConfirmSheet: Bool { get { ui.showConfirmSheet } nonmutating set { ui.showConfirmSheet = newValue } }
     private var showUndoConfirm: Bool { get { ui.showUndoConfirm } nonmutating set { ui.showUndoConfirm = newValue } }
-    @State private var calledPitchComposerDetent: PresentationDetent = .fraction(0.28)
+    private var calledPitchComposerDetent: PresentationDetent { get { ui.calledPitchComposerDetent } nonmutating set { ui.calledPitchComposerDetent = newValue } }
     private var isStrikeSwinging: Bool { get { ui.isStrikeSwinging } nonmutating set { ui.isStrikeSwinging = newValue } }
     private var isStrikeLooking: Bool { get { ui.isStrikeLooking } nonmutating set { ui.isStrikeLooking = newValue } }
     private var isWildPitch: Bool { get { ui.isWildPitch } nonmutating set { ui.isWildPitch = newValue } }
@@ -988,8 +988,19 @@ struct PitchTrackerView: View {
 
     private func expandCalledPitchComposerToLarge() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            guard calledPitch != nil else { return }
+            guard calledPitch != nil else {
+                debugLog("📐 composer expand skipped: calledPitch is nil")
+                return
+            }
+            debugLog("📐 composer expand: \(String(describing: calledPitchComposerDetent)) -> large")
             calledPitchComposerDetent = .large
+            // Device logs (2026-10-27) showed the binding reaching `.large`
+            // inside the sheet while the sheet itself stayed at 0.28 - and
+            // narrowing the allowed set to [.large] didn't move it either.
+            // So drive the UIKit sheet directly once SwiftUI has had its pass.
+            DispatchQueue.main.async {
+                forcePresentedSheetToLarge()
+            }
         }
     }
 
@@ -5967,10 +5978,6 @@ struct PitchTrackerView: View {
         )
     }
 
-    private var calledPitchComposerDetents: Set<PresentationDetent> {
-        return [.fraction(0.28), .fraction(0.5), .large]
-    }
-
     @ViewBuilder
     private var calledPitchComposerSheetView: some View {
         if let call = calledPitch {
@@ -7796,11 +7803,11 @@ struct PitchTrackerView: View {
 
         Button {
             if isNoneChip {
-                if currentTrackingMode == .coach {
-                    beginCatcherCoachCall()
-                } else {
-                    selectedPitch = ""
-                }
+                // Selecting Catcher opens nothing. The coach's next zone tap
+                // (where the pitch landed) creates the Catcher call with its
+                // real location, which opens the estimate sheet at .large -
+                // see PitchButton's empty-selectedPitch branch.
+                selectedPitch = ""
             } else if currentTrackingMode == .scout && isSelectedChip {
                 selectedPitch = ""
             } else {
@@ -11935,8 +11942,9 @@ struct PitchTrackerView: View {
                 .fixedAppDynamicType()
             }
             .sheet(isPresented: calledPitchComposerBinding) {
-                calledPitchComposerSheetView
-                    .presentationDetents(calledPitchComposerDetents, selection: $calledPitchComposerDetent)
+                CalledPitchComposerDetentHost(ui: ui) {
+                    calledPitchComposerSheetView
+                }
                     .presentationDragIndicator(.visible)
                     .presentationBackgroundInteraction(.enabled)
                     .fixedAppDynamicType()
@@ -15698,4 +15706,58 @@ struct BallStrikeToggle: View {
         .accessibilityLabel("Toggle \(title)")
         .accessibilityValue(isOn ? "On" : "Off")
     }
+}
+
+/// Applies the called-pitch composer's detents from *inside* the sheet.
+/// Observing `TrackerUIState` here means a programmatic detent change (the
+/// result-location tap expanding to `.large`) re-renders this small host
+/// directly, instead of depending on PitchTrackerView's 14k-line body and
+/// its AnyView chain to re-push the sheet content. File-scope struct for the
+/// same reason as the strike-zone overlays - see CLAUDE.md.
+struct CalledPitchComposerDetentHost<Content: View>: View {
+    static var detents: Set<PresentationDetent> { [.fraction(0.28), .fraction(0.5), .large] }
+
+    @ObservedObject var ui: TrackerUIState
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .presentationDetents(Self.detents, selection: $ui.calledPitchComposerDetent)
+            .onChange(of: ui.calledPitchComposerDetent) { old, new in
+                debugLog("📐 composer detent \(String(describing: old)) -> \(String(describing: new))")
+            }
+    }
+}
+
+/// Expands the top-most presented sheet to `.large` through UIKit. SwiftUI's
+/// `presentationDetents(_:selection:)` updated its binding but never moved
+/// the called-pitch composer on device, so this goes to the
+/// `UISheetPresentationController` itself. Logs what it finds so a failure
+/// says why.
+func forcePresentedSheetToLarge() {
+    let window = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .flatMap(\.windows)
+        .first(where: \.isKeyWindow)
+    guard var top = window?.rootViewController else {
+        debugLog("📐 UIKit expand: no key window root")
+        return
+    }
+    while let next = top.presentedViewController, !next.isBeingDismissed {
+        top = next
+    }
+    guard let sheet = top.sheetPresentationController else {
+        debugLog("📐 UIKit expand: top \(type(of: top)) has no sheetPresentationController")
+        return
+    }
+    let ids = sheet.detents.map { $0.identifier.rawValue }
+    debugLog("📐 UIKit expand: top=\(type(of: top)) selected=\(sheet.selectedDetentIdentifier?.rawValue ?? "nil") detents=\(ids) beingPresented=\(top.isBeingPresented)")
+    guard sheet.detents.contains(where: { $0.identifier == .large }) else {
+        debugLog("📐 UIKit expand: .large not among the sheet's detents")
+        return
+    }
+    sheet.animateChanges {
+        sheet.selectedDetentIdentifier = .large
+    }
+    debugLog("📐 UIKit expand: after set selected=\(sheet.selectedDetentIdentifier?.rawValue ?? "nil")")
 }

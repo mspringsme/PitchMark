@@ -66,6 +66,7 @@
 			membershipExceptions = (
 				AtBatCount.swift,
 				AuthManager.swift,
+				BaseRunnerRules.swift,
 				CalledPitchRecord.swift,
 				Games.swift,
 				Notifications.swift,

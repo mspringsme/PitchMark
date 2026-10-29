@@ -134,72 +134,243 @@ private struct AssetOutcomeButton: View {
     }
 }
 
-private struct DiamondOutcomeSelector: View {
-    @Binding var selectedOutcome: String?
-    let isDisabled: (String) -> Bool
+/// Stage 2 of the ball-in-play field: where the batter ended up and what
+/// they're credited with. Replaced the 1B/2B/3B/HR mini-diamond that sat at
+/// the end of the outcome scroll, where nobody found it. Rules live in
+/// BaseRunnerRules.swift; this view only collects the three answers.
+///
+/// Phase 1 places the batter only. Phase 2 adds runner tokens on the bases
+/// with the same tap-a-token, tap-a-base interaction.
+private struct BasesDiamondView: View {
+    @Binding var reachedBase: Int?
+    @Binding var credit: BatterCredit?
+    @Binding var extraBasesOn: ExtraBasesReason?
+    let batterLabel: String
+    let sprayRegion: String?
+    let isBatterOut: Bool
+    /// The Error button is on: a newly placed batter reached on error.
+    let prefersReachedOnError: Bool
+    let onBackToField: () -> Void
 
-    private func selectOutcome(_ label: String) {
-        selectedOutcome = (selectedOutcome == label) ? nil : label
+    private func selectBase(_ base: Int) {
+        if reachedBase == base {
+            reachedBase = nil
+            credit = nil
+            extraBasesOn = nil
+            return
+        }
+        reachedBase = base
+        credit = prefersReachedOnError ? .reachedOnError : BaseRunnerRules.defaultCredit(reached: base)
+        extraBasesOn = nil
     }
 
-    @ViewBuilder
-    private func diamondButton(
-        _ label: String,
-        isSelected: Bool,
-        width: CGFloat,
-        height: CGFloat
-    ) -> some View {
-        Button {
-            selectOutcome(label)
-        } label: {
-            Text(label)
+    private var needsExtraBasesReason: Bool {
+        guard let reachedBase, let credit else { return false }
+        return BaseRunnerRules.needsExtraBasesReason(credit: credit, reached: reachedBase)
+    }
+
+    private func selectCredit(_ option: BatterCredit) {
+        guard let reachedBase else { return }
+        credit = option
+        if !BaseRunnerRules.needsExtraBasesReason(credit: option, reached: reachedBase) {
+            extraBasesOn = nil
+        }
+    }
+
+    private func basePoint(_ base: Int, center: CGPoint, radius: CGFloat) -> CGPoint {
+        switch base {
+        case Base.first: return CGPoint(x: center.x + radius, y: center.y)
+        case Base.second: return CGPoint(x: center.x, y: center.y - radius)
+        case Base.third: return CGPoint(x: center.x - radius, y: center.y)
+        default: return CGPoint(x: center.x, y: center.y + radius)
+        }
+    }
+
+    private func diamondPath(center: CGPoint, radius: CGFloat) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: center.x, y: center.y + radius))
+            path.addLine(to: CGPoint(x: center.x + radius, y: center.y))
+            path.addLine(to: CGPoint(x: center.x, y: center.y - radius))
+            path.addLine(to: CGPoint(x: center.x - radius, y: center.y))
+            path.closeSubpath()
+        }
+    }
+
+    private func chip(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(isSelected ? .white : .primary)
-                .frame(width: width, height: height)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, 12)
+                .frame(minWidth: 52, minHeight: 36)
                 .pitchResultSelectionBackground(isSelected: isSelected)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .clipShape(Capsule())
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(isSelected ? Color.black.opacity(0.8) : Color.black.opacity(0.08), lineWidth: isSelected ? 1.6 : 1)
+                    Capsule().stroke(isSelected ? Color.black.opacity(0.8) : Color.black.opacity(0.08), lineWidth: isSelected ? 1.6 : 1)
                 )
-                .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
         }
         .buttonStyle(.plain)
-        .disabled(isDisabled(label))
-        .opacity(isDisabled(label) ? 0.35 : 1.0)
     }
 
-    private func positionedDiamondButton(
-        _ label: String,
-        isSelected: Bool,
-        x: CGFloat,
-        y: CGFloat,
-        width: CGFloat,
-        height: CGFloat
-    ) -> some View {
-        diamondButton(label, isSelected: isSelected, width: width, height: height)
-        .position(x: x, y: y)
+    private func creditTitle(_ option: BatterCredit) -> String {
+        option == .reachedOnError ? "E (ROE)" : option.rawValue
+    }
+
+    private var prompt: String {
+        if isBatterOut { return "Batter out - tap a base to mark them safe instead" }
+        guard let reachedBase else { return "Tap the base the batter reached" }
+        guard let credit else { return "Safe at \(Base.name(reachedBase))" }
+        if BaseRunnerRules.needsExtraBasesReason(credit: credit, reached: reachedBase), extraBasesOn == nil {
+            return "How did they get the extra base?"
+        }
+        return "Safe at \(Base.name(reachedBase))"
     }
 
     var body: some View {
-        let width: CGFloat = 126
-        let height: CGFloat = 108
+        VStack(alignment: .center, spacing: 10) {
+            HStack(spacing: 8) {
+                Button(action: onBackToField) {
+                    Label("Field", systemImage: "chevron.left")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
 
-        ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.clear)
-                .frame(width: width, height: height)
+                Text(sprayRegion.map { "Hit to \($0)" } ?? "No hit location yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Spacer(minLength: 0)
+            }
+
+            Text(prompt)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
             GeometryReader { proxy in
-                positionedDiamondButton("2B", isSelected: selectedOutcome == "2B", x: proxy.size.width * 0.50, y: proxy.size.height * 0.16, width: 42, height: 26)
-                positionedDiamondButton("3B", isSelected: selectedOutcome == "3B", x: proxy.size.width * 0.18, y: proxy.size.height * 0.48, width: 42, height: 26)
-                positionedDiamondButton("1B", isSelected: selectedOutcome == "1B", x: proxy.size.width * 0.82, y: proxy.size.height * 0.48, width: 42, height: 26)
-                positionedDiamondButton("HR", isSelected: selectedOutcome == "HR", x: proxy.size.width * 0.50, y: proxy.size.height * 0.80, width: 42, height: 26)
+                let side = min(proxy.size.width, proxy.size.height)
+                let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2 + side * 0.04)
+                let radius = side * 0.34
+                let batterBase = reachedBase ?? Base.home
+                let batterPoint: CGPoint = {
+                    let p = basePoint(batterBase == Base.scored ? Base.home : batterBase, center: center, radius: radius)
+                    // Sit just inside the bag so the bag stays visible and tappable.
+                    return CGPoint(x: p.x + (center.x - p.x) * 0.28, y: p.y + (center.y - p.y) * 0.28)
+                }()
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(Color(red: 0.22, green: 0.52, blue: 0.27))
+
+                    diamondPath(center: center, radius: radius * 1.22)
+                        .fill(Color(red: 0.72, green: 0.52, blue: 0.34))
+
+                    diamondPath(center: center, radius: radius * 0.74)
+                        .fill(Color(red: 0.25, green: 0.57, blue: 0.3))
+
+                    diamondPath(center: center, radius: radius)
+                        .stroke(Color.white.opacity(0.85), lineWidth: 2)
+
+                    if let reachedBase, reachedBase > Base.home {
+                        // Path run, home through each base reached.
+                        Path { path in
+                            path.move(to: basePoint(Base.home, center: center, radius: radius))
+                            for base in 1...min(reachedBase, Base.scored) {
+                                path.addLine(to: basePoint(base == Base.scored ? Base.home : base, center: center, radius: radius))
+                            }
+                        }
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [8, 6]))
+                    }
+
+                    ForEach([Base.first, Base.second, Base.third, Base.scored], id: \.self) { base in
+                        let point = basePoint(base == Base.scored ? Base.home : base, center: center, radius: radius)
+                        let isSelected = reachedBase == base
+                        Button {
+                            selectBase(base)
+                        } label: {
+                            VStack(spacing: 4) {
+                                if base == Base.scored {
+                                    Image(systemName: "pentagon.fill")
+                                        .font(.system(size: 18))
+                                        .rotationEffect(.degrees(180))
+                                        .foregroundStyle(isSelected ? Color.pitchMarkActiveGray : .white)
+                                } else {
+                                    Rectangle()
+                                        .fill(isSelected ? Color.pitchMarkActiveGray : .white)
+                                        .frame(width: 18, height: 18)
+                                        .rotationEffect(.degrees(45))
+                                }
+                                Text(base == Base.scored ? "Score" : Base.name(base))
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .shadow(color: .black.opacity(0.5), radius: 1)
+                            }
+                            .frame(width: 64, height: 64)
+                            .background(
+                                Circle()
+                                    .fill(isSelected ? Color.white.opacity(0.35) : Color.clear)
+                            )
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .position(point)
+                    }
+
+                    if !isBatterOut {
+                        Text(batterLabel)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .frame(width: 34, height: 34)
+                            .background(Circle().fill(Color.pitchMarkActiveGray))
+                            .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                            .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 2)
+                            .position(batterPoint)
+                            .allowsHitTesting(false)
+                            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: reachedBase)
+                    }
+                }
             }
-            .frame(width: width, height: height)
-            .offset(y: 20)
+            .frame(height: 280)
+
+            if !isBatterOut {
+                VStack(spacing: 8) {
+                    if let reachedBase {
+                        Text("Credit")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            ForEach(BaseRunnerRules.creditOptions(reached: reachedBase), id: \.self) { option in
+                                chip(creditTitle(option), isSelected: credit == option) {
+                                    selectCredit(option)
+                                }
+                            }
+                        }
+                    }
+
+                    // Always shown so the option is discoverable; live only
+                    // once the credit is worth fewer bases than the batter took.
+                    Text("Extra bases on")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                    HStack(spacing: 6) {
+                        ForEach(ExtraBasesReason.allCases, id: \.self) { reason in
+                            chip(reason.label, isSelected: extraBasesOn == reason) {
+                                extraBasesOn = (extraBasesOn == reason) ? nil : reason
+                            }
+                        }
+                    }
+                    .disabled(!needsExtraBasesReason)
+                    .opacity(needsExtraBasesReason ? 1 : 0.4)
+                }
+            }
         }
-        .frame(width: width, height: height)
     }
 }
 
@@ -245,6 +416,9 @@ private struct SafeOutButtonsRow: View {
     @Binding var isFoulSelected: Bool
     let isSafeDisabled: Bool
     let isOutDisabled: Bool
+    /// Safe no longer means "single": it opens the bases stage, and the
+    /// batter's base there sets the outcome.
+    let onSelectSafe: () -> Void
 
     private var safeCircleSelected: Bool {
         if isHitTagSelected { return true }
@@ -272,10 +446,9 @@ private struct SafeOutButtonsRow: View {
             return
         }
 
-        selectedOutcome = "1B"
-        selectedDescriptor = nil
         isHitTagSelected = false
         isFoulSelected = false
+        onSelectSafe()
     }
 
     private func selectOutCategory() {
@@ -604,6 +777,14 @@ struct PitchResultSheetView: View {
     @State private var battedBallSelection: OverlaySelection? = nil
     @State private var battedBallTapNormalized: CGPoint? = nil
 
+    /// Ball-in-play field stage: spray location first, then where the batter
+    /// ended up. See BasesDiamondView.
+    private enum FieldStage { case spray, bases }
+    @State private var fieldStage: FieldStage = .spray
+    @State private var batterReachedBase: Int? = nil
+    @State private var batterCredit: BatterCredit? = nil
+    @State private var batterExtraBasesOn: ExtraBasesReason? = nil
+
     @State private var showFieldOverlay: Bool = false
 
     @State private var showMissingBatterPrompt: Bool = false
@@ -739,6 +920,10 @@ struct PitchResultSheetView: View {
         battedBallRegionName = nil
         battedBallSelection = nil
         battedBallTapNormalized = nil
+        fieldStage = .spray
+        batterReachedBase = nil
+        batterCredit = nil
+        batterExtraBasesOn = nil
         showMissingBatterPrompt = false
         overrideOpponentJersey = nil
         overrideOpponentBatterId = nil
@@ -914,7 +1099,7 @@ struct PitchResultSheetView: View {
 
             HStack(spacing: 8) {
                 Spacer()
-                Text("Ball in play location")
+                Text(fieldStage == .bases ? "Batter result" : "Ball in play location")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -930,22 +1115,35 @@ struct PitchResultSheetView: View {
                 Spacer()
             }
 
-            FieldOverlayView(
-                isPresented: .constant(true),
-                colorMapImage: colorMapImage,
-                colorMapping: colorMapping,
-                selectedOutcome: $selectedOutcome,
-                selectedDescriptor: $selectedDescriptor,
-                isError: $isError,
-                battedBallRegionName: $battedBallRegionName,
-                battedBallSelection: $battedBallSelection,
-                battedBallTapNormalized: $battedBallTapNormalized,
-                displayImageName: "FieldImage2",
-                showsDismissControls: false
-            )
-            .frame(height: 520)
-            .padding(.horizontal, -12)
-            .padding(.top, -12)
+            if fieldStage == .bases {
+                BasesDiamondView(
+                    reachedBase: $batterReachedBase,
+                    credit: $batterCredit,
+                    extraBasesOn: $batterExtraBasesOn,
+                    batterLabel: effectiveOpponentJersey.map { "#\($0)" } ?? "B",
+                    sprayRegion: battedBallRegionName,
+                    isBatterOut: selectedOutcome == "Out",
+                    prefersReachedOnError: isError,
+                    onBackToField: { fieldStage = .spray }
+                )
+            } else {
+                FieldOverlayView(
+                    isPresented: .constant(true),
+                    colorMapImage: colorMapImage,
+                    colorMapping: colorMapping,
+                    selectedOutcome: $selectedOutcome,
+                    selectedDescriptor: $selectedDescriptor,
+                    isError: $isError,
+                    battedBallRegionName: $battedBallRegionName,
+                    battedBallSelection: $battedBallSelection,
+                    battedBallTapNormalized: $battedBallTapNormalized,
+                    displayImageName: "FieldImage2",
+                    showsDismissControls: false
+                )
+                .frame(height: 520)
+                .padding(.horizontal, -12)
+                .padding(.top, -12)
+            }
         }
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -1385,8 +1583,78 @@ struct PitchResultSheetView: View {
             strikeLookingMarker: isStrikeLooking ? strikeMarkerSymbol(outcome: normalizedOutcome) : nil,
             ballMarker: isBall ? ballMarkerSymbol(outcome: normalizedOutcome, prior: prior) : nil,
             foulMarker: isFoulSelected ? foulMarkerSymbol(prior: prior) : nil,
-            catcherEstimate: isCatcherCall ? catcherEstimate : nil
+            catcherEstimate: isCatcherCall ? catcherEstimate : nil,
+            play: BaseRunnerRules.playIfConsistent(
+                currentBatterPlay,
+                outcome: normalizedOutcome.isEmpty ? nil : normalizedOutcome,
+                errorOnPlay: isError
+            )
         )
+    }
+
+    /// The batter's play as answered on the bases stage, or nil while it is
+    /// unanswered or incomplete.
+    private var currentBatterPlay: BasePlay? {
+        guard let reached = batterReachedBase, let credit = batterCredit,
+              BaseRunnerRules.isComplete(credit: credit, reached: reached, extraBasesOn: batterExtraBasesOn)
+        else { return nil }
+        return BaseRunnerRules.makePlay(credit: credit, reached: reached, extraBasesOn: batterExtraBasesOn)
+    }
+
+    /// Diamond -> the sheet's existing outcome/error selections, which the
+    /// count rules, save gating and review sheet already read.
+    private func applyBatterPlayToSelections() {
+        guard let reached = batterReachedBase, let credit = batterCredit else {
+            if let outcome = selectedOutcome, ["1B", "2B", "3B", "HR"].contains(outcome) {
+                selectedOutcome = nil
+            }
+            isError = false
+            return
+        }
+        let reason = BaseRunnerRules.needsExtraBasesReason(credit: credit, reached: reached) ? batterExtraBasesOn : nil
+        // Mirror the credit on the Hit button so it doesn't read as cleared
+        // while a hit is recorded; reached on error is not a hit.
+        isHitTagSelected = credit.isHit
+        isHitBatter = false
+        isFoulSelected = false
+        isStrikeSwinging = false
+        isStrikeLooking = false
+        isBall = false
+        selectedOutcome = BaseRunnerRules.outcome(for: credit)
+        isError = BaseRunnerRules.errorOnPlay(credit: credit, extraBasesOn: reason)
+    }
+
+    /// The Error button, tapped with the batter already placed: on means
+    /// reached on error, off goes back to the clean hit for that base.
+    /// Changes the diamond makes itself already agree, so this is a no-op
+    /// for them (1B + E sets the flag on and leaves it alone).
+    private func syncBatterCreditToErrorButton(_ isOn: Bool) {
+        guard let reached = batterReachedBase, let credit = batterCredit else { return }
+        let reason = BaseRunnerRules.needsExtraBasesReason(credit: credit, reached: reached) ? batterExtraBasesOn : nil
+        guard BaseRunnerRules.errorOnPlay(credit: credit, extraBasesOn: reason) != isOn else { return }
+        batterCredit = isOn ? .reachedOnError : BaseRunnerRules.defaultCredit(reached: reached)
+        batterExtraBasesOn = nil
+    }
+
+    /// The Hit button, tapped with the batter already placed: off means the
+    /// batter is safe without a hit (reached on error), on goes back to the
+    /// clean hit for that base. A no-op when it already agrees.
+    private func syncBatterCreditToHitButton(_ isOn: Bool) {
+        guard let reached = batterReachedBase, let credit = batterCredit,
+              credit.isHit != isOn else { return }
+        batterCredit = isOn ? BaseRunnerRules.defaultCredit(reached: reached) : .reachedOnError
+        batterExtraBasesOn = nil
+    }
+
+    /// Outcome changed somewhere other than the diamond (Out, Swinging, a
+    /// deselect...) - drop a batter placement that no longer describes it.
+    private func clearBatterPlayIfOutcomeDiverged(_ outcome: String?) {
+        guard let credit = batterCredit else { return }
+        if outcome != BaseRunnerRules.outcome(for: credit) {
+            batterReachedBase = nil
+            batterCredit = nil
+            batterExtraBasesOn = nil
+        }
     }
 
     private struct OutcomeChangeHandlers: ViewModifier {
@@ -1475,7 +1743,12 @@ struct PitchResultSheetView: View {
                         isBall ||
                         isHitTagSelected ||
                         selectedOutcome == "Out" ||
-                        (selectedOutcome.map { ["1B", "2B", "3B", "HR"].contains($0) } ?? false)
+                        (
+                            (selectedOutcome.map { ["1B", "2B", "3B", "HR"].contains($0) } ?? false)
+                            // A batter placed on the diamond must finish the
+                            // "how" question (e.g. 1B to 2nd needs Error/Throw).
+                            && (batterReachedBase == nil || currentBatterPlay != nil)
+                        )
                     }()
 
                     Divider()
@@ -1491,7 +1764,11 @@ struct PitchResultSheetView: View {
                             isHitBatter: $isHitBatter,
                             isFoulSelected: $isFoulSelected,
                             isSafeDisabled: isOutcomeDisabled("1B"),
-                            isOutDisabled: isOutcomeDisabled("Out")
+                            isOutDisabled: isOutcomeDisabled("Out"),
+                            onSelectSafe: {
+                                fieldStage = .bases
+                                shouldScrollToInPlayOutcome = true
+                            }
                         )
 
                         HoldActionButton(
@@ -1549,6 +1826,28 @@ struct PitchResultSheetView: View {
                 guard currentMode == .scout, newValue != nil else { return }
                 shouldScrollToInPlayOutcome = true
             }
+            .onChange(of: battedBallTapNormalized) { _, newValue in
+                // Stage 1 -> 2: a fair-ball tap moves on to the bases. A ball
+                // over the fence is already answered: batter scores, HR.
+                guard newValue != nil else { return }
+                switch battedBallSelection {
+                case .hr?:
+                    batterReachedBase = Base.scored
+                    batterCredit = .homeRun
+                    batterExtraBasesOn = nil
+                    fieldStage = .bases
+                case .field?:
+                    fieldStage = .bases
+                case .foul?, nil:
+                    break
+                }
+            }
+            .onChange(of: batterReachedBase) { _, _ in applyBatterPlayToSelections() }
+            .onChange(of: batterCredit) { _, _ in applyBatterPlayToSelections() }
+            .onChange(of: batterExtraBasesOn) { _, _ in applyBatterPlayToSelections() }
+            .onChange(of: isError) { _, newValue in syncBatterCreditToErrorButton(newValue) }
+            .onChange(of: isHitTagSelected) { _, newValue in syncBatterCreditToHitButton(newValue) }
+            .onChange(of: selectedOutcome) { _, newValue in clearBatterPlayIfOutcomeDiverged(newValue) }
             .onChange(of: shouldScrollToInPlayOutcome) { _, newValue in
                 guard newValue else { return }
                 DispatchQueue.main.async {
@@ -1666,7 +1965,7 @@ struct PitchResultSheetView: View {
         if let descriptor = selectedDescriptor, isOutcomeDisabled(descriptor) {
             selectedDescriptor = nil
         }
-        if isError && isOutcomeDisabled("E") {
+        if isError && batterReachedBase == nil && isOutcomeDisabled("E") {
             isError = false
         }
     }
@@ -1699,33 +1998,6 @@ private struct OutcomeButtonsSection: View {
     var isOutcomeDisabled: (String) -> Bool
     let isWildPitchDisabled: Bool
     let isPassedBallDisabled: Bool
-
-    private var safeCircleSelected: Bool {
-        if isHitTagSelected { return true }
-        guard let selectedOutcome else { return false }
-        return ["1B", "2B", "3B", "HR"].contains(selectedOutcome)
-    }
-
-    private func selectSafeCategory() {
-        if safeCircleSelected {
-            if isHitTagSelected {
-                isHitTagSelected = false
-            }
-            if let selectedOutcome, ["1B", "2B", "3B", "HR"].contains(selectedOutcome) {
-                self.selectedOutcome = nil
-            } else if selectedOutcome == nil {
-                self.selectedOutcome = nil
-            }
-            selectedDescriptor = nil
-            isFoulSelected = false
-            return
-        }
-
-        selectedOutcome = "1B"
-        selectedDescriptor = nil
-        isHitTagSelected = false
-        isFoulSelected = false
-    }
 
     private func setDescriptor(_ label: String) {
         if selectedDescriptor == label {
@@ -1760,8 +2032,9 @@ private struct OutcomeButtonsSection: View {
     private func toggleError() {
         isError.toggle()
         if isError {
+            // Keep the batted-ball type (Fly, Pop...) - an error on a fly
+            // ball is still a fly ball.
             isFoulSelected = false
-            selectedDescriptor = nil
         }
     }
 
@@ -1901,8 +2174,6 @@ private struct OutcomeButtonsSection: View {
                             )
                         }
 
-                        DiamondOutcomeSelector(selectedOutcome: $selectedOutcome, isDisabled: isOutcomeDisabled)
-                            .padding(.top, 2)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

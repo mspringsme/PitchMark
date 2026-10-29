@@ -139,7 +139,11 @@ func outcomeSummaryLines(for event: PitchEvent) -> [String] {
     }
     if event.wildPitch { addUnique("Wild Pitch") }
     if event.passedBall { addUnique("Passed Ball") }
-    if event.errorOnPlay { addUnique("Error on play") }
+    if let play = event.play, let playSummary = BaseRunnerRules.summary(for: play) {
+        addUnique(playSummary, sanitizeText: false)
+    } else if event.errorOnPlay {
+        addUnique("Error on play")
+    }
     if event.isBall == true {
         let marker = event.ballMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let marker, !marker.isEmpty {
@@ -325,6 +329,12 @@ private func buildSavedPlayReviewedEvent(
 ) -> PitchEvent {
     let baseOutcome = (base.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     let baseDescriptor = (base.descriptor ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    // Reached on error is stored as "1B" + errorOnPlay, so it looks like a hit
+    // to pitchEventCountsAsHit. Hit off must keep that "1B" (the batter is
+    // still on base); Hit on turns it into a real single by clearing the error.
+    let baseIsReachedOnError = pitchEventCountsAsHit(base)
+        && BaseRunnerRules.isReachedOnError(errorOnPlay: base.errorOnPlay, play: base.play)
+    let errorOnPlay = (countsAsHit && baseIsReachedOnError) ? false : base.errorOnPlay
 
     let outcome: String? = {
         if countsAsWalk { return "Walk" }
@@ -336,6 +346,9 @@ private func buildSavedPlayReviewedEvent(
         }
         if baseOutcome.caseInsensitiveCompare("Walk") == .orderedSame || baseOutcome == "BB" {
             return nil
+        }
+        if baseIsReachedOnError {
+            return baseOutcome
         }
         if pitchEventCountsAsHit(base) {
             return nil
@@ -352,6 +365,14 @@ private func buildSavedPlayReviewedEvent(
                 return baseDescriptor
             }
             return "\(baseDescriptor), Hit"
+        }
+        if baseIsReachedOnError {
+            // Keep Fly/Pop/..., drop any Hit tag.
+            let kept = baseDescriptor
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0.lowercased() != "hit" }
+            return kept.isEmpty ? nil : kept.joined(separator: ", ")
         }
         if pitchEventCountsAsHit(base) {
             return nil
@@ -389,7 +410,7 @@ private func buildSavedPlayReviewedEvent(
         strikeLooking: strikeLooking,
         outcome: outcome,
         descriptor: descriptor,
-        errorOnPlay: base.errorOnPlay,
+        errorOnPlay: errorOnPlay,
         battedBallRegion: base.battedBallRegion,
         battedBallType: base.battedBallType,
         battedBallTapX: base.battedBallTapX,
@@ -408,7 +429,8 @@ private func buildSavedPlayReviewedEvent(
         atBatStrikes: strikes,
         atBatCount: "\(balls)-\(strikes)",
         trackingMode: base.trackingMode,
-        catcherEstimate: base.catcherEstimate
+        catcherEstimate: base.catcherEstimate,
+        play: BaseRunnerRules.playIfConsistent(base.play, outcome: outcome, errorOnPlay: errorOnPlay)
     )
 }
 
@@ -447,7 +469,9 @@ struct SavedPlayReviewSheetView: View {
         let strikes = max(0, min(2, initialEvent.atBatStrikes ?? 0))
         let normalizedOutcome = (initialEvent.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let isWalk = normalizedOutcome.caseInsensitiveCompare("Walk") == .orderedSame || normalizedOutcome == "BB"
-        let isHit = pitchEventCountsAsHit(initialEvent)
+        // Credited hit, not "looks like a hit": a reached-on-error "1B" must
+        // start with the toggle off or it counts against the pitcher.
+        let isHit = pitchEventIsCreditedHit(initialEvent)
         let scoutDefaultStrike = initialEvent.trackingMode == .scout && (
             (initialEvent.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ||
             (initialEvent.descriptor?.localizedCaseInsensitiveContains("hit") == true)
@@ -3379,7 +3403,12 @@ struct PitchResultSheet: View {
             opponentBatterId: edited.opponentBatterId,
             pitcherId: edited.pitcherId,
             hitterId: edited.hitterId,
-            createdByUid: edited.createdByUid
+            createdByUid: edited.createdByUid,
+            play: BaseRunnerRules.playIfConsistent(
+                edited.play ?? original.play,
+                outcome: edited.outcome,
+                errorOnPlay: edited.errorOnPlay
+            )
         )
         updated.id = originalId
         localEditedEventOverrides[originalId] = updated
@@ -3549,6 +3578,12 @@ struct PitchEvent: Codable, Identifiable {
     /// from `calledPitch`, which for Catcher-mode events just mirrors the
     /// observed result location (see `CatcherEstimateView`).
     var catcherEstimate: PitchCall? = nil
+
+    /// Where the batter ended up on a ball in play and what they're credited
+    /// with (BaseRunnerRules.swift). Optional: absent on every event saved
+    /// before it existed and on anything that isn't a ball in play. Rebuild
+    /// sites carry it through `BaseRunnerRules.playIfConsistent`.
+    var play: BasePlay? = nil
 }
 
 extension PitchEvent: Hashable {
@@ -3728,6 +3763,9 @@ extension PitchEvent {
         } else {
             self.trackingMode = .coach
         }
+        self.play = (data["play"] as? [String: Any]).flatMap {
+            try? Firestore.Decoder().decode(BasePlay.self, from: $0)
+        }
         self.catcherEstimate = {
             guard let payload = data["catcherEstimate"] as? [String: Any] else { return nil }
             guard let cePitch = payload["pitch"] as? String,
@@ -3784,6 +3822,7 @@ extension PitchEvent {
             let hitterId: String?
             let trackingMode: TrackingMode?
             let catcherEstimate: PitchCall?
+            let play: BasePlay?
         }
         let debug = DebugEvent(
             id: self.id,
@@ -3814,7 +3853,8 @@ extension PitchEvent {
             pitcherId: self.pitcherId,
             hitterId: self.hitterId,
             trackingMode: self.trackingMode,
-            catcherEstimate: self.catcherEstimate
+            catcherEstimate: self.catcherEstimate,
+            play: self.play
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

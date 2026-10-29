@@ -106,6 +106,13 @@ final class TrackerUIState: ObservableObject {
     @Published var showCardsFullScreenSheet: Bool = false
     @Published var cardsEditTargetEventID: String? = nil
     @Published var showConfirmSheet: Bool = false
+    /// Height of the called-pitch composer sheet. Lives here, not as `@State`
+    /// on PitchTrackerView, so `CalledPitchComposerDetentHost` - inside the
+    /// sheet - observes it directly. As parent `@State` it only reached the
+    /// sheet if PitchTrackerView's whole modifier chain re-pushed the sheet's
+    /// content, and the result-location tap's expand to `.large` was being
+    /// dropped (sheet stayed at 0.28).
+    @Published var calledPitchComposerDetent: PresentationDetent = .fraction(0.28)
     @Published var showUndoConfirm: Bool = false
     @Published var isStrikeSwinging: Bool = false
     @Published var isStrikeLooking: Bool = false
