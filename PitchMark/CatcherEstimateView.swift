@@ -166,7 +166,7 @@ struct CatcherEstimateView: View {
 
             Spacer(minLength: 8)
 
-            Button("No", action: onSkip)
+            Button("Skip", action: onSkip)
                 .buttonStyle(.bordered)
 
             Spacer(minLength: 8)

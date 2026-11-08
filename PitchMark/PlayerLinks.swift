@@ -34,8 +34,13 @@ struct PlayerProfile: Identifiable {
     let pitchers: [Pitcher]
     let players: [Player]
 
+    /// The name the Edit sheet shows and changes: the oldest roster row's.
+    /// Only a kid with no roster row (a pitcher made from Home's +) goes by
+    /// the Pitcher record. Never "whichever Pitcher sorts first" - a record
+    /// left behind by a link keeps its old name, and "Jug" sorts before
+    /// "Juju" (2026-11-02).
     var name: String {
-        pitchers.first?.name ?? entries.first?.teamPlayer.name ?? players.first?.name ?? ""
+        entries.first?.teamPlayer.name ?? pitchers.first?.name ?? players.first?.name ?? ""
     }
 
     var jersey: String? {
@@ -205,6 +210,20 @@ enum PlayerLinks {
             if order != .orderedSame { return order == .orderedAscending }
             return $0.createdAt < $1.createdAt
         }
+    }
+
+    /// Every Pitcher/Hitter record a rename has to reach: the ones named
+    /// directly plus every record the person's `Player` doc links, so a
+    /// record left behind by Link or Merge can't keep an old name.
+    static func renameTargets(
+        pitcherId: String?,
+        hitterId: String?,
+        player: Player?
+    ) -> (pitcherIds: [String], hitterIds: [String]) {
+        (
+            uniqueOrdered([pitcherId].compactMap { $0 } + (player?.allPitcherIds ?? [])),
+            uniqueOrdered([hitterId].compactMap { $0 } + (player?.allHitterIds ?? []))
+        )
     }
 
     static func profile(containing teamPlayer: TeamPlayer, in profiles: [PlayerProfile]) -> PlayerProfile? {
@@ -395,38 +414,32 @@ extension AuthManager {
         mode: ProfileCombineMode,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        var coveredTeamIds = Set(keep.teams.compactMap { $0.id })
-        var remaining = fold.flatMap { $0.entries }
+        var remaining = ProfileMerge.rowSteps(keep: keep, fold: fold, mode: mode)
 
         func nextRow() {
             guard !remaining.isEmpty else {
                 attachLeftoverRecords()
                 return
             }
-            let entry = remaining.removeFirst()
-            guard let teamId = entry.team.id, let rowId = entry.teamPlayer.id else { nextRow(); return }
+            let step = remaining.removeFirst()
+            guard let teamId = step.entry.team.id, let rowId = step.entry.teamPlayer.id else { nextRow(); return }
 
-            if mode == .mergeDuplicate, coveredTeamIds.contains(teamId) {
+            switch step.action {
+            case .remove:
                 deleteTeamPlayer(teamId: teamId, playerId: rowId) { result in
                     if case .failure(let error) = result { completion(.failure(error)); return }
                     nextRow()
                 }
-                return
-            }
-            coveredTeamIds.insert(teamId)
-            mergeTeamPlayerIntoPlayer(teamId: teamId, duplicate: entry.teamPlayer, player: canonical) { result in
-                if case .failure(let error) = result { completion(.failure(error)); return }
-                nextRow()
+            case .repoint:
+                mergeTeamPlayerIntoPlayer(teamId: teamId, duplicate: step.entry.teamPlayer, player: canonical) { result in
+                    if case .failure(let error) = result { completion(.failure(error)); return }
+                    nextRow()
+                }
             }
         }
 
         func attachLeftoverRecords() {
-            let pitcherIds = PlayerLinks.uniqueOrdered(fold.flatMap { $0.pitcherIds })
-                .filter { $0 != canonical.pitcherId }
-            let hitterIds = PlayerLinks.uniqueOrdered(fold.flatMap { $0.hitterIds })
-                .filter { $0 != canonical.hitterId }
-            let foldPlayerIds = PlayerLinks.uniqueOrdered(fold.flatMap { $0.playerIds })
-                .filter { $0 != canonical.id }
+            let (pitcherIds, hitterIds, foldPlayerIds) = ProfileMerge.foldedRecords(fold, canonical: canonical)
 
             var keptPitchers: [String] = []
             var keptHitters: [String] = []

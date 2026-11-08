@@ -1,0 +1,12 @@
+{
+  "name": "pitchmark-rules-tests",
+  "private": true,
+  "description": "Firestore security rules tests, run against the local emulator. See TESTING.md.",
+  "scripts": {
+    "test": "JAVA_HOME=$(/usr/libexec/java_home -v 21) firebase emulators:exec --config firebase.json --only firestore --project demo-pitchmark-rules \"node --test --test-concurrency=1 --test-reporter=spec tests/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.0"
+  }
+}

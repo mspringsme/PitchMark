@@ -33,9 +33,16 @@ struct RootView: View {
     @AppStorage(PitchTrackerView.DefaultsKeys.didShowDisplayOnboarding) private var didShowDisplayOnboarding = false
     private let displayAppSearchURL = URL(string: "https://apps.apple.com/us/search?term=Pitchmark%20Display")!
 
+    /// UI tests launch with `-UITestDemo` to open the local demo game
+    /// directly - no sign-in, nothing written to Firestore.
+    private static let isUITestDemo = ProcessInfo.processInfo.arguments.contains("-UITestDemo")
+
     var body: some View {
         Group {
-            if authManager.isCheckingAuth {
+            if Self.isUITestDemo {
+                PitchTrackerView(isDemoMode: true, onRequireSignIn: {})
+                    .id("uitest-demo")
+            } else if authManager.isCheckingAuth {
                 SplashView()
             } else if authManager.isSignedIn {
                 PitchTrackerView()

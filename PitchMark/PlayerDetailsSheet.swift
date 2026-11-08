@@ -34,6 +34,9 @@ struct PlayerDetailsSheet<NameAccessory: View>: View {
     @State private var jersey: String
     @State private var positions: Set<FieldPosition>
     @State private var battingSide: BattingSide?
+    /// Saved as "#12" with no name (NumberOnlyName); starts on for a player
+    /// who already is.
+    @State private var numberOnly: Bool
     @State private var errorMessage: String? = nil
     @State private var isSaving = false
 
@@ -53,7 +56,9 @@ struct PlayerDetailsSheet<NameAccessory: View>: View {
         self.nameAccessory = nameAccessory()
         self.onCancel = onCancel
         self.onSaved = onSaved
-        _name = State(initialValue: player.name)
+        let isNumberOnly = NumberOnlyName.number(in: player.name) != nil
+        _numberOnly = State(initialValue: isNumberOnly)
+        _name = State(initialValue: isNumberOnly ? "" : player.name)
         _jersey = State(initialValue: player.jerseyNumber ?? "")
         _positions = State(initialValue: Set(player.positions ?? []))
         _battingSide = State(initialValue: player.battingSide)
@@ -64,10 +69,18 @@ struct PlayerDetailsSheet<NameAccessory: View>: View {
             Form {
                 Section {
                     HStack(spacing: 8) {
-                        TextField("Name", text: $name)
-                            .textInputAutocapitalization(.words)
+                        if numberOnly {
+                            Text(savedName ?? "Enter a jersey number below")
+                                .foregroundStyle(savedName == nil ? .secondary : .primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            TextField("Name", text: $name)
+                                .textInputAutocapitalization(.words)
+                        }
                         nameAccessory
                     }
+                    Toggle("Number only (no name)", isOn: $numberOnly)
+                        .accessibilityIdentifier("player.numberOnly")
                 } header: {
                     Text("Name")
                 } footer: {
@@ -125,15 +138,18 @@ struct PlayerDetailsSheet<NameAccessory: View>: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save", action: save)
-                        .disabled(isSaving || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(isSaving || savedName == nil)
                 }
             }
         }
     }
 
+    private var savedName: String? {
+        NumberOnlyName.savedName(typed: name, jersey: jersey, numberOnly: numberOnly)
+    }
+
     private func save() {
-        guard let rowId = player.id else { return }
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        guard let rowId = player.id, let trimmedName = savedName else { return }
         let trimmedJersey = jersey.trimmingCharacters(in: .whitespaces)
         isSaving = true
         errorMessage = nil
@@ -158,7 +174,20 @@ struct PlayerDetailsSheet<NameAccessory: View>: View {
                 // (see TeamPlayer in Team.swift), but a *name* does not: the
                 // Pitcher/Hitter/Player docs and this kid's rows on other
                 // teams all show it, so they move together.
-                if trimmedName != player.name {
+                if trimmedName != player.name, OpponentPartnerAccess.shared.grant(for: teamId) != nil {
+                    // A live partner on the opponent roster: only this
+                    // row's records, named through the row.
+                    authManager.renameOpponentRecordsAsPartner(
+                        teamId: teamId,
+                        rowId: rowId,
+                        name: trimmedName,
+                        pitcherId: player.pitcherId,
+                        hitterId: player.hitterId,
+                        playerId: player.playerId
+                    ) {
+                        onSaved(updated, true)
+                    }
+                } else if trimmedName != player.name {
                     authManager.propagatePlayerRename(
                         name: trimmedName,
                         pitcherId: player.pitcherId,

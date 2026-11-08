@@ -220,9 +220,22 @@ struct LinkProfilesView: View {
             .navigationTitle("Link Player")
             .navigationBarTitleDisplayMode(.inline)
         case .linkTeams(let profileId):
-            LinkTeamsScreen(profileId: profileId, store: store, currentUid: uid, onDone: finish)
+            LinkTeamsScreen(
+                profileId: profileId,
+                store: store,
+                currentUid: uid,
+                openGameTeamIds: openGameTeamIds,
+                onCloseGame: onCloseGame,
+                onDone: finish
+            )
         case .mergePick:
-            MergePickScreen(store: store, currentUid: uid, onDone: finish)
+            MergePickScreen(
+                store: store,
+                currentUid: uid,
+                openGameTeamIds: openGameTeamIds,
+                onCloseGame: onCloseGame,
+                onDone: finish
+            )
         case .deletePick:
             DeletePickScreen(
                 store: store,
@@ -447,6 +460,8 @@ private struct LinkTeamsScreen: View {
     let profileId: String
     @ObservedObject var store: LinkProfilesStore
     let currentUid: String?
+    let openGameTeamIds: Set<String>
+    let onCloseGame: () -> Void
     let onDone: (String) -> Void
 
     @EnvironmentObject var authManager: AuthManager
@@ -458,6 +473,8 @@ private struct LinkTeamsScreen: View {
                 teams: store.teams,
                 profiles: store.profiles,
                 currentUid: currentUid,
+                openGameTeamIds: openGameTeamIds,
+                onCloseGame: onCloseGame,
                 onDone: onDone
             )
         } else {
@@ -472,6 +489,8 @@ private struct LinkTeamsContent: View {
     let teams: [Team]
     let profiles: [PlayerProfile]
     let currentUid: String?
+    let openGameTeamIds: Set<String>
+    let onCloseGame: () -> Void
     let onDone: (String) -> Void
 
     @EnvironmentObject var authManager: AuthManager
@@ -480,6 +499,7 @@ private struct LinkTeamsContent: View {
     @State private var showConfirm = false
     @State private var isWorking = false
     @State private var errorMessage: String? = nil
+    @State private var openGameLockMessage: String? = nil
 
     /// Only teams this account created and hasn't archived - firestore.rules
     /// lets only a team's creator add to its roster.
@@ -549,12 +569,25 @@ private struct LinkTeamsContent: View {
                 isEnabled: !chosenTeams.isEmpty && !isWorking,
                 errorMessage: errorMessage
             ) {
-                showConfirm = true
+                // Combining can remove a roster row, so it waits for the
+                // open game to close; adding rows alone never does.
+                let combined = profilesToCombine
+                let locked = combined.isEmpty ? [] : ProfileMerge.lockedByOpenGame([profile] + combined, openGameTeamIds: openGameTeamIds)
+                if locked.isEmpty {
+                    showConfirm = true
+                } else {
+                    openGameLockMessage = OpenGameLock.message(
+                        for: locked.map(\.name).joined(separator: ", "),
+                        plural: locked.count > 1,
+                        then: "link"
+                    )
+                }
             }
         }
         .overlay {
             if isWorking { SavingOverlay(text: "Linking…") }
         }
+        .openGameLockDialog(message: $openGameLockMessage, onCloseGame: onCloseGame)
         .appConfirmationDialog(
             isPresented: $showConfirm,
             title: "Link \(profile.name)?",
@@ -637,6 +670,10 @@ private struct LinkTeamsContent: View {
 private struct MergePickScreen: View {
     @ObservedObject var store: LinkProfilesStore
     let currentUid: String?
+    /// Merging removes the extra roster row, so - like Archive - players on
+    /// the open game's teams wait until it's closed (`OpenGameLock`).
+    let openGameTeamIds: Set<String>
+    let onCloseGame: () -> Void
     let onDone: (String) -> Void
 
     @EnvironmentObject var authManager: AuthManager
@@ -645,6 +682,7 @@ private struct MergePickScreen: View {
     @State private var showConfirm = false
     @State private var isWorking = false
     @State private var errorMessage: String? = nil
+    @State private var openGameLockMessage: String? = nil
 
     private var selected: [PlayerProfile] {
         store.profiles.filter { selectedIds.contains($0.id) }
@@ -669,8 +707,16 @@ private struct MergePickScreen: View {
                 isEnabled: selectedIds.count == 2 && !isWorking,
                 errorMessage: errorMessage
             ) {
+                let locked = ProfileMerge.lockedByOpenGame(selected, openGameTeamIds: openGameTeamIds)
                 if case .failure(let error) = plan {
                     errorMessage = message(for: error)
+                } else if !locked.isEmpty {
+                    errorMessage = nil
+                    openGameLockMessage = OpenGameLock.message(
+                        for: locked.map(\.name).joined(separator: ", "),
+                        plural: locked.count > 1,
+                        then: "merge"
+                    )
                 } else {
                     errorMessage = nil
                     showConfirm = true
@@ -680,6 +726,7 @@ private struct MergePickScreen: View {
         .overlay {
             if isWorking { SavingOverlay(text: "Merging…") }
         }
+        .openGameLockDialog(message: $openGameLockMessage, onCloseGame: onCloseGame)
         .appConfirmationDialog(
             isPresented: $showConfirm,
             title: "Merge Into One Player?",
@@ -742,7 +789,7 @@ private struct DeletePickScreen: View {
 
     /// Selected players on a team in the open game.
     private var lockedSelection: [PlayerProfile] {
-        selected.filter { !openGameTeamIds.isDisjoint(with: $0.teams.compactMap(\.id)) }
+        ProfileMerge.lockedByOpenGame(selected, openGameTeamIds: openGameTeamIds)
     }
 
     private var selected: [PlayerProfile] {
@@ -773,17 +820,7 @@ private struct DeletePickScreen: View {
                 }
             }
         }
-        .appConfirmationDialog(
-            isPresented: Binding(
-                get: { openGameLockMessage != nil },
-                set: { if !$0 { openGameLockMessage = nil } }
-            ),
-            title: OpenGameLock.title,
-            message: openGameLockMessage ?? "",
-            primaryTitle: "Close Game",
-            primaryAction: { onCloseGame() },
-            secondaryTitle: "Not Now"
-        )
+        .openGameLockDialog(message: $openGameLockMessage, onCloseGame: onCloseGame)
         .appConfirmationDialog(
             isPresented: $showConfirm,
             title: selected.count > 1 ? "Archive \(selected.count) Players?" : "Archive \(selected.first?.name ?? "Player")?",
@@ -814,5 +851,22 @@ private struct DeletePickScreen: View {
         let chosen = selected
         authManager.setPitchers(chosen.flatMap(\.pitcherIds), archived: true)
         onDone(chosen.count == 1 ? "Archived \(chosen[0].name)." : "Archived \(chosen.count) players.")
+    }
+}
+
+private extension View {
+    /// "Game in Progress" with Close Game - shown while `message` is set.
+    func openGameLockDialog(message: Binding<String?>, onCloseGame: @escaping () -> Void) -> some View {
+        appConfirmationDialog(
+            isPresented: Binding(
+                get: { message.wrappedValue != nil },
+                set: { if !$0 { message.wrappedValue = nil } }
+            ),
+            title: OpenGameLock.title,
+            message: message.wrappedValue ?? "",
+            primaryTitle: "Close Game",
+            primaryAction: { onCloseGame() },
+            secondaryTitle: "Not Now"
+        )
     }
 }

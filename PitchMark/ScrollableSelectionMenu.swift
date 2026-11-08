@@ -84,8 +84,16 @@ struct ScrollableSelectionSheet<Item: Identifiable>: View {
     var itemSubtitle: (Item) -> String? = { _ in nil }
     let isSelected: (Item) -> Bool
     let onSelect: (Item) -> Void
+    /// Set to make the sheet multi-select (2026-11-02): rows toggle a
+    /// check instead of choosing and closing, and a toolbar button hands
+    /// back every checked item, in list order. `onSelect` is unused then.
+    var onConfirmMany: (([Item]) -> Void)? = nil
+    var confirmTitle: String = "Add"
 
     @Environment(\.dismiss) private var dismiss
+    @State private var checkedIds: Set<Item.ID> = []
+
+    private var isMultiSelect: Bool { onConfirmMany != nil }
 
     var body: some View {
         NavigationStack {
@@ -120,15 +128,33 @@ struct ScrollableSelectionSheet<Item: Identifiable>: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(items) { item in
                                 Button {
-                                    onSelect(item)
-                                    dismiss()
+                                    if isMultiSelect {
+                                        if checkedIds.contains(item.id) {
+                                            checkedIds.remove(item.id)
+                                        } else {
+                                            checkedIds.insert(item.id)
+                                        }
+                                    } else {
+                                        onSelect(item)
+                                        dismiss()
+                                    }
                                 } label: {
-                                    selectionRow(
-                                        title: itemTitle(item),
-                                        subtitle: itemSubtitle(item),
-                                        systemImage: isSelected(item) ? "checkmark" : nil,
-                                        isSelected: isSelected(item)
-                                    )
+                                    if isMultiSelect {
+                                        let checked = checkedIds.contains(item.id)
+                                        selectionRow(
+                                            title: itemTitle(item),
+                                            subtitle: itemSubtitle(item),
+                                            systemImage: checked ? "checkmark.circle.fill" : "circle",
+                                            isSelected: checked
+                                        )
+                                    } else {
+                                        selectionRow(
+                                            title: itemTitle(item),
+                                            subtitle: itemSubtitle(item),
+                                            systemImage: isSelected(item) ? "checkmark" : nil,
+                                            isSelected: isSelected(item)
+                                        )
+                                    }
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -143,6 +169,15 @@ struct ScrollableSelectionSheet<Item: Identifiable>: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
                         dismiss()
+                    }
+                }
+                if let onConfirmMany {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(checkedIds.isEmpty ? confirmTitle : "\(confirmTitle) (\(checkedIds.count))") {
+                            onConfirmMany(items.filter { checkedIds.contains($0.id) })
+                            dismiss()
+                        }
+                        .disabled(checkedIds.isEmpty)
                     }
                 }
             }

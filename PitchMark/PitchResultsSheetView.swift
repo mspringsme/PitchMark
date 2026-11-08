@@ -131,26 +131,106 @@ private struct AssetOutcomeButton: View {
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.4 : 1.0)
         .contentShape(Rectangle())
+        .accessibilityLabel(assetName.capitalized)
+        .accessibilityValue(isSelected ? "selected" : "")
     }
 }
 
-/// Stage 2 of the ball-in-play field: where the batter ended up and what
-/// they're credited with. Replaced the 1B/2B/3B/HR mini-diamond that sat at
-/// the end of the outcome scroll, where nobody found it. Rules live in
-/// BaseRunnerRules.swift; this view only collects the three answers.
+/// The batter and runners, drawn on the ball-in-play field itself
+/// (2026-11-04: the user's call - the field you tap the hit location on is
+/// the only field; it used to be swapped for a separate cartoon diamond,
+/// which hid the hit marker and made a tap meant for the field place the
+/// batter). Where the batter ended up and what they're credited with.
+/// Rules live in BaseRunnerRules.swift; this view only collects the answers.
 ///
-/// Phase 1 places the batter only. Phase 2 adds runner tokens on the bases
-/// with the same tap-a-token, tap-a-base interaction.
-private struct BasesDiamondView: View {
+/// Runners already on base sit just outside their bag. Tap one, then tap
+/// where they ended up (a bag, Score, or Out). With nobody selected, a bag
+/// places the batter - only once the ball is in play and the batter isn't
+/// out, so a tap meant for the hit location can't make them safe.
+private struct BasesFieldLayer: View {
     @Binding var reachedBase: Int?
     @Binding var credit: BatterCredit?
     @Binding var extraBasesOn: ExtraBasesReason?
+    /// Who was on base before this pitch.
+    let basesBefore: BaseOccupancy
+    /// Where each runner ended up, keyed by the base they started on.
+    /// A runner with no entry stayed put.
+    @Binding var runnerDestinations: [Int: Int]
+    /// The runner (by starting base) the next bag tap moves. Owned by the
+    /// sheet so Refresh and a new hit-location tap clear it.
+    @Binding var selectedRunner: Int?
+    /// Why the current positions are impossible, if they are.
+    let conflict: String?
+    /// Wild pitch / passed ball with nobody's ball in play: only runners
+    /// move, so a bag tap can't place the batter. Carries the reason label.
+    let runnersOnlyReason: String?
     let batterLabel: String
-    let sprayRegion: String?
+    /// Which batter's box they stand in at home.
+    let batterSide: BatterSide
     let isBatterOut: Bool
+    /// The ball is in play (hit location tapped, Safe, or Out with runners
+    /// on): the bags and the prompt are live.
+    let isActive: Bool
     /// The Error button is on: a newly placed batter reached on error.
     let prefersReachedOnError: Bool
-    let onBackToField: () -> Void
+    /// The field image's frame in this canvas (FieldOverlayView's).
+    let imageRect: CGRect
+    let canvasSize: CGSize
+
+
+    /// Where each bag is on FieldImage2, as a fraction of the image
+    /// (measured from the image's white bag pixels).
+    static func normalizedPoint(of base: Int) -> CGPoint {
+        switch base {
+        case Base.first: return CGPoint(x: 0.6376, y: 0.5768)
+        case Base.second: return CGPoint(x: 0.4983, y: 0.4773)
+        case Base.third: return CGPoint(x: 0.3582, y: 0.5754)
+        default: return CGPoint(x: 0.4984, y: 0.6753)
+        }
+    }
+
+    private func point(_ base: Int) -> CGPoint {
+        let n = Self.normalizedPoint(of: base == Base.scored ? Base.home : base)
+        return CGPoint(x: imageRect.minX + n.x * imageRect.width, y: imageRect.minY + n.y * imageRect.height)
+    }
+
+    private var center: CGPoint {
+        let first = point(Base.first), third = point(Base.third)
+        let second = point(Base.second), home = point(Base.home)
+        return CGPoint(x: (first.x + third.x) / 2, y: (second.y + home.y) / 2)
+    }
+
+    private var batterPlacesOnTap: Bool {
+        isActive && !isBatterOut && runnersOnlyReason == nil
+    }
+
+    /// Runners can be picked up once the batter's result is known (placed,
+    /// out, or a wild pitch / passed ball). Before that a tap on a runner
+    /// goes through to the field - it's meant as the hit location.
+    private var runnersTakeTaps: Bool {
+        isActive && (reachedBase != nil || isBatterOut || runnersOnlyReason != nil)
+    }
+
+    private func destination(ofRunnerFrom base: Int) -> Int {
+        runnerDestinations[base] ?? base
+    }
+
+    private func tapBase(_ base: Int) {
+        if let from = selectedRunner {
+            // Back to where they started means "stayed".
+            if base >= from {
+                runnerDestinations[from] = base
+            }
+            selectedRunner = nil
+            return
+        }
+        guard batterPlacesOnTap else { return }
+        selectBase(base)
+    }
+
+    private func toggleRunnerSelection(_ from: Int) {
+        selectedRunner = (selectedRunner == from) ? nil : from
+    }
 
     private func selectBase(_ base: Int) {
         if reachedBase == base {
@@ -177,25 +257,6 @@ private struct BasesDiamondView: View {
         }
     }
 
-    private func basePoint(_ base: Int, center: CGPoint, radius: CGFloat) -> CGPoint {
-        switch base {
-        case Base.first: return CGPoint(x: center.x + radius, y: center.y)
-        case Base.second: return CGPoint(x: center.x, y: center.y - radius)
-        case Base.third: return CGPoint(x: center.x - radius, y: center.y)
-        default: return CGPoint(x: center.x, y: center.y + radius)
-        }
-    }
-
-    private func diamondPath(center: CGPoint, radius: CGFloat) -> Path {
-        Path { path in
-            path.move(to: CGPoint(x: center.x, y: center.y + radius))
-            path.addLine(to: CGPoint(x: center.x + radius, y: center.y))
-            path.addLine(to: CGPoint(x: center.x, y: center.y - radius))
-            path.addLine(to: CGPoint(x: center.x - radius, y: center.y))
-            path.closeSubpath()
-        }
-    }
-
     private func chip(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
@@ -203,8 +264,8 @@ private struct BasesDiamondView: View {
                 .foregroundStyle(isSelected ? .white : .primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                .padding(.horizontal, 12)
-                .frame(minWidth: 52, minHeight: 36)
+                .padding(.horizontal, 10)
+                .frame(minWidth: 44, minHeight: 32)
                 .pitchResultSelectionBackground(isSelected: isSelected)
                 .clipShape(Capsule())
                 .overlay(
@@ -218,159 +279,271 @@ private struct BasesDiamondView: View {
         option == .reachedOnError ? "E (ROE)" : option.rawValue
     }
 
-    private var prompt: String {
-        if isBatterOut { return "Batter out - tap a base to mark them safe instead" }
-        guard let reachedBase else { return "Tap the base the batter reached" }
-        guard let credit else { return "Safe at \(Base.name(reachedBase))" }
+    /// "#12", or "The batter" with no jersey.
+    private var batterName: String {
+        batterLabel == "B" ? "The batter" : batterLabel
+    }
+
+    private var prompt: String? {
+        if let from = selectedRunner, let runner = basesBefore[from] {
+            return "Tap where \(runner.label) ended up, or Out"
+        }
+        if let conflict { return conflict }
+        if let runnersOnlyReason { return "\(runnersOnlyReason) - tap a runner to move them" }
+        guard isActive else { return nil }
+        if isBatterOut {
+            return basesBefore.isEmpty ? nil : "\(batterName) out - tap a runner to move them"
+        }
+        guard let reachedBase else { return "Tap the base \(batterName == "The batter" ? "the batter" : batterName) reached" }
+        guard let credit else { return "\(batterName) safe at \(Base.name(reachedBase))" }
         if BaseRunnerRules.needsExtraBasesReason(credit: credit, reached: reachedBase), extraBasesOn == nil {
             return "How did they get the extra base?"
         }
-        return "Safe at \(Base.name(reachedBase))"
+        if credit == .fieldersChoice {
+            return "Fielder's choice - tap a runner to change who's out"
+        }
+        return "\(batterName) safe at \(Base.name(reachedBase))"
     }
 
     var body: some View {
-        VStack(alignment: .center, spacing: 10) {
-            HStack(spacing: 8) {
-                Button(action: onBackToField) {
-                    Label("Field", systemImage: "chevron.left")
-                        .font(.caption.weight(.semibold))
+        let center = center
+        ZStack {
+            if let reachedBase, reachedBase > Base.home {
+                // Path run, home through each base reached.
+                Path { path in
+                    path.move(to: point(Base.home))
+                    for base in 1...min(reachedBase, Base.scored) {
+                        path.addLine(to: point(base))
+                    }
                 }
-                .buttonStyle(.bordered)
+                .stroke(Color.white, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [8, 6]))
+                .allowsHitTesting(false)
+            }
 
-                Text(sprayRegion.map { "Hit to \($0)" } ?? "No hit location yet")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            ForEach(basesBefore.occupiedBases, id: \.self) { from in
+                let dest = destination(ofRunnerFrom: from)
+                if dest > from {
+                    Path { path in
+                        path.move(to: point(from))
+                        for base in (from + 1)...min(dest, Base.scored) {
+                            path.addLine(to: point(base))
+                        }
+                    }
+                    .stroke(Color.white.opacity(0.8), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round, dash: [5, 5]))
+                    .allowsHitTesting(false)
+                }
+            }
+
+            // Bags are live only when a tap on them means something; the
+            // rest of the time the field takes the tap (hit location).
+            if batterPlacesOnTap || selectedRunner != nil {
+                ForEach([Base.first, Base.second, Base.third, Base.scored], id: \.self) { base in
+                    let isSelected = reachedBase == base
+                    Button {
+                        tapBase(base)
+                    } label: {
+                        VStack(spacing: 2) {
+                            Circle()
+                                .stroke(Color.white, lineWidth: 2)
+                                .background(Circle().fill(isSelected ? Color.pitchMarkActiveGray.opacity(0.85) : Color.white.opacity(0.25)))
+                                .frame(width: 26, height: 26)
+                            Text(base == Base.scored ? "Score" : Base.name(base))
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .shadow(color: .black.opacity(0.7), radius: 1)
+                        }
+                        .frame(width: 48, height: 48)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(base == Base.scored ? "Score" : Base.name(base))
+                    // Label under the bag, so the bag itself stays centered.
+                    .position(x: point(base).x, y: point(base).y + 8)
+                }
+            }
+
+            batterToken(center: center)
+
+            let scoredRunners = basesBefore.occupiedBases.filter { destination(ofRunnerFrom: $0) == Base.scored }
+            let outRunners = basesBefore.occupiedBases.filter { destination(ofRunnerFrom: $0) == Base.out }
+            ForEach(basesBefore.occupiedBases, id: \.self) { from in
+                if let runner = basesBefore[from] {
+                    let dest = destination(ofRunnerFrom: from)
+                    let tokenPoint: CGPoint = {
+                        switch dest {
+                        case Base.scored:
+                            // Lined up beside home plate.
+                            let home = point(Base.home)
+                            let index = CGFloat(scoredRunners.firstIndex(of: from) ?? 0)
+                            return CGPoint(x: home.x + 46 + index * 38, y: home.y + 10)
+                        case Base.out:
+                            let index = CGFloat(outRunners.firstIndex(of: from) ?? 0)
+                            return CGPoint(x: 30 + index * 38, y: 64)
+                        default:
+                            // Just outside the bag, so the batter (inside
+                            // it) and the bag stay visible.
+                            let p = point(dest)
+                            return CGPoint(x: p.x + (p.x - center.x) * 0.4, y: p.y + (p.y - center.y) * 0.4)
+                        }
+                    }()
+                    RunnerToken(
+                        label: runner.label,
+                        isSelected: selectedRunner == from,
+                        isOut: dest == Base.out
+                    ) {
+                        toggleRunnerSelection(from)
+                    }
+                    .position(tokenPoint)
+                    .allowsHitTesting(runnersTakeTaps)
+                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: dest)
+                }
+            }
+
+            if let from = selectedRunner {
+                Button {
+                    runnerDestinations[from] = Base.out
+                    selectedRunner = nil
+                } label: {
+                    Text("Out")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 44)
+                        .background(Capsule().fill(Color.red.opacity(0.9)))
+                        .overlay(Capsule().stroke(Color.white, lineWidth: 2))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("bases.runnerOut")
+                .position(x: canvasSize.width - 50, y: 64)
+            }
+
+            if let prompt {
+                Text(prompt)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(conflict != nil && selectedRunner == nil ? Color.red : Color.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
                     .minimumScaleFactor(0.8)
-
-                Spacer(minLength: 0)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.regularMaterial, in: Capsule())
+                    .frame(maxWidth: canvasSize.width - 32)
+                    .position(x: canvasSize.width / 2, y: 22)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("bases.prompt")
             }
 
-            Text(prompt)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            GeometryReader { proxy in
-                let side = min(proxy.size.width, proxy.size.height)
-                let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2 + side * 0.04)
-                let radius = side * 0.34
-                let batterBase = reachedBase ?? Base.home
-                let batterPoint: CGPoint = {
-                    let p = basePoint(batterBase == Base.scored ? Base.home : batterBase, center: center, radius: radius)
-                    // Sit just inside the bag so the bag stays visible and tappable.
-                    return CGPoint(x: p.x + (center.x - p.x) * 0.28, y: p.y + (center.y - p.y) * 0.28)
-                }()
-
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color(red: 0.22, green: 0.52, blue: 0.27))
-
-                    diamondPath(center: center, radius: radius * 1.22)
-                        .fill(Color(red: 0.72, green: 0.52, blue: 0.34))
-
-                    diamondPath(center: center, radius: radius * 0.74)
-                        .fill(Color(red: 0.25, green: 0.57, blue: 0.3))
-
-                    diamondPath(center: center, radius: radius)
-                        .stroke(Color.white.opacity(0.85), lineWidth: 2)
-
-                    if let reachedBase, reachedBase > Base.home {
-                        // Path run, home through each base reached.
-                        Path { path in
-                            path.move(to: basePoint(Base.home, center: center, radius: radius))
-                            for base in 1...min(reachedBase, Base.scored) {
-                                path.addLine(to: basePoint(base == Base.scored ? Base.home : base, center: center, radius: radius))
-                            }
-                        }
-                        .stroke(Color.white, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round, dash: [8, 6]))
-                    }
-
-                    ForEach([Base.first, Base.second, Base.third, Base.scored], id: \.self) { base in
-                        let point = basePoint(base == Base.scored ? Base.home : base, center: center, radius: radius)
-                        let isSelected = reachedBase == base
-                        Button {
-                            selectBase(base)
-                        } label: {
-                            VStack(spacing: 4) {
-                                if base == Base.scored {
-                                    Image(systemName: "pentagon.fill")
-                                        .font(.system(size: 18))
-                                        .rotationEffect(.degrees(180))
-                                        .foregroundStyle(isSelected ? Color.pitchMarkActiveGray : .white)
-                                } else {
-                                    Rectangle()
-                                        .fill(isSelected ? Color.pitchMarkActiveGray : .white)
-                                        .frame(width: 18, height: 18)
-                                        .rotationEffect(.degrees(45))
-                                }
-                                Text(base == Base.scored ? "Score" : Base.name(base))
-                                    .font(.caption2.weight(.bold))
-                                    .foregroundStyle(.white)
-                                    .shadow(color: .black.opacity(0.5), radius: 1)
-                            }
-                            .frame(width: 64, height: 64)
-                            .background(
-                                Circle()
-                                    .fill(isSelected ? Color.white.opacity(0.35) : Color.clear)
-                            )
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .position(point)
-                    }
-
-                    if !isBatterOut {
-                        Text(batterLabel)
-                            .font(.system(size: 13, weight: .bold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .frame(width: 34, height: 34)
-                            .background(Circle().fill(Color.pitchMarkActiveGray))
-                            .overlay(Circle().stroke(Color.white, lineWidth: 2))
-                            .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 2)
-                            .position(batterPoint)
-                            .allowsHitTesting(false)
-                            .animation(.spring(response: 0.35, dampingFraction: 0.8), value: reachedBase)
-                    }
-                }
-            }
-            .frame(height: 280)
-
-            if !isBatterOut {
-                VStack(spacing: 8) {
-                    if let reachedBase {
-                        Text("Credit")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        HStack(spacing: 6) {
-                            ForEach(BaseRunnerRules.creditOptions(reached: reachedBase), id: \.self) { option in
-                                chip(creditTitle(option), isSelected: credit == option) {
-                                    selectCredit(option)
-                                }
-                            }
-                        }
-                    }
-
-                    // Always shown so the option is discoverable; live only
-                    // once the credit is worth fewer bases than the batter took.
-                    Text("Extra bases on")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 2)
-                    HStack(spacing: 6) {
-                        ForEach(ExtraBasesReason.allCases, id: \.self) { reason in
-                            chip(reason.label, isSelected: extraBasesOn == reason) {
-                                extraBasesOn = (extraBasesOn == reason) ? nil : reason
-                            }
-                        }
-                    }
-                    .disabled(!needsExtraBasesReason)
-                    .opacity(needsExtraBasesReason ? 1 : 0.4)
-                }
+            if isActive && !isBatterOut && runnersOnlyReason == nil, let reachedBase {
+                creditPanel(reachedBase)
+                    .frame(width: canvasSize.width - 24)
+                    .position(x: canvasSize.width / 2, y: canvasSize.height - 62)
             }
         }
+        .frame(width: canvasSize.width, height: canvasSize.height)
+    }
+
+    /// Who's batting, always on the field (2026-11-04: with runners on it
+    /// wasn't clear who was up). In their box at home until they reach a
+    /// base, red there when they're out. Darker than the white runner
+    /// tokens. Never takes a tap - the field under it does.
+    @ViewBuilder
+    private func batterToken(center: CGPoint) -> some View {
+        let placed = isActive && !isBatterOut && runnersOnlyReason == nil ? reachedBase : nil
+        let out = isActive && isBatterOut
+        let tokenPoint: CGPoint = {
+            if let placed {
+                // Just inside the bag, toward the mound.
+                let p = point(placed)
+                return CGPoint(x: p.x + (center.x - p.x) * 0.45, y: p.y + (center.y - p.y) * 0.45)
+            }
+            // A righty stands on the 3rd-base side of the plate.
+            let home = point(Base.home)
+            return CGPoint(x: home.x + (batterSide == .right ? -32 : 32), y: home.y - 2)
+        }()
+        VStack(spacing: 1) {
+            Text(batterLabel)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(out ? Color.red.opacity(0.85) : Color.pitchMarkActiveGray))
+                .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 2)
+            if placed == nil {
+                Text(out ? "OUT" : "AT BAT")
+                    .font(.system(size: 9, weight: .heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+            }
+        }
+        // Centered on the circle, with the caption hanging below it.
+        .offset(y: placed == nil ? 7 : 0)
+        .position(tokenPoint)
+        .allowsHitTesting(false)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: placed)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Batter \(batterLabel)")
+        .accessibilityValue(out ? "out" : placed.map { Base.name($0) } ?? "at bat")
+        .accessibilityIdentifier("bases.batter")
+    }
+
+    /// Credit and "extra bases on", over the white space below home plate.
+    private func creditPanel(_ reachedBase: Int) -> some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 6) {
+                ForEach(BaseRunnerRules.creditOptions(reached: reachedBase, runnersOn: !basesBefore.isEmpty), id: \.self) { option in
+                    chip(creditTitle(option), isSelected: credit == option) {
+                        selectCredit(option)
+                    }
+                }
+            }
+            // Always shown so the option is discoverable; live only once the
+            // credit is worth fewer bases than the batter took.
+            HStack(spacing: 6) {
+                Text("Extra bases on")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(ExtraBasesReason.batterChoices, id: \.self) { reason in
+                    chip(reason.label, isSelected: extraBasesOn == reason) {
+                        extraBasesOn = (extraBasesOn == reason) ? nil : reason
+                    }
+                }
+            }
+            .disabled(!needsExtraBasesReason)
+            .opacity(needsExtraBasesReason ? 1 : 0.4)
+        }
+        .padding(8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+/// A runner already on base, on the bases diamond. Tappable - selecting one
+/// makes the next bag tap move them.
+private struct RunnerToken: View {
+    let label: String
+    let isSelected: Bool
+    let isOut: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(isOut ? Color.white : Color.black)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(isOut ? Color.red.opacity(0.85) : Color.white))
+                .overlay(Circle().stroke(isSelected ? Color.pitchMarkActiveGray : Color.black.opacity(0.35), lineWidth: isSelected ? 3 : 1))
+                .scaleEffect(isSelected ? 1.18 : 1)
+                .shadow(color: .black.opacity(0.35), radius: 3, x: 0, y: 2)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isOut ? "\(label), out" : "Runner \(label)")
     }
 }
 
@@ -402,6 +575,7 @@ private struct ResultCircleButton: View {
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.4 : 1.0)
         .contentShape(Rectangle())
+        .accessibilityValue(isSelected ? "selected" : "")
     }
 }
 
@@ -419,20 +593,34 @@ private struct SafeOutButtonsRow: View {
     /// Safe no longer means "single": it opens the bases stage, and the
     /// batter's base there sets the outcome.
     let onSelectSafe: () -> Void
+    /// The batter is on a base in the diamond. A fielder's choice is stored
+    /// as "Out" (see BaseRunnerRules.outcome) but the batter is safe, so the
+    /// circles follow the diamond rather than the outcome string.
+    let batterPlaced: Bool
+    let onClearBatter: () -> Void
+    /// Out was just selected - with runners on, the diamond is where their
+    /// moves (a double play, a sac fly) get recorded.
+    let onSelectOut: () -> Void
 
     private var safeCircleSelected: Bool {
+        if batterPlaced { return true }
         if isHitTagSelected { return true }
         guard let selectedOutcome else { return false }
         return ["1B", "2B", "3B", "HR"].contains(selectedOutcome)
     }
 
     private var outCircleSelected: Bool {
+        if batterPlaced { return false }
         guard let selectedOutcome else { return false }
         return ["Out", "K", "ꓘ"].contains(selectedOutcome)
     }
 
     private func selectSafeCategory() {
         if safeCircleSelected {
+            if batterPlaced {
+                onClearBatter()
+                selectedOutcome = nil
+            }
             if isHitTagSelected {
                 isHitTagSelected = false
             }
@@ -452,8 +640,15 @@ private struct SafeOutButtonsRow: View {
     }
 
     private func selectOutCategory() {
-        let next = selectedOutcome != "Out"
+        if batterPlaced {
+            // Safe on a fielder's choice -> actually out.
+            onClearBatter()
+        }
+        let next = batterPlaced || selectedOutcome != "Out"
         selectedOutcome = next ? "Out" : nil
+        if next {
+            onSelectOut()
+        }
         if next {
             isStrikeSwinging = false
             isStrikeLooking = false
@@ -711,6 +906,50 @@ private struct EventButtonsRow: View {
     }
 }
 
+/// The result sheet's Safe/Out + Save Result row (2026-11-05): it sits in
+/// place until it reaches the top of whatever is scrolling, then stays
+/// there while the field and runners scroll under it - always reachable,
+/// never covering a control the user is looking at (user's call).
+///
+/// The sheet scrolls in one of two places: the tracker's outer scroll view
+/// (card + sheet, named `outerScrollSpace`) or its own (the edit sheet,
+/// `ownScrollSpace`). The divider above the row never moves, so it is
+/// what's measured; the row is shifted down by however far that divider
+/// has gone above the top. Its own struct, so only the bar redraws while
+/// scrolling.
+struct StickyActionBar<Content: View>: View {
+    static var outerScrollSpace: String { "pitchResult.outerScroll" }
+    static var ownScrollSpace: String { "pitchResult.ownScroll" }
+
+    @ViewBuilder let content: Content
+    @State private var pin: CGFloat = 0
+
+    /// How far to shift the row: how far the divider above it has gone
+    /// past the top of either scroll view, never negative.
+    static func pinOffset(dividerMaxYInOuter: CGFloat, dividerMaxYInOwn: CGFloat) -> CGFloat {
+        max(0, -dividerMaxYInOuter, -dividerMaxYInOwn)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    Self.pinOffset(
+                        dividerMaxYInOuter: proxy.frame(in: .named(Self.outerScrollSpace)).maxY,
+                        dividerMaxYInOwn: proxy.frame(in: .named(Self.ownScrollSpace)).maxY
+                    )
+                } action: { pin = $0 }
+            content
+                .background(
+                    Color(.systemBackground)
+                        .padding(.horizontal, -22)
+                        .shadow(color: .black.opacity(pin > 0 ? 0.12 : 0), radius: 4, x: 0, y: 3)
+                )
+                .offset(y: pin)
+        }
+    }
+}
+
 private struct HoldActionButton: View {
     let title: String
     let systemImage: String
@@ -784,6 +1023,15 @@ struct PitchResultSheetView: View {
     @State private var batterReachedBase: Int? = nil
     @State private var batterCredit: BatterCredit? = nil
     @State private var batterExtraBasesOn: ExtraBasesReason? = nil
+    /// Runners' end bases on this play, keyed by start base; no entry = stayed.
+    @State private var runnerDestinations: [Int: Int] = [:]
+    /// The runner picked up on the field, waiting for where they ended up.
+    @State private var selectedRunnerBase: Int? = nil
+    /// "Fielded by" answers (FieldedByView): fielders per out, keyed by
+    /// `FieldingPlay.OutSlot.runner`, and who made the error(s).
+    @State private var fieldingAnswers: [String: [String]] = [:]
+    @State private var errorPositionAnswers: [String] = []
+    @State private var didSeedFielding = false
 
     @State private var showFieldOverlay: Bool = false
 
@@ -793,20 +1041,19 @@ struct PitchResultSheetView: View {
         let title: String
         let summaryLines: [String]
         let event: PitchEvent
+        /// Save Result's screen frame - the review's Save goes there.
+        var saveAnchor: CGRect? = nil
     }
 
     @State private var savedPlayReviewDraft: SavedPlayReviewDraft? = nil
+    @State private var saveResultFrame: CGRect? = nil
     @State private var savedPlayReviewTitle: String = "Saved Play"
     @State private var savedPlayReviewSummaryLines: [String] = []
     @State private var savedPlayReviewEvent: PitchEvent? = nil
     /// The count *before* this pitch. The displayed count is derived from this
     /// plus the current selection - it is never mutated directly.
-    @State private var countSeed: AtBatCount = .start
-    @State private var didInitializeManualCount: Bool = false
-    /// Set only when the user taps the count circles to correct the number by
-    /// hand. Keeping this separate from the seed is what stops a manual
-    /// correction from being incremented a second time by the pitch rules.
-    @State private var manualCountOverride: AtBatCount? = nil
+    /// Seed, hand correction and publish guard for the count (CountDraft.swift).
+    @State private var countDraft = CountDraft()
     @State private var overrideOpponentJersey: String? = nil
     @State private var overrideOpponentBatterId: String? = nil
     @State private var showMissingLocationPrompt: Bool = false
@@ -846,6 +1093,9 @@ struct PitchResultSheetView: View {
 
     let pendingResultLabel: String?
     let pitchCall: PitchCall?
+    /// Who is on base as this pitch is thrown (the tracker's live state, or
+    /// the edited event's `basesBefore`).
+    var basesBefore: BaseOccupancy = .empty
     /// The coach's estimate of the opposing catcher's actual call, captured by
     /// `CatcherEstimateView` before this sheet appears. Carried straight
     /// through to the saved `PitchEvent`; nil unless this is a Catcher-mode
@@ -860,6 +1110,10 @@ struct PitchResultSheetView: View {
     let allPitchEvents: [PitchEvent]
     let suggestedCountSeed: (balls: Int, strikes: Int)?
     let currentCountSeed: (balls: Int, strikes: Int)?
+    /// Editing a saved pitch: the count it was thrown at
+    /// (PitchEventEdit.countBefore). The batter's latest pitch, which seeds
+    /// a new pitch, is the wrong start for an old one.
+    var countSeedOverride: AtBatCount? = nil
     var onCountChanged: ((Int, Int) -> Void)? = nil
     let lineupBatters: [JerseyCell]
     let selectedPitcherId: String?
@@ -867,6 +1121,12 @@ struct PitchResultSheetView: View {
     let template: PitchTemplate?
     let pitcherName: String?
     var onMissingLocation: (() -> Void)? = nil
+    /// Editing a saved pitch: its fielders, to start the Fielded by rows
+    /// from, and its play - the diamond isn't refilled on an edit, so the
+    /// saved play is what says which runners were put out.
+    var initialFieldingOuts: [FieldingOut]? = nil
+    var initialErrorPositions: [String]? = nil
+    var savedPlay: BasePlay? = nil
 
     private var effectiveLocationLabel: String? {
         let explicit = pendingResultLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -906,6 +1166,7 @@ struct PitchResultSheetView: View {
     }
 
     private func resetSelections() {
+        selectedRunnerBase = nil
         isStrikeSwinging = false
         isStrikeLooking = false
         isWildPitch = false
@@ -921,9 +1182,12 @@ struct PitchResultSheetView: View {
         battedBallSelection = nil
         battedBallTapNormalized = nil
         fieldStage = .spray
+        runnerDestinations = [:]
         batterReachedBase = nil
         batterCredit = nil
         batterExtraBasesOn = nil
+        fieldingAnswers = [:]
+        errorPositionAnswers = []
         showMissingBatterPrompt = false
         overrideOpponentJersey = nil
         overrideOpponentBatterId = nil
@@ -1036,13 +1300,7 @@ struct PitchResultSheetView: View {
                             ForEach(0..<3, id: \.self) { idx in
                                 let value = idx + 1
                                 Button {
-                                    // Tap same filled value to step down by one, else set to that value.
-                                    let current = resolvedCount
-                                    let nextBalls = (current.balls == value) ? max(0, value - 1) : value
-                                    manualCountOverride = AtBatCount(
-                                        balls: nextBalls,
-                                        strikes: current.strikes
-                                    )
+                                    countDraft.tapBall(value, facts: currentPitchFacts)
                                 } label: {
                                     countCircle(
                                         isFilled: value <= resolvedCount.balls,
@@ -1063,13 +1321,7 @@ struct PitchResultSheetView: View {
                             ForEach(0..<2, id: \.self) { idx in
                                 let value = idx + 1
                                 Button {
-                                    // Tap same filled value to step down by one, else set to that value.
-                                    let current = resolvedCount
-                                    let nextStrikes = (current.strikes == value) ? max(0, value - 1) : value
-                                    manualCountOverride = AtBatCount(
-                                        balls: current.balls,
-                                        strikes: nextStrikes
-                                    )
+                                    countDraft.tapStrike(value, facts: currentPitchFacts)
                                 } label: {
                                     countCircle(
                                         isFilled: value <= resolvedCount.strikes,
@@ -1099,14 +1351,13 @@ struct PitchResultSheetView: View {
 
             HStack(spacing: 8) {
                 Spacer()
-                Text(fieldStage == .bases ? "Batter result" : "Ball in play location")
+                Text(fieldStage == .bases ? (runnersOnlyReason != nil ? "Runners" : "Batter result") : "Ball in play location")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button {
                     resetSelections()
-                    countSeed = .start
-                    manualCountOverride = nil
+                    countDraft.resetToStart()
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                         .font(.caption.weight(.semibold))
@@ -1115,38 +1366,91 @@ struct PitchResultSheetView: View {
                 Spacer()
             }
 
-            if fieldStage == .bases {
-                BasesDiamondView(
-                    reachedBase: $batterReachedBase,
-                    credit: $batterCredit,
-                    extraBasesOn: $batterExtraBasesOn,
-                    batterLabel: effectiveOpponentJersey.map { "#\($0)" } ?? "B",
-                    sprayRegion: battedBallRegionName,
-                    isBatterOut: selectedOutcome == "Out",
-                    prefersReachedOnError: isError,
-                    onBackToField: { fieldStage = .spray }
+            // One field (2026-11-04): the hit location stays marked and the
+            // batter and runners are drawn on the same picture.
+            FieldOverlayView(
+                isPresented: .constant(true),
+                colorMapImage: colorMapImage,
+                colorMapping: colorMapping,
+                selectedOutcome: $selectedOutcome,
+                selectedDescriptor: $selectedDescriptor,
+                isError: $isError,
+                battedBallRegionName: $battedBallRegionName,
+                battedBallSelection: $battedBallSelection,
+                battedBallTapNormalized: $battedBallTapNormalized,
+                displayImageName: "FieldImage2",
+                showsDismissControls: false,
+                overlay: { imageRect, size in
+                    AnyView(
+                        BasesFieldLayer(
+                            reachedBase: $batterReachedBase,
+                            credit: $batterCredit,
+                            extraBasesOn: $batterExtraBasesOn,
+                            basesBefore: basesBefore,
+                            runnerDestinations: $runnerDestinations,
+                            selectedRunner: $selectedRunnerBase,
+                            conflict: runnerConflict,
+                            runnersOnlyReason: runnersOnlyReason?.label,
+                            batterLabel: effectiveOpponentJersey.map { "#\($0)" } ?? "B",
+                            batterSide: batterSide,
+                            isBatterOut: isBatterOutOnPlay,
+                            isActive: fieldStage == .bases,
+                            prefersReachedOnError: isError,
+                            imageRect: imageRect,
+                            canvasSize: size
+                        )
+                    )
+                }
+            )
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("result.field")
+            .frame(height: 520)
+            .padding(.horizontal, -12)
+            .padding(.top, -12)
+
+            if !fieldingSlots.isEmpty || showsErrorFielder {
+                FieldedByView(
+                    slots: fieldingSlots,
+                    answers: $fieldingAnswers,
+                    showsErrors: showsErrorFielder,
+                    errors: $errorPositionAnswers,
+                    descriptor: selectedDescriptor
                 )
-            } else {
-                FieldOverlayView(
-                    isPresented: .constant(true),
-                    colorMapImage: colorMapImage,
-                    colorMapping: colorMapping,
-                    selectedOutcome: $selectedOutcome,
-                    selectedDescriptor: $selectedDescriptor,
-                    isError: $isError,
-                    battedBallRegionName: $battedBallRegionName,
-                    battedBallSelection: $battedBallSelection,
-                    battedBallTapNormalized: $battedBallTapNormalized,
-                    displayImageName: "FieldImage2",
-                    showsDismissControls: false
-                )
-                .frame(height: 520)
-                .padding(.horizontal, -12)
-                .padding(.top, -12)
             }
         }
         .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// The play the Fielded by rows describe: the diamond's, or on an edit
+    /// the saved one while it still fits the result.
+    private var fieldingPlay: BasePlay? {
+        currentBatterPlay ?? BaseRunnerRules.playIfConsistent(
+            savedPlay,
+            outcome: selectedOutcome,
+            errorOnPlay: isError
+        )
+    }
+
+    private var fieldingSlots: [FieldingPlay.OutSlot] {
+        FieldingPlay.outSlots(
+            play: fieldingPlay,
+            batterOutOnPlay: isBatterOutOnPlay,
+            isStrikeout: resolvedTerminal == .strikeout
+        )
+    }
+
+    private var showsErrorFielder: Bool {
+        FieldingPlay.hasError(errorOnPlay: isError, play: fieldingPlay)
+    }
+
+    private func seedFieldingIfNeeded() {
+        guard !didSeedFielding else { return }
+        didSeedFielding = true
+        for out in initialFieldingOuts ?? [] {
+            fieldingAnswers[out.runner] = out.positions
+        }
+        errorPositionAnswers = initialErrorPositions ?? []
     }
 
     private enum TopToggleRule {
@@ -1344,7 +1648,8 @@ struct PitchResultSheetView: View {
         savedPlayReviewDraft = SavedPlayReviewDraft(
             title: savedPlayReviewTitle,
             summaryLines: savedPlayReviewSummaryLines,
-            event: event
+            event: event,
+            saveAnchor: saveResultFrame
         )
     }
 
@@ -1394,15 +1699,14 @@ struct PitchResultSheetView: View {
     }
 
     private func initializeManualCountIfNeeded() {
-        guard !didInitializeManualCount else { return }
-        let persistedSeed: AtBatCount? = lastPersistedEventForActiveBatter.flatMap { event in
-            guard let balls = event.atBatBalls, let strikes = event.atBatStrikes else { return nil }
-            return AtBatCount(balls: balls, strikes: strikes)
-        }
-        let fallback = currentCountSeed ?? suggestedCountSeed ?? (0, 0)
-        countSeed = persistedSeed ?? AtBatCount(balls: fallback.balls, strikes: fallback.strikes)
-        manualCountOverride = nil
-        didInitializeManualCount = true
+        guard !countDraft.isSeeded else { return }
+        let lastSaved = lastPersistedEventForActiveBatter
+        countDraft.open(seed: CountDraft.seed(
+            editedPitchSeed: countSeedOverride,
+            lastSavedPitchCount: lastSaved.map { (balls: $0.atBatBalls, strikes: $0.atBatStrikes) },
+            liveCount: currentCountSeed,
+            rememberedCount: suggestedCountSeed
+        ))
     }
 
     /// The count-relevant facts of the pitch currently being composed.
@@ -1425,21 +1729,18 @@ struct PitchResultSheetView: View {
     /// Derived, never mutated - a manual correction replaces it outright rather
     /// than feeding back into the seed.
     private var resolvedCount: AtBatCount {
-        manualCountOverride ?? AtBatCountRules.apply(currentPitchFacts, to: countSeed).count
+        countDraft.resolved(currentPitchFacts)
     }
 
     private var resolvedTerminal: AtBatTerminal? {
-        // A hand-corrected count means the user is stating the result directly, so
-        // no terminal is inferred for it.
-        guard manualCountOverride == nil else { return nil }
-        return AtBatCountRules.apply(currentPitchFacts, to: countSeed).terminal
+        countDraft.terminal(currentPitchFacts)
     }
 
     private func priorCount(for event: PitchEvent) -> (balls: Int, strikes: Int) {
         let baseEvent = lastPersistedEventForActiveBatter
 
-        let preferredSeed: AtBatCount? = didInitializeManualCount
-            ? countSeed
+        let preferredSeed: AtBatCount? = countDraft.isSeeded
+            ? countDraft.seed
             : suggestedCountSeed.map { AtBatCount(balls: $0.balls, strikes: $0.strikes) }
 
         // `atBatCount` is display text only. It is deliberately not parsed back
@@ -1588,18 +1889,34 @@ struct PitchResultSheetView: View {
                 currentBatterPlay,
                 outcome: normalizedOutcome.isEmpty ? nil : normalizedOutcome,
                 errorOnPlay: isError
-            )
+            ),
+            // Never nil, so an edit that clears every fielder is an answer
+            // too (PitchEventEdit). Saving drops empty lists.
+            fieldingOuts: FieldingPlay.outs(fieldingAnswers, slots: fieldingSlots) ?? [],
+            errorPositions: showsErrorFielder ? errorPositionAnswers.filter { FieldingPlay.positions.contains($0) } : []
+        )
+    }
+
+    /// The diamond's answers as a `PlayDraft` (PlayDraft.swift holds the rules).
+    private var playDraft: PlayDraft {
+        PlayDraft(
+            basesBefore: basesBefore,
+            batterReachedBase: batterReachedBase,
+            batterCredit: batterCredit,
+            batterExtraBasesOn: batterExtraBasesOn,
+            runnerDestinations: runnerDestinations,
+            selectedOutcome: selectedOutcome,
+            isWildPitch: isWildPitch,
+            isPassedBall: isPassedBall
         )
     }
 
     /// The batter's play as answered on the bases stage, or nil while it is
     /// unanswered or incomplete.
-    private var currentBatterPlay: BasePlay? {
-        guard let reached = batterReachedBase, let credit = batterCredit,
-              BaseRunnerRules.isComplete(credit: credit, reached: reached, extraBasesOn: batterExtraBasesOn)
-        else { return nil }
-        return BaseRunnerRules.makePlay(credit: credit, reached: reached, extraBasesOn: batterExtraBasesOn)
-    }
+    private var currentBatterPlay: BasePlay? { playDraft.play }
+    private var runnersOnlyReason: ExtraBasesReason? { playDraft.runnersOnlyReason }
+    private var isBatterOutOnPlay: Bool { playDraft.isBatterOutOnPlay }
+    private var runnerConflict: String? { playDraft.conflict }
 
     /// Diamond -> the sheet's existing outcome/error selections, which the
     /// count rules, save gating and review sheet already read.
@@ -1702,6 +2019,32 @@ struct PitchResultSheetView: View {
         }
     }
 
+    /// Every pitch resolves to exactly one primary outcome; Save needs one.
+    private var canSave: Bool {
+        (
+            // Every pitch resolves to exactly one of these primary
+            // outcomes, so require one before the result can be saved.
+            // "Out" and "Safe" (1B/2B/3B/HR) each cover a ball in play
+            // that fielders converted into a full result on their own,
+            // not a supplementary tag. Other supplementary tags (K,
+            // Walk, Wild Pitch, Passed Ball, Error, batted-ball
+            // location, descriptors) refine a result but can no longer
+            // stand in as the whole result.
+            isStrikeSwinging ||
+            isStrikeLooking ||
+            isFoulSelected ||
+            isBall ||
+            isHitTagSelected ||
+            selectedOutcome == "Out" ||
+            (
+                (selectedOutcome.map { ["1B", "2B", "3B", "HR"].contains($0) } ?? false)
+                // A batter placed on the diamond must finish the
+                // "how" question (e.g. 1B to 2nd needs Error/Throw).
+                && (batterReachedBase == nil || currentBatterPlay != nil)
+            )
+        ) && runnerConflict == nil
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
@@ -1728,63 +2071,55 @@ struct PitchResultSheetView: View {
                     }
                     .padding(.top, 8)
 
-                    let canSave: Bool = {
-                        // Every pitch resolves to exactly one of these primary
-                        // outcomes, so require one before the result can be saved.
-                        // "Out" and "Safe" (1B/2B/3B/HR) each cover a ball in play
-                        // that fielders converted into a full result on their own,
-                        // not a supplementary tag. Other supplementary tags (K,
-                        // Walk, Wild Pitch, Passed Ball, Error, batted-ball
-                        // location, descriptors) refine a result but can no longer
-                        // stand in as the whole result.
-                        isStrikeSwinging ||
-                        isStrikeLooking ||
-                        isFoulSelected ||
-                        isBall ||
-                        isHitTagSelected ||
-                        selectedOutcome == "Out" ||
-                        (
-                            (selectedOutcome.map { ["1B", "2B", "3B", "HR"].contains($0) } ?? false)
-                            // A batter placed on the diamond must finish the
-                            // "how" question (e.g. 1B to 2nd needs Error/Throw).
-                            && (batterReachedBase == nil || currentBatterPlay != nil)
-                        )
-                    }()
 
-                    Divider()
+                    StickyActionBar {
+                            HStack(alignment: .center, spacing: 8) {
+                                SafeOutButtonsRow(
+                                    selectedOutcome: $selectedOutcome,
+                                    selectedDescriptor: $selectedDescriptor,
+                                    isStrikeSwinging: $isStrikeSwinging,
+                                    isStrikeLooking: $isStrikeLooking,
+                                    isBall: $isBall,
+                                    isHitTagSelected: $isHitTagSelected,
+                                    isHitBatter: $isHitBatter,
+                                    isFoulSelected: $isFoulSelected,
+                                    isSafeDisabled: isOutcomeDisabled("1B"),
+                                    isOutDisabled: isOutcomeDisabled("Out"),
+                                    onSelectSafe: {
+                                        fieldStage = .bases
+                                        shouldScrollToInPlayOutcome = true
+                                    },
+                                    batterPlaced: batterReachedBase != nil,
+                                    onClearBatter: {
+                                        batterReachedBase = nil
+                                        batterCredit = nil
+                                        batterExtraBasesOn = nil
+                                    },
+                                    onSelectOut: {
+                                        guard !basesBefore.isEmpty else { return }
+                                        fieldStage = .bases
+                                        shouldScrollToInPlayOutcome = true
+                                    }
+                                )
 
-                    HStack(alignment: .center, spacing: 8) {
-                        SafeOutButtonsRow(
-                            selectedOutcome: $selectedOutcome,
-                            selectedDescriptor: $selectedDescriptor,
-                            isStrikeSwinging: $isStrikeSwinging,
-                            isStrikeLooking: $isStrikeLooking,
-                            isBall: $isBall,
-                            isHitTagSelected: $isHitTagSelected,
-                            isHitBatter: $isHitBatter,
-                            isFoulSelected: $isFoulSelected,
-                            isSafeDisabled: isOutcomeDisabled("1B"),
-                            isOutDisabled: isOutcomeDisabled("Out"),
-                            onSelectSafe: {
-                                fieldStage = .bases
-                                shouldScrollToInPlayOutcome = true
+                                HoldActionButton(
+                                    title: "Save Result",
+                                    systemImage: "",
+                                    foregroundColor: .green,
+                                    tint: .white,
+                                    isEnabled: canSave,
+                                    horizontalPadding: 10,
+                                    action: handleSave
+                                )
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { saveResultFrame = $0 }
+                                .accessibilityIdentifier("result.save")
                             }
-                        )
-
-                        HoldActionButton(
-                            title: "Save Result",
-                            systemImage: "",
-                            foregroundColor: .green,
-                            tint: .white,
-                            isEnabled: canSave,
-                            horizontalPadding: 10,
-                            action: handleSave
-                        )
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.top, 8)
+                            .padding(.bottom, 10)
                     }
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 2)
-                    .padding(.bottom, 12)
+                    .zIndex(1)
 
                     Divider()
 
@@ -1793,6 +2128,7 @@ struct PitchResultSheetView: View {
                 .padding(.horizontal, 22)
                 .padding(.bottom, 12)
             }
+            .coordinateSpace(.named(StickyActionBar<EmptyView>.ownScrollSpace))
             .modifier(
                 OutcomeChangeHandlers(
                     isPresented: $isPresented,
@@ -1826,6 +2162,11 @@ struct PitchResultSheetView: View {
                 guard currentMode == .scout, newValue != nil else { return }
                 shouldScrollToInPlayOutcome = true
             }
+            .onChange(of: battedBallTapNormalized) { _, _ in
+                // A new hit location means the user is placing the ball,
+                // not moving a runner.
+                selectedRunnerBase = nil
+            }
             .onChange(of: battedBallTapNormalized) { _, newValue in
                 // Stage 1 -> 2: a fair-ball tap moves on to the bases. A ball
                 // over the fence is already answered: batter scores, HR.
@@ -1842,8 +2183,28 @@ struct PitchResultSheetView: View {
                     break
                 }
             }
-            .onChange(of: batterReachedBase) { _, _ in applyBatterPlayToSelections() }
-            .onChange(of: batterCredit) { _, _ in applyBatterPlayToSelections() }
+            .onChange(of: isWildPitch || isPassedBall) { _, _ in
+                var draft = playDraft
+                guard let opens = draft.wildPitchOrPassedBallChanged() else { return }
+                runnerDestinations = draft.runnerDestinations
+                fieldStage = opens ? .bases : .spray
+                if opens { shouldScrollToInPlayOutcome = true }
+            }
+            .onChange(of: batterReachedBase) { _, _ in
+                // Runners start from the minimum the batter's base forces;
+                // the user moves anyone further.
+                var draft = playDraft
+                draft.batterBaseChanged()
+                runnerDestinations = draft.runnerDestinations
+                applyBatterPlayToSelections()
+            }
+            .onChange(of: batterCredit) { oldValue, _ in
+                // A fielder's choice puts the lead forced runner out.
+                var draft = playDraft
+                draft.batterCreditChanged(from: oldValue)
+                runnerDestinations = draft.runnerDestinations
+                applyBatterPlayToSelections()
+            }
             .onChange(of: batterExtraBasesOn) { _, _ in applyBatterPlayToSelections() }
             .onChange(of: isError) { _, newValue in syncBatterCreditToErrorButton(newValue) }
             .onChange(of: isHitTagSelected) { _, newValue in syncBatterCreditToHitButton(newValue) }
@@ -1859,15 +2220,17 @@ struct PitchResultSheetView: View {
             }
             .onChange(of: isPresented) { _, newValue in
                 if newValue {
-                    didInitializeManualCount = false
+                    countDraft.close()
                     initializeManualCountIfNeeded()
                 } else {
-                    manualCountOverride = nil
-                    didInitializeManualCount = false
+                    countDraft.close()
                     resetSelections()
                 }
             }
-            .onAppear { initializeManualCountIfNeeded() }
+            .onAppear {
+                initializeManualCountIfNeeded()
+                seedFieldingIfNeeded()
+            }
             // One notification point for the whole sheet. Previously each tap site
             // called onCountChanged by hand, so any path that forgot to call it
             // left the rest of the app showing a stale count.
@@ -1880,7 +2243,7 @@ struct PitchResultSheetView: View {
                 // on dismiss and overwrote the count the save had just committed,
                 // so every recorded pitch snapped the game back to its pre-pitch
                 // count and the next pitch re-seeded from there.
-                guard isPresented, didInitializeManualCount else { return }
+                guard countDraft.shouldPublish(isPresented: isPresented) else { return }
                 onCountChanged?(newValue.balls, newValue.strikes)
             }
             .alert("Result Location Required", isPresented: $showMissingLocationPrompt) {
@@ -1898,7 +2261,8 @@ struct PitchResultSheetView: View {
                     },
                     onSave: { reviewedEvent in
                         commitReviewedSavedPlayEvent(reviewedEvent)
-                    }
+                    },
+                    saveAnchor: draft.saveAnchor
                 )
                 .interactiveDismissDisabled(true)
                 .fixedAppDynamicType()
@@ -2216,6 +2580,9 @@ private struct FieldOverlayView: View {
     @Binding var battedBallTapNormalized: CGPoint?
     var displayImageName: String = "FieldImage2"
     var showsDismissControls: Bool = true
+    /// Drawn over the field, given the image's frame and the canvas size -
+    /// the batter and runners (BasesFieldLayer).
+    var overlay: ((CGRect, CGSize) -> AnyView)? = nil
 
     private func handleTap(at location: CGPoint, in imageRect: CGRect) {
         guard imageRect.contains(location) else { return }
@@ -2359,15 +2726,22 @@ private struct FieldOverlayView: View {
                         .fill(Color.red)
                         .frame(width: 14, height: 14)
                         .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                        .accessibilityElement()
+                        .accessibilityIdentifier("result.hitMarker")
                         .position(x: point.x, y: point.y)
 
                     if let labelText = battedBallRegionName, !labelText.isEmpty {
                         Text(labelText)
-                            .font(.headline)
-                            .padding(8)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
                             .background(.ultraThinMaterial, in: Capsule())
                             .position(x: min(max(point.x, 60), proxy.size.width - 60), y: min(point.y + 28, proxy.size.height - 24))
                     }
+                }
+
+                if let overlay {
+                    overlay(imageRect, proxy.size)
                 }
 
                 if showsDismissControls {

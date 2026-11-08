@@ -45,7 +45,14 @@ struct HitterStatsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var allEvents: [PitchEvent] = []
+    /// Steals / caught stealing / pickoffs (RunnerEventStore), filtered the
+    /// same way as the pitches.
+    @State private var allRunnerEvents: [RunnerEvent] = []
     @State private var isLoading = false
+    /// Every pitch of the games this player's teams played (FieldingStatsViews),
+    /// for the Fielding section - fielding is on the other team's pitches.
+    @State private var gameEvents: [PitchEvent] = []
+    @State private var isLoadingFielding = false
     @State private var dateFilter: DateRangeFilter = .all
     @State private var selectedTeamIds: Set<String> = []
     @State private var showsFocusGameOnly = true
@@ -74,30 +81,32 @@ struct HitterStatsView: View {
         Set(games.filter { !authManager.gameCountsInStats($0) }.compactMap { $0.id })
     }
 
+    private var statsFilter: StatsEventFilter {
+        StatsEventFilter(
+            focusGameId: isFocusedOnGame ? focusGameId : nil,
+            excludedGameIds: excludedGameIds,
+            dateRange: dateRange,
+            teamGameIds: gameIdsForSelectedTeams
+        )
+    }
+
     private var filteredEvents: [PitchEvent] {
-        // This Game is exactly the open game's pitches - archive, date and
-        // team filters don't apply to it.
-        if isFocusedOnGame, let focusGameId {
-            return allEvents.filter { $0.gameId == focusGameId }
-        }
-        var result = allEvents
-        let excluded = excludedGameIds
-        if !excluded.isEmpty {
-            result = result.filter { event in
-                guard let gid = event.gameId, !gid.isEmpty else { return true }
-                return !excluded.contains(gid)
-            }
-        }
-        if let range = dateRange {
-            result = result.filter { range.contains($0.timestamp) }
-        }
-        if let gameIds = gameIdsForSelectedTeams {
-            result = result.filter { event in
-                guard let gid = event.gameId, !gid.isEmpty else { return false }
-                return gameIds.contains(gid)
-            }
-        }
-        return result
+        statsFilter.pitches(allEvents)
+    }
+
+    private var allHitterIds: Set<String> {
+        guard let hitterId = hitter.id else { return [] }
+        return Set(combinedHitterIds.contains(hitterId) ? combinedHitterIds : [hitterId])
+    }
+
+    private var fieldingLedger: FieldingLedger {
+        FieldingLedger(events: statsFilter.pitches(gameEvents))
+    }
+
+    private var statLine: HittingStatLine {
+        var line = HittingStatLine(events: filteredEvents, runnerEvents: statsFilter.runnerEvents(allRunnerEvents))
+        line.recordRunsScored(onPitches: statsFilter.pitches(gameEvents), hitterIds: allHitterIds)
+        return line
     }
 
     var body: some View {
@@ -134,6 +143,8 @@ struct HitterStatsView: View {
                         }
                     }
 
+                    StatsSectionHeader(title: "Hitting")
+
                     Text("\(filteredEvents.count) pitch\(filteredEvents.count == 1 ? "" : "es") tracked")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -149,22 +160,31 @@ struct HitterStatsView: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal)
                     } else {
-                        statLineGrid(HittingStatLine(events: filteredEvents))
+                        statLineGrid(statLine)
                             .padding(.horizontal)
                         StrikeZoneHeatmapView(events: filteredEvents)
                             .padding(.horizontal)
                     }
+
+                    StatsSectionHeader(title: "Fielding")
+                        .padding(.top, 8)
+
+                    PlayerFieldingSection(ledger: fieldingLedger, hitterIds: allHitterIds, isLoading: isLoadingFielding)
+                        .padding(.horizontal)
                 }
                 .padding(.vertical, 12)
             }
-            .navigationTitle("Hitting Stats")
+            .navigationTitle("Player Stats")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
             }
-            .onAppear { loadEvents() }
+            .onAppear {
+                loadEvents()
+                loadFieldingEvents()
+            }
         }
     }
 
@@ -175,10 +195,12 @@ struct HitterStatsView: View {
             ("SLG", HittingStatLine.formatRate(line.slugging))
         ]
         let counts: [(String, Int)] = [
-            ("PA", line.plateAppearances), ("AB", line.atBats), ("H", line.hits),
+            ("PA", line.plateAppearances), ("AB", line.atBats), ("R", line.runs), ("H", line.hits),
             ("1B", line.singles), ("2B", line.doubles), ("3B", line.triples), ("HR", line.homeRuns),
+            ("RBI", line.runsBattedIn),
             ("BB", line.walks), ("HBP", line.hitByPitch), ("K", line.strikeouts),
-            ("ROE", line.reachedOnError)
+            ("ROE", line.reachedOnError),
+            ("SB", line.stolenBases), ("CS", line.caughtStealing), ("PO", line.pickedOff)
         ]
         let columns = [GridItem(.adaptive(minimum: 64), spacing: 8)]
         return VStack(alignment: .leading, spacing: 8) {
@@ -217,12 +239,28 @@ struct HitterStatsView: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
+    /// The games of this player's teams (all games when none are known).
+    private func loadFieldingEvents() {
+        let teamIds = Set(teams.compactMap(\.id))
+        let relevant = teamIds.isEmpty ? games : games.filter { TeamFilterChips.game($0, belongsTo: teamIds) }
+        isLoadingFielding = true
+        FieldingEventsLoader.load(games: relevant, authManager: authManager) { events in
+            gameEvents = events
+            isLoadingFielding = false
+        }
+    }
+
     private func loadEvents() {
         guard let hitterId = hitter.id else { return }
         let hitterIds = combinedHitterIds.contains(hitterId) ? combinedHitterIds : [hitterId]
         isLoading = true
         var collected: [PitchEvent] = []
         let group = DispatchGroup()
+        group.enter()
+        RunnerEventStore.loadForHitters(hitterIds) { events in
+            self.allRunnerEvents = events
+            group.leave()
+        }
         for id in hitterIds {
             group.enter()
             authManager.loadHitterEvents(hitterId: id) { events in

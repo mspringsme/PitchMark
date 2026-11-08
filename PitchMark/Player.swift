@@ -242,14 +242,16 @@ extension AuthManager {
             return
         }
 
-        if let pitcherId {
-            Firestore.firestore().collection("pitchers").document(pitcherId)
+        func renamePitcher(_ id: String) {
+            Firestore.firestore().collection("pitchers").document(id)
                 .setData(["name": name], merge: true) { error in
                     if let error {
                         debugLog("⚠️ propagatePlayerRename pitcher failed:", error.localizedDescription)
                     }
                 }
         }
+
+        if let pitcherId { renamePitcher(pitcherId) }
 
         loadMyTeams { entries, _ in
             var resolvedPlayerId = playerId
@@ -287,18 +289,27 @@ extension AuthManager {
             }
 
             group.notify(queue: .main) {
-                if let resolvedPlayerId {
-                    self.playersCollection().document(resolvedPlayerId)
-                        .setData(["name": name], merge: true) { error in
-                            if let error {
-                                debugLog("⚠️ propagatePlayerRename player failed:", error.localizedDescription)
-                            }
+                guard let resolvedPlayerId else {
+                    if let resolvedHitterId {
+                        self.updateHitterName(id: resolvedHitterId, name: name)
+                    }
+                    completion?()
+                    return
+                }
+                self.playersCollection().document(resolvedPlayerId)
+                    .setData(["name": name], merge: true) { error in
+                        if let error {
+                            debugLog("⚠️ propagatePlayerRename player failed:", error.localizedDescription)
                         }
+                    }
+                // Records the Player links (left behind by Link/Merge) get
+                // the name too, or they keep showing the old one.
+                self.loadPlayer(id: resolvedPlayerId) { player in
+                    let targets = PlayerLinks.renameTargets(pitcherId: pitcherId, hitterId: resolvedHitterId, player: player)
+                    for id in targets.pitcherIds where id != pitcherId { renamePitcher(id) }
+                    for id in targets.hitterIds { self.updateHitterName(id: id, name: name) }
+                    completion?()
                 }
-                if let resolvedHitterId {
-                    self.updateHitterName(id: resolvedHitterId, name: name)
-                }
-                completion?()
             }
         }
     }
@@ -310,35 +321,43 @@ extension AuthManager {
     /// The question linking has to answer before it may repoint a roster row
     /// off a Pitcher doc: a record with history can never be quietly
     /// abandoned, an empty one is just the duplicate the coach is cleaning up.
+    /// A failed read counts as history (ProfileMerge.hasHistory).
     func pitcherHasRecordedEvents(pitcherId: String, completion: @escaping (Bool) -> Void) {
-        Firestore.firestore().collection("pitchers").document(pitcherId)
-            .collection("pitchEvents").limit(to: 1)
-            .getDocuments { snapshot, error in
-                if let error {
-                    debugLog("⚠️ pitcherHasRecordedEvents failed:", error.localizedDescription)
-                    // Assume history on a failed read - the safe direction is
-                    // keeping a record, never deleting one on a guess.
-                    DispatchQueue.main.async { completion(true) }
-                    return
-                }
-                DispatchQueue.main.async { completion(!(snapshot?.documents.isEmpty ?? true)) }
-            }
+        recordHasHistory(paths: ProfileMerge.historyPaths(pitcherId: pitcherId), completion: completion)
     }
 
     /// `pitcherHasRecordedEvents` for the Hitter side - `/hitters/{id}/
     /// pitchEvents` accumulates the same PitchEvent rows filtered by
     /// hitterId (see Hitter.swift), so a hitting record can carry history
-    /// the pitching one doesn't and the two are checked independently.
+    /// the pitching one doesn't and the two are checked independently. Its
+    /// runner events count too: a pinch runner's steals live only there.
     func hitterHasRecordedEvents(hitterId: String, completion: @escaping (Bool) -> Void) {
-        Firestore.firestore().collection("hitters").document(hitterId)
-            .collection("pitchEvents").limit(to: 1)
+        recordHasHistory(paths: ProfileMerge.historyPaths(hitterId: hitterId), completion: completion)
+    }
+
+    private func recordHasHistory(paths: [String], completion: @escaping (Bool) -> Void) {
+        var reads: [Result<Bool, Error>] = []
+        let group = DispatchGroup()
+        for path in paths {
+            group.enter()
+            // recordHasEvents completes on the main queue.
+            recordHasEvents(path: path) { read in
+                reads.append(read)
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { completion(ProfileMerge.hasHistory(reads)) }
+    }
+
+    private func recordHasEvents(path: String, completion: @escaping (Result<Bool, Error>) -> Void) {
+        Firestore.firestore().collection(path).limit(to: 1)
             .getDocuments { snapshot, error in
                 if let error {
-                    debugLog("⚠️ hitterHasRecordedEvents failed:", error.localizedDescription)
-                    DispatchQueue.main.async { completion(true) }
+                    debugLog("⚠️ history check failed:", path, error.localizedDescription)
+                    DispatchQueue.main.async { completion(.failure(error)) }
                     return
                 }
-                DispatchQueue.main.async { completion(!(snapshot?.documents.isEmpty ?? true)) }
+                DispatchQueue.main.async { completion(.success(!(snapshot?.documents.isEmpty ?? true))) }
             }
     }
 
@@ -366,7 +385,7 @@ extension AuthManager {
         player: Player,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        guard let rowId = duplicate.id, let playerId = player.id else {
+        guard let rowId = duplicate.id, player.id != nil else {
             completion(.failure(NSError(
                 domain: "Player",
                 code: 400,
@@ -376,26 +395,32 @@ extension AuthManager {
         }
 
         recordsToKeepSeparate(for: duplicate, canonical: player) { keptPitcherId, keptHitterId in
-            var data: [String: Any] = ["playerId": playerId, "name": player.name]
-            if keptPitcherId == nil, let canonicalPitcherId = player.pitcherId {
-                data["pitcherId"] = canonicalPitcherId
-            }
-            if keptHitterId == nil, let canonicalHitterId = player.hitterId {
-                data["hitterId"] = canonicalHitterId
+            guard let repoint = ProfileMerge.repoint(
+                duplicate, onto: player, keptPitcherId: keptPitcherId, keptHitterId: keptHitterId
+            ) else {
+                completion(.failure(NSError(
+                    domain: "Player",
+                    code: 400,
+                    userInfo: [NSLocalizedDescriptionKey: "That roster entry can't be linked."]
+                )))
+                return
             }
 
             Firestore.firestore()
                 .collection("teams").document(teamId)
                 .collection("players").document(rowId)
-                .updateData(data) { error in
+                .updateData(repoint.data) { error in
                     if let error {
                         completion(.failure(error))
                         return
                     }
+                    let left = ProfileMerge.leftBehind(
+                        by: duplicate, canonical: player, keptPitcherId: keptPitcherId, keptHitterId: keptHitterId
+                    )
                     self.cleanupOrphanedPlayerIdentity(
-                        playerId: duplicate.playerId == playerId ? nil : duplicate.playerId,
-                        pitcherId: keptPitcherId == nil ? duplicate.pitcherId : nil,
-                        hitterId: keptHitterId == nil ? duplicate.hitterId : nil,
+                        playerId: left.playerId,
+                        pitcherId: left.pitcherId,
+                        hitterId: left.hitterId,
                         canonical: player
                     )
                     completion(.success(()))
@@ -411,8 +436,9 @@ extension AuthManager {
         canonical: Player,
         completion: @escaping (String?, String?) -> Void
     ) {
+        let check = ProfileMerge.recordsToCheck(on: duplicate, canonical: canonical)
         func checkHitter(keptPitcherId: String?) {
-            guard let hitterId = duplicate.hitterId, hitterId != canonical.hitterId else {
+            guard let hitterId = check.hitterId else {
                 completion(keptPitcherId, nil)
                 return
             }
@@ -421,7 +447,7 @@ extension AuthManager {
             }
         }
 
-        guard let pitcherId = duplicate.pitcherId, pitcherId != canonical.pitcherId else {
+        guard let pitcherId = check.pitcherId else {
             checkHitter(keptPitcherId: nil)
             return
         }
@@ -432,16 +458,16 @@ extension AuthManager {
 
     /// Deletes what a merge left behind - but only ever what no roster row
     /// still points at, and (for Pitcher/Hitter docs) only what holds no
-    /// recorded history. Three guards earn that:
+    /// recorded history. The decision is `ProfileMerge.unreferenced`:
     ///
-    /// 1. The canonical player's own records are excluded outright.
-    /// 2. The reference scan bails unless it actually saw roster rows -
-    ///    `loadTeamPlayers` reports a failed read as an empty roster, and
-    ///    "no rows anywhere" would otherwise read as "nothing references
-    ///    this", which is precisely the input that would delete a `Player`
-    ///    doc three other teams still link.
+    /// 1. The kept player's own identity and records are never deleted.
+    /// 2. If any team's roster can't be read, nothing is deleted - a failed
+    ///    read would otherwise look like an empty roster, which is exactly
+    ///    the input that deletes a `Player` doc that team still links.
     /// 3. A duplicate identity can itself span several teams; merging one of
     ///    its rows leaves the rest, and the scan sees them.
+    /// 4. A `Player` doc's linked histories move to the kept player before
+    ///    the doc goes (`ProfileMerge.linksToMove`); if they can't, it stays.
     ///
     /// Best-effort and silent either way: an orphan that survives is a
     /// stray row in Home's Players, which is cosmetic. Deleting something
@@ -452,48 +478,33 @@ extension AuthManager {
         hitterId: String?,
         canonical: Player
     ) {
-        let playerId = playerId.flatMap { $0 == canonical.id ? nil : $0 }
-        let pitcherId = pitcherId.flatMap { $0 == canonical.pitcherId ? nil : $0 }
-        let hitterId = hitterId.flatMap { $0 == canonical.hitterId ? nil : $0 }
-        guard playerId != nil || pitcherId != nil || hitterId != nil else { return }
+        let candidates = ProfileMerge.Candidates(playerId: playerId, pitcherId: pitcherId, hitterId: hitterId)
+        guard !ProfileMerge.excludingKept(candidates, canonical: canonical).isEmpty else { return }
 
         loadMyTeams { entries, error in
-            guard error == nil, !entries.isEmpty else { return }
+            guard error == nil else { return }
 
-            var referencedPlayerIds: Set<String> = []
-            var referencedPitcherIds: Set<String> = []
-            var referencedHitterIds: Set<String> = []
-            var sawAnyRow = false
+            var reads: [Result<[TeamPlayer], Error>] = []
             let group = DispatchGroup()
-
             for entry in entries {
                 guard let teamId = entry.team.id else { continue }
                 group.enter()
-                // loadTeamPlayers completes on the main queue, so these
-                // mutations are serialized without a lock.
-                self.loadTeamPlayers(teamId: teamId) { rows in
-                    for row in rows {
-                        sawAnyRow = true
-                        if let id = row.playerId { referencedPlayerIds.insert(id) }
-                        if let id = row.pitcherId { referencedPitcherIds.insert(id) }
-                        if let id = row.hitterId { referencedHitterIds.insert(id) }
-                    }
+                // loadTeamPlayersResult completes on the main queue, so
+                // these appends are serialized without a lock.
+                self.loadTeamPlayersResult(teamId: teamId) { read in
+                    reads.append(read)
                     group.leave()
                 }
             }
 
             group.notify(queue: .main) {
-                guard sawAnyRow else { return }
+                guard let orphans = ProfileMerge.unreferenced(candidates, canonical: canonical, rosterReads: reads) else { return }
 
-                if let playerId, !referencedPlayerIds.contains(playerId) {
-                    self.playersCollection().document(playerId).delete { error in
-                        if let error {
-                            debugLog("⚠️ cleanupOrphanedPlayerIdentity player failed:", error.localizedDescription)
-                        }
-                    }
+                if let playerId = orphans.playerId {
+                    self.deleteOrphanedPlayerDoc(playerId, canonical: canonical)
                 }
 
-                if let pitcherId, !referencedPitcherIds.contains(pitcherId) {
+                if let pitcherId = orphans.pitcherId {
                     self.pitcherHasRecordedEvents(pitcherId: pitcherId) { hasHistory in
                         guard !hasHistory else { return }
                         Firestore.firestore().collection("pitchers").document(pitcherId).delete { error in
@@ -504,7 +515,7 @@ extension AuthManager {
                     }
                 }
 
-                if let hitterId, !referencedHitterIds.contains(hitterId) {
+                if let hitterId = orphans.hitterId {
                     self.hitterHasRecordedEvents(hitterId: hitterId) { hasHistory in
                         guard !hasHistory else { return }
                         Firestore.firestore().collection("hitters").document(hitterId).delete { error in
@@ -514,6 +525,36 @@ extension AuthManager {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Moves the doc's linked histories onto the kept player, then deletes
+    /// it. A doc that can't be read, or whose links can't be moved, stays.
+    private func deleteOrphanedPlayerDoc(_ playerId: String, canonical: Player) {
+        loadPlayer(id: playerId) { duplicate in
+            guard let duplicate else { return }
+
+            func delete() {
+                self.playersCollection().document(playerId).delete { error in
+                    if let error {
+                        debugLog("⚠️ cleanupOrphanedPlayerIdentity player failed:", error.localizedDescription)
+                    }
+                }
+            }
+
+            let links = ProfileMerge.linksToMove(from: duplicate, onto: canonical)
+            guard !links.pitcherIds.isEmpty || !links.hitterIds.isEmpty else { delete(); return }
+            guard let canonicalId = canonical.id else { return }
+            var data: [String: Any] = [:]
+            if !links.pitcherIds.isEmpty { data["linkedPitcherIds"] = FieldValue.arrayUnion(links.pitcherIds) }
+            if !links.hitterIds.isEmpty { data["linkedHitterIds"] = FieldValue.arrayUnion(links.hitterIds) }
+            self.playersCollection().document(canonicalId).updateData(data) { error in
+                if let error {
+                    debugLog("⚠️ moving linked histories failed, keeping the Player doc:", error.localizedDescription)
+                    return
+                }
+                delete()
             }
         }
     }

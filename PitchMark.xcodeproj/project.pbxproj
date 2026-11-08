@@ -37,6 +37,30 @@
 		23F7D2F72F759DE90010D7BF /* StrikeZoneButtonLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F7D2F62F759DE90010D7BF /* StrikeZoneButtonLabel.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		7E570000000000000000000B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 239F0B742F12B238004E32DD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 239F0B7B2F12B238004E32DD;
+			remoteInfo = PitchMark;
+		};
+		7E5700000000000000000016 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 239F0B742F12B238004E32DD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 239F0B7B2F12B238004E32DD;
+			remoteInfo = PitchMark;
+		};
+		7E5700000000000000000021 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 239F0B742F12B238004E32DD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 23F7D2C42F758F710010D7BF;
+			remoteInfo = "Pitchmark Display";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		23652D3A2F57705F00461063 /* firestore.rules */ = {isa = PBXFileReference; lastKnownFileType = text; path = firestore.rules; sourceTree = "<group>"; };
 		239F0B7C2F12B238004E32DD /* PitchMark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PitchMark.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -51,6 +75,9 @@
 		23F7D2D82F75979E0010D7BF /* DisplayRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRootView.swift; sourceTree = "<group>"; };
 		23F7D2D92F75979E0010D7BF /* DisplayOnlyScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayOnlyScreen.swift; sourceTree = "<group>"; };
 		23F7D2F62F759DE90010D7BF /* StrikeZoneButtonLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrikeZoneButtonLabel.swift; sourceTree = "<group>"; };
+		7E5700000000000000000002 /* PitchMarkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PitchMarkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7E570000000000000000000D /* PitchMarkUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PitchMarkUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7E5700000000000000000018 /* PitchmarkDisplayTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PitchmarkDisplayTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -68,11 +95,19 @@
 				AuthManager.swift,
 				BaseRunnerRules.swift,
 				CalledPitchRecord.swift,
+				CountDraft.swift,
+				EventCopies.swift,
+				FieldedByView.swift,
+				FieldingPlay.swift,
+				FieldPositionsView.swift,
 				Games.swift,
+				LineupFieldPositions.swift,
 				Notifications.swift,
 				"Pitch%.swift",
+				PitchEventEdit.swift,
 				PitchResultsSheetView.swift,
 				PitchSessionManager.swift,
+				PlayDraft.swift,
 				SignInView.swift,
 				SubscriptionManager.swift,
 				SupportExtensions.swift,
@@ -90,6 +125,21 @@
 				23F7D2E22F7599BC0010D7BF /* Exceptions for "PitchMark" folder in "Pitchmark Display" target */,
 			);
 			path = PitchMark;
+			sourceTree = "<group>";
+		};
+		7E5700000000000000000003 /* PitchMarkTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PitchMarkTests;
+			sourceTree = "<group>";
+		};
+		7E570000000000000000000E /* PitchMarkUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PitchMarkUITests;
+			sourceTree = "<group>";
+		};
+		7E5700000000000000000019 /* PitchmarkDisplayTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PitchmarkDisplayTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -125,6 +175,27 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7E5700000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7E5700000000000000000010 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7E570000000000000000001B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -132,6 +203,9 @@
 			isa = PBXGroup;
 			children = (
 				239F0B7E2F12B238004E32DD /* PitchMark */,
+				7E5700000000000000000003 /* PitchMarkTests */,
+				7E570000000000000000000E /* PitchMarkUITests */,
+				7E5700000000000000000019 /* PitchmarkDisplayTests */,
 				23F1A8892F12C6EF0094E7BC /* Frameworks */,
 				239F0B7D2F12B238004E32DD /* Products */,
 				23652D3A2F57705F00461063 /* firestore.rules */,
@@ -148,6 +222,9 @@
 			children = (
 				239F0B7C2F12B238004E32DD /* PitchMark.app */,
 				23F7D2C52F758F710010D7BF /* Pitchmark Display.app */,
+				7E5700000000000000000002 /* PitchMarkTests.xctest */,
+				7E570000000000000000000D /* PitchMarkUITests.xctest */,
+				7E5700000000000000000018 /* PitchmarkDisplayTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -232,6 +309,75 @@
 			productReference = 23F7D2C52F758F710010D7BF /* Pitchmark Display.app */;
 			productType = "com.apple.product-type.application";
 		};
+		7E5700000000000000000001 /* PitchMarkTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7E5700000000000000000007 /* Build configuration list for PBXNativeTarget "PitchMarkTests" */;
+			buildPhases = (
+				7E5700000000000000000004 /* Sources */,
+				7E5700000000000000000005 /* Frameworks */,
+				7E5700000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7E570000000000000000000A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				7E5700000000000000000003 /* PitchMarkTests */,
+			);
+			name = PitchMarkTests;
+			packageProductDependencies = (
+			);
+			productName = PitchMarkTests;
+			productReference = 7E5700000000000000000002 /* PitchMarkTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		7E570000000000000000000C /* PitchMarkUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7E5700000000000000000012 /* Build configuration list for PBXNativeTarget "PitchMarkUITests" */;
+			buildPhases = (
+				7E570000000000000000000F /* Sources */,
+				7E5700000000000000000010 /* Frameworks */,
+				7E5700000000000000000011 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7E5700000000000000000015 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				7E570000000000000000000E /* PitchMarkUITests */,
+			);
+			name = PitchMarkUITests;
+			packageProductDependencies = (
+			);
+			productName = PitchMarkUITests;
+			productReference = 7E570000000000000000000D /* PitchMarkUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		7E5700000000000000000017 /* PitchmarkDisplayTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7E570000000000000000001D /* Build configuration list for PBXNativeTarget "PitchmarkDisplayTests" */;
+			buildPhases = (
+				7E570000000000000000001A /* Sources */,
+				7E570000000000000000001B /* Frameworks */,
+				7E570000000000000000001C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7E5700000000000000000020 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				7E5700000000000000000019 /* PitchmarkDisplayTests */,
+			);
+			name = PitchmarkDisplayTests;
+			packageProductDependencies = (
+			);
+			productName = PitchmarkDisplayTests;
+			productReference = 7E5700000000000000000018 /* PitchmarkDisplayTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -261,6 +407,18 @@
 							};
 						};
 					};
+					7E5700000000000000000001 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 239F0B7B2F12B238004E32DD;
+					};
+					7E570000000000000000000C = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 239F0B7B2F12B238004E32DD;
+					};
+					7E5700000000000000000017 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 23F7D2C42F758F710010D7BF;
+					};
 				};
 			};
 			buildConfigurationList = 239F0B772F12B238004E32DD /* Build configuration list for PBXProject "PitchMark" */;
@@ -283,6 +441,9 @@
 			targets = (
 				239F0B7B2F12B238004E32DD /* PitchMark */,
 				23F7D2C42F758F710010D7BF /* Pitchmark Display */,
+				7E5700000000000000000001 /* PitchMarkTests */,
+				7E570000000000000000000C /* PitchMarkUITests */,
+				7E5700000000000000000017 /* PitchmarkDisplayTests */,
 			);
 		};
 /* End PBXProject section */
@@ -302,6 +463,27 @@
 			files = (
 				23D15A022FA1000100D15A02 /* Assets.xcassets in Resources */,
 				23B131D22F75A91D00A70589 /* GoogleService-Info.plist in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7E5700000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7E5700000000000000000011 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7E570000000000000000001C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -331,7 +513,46 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7E5700000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7E570000000000000000000F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		7E570000000000000000001A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7E570000000000000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 239F0B7B2F12B238004E32DD /* PitchMark */;
+			targetProxy = 7E570000000000000000000B /* PBXContainerItemProxy */;
+		};
+		7E5700000000000000000015 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 239F0B7B2F12B238004E32DD /* PitchMark */;
+			targetProxy = 7E5700000000000000000016 /* PBXContainerItemProxy */;
+		};
+		7E5700000000000000000020 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 23F7D2C42F758F710010D7BF /* Pitchmark Display */;
+			targetProxy = 7E5700000000000000000021 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		239F0B852F12B239004E32DD /* Debug */ = {
@@ -470,7 +691,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
-				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to record Moments and to scan QR codes for joining a live game.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to record Moments, to scan QR codes for joining a live game, and to scan lineups.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PitchMark can tag a Moment with the city it was recorded in, if you choose to.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PitchMark uses the microphone to record audio with Moments videos.";
@@ -518,7 +739,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Pitchmark;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.sports";
-				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to record Moments and to scan QR codes for joining a live game.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "PitchMark uses the camera to record Moments, to scan QR codes for joining a live game, and to scan lineups.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PitchMark can tag a Moment with the city it was recorded in, if you choose to.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PitchMark uses the microphone to record audio with Moments videos.";
@@ -637,6 +858,128 @@
 			};
 			name = Release;
 		};
+		7E5700000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E3TJVK4339;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PitchMark.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PitchMark";
+			};
+			name = Debug;
+		};
+		7E5700000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E3TJVK4339;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PitchMark.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PitchMark";
+			};
+			name = Release;
+		};
+		7E5700000000000000000013 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E3TJVK4339;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PitchMark;
+			};
+			name = Debug;
+		};
+		7E5700000000000000000014 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E3TJVK4339;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.pitchmark.app.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = PitchMark;
+			};
+			name = Release;
+		};
+		7E570000000000000000001E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E3TJVK4339;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "app.Pitchmark-Display.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Pitchmark Display.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Pitchmark Display";
+			};
+			name = Debug;
+		};
+		7E570000000000000000001F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = E3TJVK4339;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "app.Pitchmark-Display.tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Pitchmark Display.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Pitchmark Display";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -663,6 +1006,33 @@
 			buildConfigurations = (
 				23F7D2CE2F758F720010D7BF /* Debug */,
 				23F7D2CF2F758F720010D7BF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7E5700000000000000000007 /* Build configuration list for PBXNativeTarget "PitchMarkTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7E5700000000000000000008 /* Debug */,
+				7E5700000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7E5700000000000000000012 /* Build configuration list for PBXNativeTarget "PitchMarkUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7E5700000000000000000013 /* Debug */,
+				7E5700000000000000000014 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7E570000000000000000001D /* Build configuration list for PBXNativeTarget "PitchmarkDisplayTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7E570000000000000000001E /* Debug */,
+				7E570000000000000000001F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

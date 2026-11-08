@@ -88,6 +88,8 @@ struct MomentDetailView: View {
     /// whenever photoCount changes, not decoded inline in the view body.
     @State private var photoImages: [Int: UIImage] = [:]
 
+    @State private var shareRequest: MomentShareRequest? = nil
+    @State private var showNothingToShare = false
     @State private var showTrimEditor = false
     @State private var trimErrorMessage: String? = nil
 
@@ -192,11 +194,30 @@ struct MomentDetailView: View {
                                 .stroke(Color.pitchMarkActiveGray.opacity(0.4), lineWidth: 1)
                         )
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        shareRequest = MomentShare.prepare(moment)
+                        if shareRequest == nil { showNothingToShare = true }
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share")
                     Button("Done") { dismiss() }
                 }
             }
         }
+        .sheet(item: $shareRequest) { request in
+            ShareSheet(items: request.items)
+                .presentationDetents([.medium, .large])
+        }
+        .appConfirmationDialog(
+            isPresented: $showNothingToShare,
+            title: "Nothing to Share Here",
+            message: "This Moment's video and photos are on the device that recorded it.",
+            primaryTitle: "OK",
+            primaryAction: {},
+            secondaryTitle: "Cancel"
+        )
         .sheet(item: $fullScreenPhoto) { photo in
             Image(uiImage: photo.image)
                 .resizable()

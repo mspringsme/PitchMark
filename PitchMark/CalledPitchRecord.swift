@@ -139,10 +139,18 @@ func outcomeSummaryLines(for event: PitchEvent) -> [String] {
     }
     if event.wildPitch { addUnique("Wild Pitch") }
     if event.passedBall { addUnique("Passed Ball") }
-    if let play = event.play, let playSummary = BaseRunnerRules.summary(for: play) {
+    // The play line already says the result ("2B", "Out", "Walk"), so the
+    // outcome isn't repeated under it.
+    var playSaysOutcome = false
+    if let play = event.play, let playSummary = BaseRunnerRules.cardSummary(for: play) {
         addUnique(playSummary, sanitizeText: false)
+        playSaysOutcome = !play.isRunnersOnly
     } else if event.errorOnPlay {
         addUnique("Error on play")
+    }
+    if let fielding = FieldingPlay.summary(outs: event.fieldingOuts, errors: event.errorPositions,
+                                           descriptor: event.descriptor) {
+        addUnique(fielding, sanitizeText: false)
     }
     if event.isBall == true {
         let marker = event.ballMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -168,13 +176,12 @@ func outcomeSummaryLines(for event: PitchEvent) -> [String] {
         let marker = event.foulMarker?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let marker, !marker.isEmpty {
             addUnique("\(marker) Foul Out", sanitizeText: false)
-        } else {
+        } else if !playSaysOutcome {
             addUnique(event.outcome, sanitizeText: true)
         }
-    } else {
+    } else if !playSaysOutcome {
         addUnique(event.outcome, sanitizeText: true)
     }
-    addUnique(event.descriptor, sanitizeText: true)
 
     // Batted ball details — show only the region label in cards (ignore type)
     let regionLower = (event.battedBallRegion ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -184,12 +191,20 @@ func outcomeSummaryLines(for event: PitchEvent) -> [String] {
         return !region.isEmpty && existingCombined.contains(region)
     }
 
-    if let region = event.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines), !region.isEmpty {
-        if !alreadyRepresentsRegion(regionLower) {
-            // Do NOT sanitize constructed lines; keep user-facing label intact
-            addUnique(region, sanitizeText: false)
-        }
+    // Ball type and where it went share one line: "Line · Deep Right".
+    // "Hit" is dropped from the descriptor on a hit - the card's header
+    // and the play line already say it.
+    let descriptorText: String? = sanitize(event.descriptor).map { text in
+        guard pitchEventCountsAsHit(event) else { return text }
+        let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0.caseInsensitiveCompare("Hit") != .orderedSame }
+        return parts.joined(separator: ", ")
     }
+    let region = event.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    let showRegion = !region.isEmpty && !alreadyRepresentsRegion(regionLower)
+    let detail = [descriptorText ?? "", showRegion ? region : ""].filter { !$0.isEmpty }
+    // Do NOT sanitize constructed lines; keep user-facing labels intact
+    addUnique(detail.joined(separator: " · "), sanitizeText: false)
 
     return lines
 }
@@ -314,7 +329,8 @@ struct OutcomeSummaryView: View {
     }
 }
 
-private func buildSavedPlayReviewedEvent(
+/// The review step's pitch (SavedPlayReviewSheetView). Internal for tests.
+func buildSavedPlayReviewedEvent(
     from base: PitchEvent,
     balls: Int,
     strikes: Int,
@@ -392,7 +408,7 @@ private func buildSavedPlayReviewedEvent(
     let resolvedIsStrike = isStrike || resultForcesStrike
     let resolvedIsBall = resultForcesStrike ? false : isBall
 
-    return PitchEvent(
+    var reviewed = PitchEvent(
         id: base.id,
         timestamp: base.timestamp,
         pitch: base.pitch,
@@ -425,13 +441,56 @@ private func buildSavedPlayReviewedEvent(
         strikeLookingMarker: strikeLooking ? base.strikeLookingMarker : nil,
         ballMarker: resolvedIsBall ? base.ballMarker : nil,
         foulMarker: base.foulMarker,
-        atBatBalls: balls,
-        atBatStrikes: strikes,
-        atBatCount: "\(balls)-\(strikes)",
         trackingMode: base.trackingMode,
         catcherEstimate: base.catcherEstimate,
-        play: BaseRunnerRules.playIfConsistent(base.play, outcome: outcome, errorOnPlay: errorOnPlay)
+        play: BaseRunnerRules.playIfConsistent(base.play, outcome: outcome, errorOnPlay: errorOnPlay),
+        basesBefore: base.basesBefore,
+        defense: base.defense,
+        fieldingTeamId: base.fieldingTeamId
     )
+    reviewed.fieldingOuts = FieldingPlay.consistentOuts(base.fieldingOuts, for: reviewed)
+    reviewed.errorPositions = FieldingPlay.consistentErrors(base.errorPositions, for: reviewed)
+    // Through applyCount like every other save, so a walk or strikeout keeps
+    // its "Ball 4" / "Strikeout" label and the reset count.
+    PitchEventEdit.stampReviewedCount(&reviewed, balls: balls, strikes: strikes)
+    return reviewed
+}
+
+/// Where the review sheet's Back/Save row goes when it opens from Save
+/// Result (2026-11-05, user's call: tap Save Result, then Save, without
+/// moving the finger). All in the sheet's own points.
+enum ReviewSaveLayout {
+    static let barHeight: CGFloat = 56
+    static let topPadding: CGFloat = 20
+    /// Room left under the row so it never sits on the sheet's bottom edge.
+    static let bottomRoom: CGFloat = 120
+
+    /// The row's top inside the sheet: centred on the anchor, kept inside.
+    static func barTop(anchorMidY: CGFloat, sheetMinY: CGFloat, sheetHeight: CGFloat, barHeight: CGFloat) -> CGFloat {
+        let wanted = anchorMidY - sheetMinY - barHeight / 2
+        let highest = sheetHeight > 0 ? sheetHeight - barHeight - bottomRoom : wanted
+        return max(0, min(wanted, highest))
+    }
+
+    /// Which of the header and count card fit above the row (in order -
+    /// the count never sits above without the header).
+    static func above(room: CGFloat, headerHeight: CGFloat, countHeight: CGFloat) -> (header: Bool, count: Bool) {
+        let gap: CGFloat = 10
+        let header = topPadding + headerHeight + gap <= room
+        // Its room includes the header's, so it can't fit when the header doesn't.
+        let count = topPadding + headerHeight + 18 + countHeight + gap <= room
+        return (header, count)
+    }
+
+    /// Save's centre x inside the sheet, kept clear of Back and the edge.
+    static func saveCenterX(anchorMidX: CGFloat, sheetMinX: CGFloat, sheetWidth: CGFloat, saveWidth: CGFloat) -> CGFloat {
+        let wanted = anchorMidX - sheetMinX
+        guard sheetWidth > 0 else { return wanted }
+        let backClearance: CGFloat = 110
+        let lowest = backClearance + saveWidth / 2
+        let highest = sheetWidth - 16 - saveWidth / 2
+        return max(lowest, min(wanted, max(lowest, highest)))
+    }
 }
 
 struct SavedPlayReviewSheetView: View {
@@ -440,7 +499,14 @@ struct SavedPlayReviewSheetView: View {
     let initialEvent: PitchEvent
     let onBack: () -> Void
     let onSave: (PitchEvent) -> Void
+    /// Screen frame of the Save Result button that opened this sheet; Save
+    /// goes in the same spot so saving is two taps in one place. nil keeps
+    /// Back and Save at the bottom.
+    let saveAnchor: CGRect?
 
+    @State private var sheetFrame: CGRect = .zero
+    @State private var headerHeight: CGFloat = 34
+    @State private var countCardHeight: CGFloat = 150
     @State private var draftBalls: Int
     @State private var draftStrikes: Int
     @State private var draftIsStrike: Bool
@@ -457,8 +523,10 @@ struct SavedPlayReviewSheetView: View {
         summaryLines: [String],
         initialEvent: PitchEvent,
         onBack: @escaping () -> Void,
-        onSave: @escaping (PitchEvent) -> Void
+        onSave: @escaping (PitchEvent) -> Void,
+        saveAnchor: CGRect? = nil
     ) {
+        self.saveAnchor = saveAnchor
         self.title = title
         self.summaryLines = summaryLines
         self.initialEvent = initialEvent
@@ -472,12 +540,7 @@ struct SavedPlayReviewSheetView: View {
         // Credited hit, not "looks like a hit": a reached-on-error "1B" must
         // start with the toggle off or it counts against the pitcher.
         let isHit = pitchEventIsCreditedHit(initialEvent)
-        let scoutDefaultStrike = initialEvent.trackingMode == .scout && (
-            (initialEvent.battedBallRegion?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ||
-            (initialEvent.descriptor?.localizedCaseInsensitiveContains("hit") == true)
-        )
-
-        let initialForcesStrike = pitchEventForcesStrikeResult(initialEvent) || scoutDefaultStrike
+        let initialForcesStrike = PitchEventEdit.reviewStartsAsStrike(initialEvent)
 
         _draftBalls = State(initialValue: balls)
         _draftStrikes = State(initialValue: strikes)
@@ -585,133 +648,130 @@ struct SavedPlayReviewSheetView: View {
         )
     }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(reviewHeaderText)
-                        .font(.title2.weight(.semibold))
-                        .foregroundColor(.primary)
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(reviewHeaderText)
+                .font(.title2.weight(.semibold))
+                .foregroundColor(.primary)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+    }
+
+    private var countSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Count")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Text(countText)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+            }
+
+            HStack(alignment: .top, spacing: 14) {
+                countStepper(label: "Balls", value: draftBalls, maxValue: 3, fillColor: .red, strokeColor: .red) { next in
+                    draftBalls = next
                 }
 
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text("Count")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
-                        Text(countText)
-                            .font(.system(size: 34, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                    }
-
-                    HStack(alignment: .top, spacing: 14) {
-                        countStepper(label: "Balls", value: draftBalls, maxValue: 3, fillColor: .red, strokeColor: .red) { next in
-                            draftBalls = next
-                        }
-
-                        countStepper(label: "Strikes", value: draftStrikes, maxValue: 2, fillColor: .green, strokeColor: .green) { next in
-                            draftStrikes = next
-                        }
-                    }
-                }
-                .padding(14)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color(.secondarySystemBackground))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                        )
-                )
-
-                VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Pitch")
-                                    .font(.subheadline.weight(.semibold))
-                                Text("Always adds one pitch.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.blue)
-                        }
-
-                        statToggle(title: "Strike", detail: "Counts as a strike for the pitcher.", isOn: $draftIsStrike, tint: .green)
-                        statToggle(title: "Ball", detail: "Counts as a ball for the pitcher.", isOn: $draftIsBall, tint: .red)
-                        statToggle(title: "Called Strike", detail: "Adds a looking strike.", isOn: $draftStrikeLooking, tint: .green)
-                        statToggle(title: "Swinging Strike", detail: "Adds a swinging strike.", isOn: $draftStrikeSwinging, tint: .green)
-                        statToggle(title: "Walk", detail: "Counts as a walk / BB.", isOn: $draftWalk, tint: .orange)
-                        statToggle(title: "Hit", detail: "Counts as a hit against the pitcher.", isOn: $draftHit, tint: .pink)
-                        statToggle(title: "Wild Pitch", detail: "Counts as a wild pitch.", isOn: $draftWildPitch, tint: .purple)
-                        statToggle(title: "Passed Ball", detail: "Counts as a passed ball.", isOn: $draftPassedBall, tint: .purple)
-                    }
-                    .padding(14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.white.opacity(0.92))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
-                            )
-                    )
-                }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Saved play details")
-                        .font(.headline)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(summaryLines, id: \.self) { line in
-                            let display = summaryLineDisplay(for: line)
-                            HStack(alignment: .top, spacing: 8) {
-                                Circle()
-                                    .fill(Color.black.opacity(0.35))
-                                    .frame(width: 6, height: 6)
-                                    .padding(.top, 7)
-
-                                HStack(spacing: 6) {
-                                    if let symbolName = display.symbolName {
-                                        Image(systemName: symbolName)
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .foregroundColor(.primary)
-                                    }
-
-                                    Text(display.text)
-                                        .font(.system(size: 16, weight: .medium))
-                                        .foregroundColor(.primary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-
-                                Spacer(minLength: 0)
-                            }
-                        }
-                    }
-                    .padding(14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color.white.opacity(0.9))
-                            .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 3)
-                    )
-                }
-
-                HStack(spacing: 10) {
-                    Button("Back") {
-                        onBack()
-                    }
-                    .buttonStyle(.bordered)
-
-                    Spacer()
-
-                    Button("Save") {
-                        onSave(reviewedEvent())
-                    }
-                    .buttonStyle(.borderedProminent)
+                countStepper(label: "Strikes", value: draftStrikes, maxValue: 2, fillColor: .green, strokeColor: .green) { next in
+                    draftStrikes = next
                 }
             }
-            .padding(20)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                )
+        )
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { countCardHeight = $0 }
+    }
+
+    private var pitchSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Pitch")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Always adds one pitch.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.blue)
+                }
+
+                statToggle(title: "Strike", detail: "Counts as a strike for the pitcher.", isOn: $draftIsStrike, tint: .green)
+                statToggle(title: "Ball", detail: "Counts as a ball for the pitcher.", isOn: $draftIsBall, tint: .red)
+                statToggle(title: "Called Strike", detail: "Adds a looking strike.", isOn: $draftStrikeLooking, tint: .green)
+                statToggle(title: "Swinging Strike", detail: "Adds a swinging strike.", isOn: $draftStrikeSwinging, tint: .green)
+                statToggle(title: "Walk", detail: "Counts as a walk / BB.", isOn: $draftWalk, tint: .orange)
+                statToggle(title: "Hit", detail: "Counts as a hit against the pitcher.", isOn: $draftHit, tint: .pink)
+                statToggle(title: "Wild Pitch", detail: "Counts as a wild pitch.", isOn: $draftWildPitch, tint: .purple)
+                statToggle(title: "Passed Ball", detail: "Counts as a passed ball.", isOn: $draftPassedBall, tint: .purple)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.92))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    )
+            )
+    }
+
+    private var detailsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Saved play details")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(summaryLines, id: \.self) { line in
+                    let display = summaryLineDisplay(for: line)
+                    HStack(alignment: .top, spacing: 8) {
+                        Circle()
+                            .fill(Color.black.opacity(0.35))
+                            .frame(width: 6, height: 6)
+                            .padding(.top, 7)
+
+                        HStack(spacing: 6) {
+                            if let symbolName = display.symbolName {
+                                Image(systemName: symbolName)
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(.primary)
+                            }
+
+                            Text(display.text)
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color.white.opacity(0.9))
+                    .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 3)
+            )
+        }
+    }
+
+    private var saveTapped: () -> Void {
+        { onSave(reviewedEvent()) }
+    }
+
+    var body: some View {
+        layout
         .onChange(of: draftStrikeLooking) { _, newValue in
             if newValue {
                 draftStrikeSwinging = false
@@ -766,6 +826,95 @@ struct SavedPlayReviewSheetView: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder
+    private var layout: some View {
+        if let saveAnchor {
+            anchoredLayout(saveAnchor)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    headerSection
+                    countSection
+                    pitchSection
+                    detailsSection
+                    HStack(spacing: 10) {
+                        Button("Back") {
+                            onBack()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Spacer()
+
+                        Button("Save", action: saveTapped)
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(20)
+            }
+        }
+    }
+
+    /// Opened from Save Result: Back and Save sit in a row at the height
+    /// Save Result was, with Save under where the finger already is. What
+    /// fits above the row stays there; the rest scrolls below it.
+    private func anchoredLayout(_ anchor: CGRect) -> some View {
+        let barTop = ReviewSaveLayout.barTop(
+            anchorMidY: anchor.midY, sheetMinY: sheetFrame.minY,
+            sheetHeight: sheetFrame.height, barHeight: ReviewSaveLayout.barHeight
+        )
+        let above = ReviewSaveLayout.above(room: barTop, headerHeight: headerHeight, countHeight: countCardHeight)
+        let saveWidth = max(anchor.width, 90)
+        let saveCenterX = ReviewSaveLayout.saveCenterX(
+            anchorMidX: anchor.midX, sheetMinX: sheetFrame.minX,
+            sheetWidth: sheetFrame.width, saveWidth: saveWidth
+        )
+        return VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
+                if above.header { headerSection }
+                if above.count { countSection }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, ReviewSaveLayout.topPadding)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .frame(height: barTop, alignment: .top)
+            .clipped()
+
+            ZStack(alignment: .leading) {
+                Button("Back") {
+                    onBack()
+                }
+                .buttonStyle(.bordered)
+                .padding(.leading, 20)
+
+                Button(action: saveTapped) {
+                    Text("Save")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundColor(.white)
+                        .frame(width: saveWidth, height: max(anchor.height, 40))
+                        .background(Capsule().fill(Color.green))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .offset(x: saveCenterX - saveWidth / 2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: ReviewSaveLayout.barHeight)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if !above.header { headerSection }
+                    if !above.count { countSection }
+                    pitchSection
+                    detailsSection
+                }
+                .padding(20)
+            }
+        }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { sheetFrame = $0 }
     }
 }
 
@@ -949,7 +1098,7 @@ struct PitchCardView: View {
                     if let primaryLine = scoutPrimaryLine {
                         scoutSummaryLine(primaryLine, font: .system(size: 20, weight: .medium))
                     } else {
-                        Text("Scout")
+                        Text("Tracked")
                             .font(.system(size: 20, weight: .medium))
                             .foregroundColor(.black)
                     }
@@ -1321,7 +1470,7 @@ struct PitchResultCard: View {
             }
             let successes = matchingCalls.filter { isFullySuccessful($0) }.count
             let total = matchingCalls.count
-            return total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
+            return statPercent(successes, of: total)
         }()
         
         let locationSuccessRate: Int = {
@@ -1331,7 +1480,7 @@ struct PitchResultCard: View {
             }
             let successes = matchingCalls.filter { isFullySuccessful($0) }.count
             let total = matchingCalls.count
-            return total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
+            return statPercent(successes, of: total)
         }()
         
         let timestampText: String = formattedTimestamp(event.timestamp)
@@ -1515,43 +1664,6 @@ enum LineupPlayerTarget {
     case bench(LineupBenchPlayer)
 }
 
-/// Live reorder of the lineup strip while a jersey is being dragged by its
-/// handle.
-///
-/// `dropEntered` does the moving - the row rearranges under your finger, the
-/// standard feel - and `performDrop` is where the new order gets persisted,
-/// once, rather than on every crossing.
-///
-/// Scoped to one group: `groupIds` rejects a drag that started in the other
-/// team's row. Those rows come from the rosters, not from array order, so
-/// such a move couldn't change anything and the cell would just snap back.
-private struct LineupReorderDropDelegate: DropDelegate {
-    let target: JerseyCell
-    let groupIds: Set<UUID>
-    @Binding var dragging: JerseyCell?
-    let onReorder: (JerseyCell, JerseyCell) -> Void
-    let onCommit: () -> Void
-
-    func dropEntered(info: DropInfo) {
-        guard let dragging,
-              dragging.id != target.id,
-              groupIds.contains(dragging.id),
-              groupIds.contains(target.id) else { return }
-        onReorder(dragging, target)
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        guard dragging != nil else { return false }
-        dragging = nil
-        onCommit()
-        return true
-    }
-}
-
 struct PitchEventDetailPopover: View {
     let event: PitchEvent
     let allEvents: [PitchEvent]
@@ -1568,12 +1680,11 @@ struct PitchEventDetailPopover: View {
     /// told apart by fill colour alone.
     var unlinkedBatterIds: Set<UUID> = []
     let selectedLineupBatterId: UUID?
-    let onSelectLineupBatter: (JerseyCell) -> Void
     let onEditLineupBatter: (JerseyCell) -> Void
-    /// Move `moving` to `target`'s position. Called repeatedly during a
-    /// drag, so it must only rearrange - persisting is `onCommitLineupOrder`.
+    /// Move `moving` to `target`'s position. Only rearranges - persisting
+    /// is `onCommitLineupOrder`.
     let onReorderLineupBatter: (JerseyCell, JerseyCell) -> Void
-    /// The drag ended; write the order down.
+    /// Write the order down.
     let onCommitLineupOrder: () -> Void
     let onDeleteLineupBatter: (JerseyCell) -> Void
     let currentCountSeed: (balls: Int, strikes: Int)?
@@ -1586,6 +1697,11 @@ struct PitchEventDetailPopover: View {
     var onPutInGame: ((LineupBenchPlayer) -> Void)? = nil
     var onEditBenchPlayer: ((LineupBenchPlayer) -> Void)? = nil
     var onHittingStats: ((LineupPlayerTarget) -> Void)? = nil
+    /// This game's field positions (LineupFieldPositions).
+    var fieldPositionByBatterId: [UUID: String] = [:]
+    /// The whole new map after a position change. nil = read-only (an
+    /// assistant, or no game).
+    var onFieldPositionsChanged: (([UUID: String]) -> Void)? = nil
     @State private var batterNotes: String = ""
     @State private var isBatterNotesFocused: Bool = false
     // Spray chart starts collapsed: it's a 330pt block, and the batters and
@@ -1593,12 +1709,24 @@ struct PitchEventDetailPopover: View {
     // expanded - they're one row at the bottom either way.
     @State private var isSprayExpanded: Bool = false
     @State private var isNotesExpanded: Bool = true
-    /// The jersey currently being dragged by its handle, if any.
-    @State private var draggingCell: JerseyCell? = nil
+    /// The pitch cards start collapsed too (2026-11-02): the lineup above
+    /// is what the sheet is opened for.
+    @State private var isPitchCardsExpanded: Bool = false
     /// A bench chip that's been tapped. Bench players aren't batters, so
     /// this is the sheet's own highlight rather than the game's selection;
     /// it wins over the selected batter while set.
     @State private var highlightedBenchId: String? = nil
+    /// The team whose field view is open.
+    @State private var fieldPositionsTarget: FieldPositionsTarget? = nil
+    /// The lineup player tapped in this sheet. Looking at a player (their
+    /// stats, notes, moving them) never changes who is batting in the game
+    /// (user's call, 2026-11-05) - so it's the sheet's own, and the game's
+    /// batter is only where it starts.
+    @State private var viewedBatterId: UUID? = nil
+
+    private var sheetSelectedBatterId: UUID? {
+        viewedBatterId ?? selectedLineupBatterId
+    }
 
     /// Selection still wins over the unassigned tint - otherwise an
     /// unassigned batter you've selected would be the only cell in the strip
@@ -1613,74 +1741,148 @@ struct PitchEventDetailPopover: View {
         return isUnlinked ? Color.orange.opacity(0.55) : Color.black.opacity(0.12)
     }
 
-    /// The horizontal row of jersey buttons, shared by the flat and the
-    /// grouped renderings so the two can't drift.
-    private func lineupStrip(_ cells: [JerseyCell]) -> some View {
-        let groupIds = Set(cells.map { $0.id })
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(cells) { cell in
-                    let isSelected = highlightedBenchId == nil && cell.id == selectedLineupBatterId
-                    let isUnlinked = unlinkedBatterIds.contains(cell.id)
-                    VStack(spacing: 1) {
-                        jerseyChip(cell, isSelected: isSelected, isUnlinked: isUnlinked)
-                        dragHandle(for: cell)
-                    }
-                    // No dimming of the dragged cell: the system already
-                    // shows a lifted preview of it, and a drop that lands
-                    // outside every chip never reaches `performDrop`, which
-                    // would have left a cell dimmed with no way back.
-                    .onDrop(
-                        of: [UTType.text],
-                        delegate: LineupReorderDropDelegate(
-                            target: cell,
-                            groupIds: groupIds,
-                            dragging: $draggingCell,
-                            onReorder: onReorderLineupBatter,
-                            onCommit: onCommitLineupOrder
-                        )
-                    )
+    /// The batting order as a vertical list - order number, jersey chip,
+    /// the player's name, and their field position - shared by the flat and
+    /// the grouped renderings so the two can't drift. (Was a horizontal
+    /// strip until 2026-11-02; drag-to-reorder became the Order arrows
+    /// 2026-11-03.)
+    private func lineupList(_ cells: [JerseyCell]) -> some View {
+        let teamCellIds = Set(cells.map { $0.id })
+        return VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(cells.enumerated()), id: \.element.id) { index, cell in
+                let isSelected = highlightedBenchId == nil && cell.id == sheetSelectedBatterId
+                let isUnlinked = unlinkedBatterIds.contains(cell.id)
+                HStack(spacing: 6) {
+                    Text("\(index + 1)")
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18, alignment: .trailing)
+                    jerseyChip(cell, isSelected: isSelected, isUnlinked: isUnlinked)
+                    Text(batterNameById[cell.id] ?? (isUnlinked ? "Not on roster" : ""))
+                        .font(.subheadline)
+                        .foregroundStyle(isUnlinked ? Color.secondary : Color.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            highlightedBenchId = nil
+                            viewedBatterId = cell.id
+                        }
+                    fieldPositionButton(for: cell, teamCellIds: teamCellIds)
                 }
             }
-            .padding(.horizontal, 2)
-            .padding(.vertical, 4)
         }
+        .padding(.horizontal, 2)
+        .padding(.vertical, 4)
     }
 
-    /// The grab handle. Separate from the chip on purpose: the chip owns the
-    /// tap (select this batter) and the handle owns the drag, so the two
-    /// never compete for the same gesture. Sits *below* its chip, so it is
-    /// sized to the chip's width rather than standing beside it.
-    ///
-    /// `.onDrag` (UIKit drag-and-drop) rather than a `DragGesture` - it needs
-    /// a press-and-hold to begin, which is what leaves the horizontal scroll
-    /// still working. A DragGesture here would win the arena from the
-    /// ScrollView's pan and the strip would stop scrolling.
-    private func dragHandle(for cell: JerseyCell) -> some View {
-        Image(systemName: "line.3.horizontal")
-            .font(.subheadline.weight(.bold))
-            .foregroundStyle(.secondary)
-            .frame(width: 36, height: 26)
+    /// Where the player is on the field this game. Picking a position
+    /// someone else on the team holds moves it (LineupFieldPositions).
+    @ViewBuilder
+    private func fieldPositionButton(for cell: JerseyCell, teamCellIds: Set<UUID>) -> some View {
+        let current = fieldPositionByBatterId[cell.id]
+        let label = Text(current ?? "Pos")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(current == nil ? Color.secondary : Color.primary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(width: 34, height: 26)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(Color(.systemGray5))
             )
-            .contentShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .onDrag {
-                // Async so the write can't land inside a view update - this
-                // closure runs while SwiftUI is setting the drag session up.
-                // The lift animation takes long enough that it's always set
-                // before the first chip crossing.
-                DispatchQueue.main.async { draggingCell = cell }
-                return NSItemProvider(object: cell.id.uuidString as NSString)
+        if let onFieldPositionsChanged {
+            Menu {
+                ForEach(LineupFieldPositions.choices, id: \.self) { position in
+                    Button {
+                        onFieldPositionsChanged(LineupFieldPositions.assign(
+                            position, to: cell.id, in: fieldPositionByBatterId, teamCellIds: teamCellIds
+                        ))
+                    } label: {
+                        if position == current {
+                            Label(position, systemImage: "checkmark")
+                        } else {
+                            Text(position)
+                        }
+                    }
+                }
+                if current != nil {
+                    Divider()
+                    Button("No Position", role: .destructive) {
+                        onFieldPositionsChanged(LineupFieldPositions.assign(
+                            nil, to: cell.id, in: fieldPositionByBatterId, teamCellIds: teamCellIds
+                        ))
+                    }
+                }
+            } label: {
+                label
             }
-            .accessibilityLabel("Reorder batter \(cell.jerseyNumber)")
+            .accessibilityLabel("Field position for batter \(cell.jerseyNumber): \(current ?? "none")")
+        } else {
+            label
+                .accessibilityLabel("Field position: \(current ?? "none")")
+        }
+    }
+
+    /// "Position / Order" over the field icon (opens the team's field view)
+    /// and the up/down arrows, which move the
+    /// selected batter one spot within that team's order.
+    private func orderControls(_ group: LineupBatterGroup) -> some View {
+        let cells = group.cells
+        let selectedId = highlightedBenchId == nil ? sheetSelectedBatterId : nil
+        let up = selectedId.flatMap { LineupOrder.neighbor(of: $0, in: cells, direction: .up) }
+        let down = selectedId.flatMap { LineupOrder.neighbor(of: $0, in: cells, direction: .down) }
+        let moving = selectedId.flatMap { id in cells.first(where: { $0.id == id }) }
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("Position / Order")
+                .font(.subheadline.weight(.semibold))
+            HStack(spacing: 10) {
+                Button {
+                    fieldPositionsTarget = FieldPositionsTarget(id: group.id, title: group.title, cells: cells)
+                } label: {
+                    Image(systemName: "baseball.diamond.bases")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 36, height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color(.systemGray5))
+                        )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Field positions")
+                orderArrow("chevron.up", label: "Move batter up", target: up, moving: moving)
+                orderArrow("chevron.down", label: "Move batter down", target: down, moving: moving)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
+    }
+
+    private func orderArrow(_ systemImage: String, label: String, target: JerseyCell?, moving: JerseyCell?) -> some View {
+        Button {
+            guard let moving, let target else { return }
+            withAnimation { onReorderLineupBatter(moving, target) }
+            onCommitLineupOrder()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.bold))
+                .frame(width: 36, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(.systemGray5))
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(moving == nil || target == nil)
+        .opacity(moving == nil || target == nil ? 0.35 : 1)
+        .accessibilityLabel(label)
     }
 
     private func jerseyChip(_ cell: JerseyCell, isSelected: Bool, isUnlinked: Bool) -> some View {
         Button {
             highlightedBenchId = nil
-            onSelectLineupBatter(cell)
+            viewedBatterId = cell.id
         } label: {
             // 25% smaller than the original 48x40, with the corner radius
             // and type scaled to match so a two-digit number still fits.
@@ -1708,10 +1910,12 @@ struct PitchEventDetailPopover: View {
             ? "Batter \(cell.jerseyNumber), not on a roster"
             : "Batter \(cell.jerseyNumber)"
         )
+        .accessibilityIdentifier("lineup.batter.\(cell.jerseyNumber)")
+        .accessibilityValue(isSelected ? "selected" : "")
     }
 
     private var activeLineupCell: JerseyCell? {
-        if let id = selectedLineupBatterId,
+        if let id = sheetSelectedBatterId,
            let matched = lineupBatters.first(where: { $0.id == id }) {
             return matched
         }
@@ -1807,7 +2011,7 @@ struct PitchEventDetailPopover: View {
                 // Batters first: picking which batter this sheet is about is
                 // what everything below it depends on.
                 battersSection
-                pitchCardsStrip
+                pitchCardsSection
                 sprayChartSection
                 // Notes scroll with everything else, by request. The older
                 // arrangement kept this editor outside the scroll view
@@ -1822,6 +2026,20 @@ struct PitchEventDetailPopover: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(item: $fieldPositionsTarget) { target in
+            // The team's current cells, so a change made since opening
+            // shows; falls back to the snapshot taken on tap.
+            let cells = lineupGroups.first(where: { $0.id == target.id })?.cells
+                ?? (lineupGroups.count <= 1 ? lineupBatters : target.cells)
+            FieldPositionsView(
+                title: target.title,
+                cells: cells,
+                positions: fieldPositionByBatterId,
+                nameById: batterNameById,
+                onChange: onFieldPositionsChanged
+            )
+            .presentationDetents([.large])
+        }
         .onAppear {
             guard let key = batterNotesKey else { return }
             batterNotes = UserDefaults.standard.string(forKey: key) ?? ""
@@ -1979,6 +2197,23 @@ struct PitchEventDetailPopover: View {
         }
     }
 
+    private var pitchCardsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            collapsibleHeader(
+                title: "Pitch cards",
+                isExpanded: isPitchCardsExpanded,
+                trailing: hasIdentity ? "\(batterEvents.count) \(batterEvents.count == 1 ? "pitch" : "pitches")" : nil
+            ) {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isPitchCardsExpanded.toggle()
+                }
+            }
+            if isPitchCardsExpanded {
+                pitchCardsStrip
+            }
+        }
+    }
+
     private var pitchCardsStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
@@ -2055,57 +2290,25 @@ struct PitchEventDetailPopover: View {
         .frame(minHeight: 160)
     }
 
+    /// Two teams side by side, each a vertical list: bold team name, the
+    /// batting order (order number, jersey, name), then the bench. The
+    /// columns together take about 70% of the screen height and scroll on
+    /// their own (2026-11-02, user's layout).
     @ViewBuilder
     private var battersSection: some View {
         let showsGroups = lineupGroups.count > 1 || lineupGroups.contains { !$0.bench.isEmpty || !$0.archivedNames.isEmpty }
         if !lineupBatters.isEmpty || showsGroups {
             VStack(alignment: .leading, spacing: 10) {
-                if showsGroups {
-                    VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 10) {
+                    if showsGroups {
                         ForEach(lineupGroups) { group in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Text(group.title)
-                                        .font(.subheadline.weight(.bold))
-                                        .foregroundStyle(group.isBatting ? Color.primary : Color.secondary)
-                                        .lineLimit(1)
-                                    if group.isBatting {
-                                        Text("at bat")
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(.white)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 3)
-                                            .background(Capsule().fill(Color.pitchMarkActiveGray))
-                                    }
-                                }
-                                rowCaption("In Game")
-                                if group.cells.isEmpty {
-                                    emptyRowNote("No one in the game yet.")
-                                } else {
-                                    lineupStrip(group.cells)
-                                }
-                                if !group.bench.isEmpty {
-                                    rowCaption("Bench")
-                                    benchStrip(group.bench)
-                                }
-                                if !group.archivedNames.isEmpty {
-                                    Label(
-                                        "Archived, not shown: \(group.archivedNames.joined(separator: ", ")). Unarchive from the team roster on Home.",
-                                        systemImage: "archivebox"
-                                    )
-                                    .font(.caption2)
-                                    .foregroundStyle(.orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                            if group.id != lineupGroups.last?.id {
-                                Divider()
-                            }
+                            teamColumn(group)
                         }
+                    } else {
+                        teamColumn(LineupBatterGroup(id: "lineup", title: "Lineup", isBatting: true, cells: lineupBatters))
                     }
-                } else {
-                    lineupStrip(lineupBatters)
                 }
+                .frame(height: lineupColumnsHeight)
 
                 if let benchPlayer = highlightedBenchPlayer {
                     benchActionRow(benchPlayer)
@@ -2122,11 +2325,70 @@ struct PitchEventDetailPopover: View {
         }
     }
 
+    private var lineupColumnsHeight: CGFloat {
+        UIScreen.main.bounds.height * 0.7
+    }
+
+    private func teamColumn(_ group: LineupBatterGroup) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(group.title)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(group.isBatting ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                if group.isBatting, lineupGroups.count > 1 {
+                    Text("at bat")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.pitchMarkActiveGray))
+                        .fixedSize()
+                }
+            }
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 6) {
+                    rowCaption("In Game")
+                    if group.cells.isEmpty {
+                        emptyRowNote("No one in the game yet.")
+                    } else {
+                        lineupList(group.cells)
+                    }
+                    if !group.bench.isEmpty {
+                        rowCaption("Bench")
+                            .padding(.top, 6)
+                        benchList(group.bench)
+                    }
+                    if !group.archivedNames.isEmpty {
+                        Label(
+                            "Archived, not shown: \(group.archivedNames.joined(separator: ", ")). Unarchive from the team roster on Home.",
+                            systemImage: "archivebox"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if !group.cells.isEmpty {
+                orderControls(group)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+    }
+
     /// Only an explicit selection - unlike `activeLineupCell`, never falls
     /// back to the first batter, so the action row can't act on someone
     /// who isn't highlighted.
     private var selectedLineupCell: JerseyCell? {
-        guard let id = selectedLineupBatterId else { return nil }
+        guard let id = sheetSelectedBatterId else { return nil }
         return lineupBatters.first(where: { $0.id == id })
     }
 
@@ -2148,17 +2410,19 @@ struct PitchEventDetailPopover: View {
             .padding(.vertical, 6)
     }
 
-    /// Bench chips: same size as the lineup's, outlined rather than filled
-    /// so the two rows read differently at a glance. No drag handles - the
-    /// bench has no batting order.
-    private func benchStrip(_ players: [LineupBenchPlayer]) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(players) { player in
-                    let isSelected = player.id == highlightedBenchId
-                    Button {
-                        highlightedBenchId = isSelected ? nil : player.id
-                    } label: {
+    /// Bench rows: the chip is the same size as the lineup's, outlined
+    /// rather than filled so the two lists read differently at a glance,
+    /// with the name beside it. No order number or drag handle - the bench
+    /// has no batting order.
+    private func benchList(_ players: [LineupBenchPlayer]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(players) { player in
+                let isSelected = player.id == highlightedBenchId
+                Button {
+                    highlightedBenchId = isSelected ? nil : player.id
+                } label: {
+                    HStack(spacing: 6) {
+                        Color.clear.frame(width: 18, height: 1)
                         Text(player.label)
                             .font(.subheadline.weight(.semibold))
                             .minimumScaleFactor(0.7)
@@ -2176,14 +2440,21 @@ struct PitchEventDetailPopover: View {
                                         style: StrokeStyle(lineWidth: isSelected ? 2 : 1, dash: isSelected ? [] : [3, 2])
                                     )
                             )
+                        Text(player.name)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(player.name), on the bench")
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("\(player.name), on the bench")
             }
-            .padding(.horizontal, 2)
-            .padding(.vertical, 4)
         }
+        .padding(.horizontal, 2)
+        .padding(.vertical, 4)
     }
 
     private func benchActionRow(_ player: LineupBenchPlayer) -> some View {
@@ -2201,7 +2472,7 @@ struct PitchEventDetailPopover: View {
                     }
                 }
                 if let onHittingStats, player.hasHitterRecord {
-                    batterLabelButton("Hitting", systemImage: "chart.bar", fills: false) {
+                    batterLabelButton("Hit & Field", systemImage: "chart.bar", fills: false) {
                         onHittingStats(.bench(player))
                     }
                 }
@@ -2218,23 +2489,17 @@ struct PitchEventDetailPopover: View {
         }
     }
 
-    /// Up/Down come first under the "Batting order" caption - that's all
-    /// they do, reorder the lineup - with a divider before # (rename) and
-    /// Delete, which act on the batter itself.
-    ///
-    /// Reordering moved onto the drag handles beside each jersey, so the
-    /// Up/Down buttons are gone and this row is just the two actions that
-    /// apply to the selected batter.
+    /// Reordering is the Order arrows under each team's column
+    /// (2026-11-03), so this row is just the two actions that apply to the
+    /// selected batter.
     ///
     /// `buttonBorderShape` is explicit because a large bordered button
     /// defaults to a capsule, which on a one-glyph label like "#" renders as
     /// a near-circle.
     private func batterActionRow(_ activeCell: JerseyCell) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            // A press-and-hold drag isn't self-evident, and it's the only
-            // way to reorder now that the arrows are gone.
-            Text(batterNameById[activeCell.id].map { "\($0) · in the game. Drag a handle to reorder." }
-                 ?? "Batting order: press and hold a handle to drag")
+            Text(batterNameById[activeCell.id].map { "\($0) · in the game. Move them with the arrows above." }
+                 ?? "Batting order: use the arrows under Position / Order")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -2246,7 +2511,7 @@ struct PitchEventDetailPopover: View {
                 }
                 let isRosterPlayer = !unlinkedBatterIds.contains(activeCell.id)
                 if let onHittingStats, isRosterPlayer {
-                    batterLabelButton("Hitting", systemImage: "chart.bar", fills: false) {
+                    batterLabelButton("Hit & Field", systemImage: "chart.bar", fills: false) {
                         onHittingStats(.batter(activeCell))
                     }
                 }
@@ -2603,7 +2868,7 @@ struct PitchResultSheet: View {
             let total = pairs.count
             // Success uses the same isLocationMatch/isFullySuccessful heuristic used in PitchResultCard
             let successes = pairs.filter { strictIsLocationMatch($0.1) }.count
-            let pct = total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
+            let pct = statPercent(successes, of: total)
             result[pitchType] = pct
         }
         return result
@@ -2955,6 +3220,7 @@ struct PitchResultSheet: View {
                         isStrike: target.isStrike,
                         codes: target.codes
                     ),
+                    basesBefore: target.basesBefore ?? .empty,
                     catcherEstimate: target.catcherEstimate,
                     batterSide: target.batterSide,
                     selectedTemplateId: target.templateId,
@@ -2965,7 +3231,10 @@ struct PitchResultSheet: View {
                     allPitchEvents: allEvents,
                     suggestedCountSeed: nil,
                     currentCountSeed: currentCountSeed,
+                    countSeedOverride: PitchEventEdit.countBefore(target, in: allEvents),
                     onCountChanged: { balls, strikes in
+                        // Only the latest pitch's count is the tracker's.
+                        guard PitchEventEdit.editMovesTrackerCount(target, in: allEvents) else { return }
                         onCountChanged?(balls, strikes)
                     },
                     lineupBatters: [],
@@ -2974,7 +3243,10 @@ struct PitchResultSheet: View {
                         saveEditedEvent(edited, original: target)
                     },
                     template: nil,
-                    pitcherName: selectedPlayerName
+                    pitcherName: selectedPlayerName,
+                    initialFieldingOuts: target.fieldingOuts,
+                    initialErrorPositions: target.errorPositions,
+                    savedPlay: target.play
                 )
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
@@ -3024,7 +3296,6 @@ struct PitchResultSheet: View {
         }
         if let jersey = pendingBatterSelection?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
             updateData["opponentJersey"] = jersey
-            updateData["opponentBatterId"] = FieldValue.delete()
         }
 
         // Nothing to apply: just exit selection mode.
@@ -3035,6 +3306,14 @@ struct PitchResultSheet: View {
             isSelecting = false
             return
         }
+
+        // Planned before the overrides below change what the cards show.
+        let writes = selectionChangeWrites(
+            for: selectedEvents,
+            newPitcherId: updateData["pitcherId"] as? String,
+            jersey: updateData["opponentJersey"] as? String,
+            uid: uid
+        )
 
         // Optimistically close selection UI so Done always feels responsive.
         let selectedEventIdsSnapshot = selectedEvents.compactMap(\.id)
@@ -3055,11 +3334,7 @@ struct PitchResultSheet: View {
         selectedEventIDs.removeAll()
         isSelecting = false
 
-        if let newPitcherId = updateData["pitcherId"] as? String, !newPitcherId.isEmpty {
-            removeStalePitcherCopies(for: selectedEvents, newPitcherId: newPitcherId)
-        }
-        let refs = selectedEvents.flatMap { eventDocumentReferences(for: $0, currentUid: uid) }
-        updateEventCopies(refs, updateData, label: "applyPendingSelectionChangesAndPersist")
+        sendEventCopies(writes, label: "applyPendingSelectionChangesAndPersist")
     }
 
     private func applySelectedBatterImmediately(_ jersey: String) {
@@ -3077,6 +3352,9 @@ struct PitchResultSheet: View {
             return
         }
 
+        let uid = Auth.auth().currentUser?.uid
+        let writes = uid.map { selectionChangeWrites(for: selectedEvents, newPitcherId: nil, jersey: trimmed, uid: $0) } ?? []
+
         // Immediate visual feedback in-card.
         for eid in selectedIds {
             localBatterJerseyOverrides[eid] = trimmed
@@ -3084,13 +3362,8 @@ struct PitchResultSheet: View {
         onApplyBatterJerseyOverride?(selectedIds, trimmed)
 
         // Persist immediately so the change survives sheet/game close.
-        guard let uid = Auth.auth().currentUser?.uid else { return }
-        let update: [String: Any] = [
-            "opponentJersey": trimmed,
-            "opponentBatterId": FieldValue.delete()
-        ]
-        let refs = selectedEvents.flatMap { eventDocumentReferences(for: $0, currentUid: uid) }
-        updateEventCopies(refs, update, label: "applySelectedBatterImmediately")
+        guard uid != nil else { return }
+        sendEventCopies(writes, label: "applySelectedBatterImmediately")
 
         // Clear pending since this change is already applied/persisted.
         pendingBatterSelection = nil
@@ -3109,55 +3382,64 @@ struct PitchResultSheet: View {
             return
         }
 
+        let uid = Auth.auth().currentUser?.uid
+        let writes = uid.map { selectionChangeWrites(for: selectedEvents, newPitcherId: pitcherId, jersey: nil, uid: $0) } ?? []
+
         for eid in selectedIds {
             localPitcherOverrides[eid] = pitcherId
         }
         onApplyPitcherOverride?(selectedIds, pitcherId)
 
-        guard let uid = Auth.auth().currentUser?.uid else { return }
-        removeStalePitcherCopies(for: selectedEvents, newPitcherId: pitcherId)
-        let refs = selectedEvents.flatMap { eventDocumentReferences(for: $0, currentUid: uid) }
-        updateEventCopies(refs, ["pitcherId": pitcherId], label: "applySelectedPitcherImmediately")
+        guard uid != nil else { return }
+        sendEventCopies(writes, label: "applySelectedPitcherImmediately")
 
         pendingPitcherSelection = nil
     }
 
-    private func eventDocumentReferences(for event: PitchEvent, currentUid: String) -> [DocumentReference] {
-        guard let eid = event.id else { return [] }
-        let db = Firestore.firestore()
-        var refs: [DocumentReference] = []
-        var seen: Set<String> = []
-
-        func add(_ ref: DocumentReference) {
-            let path = ref.path
-            guard !seen.contains(path) else { return }
-            seen.insert(path)
-            refs.append(ref)
+    /// The pitch as the cards currently show it - a local edit, pitcher or
+    /// batter change that hasn't come back from Firestore yet included.
+    private func currentState(of event: PitchEvent) -> PitchEvent {
+        guard let eid = event.id else { return event }
+        var current = localEditedEventOverrides[eid] ?? event
+        if let pitcherId = localPitcherOverrides[eid] { current.pitcherId = pitcherId }
+        if let jersey = localBatterJerseyOverrides[eid], jersey != current.opponentJersey {
+            current.opponentJersey = jersey
+            current.opponentBatterId = nil
+            current.hitterId = nil
         }
-
-        if event.mode == .game {
-            if let gid = event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines), !gid.isEmpty,
-               let owner = gameOwnerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !owner.isEmpty {
-                add(db.collection("users").document(owner).collection("games").document(gid).collection("pitchEvents").document(eid))
-            }
-
-            if let liveId = liveGameId?.trimmingCharacters(in: .whitespacesAndNewlines), !liveId.isEmpty {
-                add(db.collection("liveGames").document(liveId).collection("pitchEvents").document(eid))
-            }
-        }
-
-        // Legacy/fallback path
-        if refs.isEmpty {
-            let ownerUid = event.createdByUid?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedUid = (ownerUid?.isEmpty == false) ? ownerUid! : currentUid
-            add(db.collection("users").document(resolvedUid).collection("pitchEvents").document(eid))
-        }
-
-        return refs
+        return current
     }
 
-    /// Applies the same change to every stored copy of an event, one request
-    /// per copy.
+    /// Every stored copy of a pitch (EventCopyTargets), including the
+    /// pitcher's and hitter's own records.
+    private func eventCopyTargets(for event: PitchEvent, currentUid: String) -> EventCopyTargets? {
+        let current = currentState(of: event)
+        return EventCopyTargets.of(
+            eventId: current.id,
+            isGame: current.mode == .game,
+            gameId: current.gameId,
+            gameOwnerUid: gameOwnerUserId,
+            liveId: liveGameId,
+            createdByUid: current.createdByUid,
+            currentUid: currentUid,
+            pitcherId: current.pitcherId,
+            hitterId: current.hitterId
+        )
+    }
+
+    private func selectionChangeWrites(for events: [PitchEvent], newPitcherId: String?, jersey: String?, uid: String) -> [EventCopyWrite] {
+        events.flatMap { event -> [EventCopyWrite] in
+            let current = currentState(of: event)
+            guard let eid = current.id,
+                  let targets = eventCopyTargets(for: event, currentUid: uid),
+                  let data = try? Firestore.Encoder().encode(current)
+            else { return [] }
+            return EventCopyPlan.selectionChange(data, eventId: eid, targets: targets,
+                                                 newPitcherId: newPitcherId, jersey: jersey, writerUid: uid)
+        }
+    }
+
+    /// Sends each write to its copy as its own request.
     ///
     /// These used to go out as a single `WriteBatch`. A batch is atomic, and a
     /// participant has *create-only* access to
@@ -3167,62 +3449,8 @@ struct PitchResultSheet: View {
     /// already shown it as applied. Sending the copies independently lets each
     /// one succeed on its own merits; the owner's device then mirrors the
     /// /liveGames change into its own copy.
-    private func updateEventCopies(_ refs: [DocumentReference], _ data: [String: Any], label: String) {
-        for ref in refs {
-            ref.updateData(data) { error in
-                if let error {
-                    debugLog("❌ \(label) failed for \(ref.path): \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    /// Replaces every stored copy of an event, one request per copy.
-    /// Split for the same reason as `updateEventCopies`.
-    private func overwriteEventCopies(_ refs: [DocumentReference], _ data: [String: Any], label: String) {
-        for ref in refs {
-            ref.setData(data, merge: false) { error in
-                if let error {
-                    debugLog("❌ \(label) failed for \(ref.path): \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-
-    /// Removes an event's row under the pitcher it is being moved *away* from.
-    ///
-    /// The live-room mirror writes the pitcher copy from the event's current
-    /// `pitcherId` and has no way to know which pitcher it left, so without
-    /// this the old row lingers and the pitch keeps counting toward both
-    /// pitchers' career stats. This is the only place that sees both the old
-    /// and the new id, which is why it belongs here rather than in the mirror.
-    private func removeStalePitcherCopies(for events: [PitchEvent], newPitcherId: String) {
-        for event in events {
-            guard let eid = event.id else { continue }
-            let previous = event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let previous, !previous.isEmpty, previous != newPitcherId else { continue }
-
-            Firestore.firestore()
-                .collection("pitchers").document(previous)
-                .collection("pitchEvents").document(eid)
-                .delete { error in
-                    if let error {
-                        debugLog("❌ stale pitcher copy delete failed for pitchers/\(previous)/pitchEvents/\(eid): \(error.localizedDescription)")
-                    }
-                }
-        }
-    }
-
-    /// Deletes every stored copy of an event, one request per copy.
-    /// Split for the same reason as `updateEventCopies`.
-    private func deleteEventCopies(_ refs: [DocumentReference], label: String) {
-        for ref in refs {
-            ref.delete { error in
-                if let error {
-                    debugLog("❌ \(label) failed for \(ref.path): \(error.localizedDescription)")
-                }
-            }
-        }
+    private func sendEventCopies(_ writes: [EventCopyWrite], label: String) {
+        EventCopyWriter.send(writes, label: label, perform: EventCopyWriter.firestore, log: { debugLog($0) })
     }
 
     private func deleteSelectedEvents() {
@@ -3232,6 +3460,11 @@ struct PitchResultSheet: View {
             return selectedEventIDs.contains(eid)
         }
         guard !selectedEvents.isEmpty else { return }
+
+        // Planned before the cleanup below forgets the cards' local changes.
+        let writes = selectedEvents
+            .compactMap { eventCopyTargets(for: $0, currentUid: uid) }
+            .flatMap { EventCopyPlan.delete(targets: $0) }
 
         let selectedIds = Set(selectedEvents.compactMap(\.id))
         // Optimistic UI cleanup.
@@ -3245,8 +3478,7 @@ struct PitchResultSheet: View {
         localPitcherOverrides = localPitcherOverrides.filter { !selectedIds.contains($0.key) }
         localEditedEventOverrides = localEditedEventOverrides.filter { !selectedIds.contains($0.key) }
 
-        let refs = selectedEvents.flatMap { eventDocumentReferences(for: $0, currentUid: uid) }
-        deleteEventCopies(refs, label: "deleteSelectedEvents")
+        sendEventCopies(writes, label: "deleteSelectedEvents")
     }
 
     private func prepareEditForSelectedEvent() {
@@ -3375,41 +3607,8 @@ struct PitchResultSheet: View {
         guard let uid = Auth.auth().currentUser?.uid,
               let originalId = original.id else { return }
 
-        var updated = PitchEvent(
-            id: originalId,
-            timestamp: original.timestamp,
-            pitch: edited.pitch,
-            location: edited.location,
-            codes: edited.codes,
-            isStrike: edited.isStrike,
-            isBall: edited.isBall,
-            mode: edited.mode,
-            calledPitch: edited.calledPitch,
-            batterSide: edited.batterSide,
-            templateId: edited.templateId,
-            strikeSwinging: edited.strikeSwinging,
-            wildPitch: edited.wildPitch,
-            passedBall: edited.passedBall,
-            strikeLooking: edited.strikeLooking,
-            outcome: edited.outcome,
-            descriptor: edited.descriptor,
-            errorOnPlay: edited.errorOnPlay,
-            battedBallRegion: edited.battedBallRegion,
-            battedBallType: edited.battedBallType,
-            battedBallTapX: edited.battedBallTapX,
-            battedBallTapY: edited.battedBallTapY,
-            gameId: edited.gameId,
-            opponentJersey: edited.opponentJersey,
-            opponentBatterId: edited.opponentBatterId,
-            pitcherId: edited.pitcherId,
-            hitterId: edited.hitterId,
-            createdByUid: edited.createdByUid,
-            play: BaseRunnerRules.playIfConsistent(
-                edited.play ?? original.play,
-                outcome: edited.outcome,
-                errorOnPlay: edited.errorOnPlay
-            )
-        )
+        // Only what the sheet answers changes (PitchEventEdit).
+        var updated = PitchEventEdit.applying(edited, to: original)
         updated.id = originalId
         localEditedEventOverrides[originalId] = updated
         onApplyEditedEventOverride?(originalId, updated)
@@ -3421,8 +3620,9 @@ struct PitchResultSheet: View {
                 data["createdByUid"] = createdBy
             }
 
-            let refs = eventDocumentReferences(for: original, currentUid: uid)
-            overwriteEventCopies(refs, data, label: "saveEditedEvent")
+            if let targets = eventCopyTargets(for: original, currentUid: uid) {
+                sendEventCopies(EventCopyPlan.edit(data, targets: targets, writerUid: uid), label: "saveEditedEvent")
+            }
             selectedEventIDs.removeAll()
             isSelecting = false
         } catch {
@@ -3527,10 +3727,10 @@ struct PitchResultSheet: View {
 struct PitchEvent: Codable, Identifiable {
     @DocumentID var id: String? // Firestore will auto-assign this
     let timestamp: Date
-    let pitch: String
-    let location: String
-    let codes: [String]
-    let isStrike: Bool
+    var pitch: String
+    var location: String
+    var codes: [String]
+    var isStrike: Bool
     var isBall: Bool?          // Changed from 'var isBall: Bool = false' to optional Bool
     let mode: PitchMode
     var calledPitch: PitchCall?
@@ -3584,6 +3784,22 @@ struct PitchEvent: Codable, Identifiable {
     /// before it existed and on anything that isn't a ball in play. Rebuild
     /// sites carry it through `BaseRunnerRules.playIfConsistent`.
     var play: BasePlay? = nil
+
+    /// Who was on base when this pitch was thrown. Stamped on every game
+    /// pitch so undo can put the runners back exactly, and so `play` can be
+    /// replayed against the bases it was recorded over. Optional for the
+    /// same reason as `play`.
+    var basesBefore: BaseOccupancy? = nil
+
+    /// Who fielded the play's outs and errors, and who was playing where
+    /// (FieldingPlay.swift). Optional: absent before 2026-11-03 and on any
+    /// pitch nobody answered them for.
+    var fieldingOuts: [FieldingOut]? = nil
+    var errorPositions: [String]? = nil
+    var defense: [DefenseSlot]? = nil
+    /// The team in the field, so a team's fielding includes positions
+    /// nobody on its lineup held.
+    var fieldingTeamId: String? = nil
 }
 
 extension PitchEvent: Hashable {
@@ -3638,7 +3854,7 @@ func summarizeOverallSuccess(events: [PitchEvent]) -> [String: Int] {
     for (pitchType, pairs) in grouped {
         let total = pairs.count
         let successes = pairs.filter { isFullySuccessful($0.1) }.count
-        let percentage = total == 0 ? 0 : Int(Double(successes) / Double(total) * 100)
+        let percentage = statPercent(successes, of: total)
         result[pitchType] = percentage
     }
     
@@ -3766,6 +3982,17 @@ extension PitchEvent {
         self.play = (data["play"] as? [String: Any]).flatMap {
             try? Firestore.Decoder().decode(BasePlay.self, from: $0)
         }
+        self.basesBefore = (data["basesBefore"] as? [String: Any]).flatMap {
+            try? Firestore.Decoder().decode(BaseOccupancy.self, from: $0)
+        }
+        self.fieldingOuts = (data["fieldingOuts"] as? [[String: Any]])?.compactMap {
+            try? Firestore.Decoder().decode(FieldingOut.self, from: $0)
+        }
+        self.errorPositions = data["errorPositions"] as? [String]
+        self.defense = (data["defense"] as? [[String: Any]])?.compactMap {
+            try? Firestore.Decoder().decode(DefenseSlot.self, from: $0)
+        }
+        self.fieldingTeamId = data["fieldingTeamId"] as? String
         self.catcherEstimate = {
             guard let payload = data["catcherEstimate"] as? [String: Any] else { return nil }
             guard let cePitch = payload["pitch"] as? String,
@@ -3823,6 +4050,7 @@ extension PitchEvent {
             let trackingMode: TrackingMode?
             let catcherEstimate: PitchCall?
             let play: BasePlay?
+            let basesBefore: BaseOccupancy?
         }
         let debug = DebugEvent(
             id: self.id,
@@ -3854,7 +4082,8 @@ extension PitchEvent {
             hitterId: self.hitterId,
             trackingMode: self.trackingMode,
             catcherEstimate: self.catcherEstimate,
-            play: self.play
+            play: self.play,
+            basesBefore: self.basesBefore
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -3885,5 +4114,19 @@ extension PitchEvent {
         // Their location data belongs in the Catcher Reads section instead.
         guard pitch.trimmingCharacters(in: .whitespacesAndNewlines) != "Catcher" else { return false }
         return (trackingMode ?? .coach) == .coach && calledPitch != nil && !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+extension EventCopyWriter {
+    /// Sends one copy write to Firestore as its own request.
+    static func firestore(_ write: EventCopyWrite, completion: @escaping (Error?) -> Void) {
+        let ref = Firestore.firestore().document(write.path)
+        switch write {
+        case .set(_, let data): ref.setData(data, merge: false) { completion($0) }
+        case .update(_, let data):
+            let fields = data.mapValues { $0 is EventCopyFieldDelete ? FieldValue.delete() : $0 }
+            ref.updateData(fields) { completion($0) }
+        case .delete: ref.delete { completion($0) }
+        }
     }
 }

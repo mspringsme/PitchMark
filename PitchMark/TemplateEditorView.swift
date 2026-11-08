@@ -1109,9 +1109,12 @@ struct TemplateEditorView: View {
                                         }) {
                                             Label(pitch, systemImage: isSelected ? "checkmark" : "")
                                         }
+                                        // Stay open so several pitches can be
+                                        // checked in one go (2026-11-02).
+                                        .menuActionDismissBehavior(.disabled)
                                     }
                                 } label: {
-                                    let title = "Pitches"
+                                    let title = selectedPitches.isEmpty ? "Pitches" : "Pitches (\(selectedPitches.count))"
                                     HStack(spacing: 8) {
                                         Text(title)
                                             .font(.subheadline)

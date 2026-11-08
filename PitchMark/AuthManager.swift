@@ -1439,27 +1439,8 @@ class AuthManager: ObservableObject {
             }
 
             let pitcherRef = db.collection("pitchers").document(pitcherId)
-            let updates: [String: Any] = [
-                "sharedWith": FieldValue.arrayUnion([user.uid])
-            ]
 
-            pitcherRef.setData(updates, merge: true) { err in
-                if let err {
-                    completion(.failure(err))
-                    return
-                }
-
-                // Burn the token only after sharedWith actually took. Best
-                // effort: a failure here leaves a redeemable token, which is
-                // the old behaviour, and is better than reporting a join that
-                // succeeded as a failure.
-                if redeemedByUid == nil {
-                    tokenRef.setData([
-                        "redeemedByUid": user.uid,
-                        "redeemedAt": FieldValue.serverTimestamp()
-                    ], merge: true)
-                }
-
+            let readPitcher = {
                 pitcherRef.getDocument { updatedSnap, readErr in
                     if let readErr {
                         completion(.failure(readErr))
@@ -1478,6 +1459,40 @@ class AuthManager: ObservableObject {
                         }
                     }
                 }
+            }
+
+            let addToPitcher = {
+                let updates: [String: Any] = [
+                    "sharedWith": FieldValue.arrayUnion([user.uid]),
+                    "inviteToken": token
+                ]
+                pitcherRef.setData(updates, merge: true) { err in
+                    if let err {
+                        completion(.failure(err))
+                        return
+                    }
+                    readPitcher()
+                }
+            }
+
+            // Burn the token first, then name it on the pitcher: the rules
+            // only let you add yourself to sharedWith with an invite for this
+            // pitcher that you have redeemed (2026-10-31; before that,
+            // knowing a pitcher's id was enough). A failed join after the
+            // burn can be retried - the token is yours.
+            if redeemedByUid == nil {
+                tokenRef.setData([
+                    "redeemedByUid": user.uid,
+                    "redeemedAt": FieldValue.serverTimestamp()
+                ], merge: true) { burnErr in
+                    if let burnErr {
+                        completion(.failure(burnErr))
+                        return
+                    }
+                    addToPitcher()
+                }
+            } else {
+                addToPitcher()
             }
         }
     }
@@ -2392,6 +2407,17 @@ extension AuthManager {
     }
     
     
+    /// The game's field positions (`Game.fieldPositionByBatterId`) - a
+    /// targeted write, for the same reason as `updateGameHitterLinks`.
+    func updateGameFieldPositions(ownerUserId: String?, gameId: String, positions: [String: String]) {
+        guard let currentUid = user?.uid else { return }
+        if let ownerUserId, ownerUserId != currentUid { return }
+        guard let ref = gameDocRef(ownerUserId: ownerUserId, gameId: gameId) else { return }
+        ref.updateData(["fieldPositionByBatterId": positions]) { error in
+            if let error = error { debugLog("Error updating field positions: \(error)") }
+        }
+    }
+
     /// Archiving never deletes anything - `keepInStats` only decides
     /// whether this user's stats keep counting the game's pitches (both
     /// teams'), and it stays changeable via `setArchivedGame(_:includedInStats:)`.
@@ -2409,9 +2435,7 @@ extension AuthManager {
 
     /// The one rule every stats screen applies.
     func gameCountsInStats(_ game: Game) -> Bool {
-        guard game.isArchived else { return true }
-        guard let id = game.id else { return false }
-        return archivedGameIdsIncludedInStats.contains(id)
+        game.countsInStats(includedArchivedIds: archivedGameIdsIncludedInStats)
     }
 
     func setArchivedGame(_ gameId: String, includedInStats: Bool) {

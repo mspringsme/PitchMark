@@ -32,6 +32,7 @@
 
 import SwiftUI
 import Combine
+import FirebaseFirestore
 
 final class TrackerUIState: ObservableObject {
     /// Callers waiting on the in-flight `ensurePrimarySessionOrPrompt` read.
@@ -86,6 +87,8 @@ final class TrackerUIState: ObservableObject {
     @Published var teamSetupShouldFlipSide: Bool = true
     @Published var showQuickAddPlayerSheet: Bool = false
     @Published var quickAddPlayerName: String = ""
+    /// Quick add's "Number only (no name)" (NumberOnlyName).
+    @Published var quickAddNumberOnly = false
     @Published var quickAddPlayerJersey: String = ""
     @Published var quickAddTeamId: String? = nil
     @Published var selectedHitterId: String? = nil
@@ -113,6 +116,21 @@ final class TrackerUIState: ObservableObject {
     /// content, and the result-location tap's expand to `.large` was being
     /// dropped (sheet stayed at 0.28).
     @Published var calledPitchComposerDetent: PresentationDetent = .fraction(0.28)
+    /// Who is on base right now (BaseRunnerRules.swift). Live progress, like
+    /// `outs`: inning-scoped, synced through the live room and
+    /// `LocalProgressSnapshot`, never stored on `Game`. Here rather than as
+    /// `@State` on PitchTrackerView to keep that struct from growing.
+    @Published var bases: BaseOccupancy = .empty
+    /// Steals/pickoffs/pinch runners recorded on this device this session,
+    /// newest last - what the undo button reverses when one is newer than
+    /// the last pitch.
+    @Published var sessionRunnerEvents: [RunnerEvent] = []
+    /// liveGames/{id}/runnerEvents - the owner mirrors it into the game and
+    /// hitter copies. Plumbing, not view state, so not @Published.
+    var liveRunnerEventsListener: ListenerRegistration? = nil
+    /// Stops late boot work from sending the coach to Home after they've
+    /// opened a game (LaunchHomeGate.swift). Not @Published: nothing renders it.
+    var launchHomeGate = LaunchHomeGate()
     @Published var showUndoConfirm: Bool = false
     @Published var isStrikeSwinging: Bool = false
     @Published var isStrikeLooking: Bool = false
@@ -154,6 +172,14 @@ final class TrackerUIState: ObservableObject {
     @Published var showAllPitchesHeatmapPitchPicker: Bool = false
     @Published var showHeatmapUnavailablePitchAlert: Bool = false
     @Published var heatmapUnavailablePitchMessage: String = ""
+    /// Roster links of lineup cells that dropped out of a snapshot - see
+    /// LineupLinkPrune.
+    @Published var parkedHitterLinks: [UUID: String] = [:]
+    /// "liveId|gameId" a partner has loaded the owner's game for (once per room).
+    var partnerLoadedGameKey: String? = nil
+    /// Team ids whose roster read succeeded - an empty roster among them
+    /// is really empty, not still loading (SideScope).
+    @Published var loadedRosterTeamIds: Set<String> = []
     @Published var scoutInPlayOutcome: String? = nil
     @Published var scoutHitOnPlay: Bool = false
     @Published var scoutDescriptor: String? = nil
@@ -201,7 +227,11 @@ final class TrackerUIState: ObservableObject {
     @Published var autoLiveCreateInProgress: Bool = false
     @Published var didAutoCreateLiveSessionForGameId: String? = nil
     @Published var activeGameOwnerUserId: String? = nil
-    @Published var progressRevisionRoomId: String? = nil
+    /// Live-room sync gate and local-change tokens (LiveProgressSync.swift).
+    /// Not @Published: nothing renders from it, it only decides what applies.
+    var progressSync = LiveProgressSync()
+    /// What the live pitchEvents listener has already copied (owner only).
+    var livePitchMirror = LivePitchMirror()
     @Published var progressPublishScheduled: Bool = false
     @Published var lastObservedResultSelectionId: String? = nil
     @Published var isRestoringState: Bool = false

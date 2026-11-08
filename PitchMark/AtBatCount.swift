@@ -103,7 +103,8 @@ enum AtBatCountRules {
         if facts.isHitBatter || outcome.caseInsensitiveCompare("HBP") == .orderedSame {
             return .endsAtBat(.hitByPitch)
         }
-        if outcome.caseInsensitiveCompare("Walk") == .orderedSame {
+        // "BB" is the scorebook spelling some older pitches carry.
+        if outcome.caseInsensitiveCompare("Walk") == .orderedSame || outcome.caseInsensitiveCompare("BB") == .orderedSame {
             return .endsAtBat(.walk)
         }
         if outcome == "K" || outcome == "ꓘ" {
@@ -204,5 +205,65 @@ extension PitchEvent {
             atBatStrikes = count.strikes
             atBatCount = count.displayText
         }
+    }
+}
+
+extension AtBatCountRules {
+    /// How (if at all) an at-bat ended on a saved pitch. `storedBalls` /
+    /// `storedStrikes` are the pitch's own saved count - nil on events
+    /// written before the count was stored, where only an explicit outcome
+    /// can be read.
+    ///
+    /// - An explicit outcome (K/ꓘ, Walk, HBP, Out, 1B/2B/3B/HR/Hit) is
+    ///   classified by `effect`, the same rule the count itself uses.
+    /// - A third strike or fourth ball can carry no outcome. But `applyCount`
+    ///   stamps every terminal pitch 0-0, and a plain strike or ball can't
+    ///   otherwise *leave* the count at 0-0, so a strike/ball stored at 0-0
+    ///   ended the at-bat.
+    /// - The sheet's "Hit" tag lives in `descriptor`; with no explicit
+    ///   outcome it is a hit.
+    ///
+    /// Pitcher and hitter stats both read at-bat ends from here (moved out of
+    /// HittingStatLine 2026-11-01 so they can't disagree).
+    static func endOfAtBat(
+        facts: PitchFacts,
+        storedBalls: Int?,
+        storedStrikes: Int?,
+        descriptor: String? = nil
+    ) -> AtBatTerminal? {
+        let storedAtStart = storedBalls == 0 && storedStrikes == 0
+        let hasOutcome = !(facts.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if !hasOutcome, hasHitTag(descriptor) {
+            return .hit
+        }
+        switch effect(for: facts) {
+        case .endsAtBat(let terminal):
+            return terminal
+        case .strike:
+            return storedAtStart ? .strikeout : nil
+        case .ball:
+            return storedAtStart ? .walk : nil
+        case .foul, .noChange:
+            return nil
+        }
+    }
+
+    /// `descriptor` is a comma-joined tag list, e.g. "Line Drive, Hit".
+    static func hasHitTag(_ descriptor: String?) -> Bool {
+        (descriptor ?? "")
+            .split(separator: ",")
+            .contains { $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("hit") == .orderedSame }
+    }
+}
+
+extension PitchEvent {
+    /// How the at-bat ended on this pitch, if it did (AtBatCountRules.endOfAtBat).
+    var atBatEnd: AtBatTerminal? {
+        AtBatCountRules.endOfAtBat(
+            facts: AtBatCountRules.PitchFacts(event: self),
+            storedBalls: atBatBalls,
+            storedStrikes: atBatStrikes,
+            descriptor: descriptor
+        )
     }
 }

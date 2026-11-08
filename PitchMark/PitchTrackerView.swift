@@ -147,7 +147,6 @@ struct PitchTrackerView: View {
         case chooseAny
     }
 
-    @State private var mirroredLivePitchEventIds: Set<String> = []
     // The 153 presentation-state properties that used to be `@State` here
     // live in this object now - see TrackerUIState.swift for why. Each one
     // keeps a same-named forwarding property below, so `foo` still reads and
@@ -493,25 +492,6 @@ struct PitchTrackerView: View {
         static let promptedTrackingModeLiveIds = "promptedTrackingModeLiveIds"
     }
 
-    private struct LocalProgressSnapshot: Codable {
-        let balls: Int
-        let strikes: Int
-        let inning: Int
-        let hits: Int
-        let walks: Int
-        let us: Int
-        let them: Int
-        let updatedAt: TimeInterval
-        /// Still written so older builds reading this cache keep working, but
-        /// **no longer restored**: the revision belongs to a single live room,
-        /// and carrying a stale floor across relaunches is exactly what made a
-        /// device reject the partner's updates. See `progressRevision`.
-        let progressRevision: Int?
-        /// `outs` rides in the published live snapshot, so it has to survive a
-        /// relaunch as well - otherwise a relaunched device keeps outs at 0 and
-        /// republishes that 0 over the other device's real count.
-        let outs: Int?
-    }
     private var isSelecting: Bool { get { ui.isSelecting } nonmutating set { ui.isSelecting = newValue } }
     @State private var selectedEventIDs: Set<String> = []
     @State private var localTemplateOverrides: [String: String] = [:]
@@ -546,7 +526,9 @@ struct PitchTrackerView: View {
     @State private var livePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEventsListener: ListenerRegistration? = nil
     @State private var gamePitchEvents: [PitchEvent] = []
-    @State private var lastLocalProgressUpdate: Date? = nil
+    /// The sync state below lives in `ui.progressSync` (LiveProgressSync.swift,
+    /// where the rules are); these names forward to it.
+    private var lastLocalProgressUpdate: Date? { get { ui.progressSync.lastLocalChangeAt } nonmutating set { ui.progressSync.lastLocalChangeAt = newValue } }
     /// Highest `progressRevision` this device has seen on the **live room
     /// document**. It replaces comparing a Firestore server timestamp against a
     /// local `Date()` - two different clocks, so any skew made the comparison
@@ -572,18 +554,12 @@ struct PitchTrackerView: View {
     /// changes that have not reached the room yet now comes from
     /// `hasUnpublishedLocalProgress` instead, which does not pollute the
     /// revision comparison.
-    @State private var progressRevision: Int = 0
+    private var progressRevision: Int { get { ui.progressSync.revision } nonmutating set { ui.progressSync.revision = newValue } }
     /// The live room `progressRevision` was read from. A freshly created room
     /// has no `progressRevision` field, so its first commit lands at 1; a floor
     /// carried over from a previous room would swallow the partner's first
     /// updates in the new one.
-    private var progressRevisionRoomId: String? { get { ui.progressRevisionRoomId } nonmutating set { ui.progressRevisionRoomId = newValue } }
-    /// Bumped by every local progress mutation. `publishedLocalProgressToken`
-    /// trails it until the corresponding publish reports back, which is how
-    /// `hasUnpublishedLocalProgress` knows this device is holding newer state.
-    @State private var localProgressChangeToken: Int = 0
-    @State private var publishedLocalProgressToken: Int = 0
-    @State private var lastUnpublishedProgressChangeAt: Date? = nil
+    private var progressRevisionRoomId: String? { get { ui.progressSync.roomId } nonmutating set { ui.progressSync.roomId = newValue } }
     private var progressPublishScheduled: Bool { get { ui.progressPublishScheduled } nonmutating set { ui.progressPublishScheduled = newValue } }
     @State private var bufferedSharedPitcherEvents: [BufferedPitcherEvent] = []
     private var lastObservedResultSelectionId: String? { get { ui.lastObservedResultSelectionId } nonmutating set { ui.lastObservedResultSelectionId = newValue } }
@@ -613,6 +589,7 @@ struct PitchTrackerView: View {
     @State private var balls: Int = 0
     @State private var strikes: Int = 0
     @State private var outs: Int = 0
+    private var bases: BaseOccupancy { get { ui.bases } nonmutating set { ui.bases = newValue } }
     private var showOutsFlash: Bool { get { ui.showOutsFlash } nonmutating set { ui.showOutsFlash = newValue } }
     @State private var inning: Int = 1
     @State private var hits: Int = 0
@@ -695,6 +672,7 @@ struct PitchTrackerView: View {
 
             // Match your existing selection side-effects
             self.selectedBatterId = nil
+            self.restoreRememberedBatter()
             self.ownerTemplateName = self.selectedTemplate?.name
             self.showParticipantOverlay = !self.isOwnerForActiveGame
 
@@ -741,6 +719,7 @@ struct PitchTrackerView: View {
                     self.loadSideContext(for: game)
 
                     self.selectedBatterId = nil
+                    self.restoreRememberedBatter()
                     self.ownerTemplateName = self.selectedTemplate?.name
                     self.showParticipantOverlay = !self.isOwnerForActiveGame
 
@@ -1149,13 +1128,18 @@ struct PitchTrackerView: View {
     private func ensureLivePresence(liveId: String) {
         guard let uid = authManager.user?.uid, !uid.isEmpty else { return }
         let db = Firestore.firestore()
+        // A partner's presence names the code / invite it joined with
+        // (LiveJoinCredential); the owner needs none.
         db.collection("liveGames").document(liveId)
             .collection("participants").document(uid)
-            .setData([
-                "uid": uid,
-                "joinedAt": FieldValue.serverTimestamp(),
-                "lastSeenAt": FieldValue.serverTimestamp()
-            ], merge: true)
+            .setData(LiveJoinCredential.presenceFields(
+                uid: uid,
+                credential: isOwnerForActiveGame ? nil : LiveJoinCredential.remembered(for: liveId),
+                timestamps: [
+                    "joinedAt": FieldValue.serverTimestamp(),
+                    "lastSeenAt": FieldValue.serverTimestamp()
+                ]
+            ), merge: true)
 
         // Only participant devices should claim the live `connection` state.
         // If owner writes this field too, invite UI can auto-dismiss from a fake connect event.
@@ -1224,6 +1208,8 @@ struct PitchTrackerView: View {
     func startListeningToLivePitchEvents(liveId: String) {
         livePitchEventsListener?.remove()
         livePitchEventsListener = nil
+        ui.liveRunnerEventsListener?.remove()
+        ui.liveRunnerEventsListener = nil
 
         // A fresh listener replays the whole collection as `.added`, and the
         // mirror below skips ids it has already seen. Anything edited or
@@ -1234,7 +1220,7 @@ struct PitchTrackerView: View {
         // startListeningToLiveGame, so the seen-set has to be dropped here too.
         // Re-mirroring an unchanged event is an idempotent setData; losing an
         // edit is not.
-        mirroredLivePitchEventIds.removeAll()
+        ui.livePitchMirror.restart()
 
         let ref = Firestore.firestore()
             .collection("liveGames").document(liveId)
@@ -1242,6 +1228,26 @@ struct PitchTrackerView: View {
             .order(by: "timestamp", descending: false)
 
         debugLog("👂 live pitchEvents listener start liveId=\(liveId)")
+
+        // Runner events ride the same lifecycle. Only the owner acts on them:
+        // it is the only device allowed to write the hitter copies.
+        ui.liveRunnerEventsListener = Firestore.firestore()
+            .collection("liveGames").document(liveId)
+            .collection(RunnerEventStore.collection)
+            .addSnapshotListener { snap, err in
+                if let err {
+                    debugLog("❌ Live runnerEvents listener error:", err.localizedDescription)
+                    return
+                }
+                guard let changes = snap?.documentChanges, !changes.isEmpty else { return }
+                DispatchQueue.main.async {
+                    guard self.isOwnerForActiveGame,
+                          let ownerUid = self.effectiveGameOwnerUserId, !ownerUid.isEmpty,
+                          let gameId = self.selectedGameId, !gameId.isEmpty
+                    else { return }
+                    RunnerEventStore.mirrorLiveChanges(changes, ownerUid: ownerUid, gameId: gameId)
+                }
+            }
 
         livePitchEventsListener = ref.addSnapshotListener { snap, err in
             if let err = err {
@@ -1271,21 +1277,17 @@ struct PitchTrackerView: View {
                 // Deletions must be pruned from the seeded backfill as well, and
                 // before the merge below. `seededGamePitchEventsForLive` is
                 // filled once from the owner's pre-live history and only cleared
-                // on teardown, so mergeLiveAndSeededEvents would otherwise
-                // re-add a just-deleted pitch from the stale seed array and the
-                // card would reappear on the very next snapshot. Applies to both
+                // on teardown, so the merge would otherwise re-add a
+                // just-deleted pitch from the stale seed array and the card
+                // would reappear on the very next snapshot. Applies to both
                 // roles, so it sits outside the owner-only mirror below.
                 let removedEventIds = Set(
                     (snap?.documentChanges ?? [])
                         .filter { $0.type == .removed }
                         .map(\.document.documentID)
                 )
-                if !removedEventIds.isEmpty {
-                    self.seededGamePitchEventsForLive.removeAll { event in
-                        guard let id = event.id else { return false }
-                        return removedEventIds.contains(id)
-                    }
-                }
+                self.seededGamePitchEventsForLive = LivePitchMirror.pruned(
+                    seed: self.seededGamePitchEventsForLive, removedIds: removedEventIds)
 
                 let combined = self.mergeLiveAndSeededEvents(liveEvents: events)
                 if !combined.isEmpty {
@@ -1294,149 +1296,38 @@ struct PitchTrackerView: View {
                     debugLog("⚠️ Live merge produced 0 events (seeded=\(self.seededGamePitchEventsForLive.count), live=\(events.count))")
                 }
 
-                // ✅ OWNER ONLY: mirror live events into owner’s real game doc
-                guard self.isOwnerForActiveGame,
-                      let ownerUid = self.effectiveGameOwnerUserId, !ownerUid.isEmpty,
-                      let gameId = self.selectedGameId, !gameId.isEmpty
-                else { return }
-
-                // Modifications and removals have to be mirrored too, not just
-                // insertions. A participant only has *create* access to
-                // users/{owner}/games/{gid}/pitchEvents (see firestore.rules),
-                // so when they edit an outcome, reassign a pitcher/jersey, or
-                // undo a pitch, that change can only land in /liveGames - and
-                // this loop is the sole path by which it reaches the owner's
-                // permanent record. Keying purely off "have I already seen this
-                // id" froze the owner's copy at the event's first-written state
-                // for the rest of the session.
-                let gameEventsRef = Firestore.firestore()
-                    .collection("users").document(ownerUid)
-                    .collection("games").document(gameId)
-                    .collection("pitchEvents")
+                // OWNER ONLY: mirror the room into the owner's game, the
+                // pitcher's career record and the hitter's record. Edits and
+                // deletes are mirrored too, not just new pitches: a partner
+                // can only change the room's copy, and this is the sole path
+                // by which that reaches the permanent record. The decisions
+                // are in LivePitchMirror (EventCopies.swift).
+                let owner: LivePitchMirror.Owner? = {
+                    guard self.isOwnerForActiveGame,
+                          let ownerUid = self.effectiveGameOwnerUserId,
+                          let gameId = self.selectedGameId
+                    else { return nil }
+                    return LivePitchMirror.Owner(ownerUid: ownerUid, gameId: gameId)
+                }()
+                guard owner != nil else { return }
 
                 for change in snap?.documentChanges ?? [] {
-                    let liveEventId = change.document.documentID
-                    let dst = gameEventsRef.document(liveEventId)
-
-                    // The owner's device is also the only one that can keep
-                    // /pitchers/{id}/pitchEvents in step during a live session.
-                    // A code-joined partner is neither the pitcher's owner nor
-                    // in its sharedWith list, so their own attempt is dropped
-                    // client-side (saveSharedPitcherEventIfAllowed) and would
-                    // be denied by rules anyway - which left every pitch the
-                    // partner recorded out of the pitcher's career stats.
-                    let pitcherDst: DocumentReference? = {
-                        let raw = change.document.data()["pitcherId"] as? String
-                        guard let pid = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-                              !pid.isEmpty
-                        else { return nil }
-                        return Firestore.firestore()
-                            .collection("pitchers").document(pid)
-                            .collection("pitchEvents").document(liveEventId)
-                    }()
-
-                    // Same reasoning as pitcherDst above, for a linked batter:
-                    // a code-joined partner has no write access to
-                    // /hitters/{id}/pitchEvents (ownerUid-only rules), so the
-                    // owner's device is the only place this copy can be kept
-                    // in step.
-                    let hitterDst: DocumentReference? = {
-                        let raw = change.document.data()["hitterId"] as? String
-                        guard let hid = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-                              !hid.isEmpty
-                        else { return nil }
-                        return Firestore.firestore()
-                            .collection("hitters").document(hid)
-                            .collection("pitchEvents").document(liveEventId)
-                    }()
-
-                    if change.type == .removed {
-                        self.mirroredLivePitchEventIds.remove(liveEventId)
-                        dst.delete { err in
-                            if let err {
-                                debugLog("❌ mirror live pitchEvent delete failed:", err.localizedDescription)
-                            } else {
-                                debugLog("🗑️ mirrored live pitchEvent delete → users/\(ownerUid)/games/\(gameId)/pitchEvents/\(liveEventId)")
-                            }
-                        }
-                        pitcherDst?.delete { err in
-                            if let err {
-                                debugLog("❌ mirror pitcher pitchEvent delete failed:", err.localizedDescription)
-                            }
-                        }
-                        hitterDst?.delete { err in
-                            if let err {
-                                debugLog("❌ mirror hitter pitchEvent delete failed:", err.localizedDescription)
-                            }
-                        }
-                        continue
+                    let kind: LivePitchMirror.ChangeKind
+                    switch change.type {
+                    case .added: kind = .added
+                    case .modified: kind = .modified
+                    case .removed: kind = .removed
+                    @unknown default: continue
                     }
-
-                    // Skip only re-adds of events already mirrored (listener
-                    // restarts replay the whole collection as .added); a
-                    // .modified always rewrites.
-                    if change.type == .added, self.mirroredLivePitchEventIds.contains(liveEventId) { continue }
-                    self.mirroredLivePitchEventIds.insert(liveEventId)
-
-                    var data = change.document.data()
-
-                    // Ensure required fields exist for game storage / rules
-                    data["gameId"] = gameId
-
-                    // seedLivePitchEventsFromOwnerGameIfNeeded rewrites
-                    // createdByUid to the owner so its backfill passes the
-                    // live-room create rule, stashing the real author in
-                    // originalCreatedByUid. Restore it so the permanent record
-                    // keeps the partner's attribution instead of the owner's.
-                    if let original = (data["originalCreatedByUid"] as? String)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines),
-                       !original.isEmpty {
-                        data["createdByUid"] = original
-                    }
-                    if data["createdByUid"] == nil {
-                        data["createdByUid"] = ownerUid
-                    }
-
-                    dst.setData(data, merge: false) { err in
-                        if let err {
-                            debugLog("❌ mirror live pitchEvent failed:", err.localizedDescription)
-                        } else {
-                            debugLog("✅ mirrored live pitchEvent → users/\(ownerUid)/games/\(gameId)/pitchEvents/\(liveEventId)")
-                        }
-                    }
-
-                    if let pitcherDst {
-                        // The pitcher-copy create rule requires the writer to
-                        // own the row it writes, so stamp this device's uid and
-                        // keep the true author beside it.
-                        var pitcherData = data
-                        if let author = data["createdByUid"] as? String, author != ownerUid {
-                            pitcherData["originalCreatedByUid"] = author
-                        }
-                        pitcherData["createdByUid"] = ownerUid
-                        pitcherDst.setData(pitcherData, merge: false) { err in
-                            if let err {
-                                debugLog("❌ mirror pitcher pitchEvent failed:", err.localizedDescription)
-                            } else {
-                                debugLog("✅ mirrored pitcher pitchEvent → \(pitcherDst.path)")
-                            }
-                        }
-                    }
-
-                    if let hitterDst {
-                        var hitterData = data
-                        if let author = data["createdByUid"] as? String, author != ownerUid {
-                            hitterData["originalCreatedByUid"] = author
-                        }
-                        hitterData["createdByUid"] = ownerUid
-                        hitterDst.setData(hitterData, merge: false) { err in
-                            if let err {
-                                debugLog("❌ mirror hitter pitchEvent failed:", err.localizedDescription)
-                            } else {
-                                debugLog("✅ mirrored hitter pitchEvent → \(hitterDst.path)")
-                            }
-                        }
-                    }
+                    let writes = self.ui.livePitchMirror.writes(
+                        for: kind,
+                        eventId: change.document.documentID,
+                        data: change.document.data(),
+                        owner: owner
+                    )
+                    EventCopyWriter.send(writes, label: "mirror live pitchEvent",
+                                         perform: EventCopyWriter.firestore,
+                                         log: { debugLog($0) })
                 }
             }
         }
@@ -1714,31 +1605,11 @@ struct PitchTrackerView: View {
     }
 
     private func mergeLiveAndSeededEvents(liveEvents: [PitchEvent]) -> [PitchEvent] {
-        var byId: [String: PitchEvent] = [:]
-        var result: [PitchEvent] = []
-
-        for event in seededGamePitchEventsForLive {
-            if let id = event.id {
-                byId[id] = event
-            } else {
-                result.append(event)
-            }
-        }
-
-        for event in liveEvents {
-            if let id = event.id {
-                byId[id] = event
-            } else {
-                result.append(event)
-            }
-        }
-
-        result.append(contentsOf: byId.values)
-        return result.sorted { lhs, rhs in lhs.timestamp > rhs.timestamp }
+        LivePitchMirror.merged(seeded: seededGamePitchEventsForLive, live: liveEvents)
     }
 
     private func startListeningToLiveGame(liveId: String) {
-        mirroredLivePitchEventIds.removeAll()
+        ui.livePitchMirror.restart()
         liveListener?.remove()
         liveListener = nil
         gamePitchEventsListener?.remove()
@@ -1756,10 +1627,7 @@ struct PitchTrackerView: View {
         // the partner's opening updates. Only reset when the room actually
         // changes: this function restarts for the *same* room from several call
         // sites, and zeroing there would re-apply room state over a local change.
-        if progressRevisionRoomId != liveId {
-            progressRevision = 0
-            progressRevisionRoomId = liveId
-        }
+        ui.progressSync.enterRoom(liveId)
 
         startListeningToLivePitchEvents(liveId: liveId)
         startListeningToLiveParticipants(liveId: liveId)
@@ -1805,34 +1673,15 @@ struct PitchTrackerView: View {
             DispatchQueue.main.async {
                 let liveStamp = (data["progressUpdatedAt"] as? Timestamp)?.dateValue()
                 let remoteRevision = data["progressRevision"] as? Int
-                let shouldApplyLiveProgress: Bool
-                if self.hasUnpublishedLocalProgress {
-                    // This device changed the count/outs and that change has not
-                    // reached the room yet, so every snapshot in flight - even a
-                    // higher-revision one - predates it.
-                    shouldApplyLiveProgress = false
-                } else if let remoteRevision {
-                    // Only accept a snapshot strictly newer than the highest
-                    // revision the *server* has handed this device.
-                    shouldApplyLiveProgress = remoteRevision > self.progressRevision
-                    if shouldApplyLiveProgress {
-                        self.progressRevision = max(self.progressRevision, remoteRevision)
-                    }
-                } else {
-                    // Rooms written by an older build carry no revision, so fall
-                    // back to the previous timestamp comparison for them.
-                    shouldApplyLiveProgress = self.shouldApplyProgressFromSnapshot(liveStamp)
-                        || self.lastLocalProgressUpdate == nil
-                }
+                // Revision gate, unpublished-change guard and old-build
+                // fallback: LiveProgressSync.acceptRoomSnapshot.
+                let shouldApplyLiveProgress = self.ui.progressSync.acceptRoomSnapshot(
+                    remoteRevision: remoteRevision,
+                    remoteStamp: liveStamp,
+                    now: Date()
+                )
                 if shouldApplyLiveProgress {
-                    self.balls   = data["balls"]   as? Int ?? self.balls
-                    self.strikes = data["strikes"] as? Int ?? self.strikes
-                    self.inning  = data["inning"]  as? Int ?? self.inning
-                    self.hits    = data["hits"]    as? Int ?? self.hits
-                    self.walks   = data["walks"]   as? Int ?? self.walks
-                    self.us      = data["us"]      as? Int ?? self.us
-                    self.them    = data["them"]    as? Int ?? self.them
-                    self.outs    = data["outs"]    as? Int ?? self.outs
+                    self.liveProgressFields = self.liveProgressFields.applying(roomData: data)
                     if let liveStamp {
                         self.lastLocalProgressUpdate = liveStamp
                     }
@@ -1941,6 +1790,9 @@ struct PitchTrackerView: View {
                     }
 
                     self.didHydrateLineupFromLive = true
+                    // A partner's adds, Bench and scans arrive with their
+                    // links; the coach's phone saves both.
+                    self.applyRoomLineup(data, fromServer: !snap.metadata.hasPendingWrites)
                 }
 
                 // ✅ Keep selectedGameId in sync for other downstream UI, and provide fallback hydration
@@ -1959,8 +1811,20 @@ struct PitchTrackerView: View {
                         defaults.set("tracker", forKey: DefaultsKeys.lastView)
                     }
 
+                    // A partner reads the owner's game once per room (rules allow
+                    // a GET while the room's code is live): its team ids are what
+                    // load both rosters, the opponent claim and the gear sheet's
+                    // teams. Several join paths never pass a game id, so this is
+                    // the one place every partner gets it. The lineup itself stays
+                    // the room's.
+                    if !self.isOwnerForActiveGame,
+                       let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty,
+                       self.ui.partnerLoadedGameKey != "\(liveId)|\(ownerGameId)" {
+                        self.ui.partnerLoadedGameKey = "\(liveId)|\(ownerGameId)"
+                        self.loadGameForPartner(ownerUid: ownerUid, gameId: ownerGameId)
+                    }
+
                     // Fallback: ONLY the OWNER may hydrate lineup from the owner's private game doc.
-                    // Participants cannot read /users/{owner}/games/{gid}, so this would leave them empty.
                     if self.isOwnerForActiveGame {
                         if (data["jerseyNumbers"] as? [String])?.isEmpty ?? true {
                             if !self.didHydrateLineupFromLive || self.jerseyCells.isEmpty {
@@ -1969,6 +1833,10 @@ struct PitchTrackerView: View {
                                     self.didHydrateLineupFromLive = true
                                     self.hydrateChosenGameUI(ownerUid: ownerUid, gameId: ownerGameId)
                                     self.startListeningToActiveGame()
+                                    // The room has no lineup (it was made before the
+                                    // game had one): give it the game's, or partners
+                                    // see an empty lineup the coach doesn't.
+                                    LiveGameService.shared.seedLineupIfEmpty(liveId: liveId, ownerUid: ownerUid, gameId: ownerGameId)
                                 }
                             }
                         }
@@ -2140,6 +2008,11 @@ struct PitchTrackerView: View {
                 JoinedLiveSession(liveId: $0.documentID, data: $0.data())
             }
             DispatchQueue.main.async {
+                // Re-entering from Home recreates presence, which the rules
+                // only allow with the code / invite this account joined with.
+                for session in sessions {
+                    LiveJoinCredential.remember(session.credential, for: session.liveId)
+                }
                 self.joinedLiveSessions = sessions.sorted { ($0.joinedAt ?? .distantPast) > ($1.joinedAt ?? .distantPast) }
             }
         }
@@ -2216,6 +2089,7 @@ struct PitchTrackerView: View {
 
     private func endLiveSessionLocally(keepCurrentGame: Bool) {
         guard let liveId = activeLiveId else { return }
+        OpponentPartnerAccess.shared.clear(liveId: liveId)
 
         flushBufferedSharedPitcherEvents(reason: "endLiveSession")
         flushBufferedSharedHitterEvents(reason: "endLiveSession")
@@ -2239,6 +2113,8 @@ struct PitchTrackerView: View {
         liveListener = nil
         livePitchEventsListener?.remove()
         livePitchEventsListener = nil
+        ui.liveRunnerEventsListener?.remove()
+        ui.liveRunnerEventsListener = nil
         gamePitchEventsListener?.remove()
         gamePitchEventsListener = nil
 
@@ -2249,10 +2125,9 @@ struct PitchTrackerView: View {
         didHydrateLineupFromLive = false
         // The revision floor was scoped to the room that just ended; rejoining
         // (or joining a different room) must start from scratch.
-        progressRevision = 0
-        progressRevisionRoomId = nil
+        ui.progressSync.leaveRoom()
         didAutoDismissCodeSheetForLiveId = nil
-        mirroredLivePitchEventIds.removeAll()
+        ui.livePitchMirror.restart()
         didSeedOwnerGameEventsForLive = false
         didSeedLivePitchEventsFromOwnerGame = false
         seededGamePitchEventsForLive.removeAll()
@@ -2315,9 +2190,7 @@ struct PitchTrackerView: View {
     }
 
     private func shouldApplyProgressFromSnapshot(_ snapshotStamp: Date?) -> Bool {
-        guard let localStamp = lastLocalProgressUpdate else { return true }
-        guard let snapshotStamp else { return false }
-        return snapshotStamp >= localStamp
+        LiveProgressSync.snapshotIsNewer(snapshotStamp, than: lastLocalProgressUpdate)
     }
 
     private func loadLocalProgressSnapshot(for gameId: String) -> LocalProgressSnapshot? {
@@ -2332,16 +2205,9 @@ struct PitchTrackerView: View {
     private func persistLocalProgressSnapshot() {
         guard let gid = selectedGameId else { return }
         let snapshot = LocalProgressSnapshot(
-            balls: balls,
-            strikes: strikes,
-            inning: inning,
-            hits: hits,
-            walks: walks,
-            us: us,
-            them: them,
+            fields: liveProgressFields,
             updatedAt: Date().timeIntervalSince1970,
-            progressRevision: progressRevision,
-            outs: outs
+            progressRevision: progressRevision
         )
         if let data = try? JSONEncoder().encode(snapshot) {
             UserDefaults.standard.set(data, forKey: "\(DefaultsKeys.lastProgressByGameId).\(gid)")
@@ -2355,47 +2221,30 @@ struct PitchTrackerView: View {
         if let idx = merged.firstIndex(where: { $0.id == gid }) {
             debugLog("🧭[PROG] mergeLoadedGames gid=\(gid) localStamp=\(String(describing: lastLocalProgressUpdate)) snapshotStamp=\(String(describing: merged[idx].progressUpdatedAt)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them) snap=\(merged[idx].balls)/\(merged[idx].strikes)/\(merged[idx].inning)/\(merged[idx].hits)/\(merged[idx].walks)/\(merged[idx].us)/\(merged[idx].them)")
             if lastLocalProgressUpdate == nil, let local = loadLocalProgressSnapshot(for: gid) {
-                balls = local.balls
-                strikes = local.strikes
-                inning = local.inning
-                hits = local.hits
-                walks = local.walks
-                us = local.us
-                them = local.them
-                lastLocalProgressUpdate = Date(timeIntervalSince1970: local.updatedAt)
-                // `progressRevision` is deliberately NOT restored - see its
-                // declaration. It belongs to one live room, and resuming at 0
-                // is what lets the room's first snapshot resync this device.
-                outs = local.outs ?? outs
+                // No revision in it - see LocalProgressSnapshot.restored.
+                let restored = local.restored(over: liveProgressFields)
+                liveProgressFields = restored.fields
+                lastLocalProgressUpdate = restored.changedAt
             }
 
-            if lastLocalProgressUpdate == nil {
-                if let stamp = merged[idx].progressUpdatedAt {
-                    lastLocalProgressUpdate = stamp
-                } else if merged[idx].balls != 0
-                            || merged[idx].strikes != 0
-                            || merged[idx].inning != 1
-                            || merged[idx].hits != 0
-                            || merged[idx].walks != 0
-                            || merged[idx].us != 0
-                            || merged[idx].them != 0 {
-                    lastLocalProgressUpdate = Date()
-                }
-            }
-
-            if let localStamp = lastLocalProgressUpdate {
-                let snapshotStamp = merged[idx].progressUpdatedAt
-                if snapshotStamp == nil || (snapshotStamp ?? Date.distantPast) < localStamp {
-                    merged[idx].balls = balls
-                    merged[idx].strikes = strikes
-                    merged[idx].inning = inning
-                    merged[idx].hits = hits
-                    merged[idx].walks = walks
-                    merged[idx].us = us
-                    merged[idx].them = them
-                    merged[idx].progressUpdatedAt = localStamp
-                }
-            }
+            let game = merged[idx]
+            let result = LiveProgressSync.mergeReloadedGame(
+                game: ScoreboardValues(balls: game.balls, strikes: game.strikes, inning: game.inning,
+                                       hits: game.hits, walks: game.walks, us: game.us, them: game.them),
+                gameStamp: game.progressUpdatedAt,
+                local: liveProgressFields.board,
+                localStamp: lastLocalProgressUpdate,
+                now: Date()
+            )
+            lastLocalProgressUpdate = result.localStamp
+            merged[idx].balls = result.game.balls
+            merged[idx].strikes = result.game.strikes
+            merged[idx].inning = result.game.inning
+            merged[idx].hits = result.game.hits
+            merged[idx].walks = result.game.walks
+            merged[idx].us = result.game.us
+            merged[idx].them = result.game.them
+            merged[idx].progressUpdatedAt = result.gameStamp
         }
         return merged
     }
@@ -2410,17 +2259,34 @@ struct PitchTrackerView: View {
     /// leave this device permanently deaf to the partner. After the timeout the
     /// room wins, which is the right outcome for a write that never landed.
     private var hasUnpublishedLocalProgress: Bool {
-        guard publishedLocalProgressToken < localProgressChangeToken else { return false }
-        guard let changedAt = lastUnpublishedProgressChangeAt else { return false }
-        return Date().timeIntervalSince(changedAt) < Self.unpublishedProgressGraceWindow
+        ui.progressSync.hasUnpublishedLocalChange(now: Date())
     }
 
-    private static let unpublishedProgressGraceWindow: TimeInterval = 5
+    /// The live room's progress fields, read from / written to this view's state.
+    private var liveProgressFields: LiveProgressFields {
+        get {
+            LiveProgressFields(
+                board: ScoreboardValues(balls: balls, strikes: strikes, inning: inning,
+                                        hits: hits, walks: walks, us: us, them: them),
+                outs: outs,
+                bases: bases
+            )
+        }
+        nonmutating set {
+            balls = newValue.board.balls
+            strikes = newValue.board.strikes
+            inning = newValue.board.inning
+            hits = newValue.board.hits
+            walks = newValue.board.walks
+            us = newValue.board.us
+            them = newValue.board.them
+            outs = newValue.outs
+            bases = newValue.bases
+        }
+    }
 
     private func markLocalProgressChange() {
-        lastLocalProgressUpdate = Date()
-        localProgressChangeToken += 1
-        lastUnpublishedProgressChangeAt = Date()
+        ui.progressSync.noteLocalChange(now: Date())
         persistLocalProgressSnapshot()
         debugLog("🧭[PROG] markLocalProgressChange gid=\(selectedGameId ?? "<nil>") stamp=\(String(describing: lastLocalProgressUpdate)) local=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
         scheduleProgressSnapshotPublish()
@@ -2454,32 +2320,23 @@ struct PitchTrackerView: View {
         // token captured here is the one that clears `hasUnpublishedLocalProgress`.
         // A change made *while* this publish is in flight raises the token
         // again and keeps the guard up until its own publish reports back.
-        let publishingToken = localProgressChangeToken
+        let publishingToken = ui.progressSync.tokenForPublish
 
         if let liveId = activeLiveId, !liveId.isEmpty {
-            LiveGameService.shared.commitLiveProgress(liveId: liveId, fields: [
-                "balls": balls,
-                "strikes": strikes,
-                "inning": inning,
-                "hits": hits,
-                "walks": walks,
-                "us": us,
-                "them": them,
-                "outs": outs
-            ]) { result in
+            LiveGameService.shared.commitLiveProgress(liveId: liveId, fields: liveProgressFields.payload) { result in
                 DispatchQueue.main.async {
-                    self.publishedLocalProgressToken = max(self.publishedLocalProgressToken, publishingToken)
-                    // A failed commit means the room never got this change, so
-                    // the room's own state is the newer truth - leave the
-                    // revision floor alone and let the next snapshot apply.
-                    guard case .success(let serverRevision) = result else { return }
-                    guard self.progressRevisionRoomId == liveId else { return }
-                    self.progressRevision = max(self.progressRevision, serverRevision)
+                    // A failed commit leaves the revision floor alone, so the
+                    // room's own (newer) state applies next.
+                    let serverRevision: Int? = {
+                        if case .success(let revision) = result { return revision }
+                        return nil
+                    }()
+                    self.ui.progressSync.publishFinished(token: publishingToken, serverRevision: serverRevision, publishedRoomId: liveId)
                 }
             }
         } else {
             // No room to publish to, so there is nothing pending to protect.
-            publishedLocalProgressToken = max(publishedLocalProgressToken, publishingToken)
+            ui.progressSync.publishSkippedNoRoom(token: publishingToken)
         }
 
         guard isOwnerForActiveGame else { return }
@@ -2552,6 +2409,8 @@ struct PitchTrackerView: View {
         gameListener = nil
         livePitchEventsListener?.remove()
         livePitchEventsListener = nil
+        ui.liveRunnerEventsListener?.remove()
+        ui.liveRunnerEventsListener = nil
         gamePitchEventsListener?.remove()
         gamePitchEventsListener = nil
         selectedGameId = nil
@@ -2560,7 +2419,7 @@ struct PitchTrackerView: View {
         jerseyCells = []
         showParticipantOverlay = false
         lastObservedResultSelectionId = nil
-        mirroredLivePitchEventIds.removeAll()
+        ui.livePitchMirror.restart()
         didSeedOwnerGameEventsForLive = false
         didSeedLivePitchEventsFromOwnerGame = false
         seededGamePitchEventsForLive.removeAll()
@@ -2595,11 +2454,14 @@ struct PitchTrackerView: View {
             let ref = db.collection("liveGames").document(liveId)
                 .collection("participants").document(myUid)
 
-            ref.setData([
-                "uid": myUid,
-                "lastSeenAt": FieldValue.serverTimestamp(),
-                "joinedAt": FieldValue.serverTimestamp() // ok to re-write; server keeps latest
-            ], merge: true)
+            ref.setData(LiveJoinCredential.presenceFields(
+                uid: myUid,
+                credential: LiveJoinCredential.remembered(for: liveId),
+                timestamps: [
+                    "lastSeenAt": FieldValue.serverTimestamp(),
+                    "joinedAt": FieldValue.serverTimestamp() // ok to re-write; server keeps latest
+                ]
+            ), merge: true)
         }
 
         // fire once immediately so presence shows up right away
@@ -2642,6 +2504,26 @@ struct PitchTrackerView: View {
         case .away:
             return visiblePitchers.filter { awayPitcherIds.contains($0.id ?? "") }
         }
+    }
+
+    /// Once the away pitchers are known: a pitcher from the other side
+    /// comes off the button, and an empty button gets this side's
+    /// remembered pitcher. Before they load every pitcher looks like ours,
+    /// so game entry can't check this on its own.
+    private func reconcilePitcherWithSide() {
+        let side = activeSide
+        // Read first: clearing below writes this side's memory.
+        let remembered = selectedGameId.flatMap { TrackerSelectionMemory.load(gameId: $0).pitcherId(for: side) }
+        if let pid = selectedPitcherId,
+           !SideScope.pitcher(pid, belongsTo: side, awayPitcherIds: awayPitcherIds) {
+            selectedPitcherId = nil
+            persistSelectedPitcherId(nil)
+        }
+        guard selectedPitcherId == nil,
+              let pid = remembered,
+              SideScope.pitcher(pid, belongsTo: side, awayPitcherIds: awayPitcherIds),
+              let pitcher = pitchers.first(where: { $0.id == pid }) else { return }
+        applySelectedPitcher(pitcher)
     }
 
     private func loadAwayPitcherIds(awayTeamId: String?, completion: (() -> Void)? = nil) {
@@ -2789,9 +2671,14 @@ struct PitchTrackerView: View {
             guard !existingDisplays.contains(lineupDisplayNumber(for: player)) else { return false }
             return trackAll || chooseBattersSelection.contains(player.id ?? "")
         }
-        for player in chosen {
-            addBatterFromRoster(player)
+        // One write for the lot - see addJerseyCellsForRosterPlayers.
+        if activeSide == .home {
+            addToActiveAwayBatterIdsIfCurated(chosen.map(\.id))
         }
+        addJerseyCellsForRosterPlayers(
+            chosen.map { (lineupDisplayNumber(for: $0), $0.hitterId) },
+            selectFirst: true
+        )
     }
 
     private func createAndSetOpponentTeam() {
@@ -2823,13 +2710,20 @@ struct PitchTrackerView: View {
     /// clear both rosters instead of loading them.
     private func loadSideContext(for game: Game?) {
         if let awayTeamId = game?.awayTeamId, !awayTeamId.isEmpty {
-            loadAwayPitcherIds(awayTeamId: awayTeamId)
-            refreshAwayRoster(awayTeamId: awayTeamId)
+            withOpponentAccess(awayTeamId: awayTeamId) {
+                self.loadAwayPitcherIds(awayTeamId: awayTeamId) {
+                    self.reconcilePitcherWithSide()
+                }
+                self.refreshAwayRoster(awayTeamId: awayTeamId)
+            }
             authManager.loadMyTeams { teams, _ in
                 if let match = teams.first(where: { $0.team.id == awayTeamId }) {
                     self.activeAwayTeamName = match.team.name
                     self.activeAwayTeamClass = match.team.classLabel ?? ""
                     self.activeAwayTeamSeason = Self.seasonText(for: match.team)
+                } else if self.activeAwayTeamName.isEmpty, let opponent = game?.opponent {
+                    // A partner isn't on the opponent team; the game names it.
+                    self.activeAwayTeamName = opponent
                 }
             }
         } else {
@@ -2840,12 +2734,28 @@ struct PitchTrackerView: View {
             activeAwayTeamSeason = ""
         }
         if let teamId = game?.teamId, !teamId.isEmpty {
-            refreshHomeRoster(teamId: teamId)
+            // A partner reads our roster through the room too - read only.
+            withOpponentAccess(awayTeamId: teamId, canEdit: false) {
+                self.refreshHomeRoster(teamId: teamId)
+            }
             authManager.loadMyTeams { teams, _ in
                 if let match = teams.first(where: { $0.team.id == teamId }) {
                     self.activeHomeTeamName = match.team.name
                     self.activeHomeTeamClass = match.team.classLabel ?? ""
                     self.activeHomeTeamSeason = Self.seasonText(for: match.team)
+                } else if !self.isOwnerForActiveGame, self.activeLiveId != nil {
+                    // A partner who isn't on our team reads its name through
+                    // the room (rules H1) - after the claim above lands.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                        Firestore.firestore().collection("teams").document(teamId).getDocument { snap, _ in
+                            guard let team = try? snap?.data(as: Team.self) else { return }
+                            DispatchQueue.main.async {
+                                self.activeHomeTeamName = team.name
+                                self.activeHomeTeamClass = team.classLabel ?? ""
+                                self.activeHomeTeamSeason = Self.seasonText(for: team)
+                            }
+                        }
+                    }
                 }
             }
         } else {
@@ -2863,8 +2773,122 @@ struct PitchTrackerView: View {
     /// TeamRosterView runs. The game screen only lists hitter-linked rows,
     /// so without it an older player showed on Home's roster (which lists
     /// every row) but never reached this game's bench or batter picker.
+    /// The room's lineup links into ours (LiveLineupLinks). On the coach's
+    /// phone the room's lineup and links are then saved to the game - a
+    /// partner can't write the saved game, so this is how their changes
+    /// get there. Only for snapshots the server confirmed: our own pending
+    /// write echoing back isn't news.
+    private func applyRoomLineup(_ data: [String: Any], fromServer: Bool) {
+        debugLog("🧾 room lineup: \(jerseyCells.count) spots, \((data[LiveLineupLinks.field] as? [String: String])?.count ?? 0) room links, owner=\(isOwnerForActiveGame) game loaded=\(activeGameForBatterSetup != nil) away=\(awayRoster.count) home=\(homeRoster.count) visible=\(visibleJerseyCells.count)")
+        let local = Dictionary(uniqueKeysWithValues: hitterIdByJerseyCellId.map { ($0.key.uuidString, $0.value) })
+        let room = data[LiveLineupLinks.field] as? [String: String]
+        var newHitters: Set<String> = []
+        if let merged = LiveLineupLinks.ownerMerge(local: local, room: room) {
+            var map: [UUID: String] = [:]
+            for (key, hitter) in merged {
+                if let id = UUID(uuidString: key) { map[id] = hitter }
+            }
+            newHitters = Set(merged.values).subtracting(local.values)
+            hitterIdByJerseyCellId = map
+            if fromServer, LiveLineupLinks.writesSavedGame(isOwner: isOwnerForActiveGame), let gid = selectedGameId, !isDemoMode {
+                if let index = games.firstIndex(where: { $0.id == gid }) {
+                    games[index].hitterIdByBatterId = merged
+                }
+                authManager.updateGameHitterLinks(ownerUserId: effectiveGameOwnerUserId, gameId: gid, links: merged)
+            }
+        }
+
+        // A room lineup without matching ids gets fresh ids on every
+        // snapshot (the fallback above) - never save those.
+        let roomIds = (data["batterIds"] as? [String]) ?? []
+        let roomJerseys = (data["jerseyNumbers"] as? [String]) ?? []
+        // Field positions from the room reach everyone's copy of the game;
+        // the coach's phone saves them.
+        let roomPositions = data[LiveLineupLinks.positionsField] as? [String: String]
+        if let gid = selectedGameId, let index = games.firstIndex(where: { $0.id == gid }),
+           let positions = LiveLineupLinks.positionsFromRoom(game: games[index].fieldPositionByBatterId, room: roomPositions) {
+            games[index].fieldPositionByBatterId = positions
+            if fromServer, isOwnerForActiveGame, !isDemoMode {
+                authManager.updateGameFieldPositions(ownerUserId: effectiveGameOwnerUserId, gameId: gid, positions: positions)
+            }
+        }
+
+        guard fromServer, isOwnerForActiveGame, !isDemoMode,
+              !roomIds.isEmpty, roomIds.count == roomJerseys.count,
+              let gid = selectedGameId,
+              let owner = effectiveGameOwnerUserId, !owner.isEmpty,
+              let index = games.firstIndex(where: { $0.id == gid }) else { return }
+
+        // A room made before links / positions rode it: the coach's phone
+        // fills them in once, so partners start with what the coach has.
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            if room == nil, !local.isEmpty {
+                LiveGameService.shared.publishLineupLinks(liveId: liveId, links: local)
+            }
+            if let positions = LiveLineupLinks.needsPublishing(game: games[index].fieldPositionByBatterId, room: roomPositions) {
+                LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [LiveLineupLinks.positionsField: positions])
+            }
+        }
+        let jerseys = jerseyCells.map(\.jerseyNumber)
+        let ids = jerseyCells.map { $0.id.uuidString }
+        if games[index].jerseyNumbers != jerseys || (games[index].batterIds ?? []) != ids {
+            games[index].jerseyNumbers = jerseys
+            games[index].batterIds = ids
+            authManager.updateGameLineup(ownerUserId: owner, gameId: gid, jerseyNumbers: jerseys, batterIds: ids)
+        }
+        // New opponent batters join a curated batter list the way Add
+        // From Team's do; a brand-new roster row needs the roster reloaded.
+        guard !newHitters.isEmpty,
+              let awayTeamId = games[index].awayTeamId, !awayTeamId.isEmpty,
+              !(games[index].activeAwayBatterIds ?? []).isEmpty else { return }
+        refreshAwayRoster(awayTeamId: awayTeamId) {
+            let rows = self.awayRoster.filter { newHitters.contains($0.hitterId ?? "") }.map(\.id)
+            self.addToActiveAwayBatterIdsIfCurated(rows)
+        }
+    }
+
+    /// A partner's copy of the owner's game: games[] (team ids, side
+    /// labels, stats sheets), its lineup links, and both rosters. Never
+    /// the lineup cells - those are the room's.
+    private func loadGameForPartner(ownerUid: String, gameId: String) {
+        Firestore.firestore()
+            .collection("users").document(ownerUid)
+            .collection("games").document(gameId)
+            .getDocument { snap, error in
+                DispatchQueue.main.async {
+                    guard let game = try? snap?.data(as: Game.self) else {
+                        debugLog("⚠️ partner game load failed:", error?.localizedDescription ?? "no data")
+                        self.ui.partnerLoadedGameKey = nil
+                        return
+                    }
+                    if let index = self.games.firstIndex(where: { $0.id == game.id }) {
+                        self.games[index] = game
+                    } else {
+                        self.games.append(game)
+                    }
+                    if (self.opponentName ?? "").isEmpty { self.opponentName = game.opponent }
+                    self.mergeHitterLinks(from: game)
+                    self.loadSideContext(for: game)
+                }
+            }
+    }
+
+    /// A partner in a live room reads the opponent roster through the
+    /// room (OpponentPartnerAccess) - claim it first. Everyone else, and
+    /// a refused claim, just goes ahead (the read decides).
+    private func withOpponentAccess(awayTeamId: String, canEdit: Bool = true, then: @escaping () -> Void) {
+        guard !isOwnerForActiveGame,
+              let liveId = activeLiveId, !liveId.isEmpty,
+              let owner = effectiveGameOwnerUserId, !owner.isEmpty else {
+            then()
+            return
+        }
+        authManager.claimOpponentAccess(teamId: awayTeamId, liveId: liveId, ownerUid: owner, canEdit: canEdit) { _ in then() }
+    }
+
     private func refreshAwayRoster(awayTeamId: String, completion: (() -> Void)? = nil) {
-        authManager.loadTeamPlayers(teamId: awayTeamId) { players in
+        authManager.loadTeamPlayersResult(teamId: awayTeamId) { result in
+            let players = self.noteRosterRead(teamId: awayTeamId, result)
             self.awayRoster = players.filter { $0.archivedAt == nil }
             self.backfillRosterLinks(teamId: awayTeamId, isHome: false)
             completion?()
@@ -2872,14 +2896,31 @@ struct PitchTrackerView: View {
     }
 
     private func refreshHomeRoster(teamId: String, completion: (() -> Void)? = nil) {
-        authManager.loadTeamPlayers(teamId: teamId) { players in
+        authManager.loadTeamPlayersResult(teamId: teamId) { result in
+            let players = self.noteRosterRead(teamId: teamId, result)
             self.homeRoster = players.filter { $0.archivedAt == nil }
             self.backfillRosterLinks(teamId: teamId, isHome: true)
             completion?()
         }
     }
 
+    /// Records whether a roster read succeeded (see SideScope) and hands
+    /// back its players - none on a failure, as before.
+    private func noteRosterRead(teamId: String, _ result: Result<[TeamPlayer], Error>) -> [TeamPlayer] {
+        switch result {
+        case .success(let players):
+            if !ui.loadedRosterTeamIds.contains(teamId) { ui.loadedRosterTeamIds.insert(teamId) }
+            return players
+        case .failure:
+            ui.loadedRosterTeamIds.remove(teamId)
+            return []
+        }
+    }
+
     private func backfillRosterLinks(teamId: String, isHome: Bool) {
+        // Only the coach mends roster links: a partner's device would mint
+        // records under its own account and then be refused the row write.
+        guard isOwnerForActiveGame || activeLiveId == nil else { return }
         let roster = isHome ? homeRoster : awayRoster
         for player in roster where player.pitcherId == nil || player.hitterId == nil {
             authManager.ensureTeamPlayerHasPitcherAndHitter(teamId: teamId, teamPlayer: player) { updated in
@@ -3022,10 +3063,12 @@ struct PitchTrackerView: View {
     ///    display meant deselecting someone in "Batters to Track" silently
     ///    removed a batter already in the lineup.
     private var currentBattingHitterIds: Set<String>? {
-        guard currentBattingTeamId != nil else { return nil }
-        let roster = activeSide == .home ? awayRoster : homeRoster
-        let hitterIds = Set(roster.compactMap { $0.hitterId })
-        return hitterIds.isEmpty ? nil : hitterIds
+        let teamId = currentBattingTeamId
+        return SideScope.battingHitterIds(
+            teamId: teamId,
+            roster: activeSide == .home ? awayRoster : homeRoster,
+            rosterLoaded: teamId.map { ui.loadedRosterTeamIds.contains($0) } ?? false
+        )
     }
 
     /// The "At Bat" scroll, scoped to whoever's actually up: Us pitching
@@ -3035,11 +3078,7 @@ struct PitchTrackerView: View {
     /// Us/Them existed, or just a bare jersey number typed in) always
     /// shows, so nothing already on a coach's lineup silently vanishes.
     private var visibleJerseyCells: [JerseyCell] {
-        guard let battingIds = currentBattingHitterIds else { return jerseyCells }
-        return jerseyCells.filter { cell in
-            guard let hitterId = hitterIdByJerseyCellId[cell.id] else { return true }
-            return battingIds.contains(hitterId)
-        }
+        SideScope.visibleCells(jerseyCells, links: hitterIdByJerseyCellId, battingHitterIds: currentBattingHitterIds)
     }
 
     /// `sideFilteredPitchers` filters by `awayPitcherIds`, which only ever
@@ -3435,6 +3474,17 @@ struct PitchTrackerView: View {
         refreshKeyPickedForActiveGame()
     }
 
+    /// Puts back the batter who was up on this side when the game was left,
+    /// if they're still in the lineup. Never overrides a partner's room.
+    private func restoreRememberedBatter(from memory: TrackerSelectionMemory? = nil) {
+        guard let gid = selectedGameId, isOwnerForActiveGame || activeLiveId == nil else { return }
+        let memory = memory ?? TrackerSelectionMemory.load(gameId: gid)
+        guard let id = memory.batterId(for: activeSide),
+              let cell = jerseyCells.first(where: { $0.id == id }) else { return }
+        selectedBatterId = cell.id
+        selectedBatterJersey = cell.jerseyNumber
+    }
+
     private func persistSelectedPitcherId(_ id: String?) {
         let defaults = UserDefaults.standard
         if let id {
@@ -3444,6 +3494,8 @@ struct PitchTrackerView: View {
         }
 
         if let gameId = selectedGameId, !gameId.isEmpty {
+            let side = activeSide
+            TrackerSelectionMemory.update(gameId: gameId) { $0.setPitcher(id, for: side) }
             var map = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String] ?? [:]
             if let id {
                 map[gameId] = id
@@ -3487,6 +3539,11 @@ struct PitchTrackerView: View {
         }
 
         let pitcherId: String? = {
+            // This side's own pitcher first: the per-game map below holds
+            // only the last one picked, whichever side that was.
+            if let remembered = TrackerSelectionMemory.load(gameId: gameId).pitcherId(for: activeSide) {
+                return remembered
+            }
             if let pitcherMap = defaults.dictionary(forKey: DefaultsKeys.lastPitcherByGameId) as? [String: String] {
                 if let localPitcherId = pitcherMap[gameId], !localPitcherId.isEmpty {
                     return localPitcherId
@@ -3498,7 +3555,10 @@ struct PitchTrackerView: View {
             return nil
         }()
 
+        // Only a pitcher from the side that's pitching - the per-game map
+        // holds whichever side was picked last.
         if let pitcherId,
+           SideScope.pitcher(pitcherId, belongsTo: activeSide, awayPitcherIds: awayPitcherIds),
            let pitcher = pitchers.first(where: { $0.id == pitcherId }) {
             applySelectedPitcher(pitcher)
         }
@@ -3981,6 +4041,7 @@ struct PitchTrackerView: View {
     }
 
     private func chooseGame(gameId: String, ownerUid: String) {
+        ui.launchHomeGate.noteGameOpened()
         if activeLiveId != nil {
             endLiveSessionLocally(keepCurrentGame: false)
         }
@@ -3988,11 +4049,16 @@ struct PitchTrackerView: View {
         activeGameOwnerUserId = ownerUid
         selectedGameId = gameId
         currentTrackingMode = games.first(where: { $0.id == gameId })?.trackingMode ?? .coach
-        activeSide = .home
+        // Back on whichever side was pitching when this game was left
+        // (TrackerSelectionMemory) - Away only if the game still has one.
+        let rememberedSide = TrackerSelectionMemory.load(gameId: gameId).side
+        let hasAwayTeam = !(games.first(where: { $0.id == gameId })?.awayTeamId ?? "").isEmpty
+        activeSide = (rememberedSide == .away && hasAwayTeam) ? .away : .home
         selectedHitterId = nil
         // Was an unconditional reset, which is what made the At Bat scroll
         // stop scoping to the batting side after reopening a game.
         seedHitterLinks(from: games.first(where: { $0.id == gameId }))
+        ui.parkedHitterLinks = [:]
         loadSideContext(for: games.first(where: { $0.id == gameId }))
         debugLog("🧭[PROG] chooseGame gid=\(gameId) owner=\(ownerUid)")
 
@@ -4005,19 +4071,20 @@ struct PitchTrackerView: View {
         defaults.set(ownerUid, forKey: DefaultsKeys.activeGameOwnerUserId)
         defaults.set("tracker", forKey: DefaultsKeys.lastView)
 
+        ui.sessionRunnerEvents = []
         if let local = loadLocalProgressSnapshot(for: gameId) {
-            balls = local.balls
-            strikes = local.strikes
-            inning = local.inning
-            hits = local.hits
-            walks = local.walks
-            us = local.us
-            them = local.them
-            lastLocalProgressUpdate = Date(timeIntervalSince1970: local.updatedAt)
-            // `progressRevision` is deliberately NOT restored - see its declaration.
-            outs = local.outs ?? outs
+            // No revision in it - see LocalProgressSnapshot.restored. A
+            // snapshot from before runners were stored starts with none.
+            var current = liveProgressFields
+            current.bases = .empty
+            let restored = local.restored(over: current)
+            liveProgressFields = restored.fields
+            lastLocalProgressUpdate = restored.changedAt
             debugLog("🧭[PROG] chooseGame loadLocalSnapshot gid=\(gameId) stamp=\(lastLocalProgressUpdate!) values=\(balls)/\(strikes)/\(inning)/\(hits)/\(walks)/\(us)/\(them)")
         } else if let cached = games.first(where: { $0.id == gameId }) {
+            // Runners aren't stored on Game; a game with no local snapshot
+            // must not inherit the previous game's.
+            bases = .empty
             balls = cached.balls
             strikes = cached.strikes
             inning = cached.inning
@@ -4705,10 +4772,7 @@ struct PitchTrackerView: View {
     }
 
     private func atBatCountKey(batterId: String?, jersey: String?) -> String? {
-        if let batterId, !batterId.isEmpty { return "id:\(batterId)" }
-        let trimmed = jersey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmed.isEmpty { return "jersey:\(trimmed)" }
-        return nil
+        GameProgress.batterKey(batterId: batterId, jersey: jersey)
     }
 
     private func migrateEditedJerseyReferences(
@@ -5107,6 +5171,27 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// The gear sheet's field positions: the local Game first, so the sheet
+    /// shows the change at once, then a targeted write (owner only).
+    private func saveFieldPositions(_ positions: [UUID: String]) {
+        guard let gid = selectedGameId,
+              let index = games.firstIndex(where: { $0.id == gid }) else { return }
+        let stored = LineupFieldPositions.encode(positions)
+        games[index].fieldPositionByBatterId = stored
+        guard !isDemoMode else { return }
+        // In a live room positions ride the room, so a partner's change
+        // reaches the coach's phone, which saves it (applyRoomLineup).
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            LiveGameService.shared.updateLiveFields(liveId: liveId, fields: [LiveLineupLinks.positionsField: stored])
+        }
+        guard LiveLineupLinks.writesSavedGame(isOwner: isOwnerForActiveGame) else { return }
+        authManager.updateGameFieldPositions(
+            ownerUserId: effectiveGameOwnerUserId,
+            gameId: gid,
+            positions: stored
+        )
+    }
+
     private func deleteBatterFromDetail(_ cell: JerseyCell) {
         guard let idx = jerseyCells.firstIndex(where: { $0.id == cell.id }) else { return }
         let removed = jerseyCells.remove(at: idx)
@@ -5323,8 +5408,8 @@ struct PitchTrackerView: View {
         HStack(alignment: .top, spacing: 8) {
             countDisplaySegment
             cardsSegmentButton
-            scoreSegment(label: sideLabel(for: .home, maxLength: 7), value: usBinding.wrappedValue)
-            scoreSegment(label: sideLabel(for: .away, maxLength: 7), value: themBinding.wrappedValue)
+            scoreSegment(label: sideLabel(for: .home, maxLength: 7), value: usBinding.wrappedValue, identifier: "score.home")
+            scoreSegment(label: sideLabel(for: .away, maxLength: 7), value: themBinding.wrappedValue, identifier: "score.away")
         }
         .foregroundStyle(.black)
     }
@@ -5356,7 +5441,7 @@ struct PitchTrackerView: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Edit Count, Inning, Hits, Walks and Score")
+        .accessibilityLabel("Edit Count, Inning, Runners and Score")
     }
 
     private func staticCountDots(
@@ -5426,7 +5511,7 @@ struct PitchTrackerView: View {
         .accessibilityLabel("Filter and Edit Cards")
     }
 
-    private func scoreSegment(label: String, value: Int) -> some View {
+    private func scoreSegment(label: String, value: Int, identifier: String) -> some View {
         HStack(spacing: 4) {
             Text(label)
                 .font(.subheadline)
@@ -5438,6 +5523,10 @@ struct PitchTrackerView: View {
         .padding(.vertical, 8)
         .background(Color(.systemGray5))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) \(value)")
+        .accessibilityValue("\(value)")
+        .accessibilityIdentifier(identifier)
     }
 
     /// Pre-existing tab bar, kept for non-game modes (practice/scout), where
@@ -5460,7 +5549,7 @@ struct PitchTrackerView: View {
                             .font(.title3.weight(.semibold))
                     }
                     .buttonStyle(.plain)
-                    .disabled(lastPersistedEventInCurrentMode == nil)
+                    .disabled(lastPersistedEventInCurrentMode == nil && pendingUndoRunnerEvent == nil)
                     .accessibilityLabel("Undo Last Pitch")
                 )
                 // The confirm dialog is attached once at baseBody's root,
@@ -5660,6 +5749,7 @@ struct PitchTrackerView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 8)
                 }
+                .coordinateSpace(.named(StickyActionBar<EmptyView>.outerScrollSpace))
                 .frame(maxHeight: effectiveScreenSize.height * 0.78)
             }
         }
@@ -5682,6 +5772,11 @@ struct PitchTrackerView: View {
             balls: ballsBinding,
             strikes: strikesBinding,
             outs: outs,
+            bases: bases,
+            runnerChoices: runnerChoices,
+            onSetRunner: { runner, base in setRunnerManually(runner, on: base) },
+            onRunnerEvent: { kind, base, substitute in recordRunnerEvent(kind, from: base, substitute: substitute) },
+            onClearBases: { clearBasesManually() },
             showOutsFlash: showOutsFlash,
             onOutsTapIndex: { idx in
                 pendingOutsResetWorkItem?.cancel()
@@ -5695,8 +5790,6 @@ struct PitchTrackerView: View {
                 }
             },
             inning: inningBinding,
-            hits: hitsBinding,
-            walks: walksBinding,
             us: usBinding,
             them: themBinding,
             selectedGameId: $ui.selectedGameId,
@@ -5708,30 +5801,6 @@ struct PitchTrackerView: View {
         .frame(maxWidth: .infinity, minHeight: 250, alignment: .top)
     }
 
-
-    private var headerContainer: some View {
-        let screen = effectiveScreenSize
-
-        return VStack(spacing: 4) {
-            topBar
-        }
-        .frame(
-            width: screen.width * 0.94   // 94% of screen width
-        )
-        .fixedSize(horizontal: false, vertical: true)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.thickMaterial)
-                .shadow(color: .black.opacity(0.7), radius: 6, x: 0, y: 6)
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-        .padding(.horizontal)
-        .padding(.top, 6)
-    }
 
     private var isCompactHeight: Bool {
         effectiveScreenSize.height <= 700
@@ -5747,8 +5816,6 @@ struct PitchTrackerView: View {
 
     private var sidebarColumnWidth: CGFloat { 60 }
 
-    private var topControlRowHeight: CGFloat { 92 }
-    private var sidebarControlPanelHeight: CGFloat { 90 }
     
     private var participantHeaderOverlay: some View {
         Group {
@@ -6011,6 +6078,9 @@ struct PitchTrackerView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 8)
             }
+            // The result sheet's Save row sticks to the top of this
+            // (StickyActionBar).
+            .coordinateSpace(.named(StickyActionBar<EmptyView>.outerScrollSpace))
         } else {
             Color.clear.frame(height: 1)
         }
@@ -6083,50 +6153,54 @@ struct PitchTrackerView: View {
     }
     
     // MARK: - Extracted subviews to help type-checker
-    private var topBar: some View {
-        HStack(spacing: 6) {
-            if isGame && !isOwnerForActiveGame && activeLiveId != nil {
-                Text("Pitch Events: Assistant")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+
+    /// The assistant's Call Pitches / Track Game menu, where the owner's
+    /// Key button sits.
+    private var partnerModeMenu: some View {
+        Menu {
+            Section("Mode") {
+                trackingModePicker
             }
-
-            if !(isGame && !isOwnerForActiveGame) {
-                topBarMenu
-                    .layoutPriority(1)
-            }
-
-            Spacer(minLength: 4)
-
-            if isGame && isOwnerForActiveGame {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("Pitching")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    usThemControl
+            // Leaving the room. The "Game in progress" banner that carried
+            // this only shows on one join path; the menu is always here.
+            Section {
+                Button(role: .destructive) {
+                    disconnectFromGame(notifyHost: false)
+                } label: {
+                    Label("Disconnect", systemImage: "xmark.circle")
                 }
             }
+        } label: {
+            HStack(spacing: 4) {
+                Text("Assistant · \(currentTrackingMode.displayName)")
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundColor(.primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
     }
 
-    /// Left side of the top bar - a single dropdown for the two things that
+    /// Right side of the top bar - a single dropdown for the two things that
     /// used to be separate always-visible controls (the Key/template picker
     /// and Invite Assistant). The gear/Settings button that used to sit on
     /// the right is gone entirely - the bottom Home tab already reaches the
     /// same place (`settingsButton`'s action was just `activeHomeArea = .home`).
     private var topBarMenu: some View {
         Menu {
+            Section("Mode") {
+                trackingModePicker
+            }
+
             // With no keys to choose from, the Key item used to be present
             // but disabled - the control the coach reaches for when the
             // tracker is blurred, doing nothing. Offer the fix instead.
@@ -6151,6 +6225,17 @@ struct PitchTrackerView: View {
                 triggerAssistantCodeLink()
             } label: {
                 Label("Invite Assistant", systemImage: "person.badge.plus")
+            }
+
+            // Ending the room was only reachable through Invite Assistant's
+            // dialog. Same dialog (End Live Session / Cancel), named for
+            // what it does.
+            if let liveId = activeLiveId, !liveId.isEmpty {
+                Button(role: .destructive) {
+                    showCodeShareModePicker = true
+                } label: {
+                    Label("End Live Session…", systemImage: "xmark.circle")
+                }
             }
         } label: {
             topBarMenuLabel
@@ -6234,8 +6319,8 @@ struct PitchTrackerView: View {
                 needsKey: needsKeyForThisGame
             )
         }
-        .frame(maxWidth: 150, alignment: .leading)
-        .padding(.horizontal, 14)
+        .frame(maxWidth: 124, alignment: .leading)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)
         .clipShape(Capsule())
@@ -6448,19 +6533,15 @@ struct PitchTrackerView: View {
     private var mainStrikeZoneSection: some View {
         let deviceWidth = effectiveScreenSize.width
         let SZwidth: CGFloat = isGame ? (deviceWidth * 0.78) : (deviceWidth * 0.85)
-        let chipStripWidth: CGFloat = SZwidth
+        // Screen width less the section's 12pt margins: the Call Pitches /
+        // Track Game switch moved into the Key menu (2026-11-02), so the
+        // pitcher row no longer shares its line with a sidebar.
+        let chipStripWidth: CGFloat = deviceWidth - 24
 
         return VStack(spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                sidebarControlPanel
-
-                if !activePitchChipOptions.isEmpty {
-                    pitchSelectionStrip(width: chipStripWidth)
-                } else {
-                    Color.clear
-                        .frame(width: chipStripWidth, height: topControlRowHeight)
-                }
-            }
+            // Always shown: the Key button lives here even before a game
+            // has a key or any pitches.
+            pitchSelectionStrip(width: chipStripWidth)
 
             HStack(alignment: .top, spacing: 8) {
                 atBatSidebar
@@ -6502,13 +6583,21 @@ struct PitchTrackerView: View {
     /// that just created them, since the curated subset would still exclude
     /// them. No-ops when the list is unset/empty (no restriction active).
     private func addToActiveAwayBatterIdsIfCurated(_ teamPlayerId: String?) {
-        guard let teamPlayerId,
-              let gid = selectedGameId,
+        addToActiveAwayBatterIdsIfCurated([teamPlayerId])
+    }
+
+    /// One `saveGame` for any number of players. `saveGame` writes the
+    /// whole Game from this local copy, whose lineup lags the cells being
+    /// added - one save per player, interleaved with the lineup writes,
+    /// rolled the lineup back mid-add (2026-11-02).
+    private func addToActiveAwayBatterIdsIfCurated(_ teamPlayerIds: [String?]) {
+        guard let gid = selectedGameId,
               let index = games.firstIndex(where: { $0.id == gid }),
-              let activeIds = games[index].activeAwayBatterIds, !activeIds.isEmpty,
-              !activeIds.contains(teamPlayerId)
+              let activeIds = games[index].activeAwayBatterIds, !activeIds.isEmpty
         else { return }
-        games[index].activeAwayBatterIds = activeIds + [teamPlayerId]
+        let added = PlayerLinks.uniqueOrdered(teamPlayerIds.compactMap { $0 }).filter { !activeIds.contains($0) }
+        guard !added.isEmpty else { return }
+        games[index].activeAwayBatterIds = activeIds + added
         if !isDemoMode {
             authManager.saveGame(games[index])
         }
@@ -6516,6 +6605,7 @@ struct PitchTrackerView: View {
 
     private func presentQuickAddPlayer(teamId: String, onCreate: @escaping (TeamPlayer) -> Void) {
         quickAddPlayerName = ""
+        ui.quickAddNumberOnly = false
         quickAddPlayerJersey = ""
         quickAddPlayerPositions = []
         quickAddPlayerBattingSide = nil
@@ -6526,8 +6616,8 @@ struct PitchTrackerView: View {
 
     private func confirmQuickAddPlayer() {
         guard let teamId = quickAddTeamId else { return }
-        let name = quickAddPlayerName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
+        guard let name = NumberOnlyName.savedName(typed: quickAddPlayerName, jersey: quickAddPlayerJersey,
+                                                  numberOnly: ui.quickAddNumberOnly) else { return }
         let jersey = quickAddPlayerJersey.trimmingCharacters(in: .whitespaces)
         authManager.addTeamPlayerCreatingNewPlayer(
             teamId: teamId,
@@ -6603,7 +6693,10 @@ struct PitchTrackerView: View {
     private var quickAddPlayerSheetView: some View {
         NavigationView {
             Form {
-                TextField("Name", text: $ui.quickAddPlayerName)
+                Toggle("Number only (no name)", isOn: $ui.quickAddNumberOnly)
+                if !ui.quickAddNumberOnly {
+                    TextField("Name", text: $ui.quickAddPlayerName)
+                }
                 TextField("Jersey #", text: $ui.quickAddPlayerJersey)
 
                 Section("Position") {
@@ -6633,7 +6726,8 @@ struct PitchTrackerView: View {
                     Button("Add") {
                         confirmQuickAddPlayer()
                     }
-                    .disabled(quickAddPlayerName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(NumberOnlyName.savedName(typed: ui.quickAddPlayerName, jersey: ui.quickAddPlayerJersey,
+                                                       numberOnly: ui.quickAddNumberOnly) == nil)
                 }
             }
         }
@@ -6709,6 +6803,22 @@ struct PitchTrackerView: View {
         season.isEmpty ? name : "\(name) · \(season)"
     }
 
+    /// The team in the field's positions right now, copied onto each game
+    /// pitch (FieldingPlay.swift). Its players are the lineup cells linked
+    /// to the pitching team's roster - the same split as the gear sheet.
+    private var currentDefense: [DefenseSlot] {
+        let pitchingRoster = activeSide == .home ? homeRoster : awayRoster
+        let pitchingHitterIds = Set(pitchingRoster.compactMap { $0.hitterId })
+        let cells = jerseyCells.compactMap { cell -> (batterId: UUID, hitterId: String?, label: String)? in
+            guard let hitterId = hitterIdByJerseyCellId[cell.id], pitchingHitterIds.contains(hitterId) else { return nil }
+            return (batterId: cell.id, hitterId: hitterId, label: "#\(cell.jerseyNumber)")
+        }
+        return FieldingPlay.defense(
+            cells: cells,
+            positions: LineupFieldPositions.decode(activeGameForBatterSetup?.fieldPositionByBatterId)
+        )
+    }
+
     private var lineupGroupsForDetail: [LineupBatterGroup] {
         let battingRoster = activeSide == .home ? awayRoster : homeRoster
         let pitchingRoster = activeSide == .home ? homeRoster : awayRoster
@@ -6740,8 +6850,10 @@ struct PitchTrackerView: View {
         let battingArchived = archivedBenchNames(from: battingRoster)
         let fieldingArchived = archivedBenchNames(from: pitchingRoster)
 
+        // A team in the game gets its column even with nobody on its
+        // roster yet - a blank column is where its players will go.
         var groups: [LineupBatterGroup] = []
-        if !battingRow.isEmpty || !battingBench.isEmpty || !battingArchived.isEmpty {
+        if currentBattingTeamId != nil || !battingRow.isEmpty || !battingBench.isEmpty || !battingArchived.isEmpty {
             groups.append(
                 LineupBatterGroup(
                     id: "batting",
@@ -6756,7 +6868,7 @@ struct PitchTrackerView: View {
                 )
             )
         }
-        if !fielding.isEmpty || !fieldingBench.isEmpty || !fieldingArchived.isEmpty {
+        if currentPitchingTeamId != nil || !fielding.isEmpty || !fieldingBench.isEmpty || !fieldingArchived.isEmpty {
             groups.append(
                 LineupBatterGroup(
                     id: "fielding",
@@ -6994,12 +7106,18 @@ struct PitchTrackerView: View {
     /// prune a delete triggers - so the whole-doc write landed a stale
     /// lineup on top of the delete that had just happened.
     private func persistHitterLinks() {
-        guard !isDemoMode,
-              isOwnerForActiveGame,
-              let gid = selectedGameId else { return }
+        guard !isDemoMode else { return }
         let links = Dictionary(
             uniqueKeysWithValues: hitterIdByJerseyCellId.map { ($0.key.uuidString, $0.value) }
         )
+        // In a live room the links ride the room too, so a partner's Bench
+        // / Put In Game reaches the coach's phone, which saves them
+        // (LiveLineupLinks).
+        if let liveId = activeLiveId, !liveId.isEmpty {
+            LiveGameService.shared.publishLineupLinks(liveId: liveId, links: links)
+        }
+        guard LiveLineupLinks.writesSavedGame(isOwner: isOwnerForActiveGame),
+              let gid = selectedGameId else { return }
         if let index = games.firstIndex(where: { $0.id == gid }) {
             guard games[index].hitterIdByBatterId != links else { return }
             // Local struct only - the write below is the one that persists.
@@ -7079,17 +7197,34 @@ struct PitchTrackerView: View {
     /// batting. Keyed by cell id rather than threaded through jerseyCells'
     /// seven rehydration sites, so none of that fragile ordering moves.
     private func addJerseyCellForRosterPlayer(displayNumber: String, hitterId: String?, select: Bool = true) {
-        let newCell = JerseyCell(jerseyNumber: displayNumber)
-        jerseyCells.append(newCell)
-        if let hitterId {
-            hitterIdByJerseyCellId[newCell.id] = hitterId
-            persistHitterLinks()
+        addJerseyCellsForRosterPlayers([(displayNumber, hitterId)], selectFirst: select)
+    }
+
+    /// Appends one or more batters with ONE lineup write and ONE link
+    /// write. Adding several players one call at a time (2026-11-02's
+    /// multi-select) raced: the game snapshot from the first write landed
+    /// mid-way, rebuilt the lineup from the doc, and pruned the links of
+    /// the cells still being added - they showed as "Not on roster" while
+    /// the same kids sat on the bench.
+    private func addJerseyCellsForRosterPlayers(_ players: [(displayNumber: String, hitterId: String?)], selectFirst: Bool) {
+        guard !players.isEmpty else { return }
+        let newCells = players.map { JerseyCell(jerseyNumber: $0.displayNumber) }
+        jerseyCells.append(contentsOf: newCells)
+        var linked = false
+        for (cell, player) in zip(newCells, players) {
+            if let hitterId = player.hitterId {
+                hitterIdByJerseyCellId[cell.id] = hitterId
+                linked = true
+            }
         }
+        if linked { persistHitterLinks() }
 
         if let liveId = activeLiveId, !liveId.isEmpty {
             LiveGameService.shared.mutateLiveLineup(liveId: liveId) { jerseys, batterIds in
-                jerseys.append(displayNumber)
-                batterIds.append(newCell.id.uuidString)
+                for cell in newCells {
+                    jerseys.append(cell.jerseyNumber)
+                    batterIds.append(cell.id.uuidString)
+                }
             } completion: { result in
                 guard case .success(let merged) = result,
                       let gameId = selectedGameId,
@@ -7114,8 +7249,8 @@ struct PitchTrackerView: View {
             )
         }
 
-        if select {
-            selectedBatterId = newCell.id
+        if selectFirst, let first = newCells.first {
+            selectedBatterId = first.id
         }
     }
 
@@ -7171,7 +7306,24 @@ struct PitchTrackerView: View {
             isSelected: { _ in false },
             onSelect: { player in
                 addBatterFromRoster(player)
+            },
+            // Several at once (2026-11-02): check everyone who's batting,
+            // then Add - they join the order in roster order.
+            onConfirmMany: { players in
+                addBattersFromRoster(players)
             }
+        )
+    }
+
+    /// Adds each player in turn; only the first one added becomes the
+    /// selected batter, so the at-bat doesn't jump to the last checked.
+    private func addBattersFromRoster(_ players: [TeamPlayer]) {
+        if activeSide == .home {
+            addToActiveAwayBatterIdsIfCurated(players.map(\.id))
+        }
+        addJerseyCellsForRosterPlayers(
+            players.map { (lineupDisplayNumber(for: $0), $0.hitterId) },
+            selectFirst: selectedBatterId == nil
         )
     }
 
@@ -7342,16 +7494,6 @@ struct PitchTrackerView: View {
                         resetScoutComposer()
                     }
 
-                    if isGame {
-                        scoutBottomBarButton(systemImage: "chart.bar") {
-                            showGameStatsSheet = true
-                        }
-
-                        scoutBottomBarButton(systemImage: "doc.text") {
-                            showGameSummarySheet = true
-                        }
-                    }
-
                     Spacer(minLength: 0)
 
                     Button("Save Event") {
@@ -7379,49 +7521,25 @@ struct PitchTrackerView: View {
         .frame(width: width, height: strikeZoneHeight, alignment: .bottom)
     }
 
-    private func scoutBottomBarButton(systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 30, height: 30)
-                .background(.regularMaterial, in: Capsule())
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
+    /// Call Pitches / Track Game - the old Coach / Scout sidebar, now
+    /// inside the Key menu (2026-11-02). Track Game waits while a
+    /// participant's call is in flight, as the sidebar button did.
+    private var trackingModeBinding: Binding<TrackingMode> {
+        Binding(
+            get: { currentTrackingMode },
+            set: { newValue in
+                if newValue == .scout, isParticipantCallInProgress { return }
+                currentTrackingMode = newValue
+            }
+        )
     }
 
-    private var sidebarControlPanel: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            sidebarControlButton(title: "Coach", isSelected: currentTrackingMode == .coach) {
-                currentTrackingMode = .coach
-            }
-            Spacer(minLength: 0)
-            sidebarControlButton(title: "Scout", isSelected: currentTrackingMode == .scout) {
-                guard !isParticipantCallInProgress else { return }
-                currentTrackingMode = .scout
-            }
-            .opacity(isParticipantCallInProgress ? 0.45 : 1.0)
-            Spacer(minLength: 0)
+    private var trackingModePicker: some View {
+        Picker("Mode", selection: trackingModeBinding) {
+            Label(TrackingMode.coach.displayName, systemImage: "hand.point.up.left").tag(TrackingMode.coach)
+            Label(TrackingMode.scout.displayName, systemImage: "pencil.and.list.clipboard").tag(TrackingMode.scout)
         }
-        .padding(.horizontal, 6)
-        .frame(width: sidebarColumnWidth, height: topControlRowHeight, alignment: .center)
-        .background(alignment: .top) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .frame(height: topControlRowHeight)
-                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
-        }
-        .overlay(alignment: .top) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                .frame(height: topControlRowHeight)
-        }
-        .zIndex(10)
+        .pickerStyle(.inline)
     }
 
     /// Owner-only switch for which side's pitcher is active - a parallel,
@@ -7431,7 +7549,7 @@ struct PitchTrackerView: View {
     /// Labeled Us/Them (matching the existing scoreboard vocabulary) - the
     /// underlying GameSide cases stay .home/.away internally.
     private var usThemControl: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             usThemButton(side: .away) {
                 guard !isOwnerCallInProgress else { return }
                 handleSelectAwaySide()
@@ -7483,35 +7601,40 @@ struct PitchTrackerView: View {
         return String(name.prefix(maxLength))
     }
 
+    /// The selected side wears a bold "Pitching" label centered above it,
+    /// inside a faint rounded rectangle; the other side reserves the same
+    /// space so the chips don't jump when the side changes.
     private func usThemButton(side: GameSide, action: @escaping () -> Void) -> some View {
         let isSelected = activeSide == side
         return Button(action: action) {
-            Text(sideLabel(for: side))
-                .font(.caption2.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .foregroundStyle(isSelected ? Color.white : Color.primary)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
+            VStack(spacing: 3) {
+                Text("Pitching")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .opacity(isSelected ? 1 : 0)
+                Text(sideLabel(for: side))
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(isSelected ? Color.pitchMarkActiveGray : Color(.systemGray6)))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.primary.opacity(isSelected ? 0.05 : 0))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.primary.opacity(isSelected ? 0.12 : 0), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(side == .home ? "Our team pitching" : "Opponent pitching")
-    }
-
-    private func sidebarControlButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(isSelected ? Color.white : Color.primary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(
-                    Capsule()
-                        .fill(isSelected ? Color.black : Color(.systemGray6))
-                )
-        }
-        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func sidebarInviteButton(isConnected: Bool, action: @escaping () -> Void) -> some View {
@@ -7758,41 +7881,61 @@ struct PitchTrackerView: View {
         return [""] + activePitchChipOptions
     }
 
-    @ViewBuilder
+    /// Two cards (2026-11-03): who's pitching (the Pitching side chips,
+    /// the pitcher, the game's stats) and what's thrown (the Key and the
+    /// pitch chips). Same height, so the row reads as one band. The
+    /// pitching card hugs its contents; the Key card gets the rest.
     private func pitchSelectionStrip(width: CGFloat) -> some View {
         let chipOptions = displayedPitchChipOptions
         let rows = [
             GridItem(.flexible(minimum: 20), spacing: 6),
             GridItem(.flexible(minimum: 20), spacing: 6)
         ]
-        let pitcherColumnWidth: CGFloat = 74
-        let chipsMinWidth = max(0, width - 16 - pitcherColumnWidth - 8)
 
-        return HStack(spacing: 8) {
-            pitcherPickerButton
-                .frame(width: pitcherColumnWidth)
-
-            Divider()
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHGrid(rows: rows, spacing: 8) {
-                    ForEach(chipOptions, id: \.self) { pitch in
-                        pitchChip(pitch)
-                            .fixedSize(horizontal: true, vertical: false)
+        return HStack(alignment: .top, spacing: 8) {
+            VStack(spacing: 6) {
+                if isGame && isOwnerForActiveGame {
+                    usThemControl
+                }
+                HStack(spacing: 8) {
+                    pitcherPickerButton
+                        .frame(width: 74)
+                    if isGame {
+                        makeZoneGameStatsButtons()
                     }
                 }
-                .frame(minWidth: chipsMinWidth, alignment: .center)
+                .frame(maxHeight: .infinity)
             }
+            .padding(8)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxHeight: .infinity)
+            .modifier(TrackerTopCardStyle())
+
+            VStack(spacing: 8) {
+                if isGame && !isOwnerForActiveGame {
+                    if activeLiveId != nil {
+                        partnerModeMenu
+                    }
+                } else {
+                    topBarMenu
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHGrid(rows: rows, spacing: 8) {
+                        ForEach(chipOptions, id: \.self) { pitch in
+                            pitchChip(pitch)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
+                    .frame(height: 64)
+                }
+                .frame(maxHeight: .infinity)
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .modifier(TrackerTopCardStyle())
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .frame(width: width, height: topControlRowHeight, alignment: .center)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+        .frame(width: width)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -7860,16 +8003,25 @@ struct PitchTrackerView: View {
         }
     }
     
+    /// The batting team's name, 7 characters or fewer - whichever side
+    /// isn't pitching.
+    private var atBatHeaderTitle: String {
+        sideLabel(for: activeSide == .home ? .away : .home, maxLength: 7)
+    }
+
     private var atBatSidebar: AnyView {
         guard isGame else { return AnyView(EmptyView()) }
         let needsBatterSelection = selectedBatterId == nil
 
         return AnyView(
             VStack(spacing: 0) {
-                Text("At Bat")
+                Text(atBatHeaderTitle)
                     .font(.caption)
                     .fontWeight(.semibold)
                     .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .padding(.horizontal, 2)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
                     .background(
@@ -8343,7 +8495,7 @@ struct PitchTrackerView: View {
     private func makeZoneUndoButton() -> ZoneUndoButton {
         ZoneUndoButton(
             blockHeight: zoneCornerButtonBlockHeight,
-            isDisabled: lastPersistedEventInCurrentMode == nil,
+            isDisabled: lastPersistedEventInCurrentMode == nil && pendingUndoRunnerEvent == nil,
             showConfirm: $ui.showUndoConfirm
         )
     }
@@ -8572,13 +8724,11 @@ struct PitchTrackerView: View {
         // same way, and prefer a @Binding over a closure where the action
         // is just setting state.
         var decoratedCard: AnyView = card
+        // Centered now that the game stats buttons moved up beside the
+        // pitcher (2026-11-02).
         decoratedCard = AnyView(decoratedCard.overlay(
             ZoneOpponentLabel(title: zoneMatchupTitle),
-            alignment: .bottomLeading
-        ))
-        decoratedCard = AnyView(decoratedCard.overlay(
-            makeZoneGameStatsButtons(),
-            alignment: .bottomTrailing
+            alignment: .bottom
         ))
         decoratedCard = AnyView(decoratedCard.overlay(
             makeZoneResetButton(),
@@ -8659,9 +8809,10 @@ struct PitchTrackerView: View {
     private var mainStack: some View {
         ZStack(alignment: .top) {
             VStack(spacing: 4) {
-                headerContainer
-                Spacer(minLength: 10)
+                // The pitching and key controls live in the two cards at
+                // the top of the content section (2026-11-03).
                 contentSectionDimmed
+                    .padding(.top, 6)
             }
 
             // Top overlays (only one should show based on your conditions)
@@ -8994,6 +9145,14 @@ struct PitchTrackerView: View {
         if eventToPersist.hitterId == nil {
             eventToPersist.hitterId = selectedHitterId
         }
+        if isGame && sessionManager.currentMode == .game {
+            GameProgress.stampBasePlay(on: &eventToPersist, bases: bases)
+            let defense = currentDefense
+            eventToPersist.defense = defense.isEmpty ? nil : defense
+            eventToPersist.fieldingTeamId = currentPitchingTeamId
+        }
+        eventToPersist.fieldingOuts = FieldingPlay.consistentOuts(eventToPersist.fieldingOuts, for: eventToPersist)
+        eventToPersist.errorPositions = FieldingPlay.consistentErrors(eventToPersist.errorPositions, for: eventToPersist)
         if let savedBalls = eventToPersist.atBatBalls, let savedStrikes = eventToPersist.atBatStrikes,
            let key = atBatCountKey(batterId: eventToPersist.opponentBatterId, jersey: eventToPersist.opponentJersey) {
             atBatCountCacheByBatter[key] = (balls: savedBalls, strikes: savedStrikes)
@@ -9069,7 +9228,7 @@ struct PitchTrackerView: View {
 
         sessionManager.incrementCount()
         applyProgressOutcomeAdjustments(for: eventToPersist)
-        applyReviewedOutAdvanceIfNeeded(for: eventToPersist)
+        applyGameProgress(for: eventToPersist)
         if eventToPersist.atBatBalls == nil || eventToPersist.atBatStrikes == nil {
             applyProgressCountAdjustments(for: eventToPersist)
         }
@@ -9224,40 +9383,128 @@ struct PitchTrackerView: View {
     }
 
     private func reviewedEventCountsAsOut(_ event: PitchEvent) -> Bool {
-        let normalizedOutcome = (event.outcome ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-
-        if normalizedOutcome.contains("out")
-            || normalizedOutcome.contains("strikeout")
-            || normalizedOutcome.contains("strike looking")
-            || normalizedOutcome.contains("looking strike")
-            || normalizedOutcome == "k"
-            || normalizedOutcome == "ꓘ".lowercased() {
-            return true
-        }
-
-        let countText = (event.atBatCount ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if countText.caseInsensitiveCompare("Out") == .orderedSame || countText.caseInsensitiveCompare("Strikeout") == .orderedSame {
-            return true
-        }
-
-        return false
+        GameProgress.batterIsOut(event)
     }
 
-    private func applyReviewedOutAdvanceIfNeeded(for event: PitchEvent) {
+    // MARK: - Runners, outs and runs (rules in GameProgress.swift)
+
+    /// The tracker's runner-dependent state as a `GameProgress`.
+    private var gameProgress: GameProgress {
+        GameProgress(
+            bases: bases,
+            outs: outs,
+            homeScore: us,
+            awayScore: them,
+            pitchingSide: activeSide == .home ? .home : .away,
+            lastThirdOut: lastOutResetEventIdentity.map {
+                GameProgress.ThirdOut(identity: $0, previousOuts: lastOutResetPreviousOuts)
+            }
+        )
+    }
+
+    /// Writes what `next` changed back through the tracker's normal paths:
+    /// the score bindings (Game document / live room), `updateOuts`, and one
+    /// `markLocalProgressChange` for the bases. A fresh third out starts the
+    /// flash-then-reset.
+    private func commitGameProgress(_ next: GameProgress) {
+        let previous = gameProgress
+        guard next != previous else { return }
+        if next.homeScore != previous.homeScore { usBinding.wrappedValue = next.homeScore }
+        if next.awayScore != previous.awayScore { themBinding.wrappedValue = next.awayScore }
+        if next.bases != previous.bases { bases = next.bases }
+        lastOutResetEventIdentity = next.lastThirdOut?.identity
+        lastOutResetPreviousOuts = next.lastThirdOut?.previousOuts
+        if next.outs != previous.outs {
+            pendingOutsResetWorkItem?.cancel()
+            updateOuts(next.outs)
+            if next.outs >= 3 && previous.outs < 3 {
+                scheduleOutsResetToZero()
+            }
+        }
+        markLocalProgressChange()
+    }
+
+    /// A saved game pitch's outs, runners and runs.
+    private func applyGameProgress(for event: PitchEvent) {
         guard sessionManager.currentMode == .game else { return }
-        guard reviewedEventCountsAsOut(event) else { return }
+        var next = gameProgress
+        next.applyPitch(event)
+        commitGameProgress(next)
+    }
 
+    /// Manual correction from the Runners panel: put someone on a base
+    /// (or take them off) without recording a play. No stats, no undo entry.
+    private func setRunnerManually(_ runner: BaseRunner?, on base: Int) {
+        var next = bases
+        next[base] = runner
+        bases = next
+        markLocalProgressChange()
+    }
+
+    /// The batting team's lineup as runners, for the Runners panel picker.
+    private var runnerChoices: [BaseRunner] {
+        visibleJerseyCells.map { cell in
+            let jersey = cell.jerseyNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+            return BaseRunner(
+                id: cell.id.uuidString,
+                label: jersey.isEmpty ? "R" : "#\(jersey)",
+                hitterId: hitterIdByJerseyCellId[cell.id]
+            )
+        }
+    }
+
+    /// A steal, caught stealing, pickoff, advance or pinch runner: moves the
+    /// bases, scores/outs, and is saved as its own record so it counts in
+    /// stats (RunnerEventStore).
+    private func recordRunnerEvent(_ kind: RunnerEventKind, from: Int, substitute: BaseRunner? = nil) {
+        guard isGame, sessionManager.currentMode == .game else { return }
+        var next = gameProgress
+        guard let event = next.recordRunnerEvent(
+            kind,
+            from: from,
+            substitute: substitute,
+            id: UUID().uuidString,
+            timestamp: Date(),
+            context: GameProgress.RunnerEventContext(
+                gameId: selectedGameId,
+                pitcherId: effectivePitcherIdForSave,
+                createdByUid: authManager.user?.uid,
+                inning: inning
+            )
+        ) else { return }
+        commitGameProgress(next)
+        if !isDemoMode {
+            RunnerEventStore.save(event, liveId: activeLiveId, ownerUid: effectiveGameOwnerUserId, gameId: selectedGameId)
+        }
+        ui.sessionRunnerEvents.append(event)
+    }
+
+    /// The runner event the undo button would reverse, if any.
+    private var pendingUndoRunnerEvent: RunnerEvent? {
+        GameProgress.runnerEventToUndo(
+            sessionRunnerEvents: ui.sessionRunnerEvents,
+            lastPitchTimestamp: lastPersistedEventInCurrentMode?.timestamp
+        )
+    }
+
+    private func undoRunnerEvent(_ event: RunnerEvent) {
+        ui.sessionRunnerEvents.removeAll { $0.id == event.id }
         pendingOutsResetWorkItem?.cancel()
-        let nextOuts = min(3, outs + 1)
-        updateOuts(nextOuts)
+        pendingOutsResetWorkItem = nil
+        showOutsFlash = false
 
-        guard nextOuts >= 3 else { return }
+        var next = gameProgress
+        next.undoRunnerEvent(event)
+        commitGameProgress(next)
+        if !isDemoMode {
+            RunnerEventStore.delete(event, liveId: activeLiveId, ownerUid: effectiveGameOwnerUserId, gameId: selectedGameId)
+        }
+    }
 
-        lastOutResetEventIdentity = event.identity
-        lastOutResetPreviousOuts = max(0, nextOuts - 1)
-        scheduleOutsResetToZero()
+    private func clearBasesManually() {
+        guard !bases.isEmpty else { return }
+        bases = .empty
+        markLocalProgressChange()
     }
 
     /// Shared by the pitch-outcome path and the manual out-circle tap so both
@@ -9270,7 +9517,11 @@ struct PitchTrackerView: View {
 
         let workItem = DispatchWorkItem {
             withAnimation(.easeInOut(duration: 0.18)) {
-                self.updateOuts(0)
+                // Side retired (GameProgress.completeThirdOut): outs to 0
+                // and nobody stays on base, in one publish.
+                var next = self.gameProgress
+                next.completeThirdOut()
+                self.commitGameProgress(next)
                 self.showOutsFlash = false
             }
             self.pendingOutsResetWorkItem = nil
@@ -9311,6 +9562,11 @@ struct PitchTrackerView: View {
     }
 
     private func undoLastPitch() {
+        // A steal/pickoff recorded after the last pitch is the last play.
+        if let runnerEvent = pendingUndoRunnerEvent {
+            undoRunnerEvent(runnerEvent)
+            return
+        }
         guard let event = lastPersistedEventInCurrentMode else { return }
         guard let eventId = event.id?.trimmingCharacters(in: .whitespacesAndNewlines), !eventId.isEmpty else { return }
 
@@ -9324,25 +9580,18 @@ struct PitchTrackerView: View {
         sessionManager.decrementCount()
 
         let remaining = remainingEvents(afterRemovingIdentity: event.identity)
+        let restored = GameProgress.countAfterUndo(remainingNewestFirst: remaining)
+        syncCountFromComposer(balls: restored.balls, strikes: restored.strikes)
         if let priorEvent = remaining.first,
-           let priorBalls = priorEvent.atBatBalls,
-           let priorStrikes = priorEvent.atBatStrikes {
-            syncCountFromComposer(balls: priorBalls, strikes: priorStrikes)
-            if let key = atBatCountKey(batterId: priorEvent.opponentBatterId, jersey: priorEvent.opponentJersey) {
-                atBatCountCacheByBatter[key] = (balls: priorBalls, strikes: priorStrikes)
-            }
-        } else {
-            syncCountFromComposer(balls: 0, strikes: 0)
+           priorEvent.atBatBalls != nil, priorEvent.atBatStrikes != nil,
+           let key = atBatCountKey(batterId: priorEvent.opponentBatterId, jersey: priorEvent.opponentJersey) {
+            atBatCountCacheByBatter[key] = (balls: restored.balls, strikes: restored.strikes)
         }
 
-        if reviewedEventCountsAsOut(event) {
-            if lastOutResetEventIdentity == event.identity {
-                updateOuts(lastOutResetPreviousOuts ?? 2)
-                lastOutResetEventIdentity = nil
-                lastOutResetPreviousOuts = nil
-            } else {
-                updateOuts(max(0, outs - 1))
-            }
+        if sessionManager.currentMode == .game {
+            var next = gameProgress
+            next.undoPitch(event)
+            commitGameProgress(next)
         }
 
         if eventCountsAsHit(event) {
@@ -9383,61 +9632,21 @@ struct PitchTrackerView: View {
     }
 
     private func deletePersistedPitchEvent(_ event: PitchEvent) {
-        guard let eventId = event.id?.trimmingCharacters(in: .whitespacesAndNewlines), !eventId.isEmpty else { return }
-
-        let db = Firestore.firestore()
-        var refs: [DocumentReference] = []
-
-        if let liveId = activeLiveId, !liveId.isEmpty {
-            refs.append(
-                db.collection("liveGames")
-                    .document(liveId)
-                    .collection("pitchEvents")
-                    .document(eventId)
-            )
-            if let owner = effectiveGameOwnerUserId, !owner.isEmpty,
-               let gid = selectedGameId, !gid.isEmpty {
-                refs.append(
-                    db.collection("users")
-                        .document(owner)
-                        .collection("games")
-                        .document(gid)
-                        .collection("pitchEvents")
-                        .document(eventId)
-                )
-            }
-        } else if let owner = effectiveGameOwnerUserId, !owner.isEmpty,
-                  let gid = selectedGameId, !gid.isEmpty {
-            refs.append(
-                db.collection("users")
-                    .document(owner)
-                    .collection("games")
-                    .document(gid)
-                    .collection("pitchEvents")
-                    .document(eventId)
-            )
-        } else if let uid = authManager.user?.uid {
-            refs.append(
-                db.collection("users")
-                    .document(uid)
-                    .collection("pitchEvents")
-                    .document(eventId)
-            )
-        }
-
-        let pitcherId = (event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? event.pitcherId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            : selectedPitcherId
-        if let pitcherId, !pitcherId.isEmpty {
-            refs.append(
-                db.collection("pitchers")
-                    .document(pitcherId)
-                    .collection("pitchEvents")
-                    .document(eventId)
-            )
-        }
-
-        guard !refs.isEmpty else { return }
+        guard let uid = authManager.user?.uid ?? EventCopyPaths.trimmed(event.createdByUid) else { return }
+        // Every copy, the pitcher's and hitter's records included
+        // (EventCopyTargets). The pitcher falls back to the selected one for
+        // pitches saved before events carried it.
+        guard let targets = EventCopyTargets.of(
+            eventId: event.id,
+            isGame: true,
+            gameId: selectedGameId,
+            gameOwnerUid: effectiveGameOwnerUserId,
+            liveId: activeLiveId,
+            createdByUid: nil,
+            currentUid: uid,
+            pitcherId: EventCopyPaths.trimmed(event.pitcherId) ?? selectedPitcherId,
+            hitterId: event.hitterId
+        ) else { return }
 
         // Deleted one copy at a time rather than as a `WriteBatch`. A batch is
         // atomic, and this list spans three different owners' rules: a
@@ -9447,13 +9656,8 @@ struct PitchTrackerView: View {
         // rolled back the count, outs and hits locally while every stored copy
         // of the pitch survived - and the live listener put the card straight
         // back. Independent deletes let each copy go on its own permissions.
-        for ref in refs {
-            ref.delete { error in
-                if let error {
-                    debugLog("❌ undoLastPitch delete failed for \(ref.path): \(error.localizedDescription)")
-                }
-            }
-        }
+        EventCopyWriter.send(EventCopyPlan.delete(targets: targets), label: "undoLastPitch delete",
+                             perform: EventCopyWriter.firestore, log: { debugLog($0) })
     }
 
     private var bufferedSharedEventsURL: URL {
@@ -9624,8 +9828,9 @@ struct PitchTrackerView: View {
         // small button's frame.
         .appConfirmationDialog(
             isPresented: $ui.showUndoConfirm,
-            title: "Undo Last Pitch?",
-            message: "This will remove the last recorded pitch.",
+            title: pendingUndoRunnerEvent == nil ? "Undo Last Pitch?" : "Undo Last Play?",
+            message: pendingUndoRunnerEvent.map { "This will undo: \($0.summary)." }
+                ?? "This will remove the last recorded pitch.",
             primaryTitle: "Undo",
             primaryRole: .destructive,
             primaryAction: { undoLastPitch() },
@@ -10182,6 +10387,14 @@ struct PitchTrackerView: View {
         // (and the resulting jump to Home) arrived late enough to interrupt
         // whatever the coach had already started doing.
         let forceHomeOnLaunch = shouldForceSettingsOnLaunch()
+        // Applied NOW too. Applying it only in the completion below - after
+        // the session read, which is slow on a fresh install - is what threw
+        // a coach who had already tapped into a game back to Home
+        // (LaunchHomeGate.swift). Home is a tab switch, not a sheet, so it
+        // can't hide the "Account In Use" blocker.
+        if forceHomeOnLaunch {
+            activeHomeArea = .home
+        }
         // Everything below waits on the answer. Running it first is what put
         // the "Account In Use" blocker behind the boot sheets.
         ensurePrimarySessionOrPrompt { hasConflict in
@@ -10193,7 +10406,8 @@ struct PitchTrackerView: View {
     /// The rest of `handleInitialAppear`, split out so it can run as the
     /// completion of the primary-session check rather than racing it.
     private func continueBootAfterSessionCheck(forceHome: Bool) {
-        if forceHome {
+        // Late: only if the coach hasn't opened a game while we waited.
+        if ui.launchHomeGate.shouldGoHomeAfterBoot(forceHomeOnLaunch: forceHome, lastView: nil) {
             activeHomeArea = .home
         }
 
@@ -10401,8 +10615,10 @@ struct PitchTrackerView: View {
                 return
             }
 
-            // Present settings if that was the last view preference
-            if lastViewPref == "settings" {
+            // Present settings if that was the last view preference - unless
+            // the coach opened a game while the boot reads were in flight.
+            if lastViewPref == "settings",
+               self.ui.launchHomeGate.shouldGoHomeAfterBoot(forceHomeOnLaunch: false, lastView: lastViewPref) {
                 self.presentExclusive(settings: true)
             } else {
                 // If no active restored session, show the normal chooser sheet
@@ -10458,6 +10674,8 @@ struct PitchTrackerView: View {
         participantsListener = nil
         livePitchEventsListener?.remove()
         livePitchEventsListener = nil
+        ui.liveRunnerEventsListener?.remove()
+        ui.liveRunnerEventsListener = nil
         gamePitchEventsListener?.remove()
         gamePitchEventsListener = nil
         displayListener?.remove()
@@ -10629,6 +10847,7 @@ struct PitchTrackerView: View {
             isDemoMode: isDemoMode,
             pendingResultLabel: pendingResultLabel,
             pitchCall: calledPitch,
+            basesBefore: (isGame && sessionManager.currentMode == .game) ? bases : .empty,
             catcherEstimate: catcherEstimate,
             batterSide: batterSide,
             selectedTemplateId: selectedTemplate?.id.uuidString,
@@ -10878,11 +11097,11 @@ struct PitchTrackerView: View {
         }()
         let hitSpotLine = gameSummaryHasLocationAnalytics
             ? "- Hit Spot: \(summaryHitSpotPitches) of \(summaryLocationAnalyticsEligibleCount) (\(summaryPercent(summaryHitSpotPitches, total: summaryLocationAnalyticsEligibleCount)))"
-            : "- Hit Spot: Hidden for Scout Mode events"
+            : "- Hit Spot: Hidden for Track Game pitches"
         let firstPitchStrikeLine = "- 1st Pitch Strike: \(summaryPercent(summaryFirstPitchStrike.made, total: summaryFirstPitchStrike.total)) (\(summaryFirstPitchStrike.made)/\(summaryFirstPitchStrike.total))"
         let hitSpotDefinition = gameSummaryHasLocationAnalytics
             ? "- Hit Spot % = Location matches / Coach-mode pitches"
-            : "- Location-based metrics hidden for Scout Mode events."
+            : "- Location-based metrics hidden for Track Game pitches."
         let foulPercentLine = "- Foul % = Foul pitches / Total pitches"
 
         return """
@@ -11006,7 +11225,7 @@ struct PitchTrackerView: View {
                 if gameSummaryHasLocationAnalytics {
                     Text("Hit Spot % = Location matches / Coach-mode pitches")
                 } else {
-                    Text("Location-based metrics hidden for Scout Mode events.")
+                    Text("Location-based metrics hidden for Track Game pitches.")
                 }
                 Text("Foul % = Foul pitches / Total pitches")
             }
@@ -11184,7 +11403,7 @@ struct PitchTrackerView: View {
                 if gameSummaryHasLocationAnalytics {
                     Text("Hit Spot % = Location matches / Coach-mode pitches")
                 } else {
-                    Text("Location-based metrics hidden for Scout Mode events.")
+                    Text("Location-based metrics hidden for Track Game pitches.")
                 }
                 Text("Foul % = Foul pitches / Total pitches")
             }
@@ -11395,6 +11614,8 @@ struct PitchTrackerView: View {
         liveListener = nil
         livePitchEventsListener?.remove()
         livePitchEventsListener = nil
+        ui.liveRunnerEventsListener?.remove()
+        ui.liveRunnerEventsListener = nil
         participantsListener?.remove()
         participantsListener = nil
         uiConnected = false
@@ -11461,6 +11682,7 @@ struct PitchTrackerView: View {
                     }
 
                     DispatchQueue.main.async {
+                        LiveJoinCredential.remember(LiveJoinCredential(kind: .joinCode, value: code), for: liveId)
                         self.activeGameOwnerUserId = ownerUid
                         self.selectedGameId = gameId
 
@@ -11521,25 +11743,20 @@ struct PitchTrackerView: View {
 
     private func shouldForceSettingsOnLaunch() -> Bool {
         let defaults = UserDefaults.standard
-        let lastBackgroundAt = defaults.double(forKey: DefaultsKeys.lastBackgroundAt)
         let forceFlag = defaults.bool(forKey: DefaultsKeys.forceSettingsOnNextLaunch)
         if forceFlag {
             defaults.set(false, forKey: DefaultsKeys.forceSettingsOnNextLaunch)
-            return true
         }
-        if lastBackgroundAt > 0 {
-            let idleSeconds = Date().timeIntervalSince1970 - lastBackgroundAt
-            return idleSeconds >= 15 * 60
-        }
-        return false
+        return LaunchHomeGate.shouldForceHomeOnLaunch(
+            forceFlag: forceFlag,
+            lastBackgroundAt: defaults.double(forKey: DefaultsKeys.lastBackgroundAt),
+            now: Date().timeIntervalSince1970
+        )
     }
 
     private func evaluateIdleAndMaybeShowSettings() {
-        let defaults = UserDefaults.standard
-        let lastBackgroundAt = defaults.double(forKey: DefaultsKeys.lastBackgroundAt)
-        guard lastBackgroundAt > 0 else { return }
-        let idleSeconds = Date().timeIntervalSince1970 - lastBackgroundAt
-        if idleSeconds >= 15 * 60 {
+        let lastBackgroundAt = UserDefaults.standard.double(forKey: DefaultsKeys.lastBackgroundAt)
+        if LaunchHomeGate.isIdleTooLong(lastBackgroundAt: lastBackgroundAt, now: Date().timeIntervalSince1970) {
             activeHomeArea = .home
         }
     }
@@ -11789,8 +12006,27 @@ struct PitchTrackerView: View {
                 showCallingPitchesPrompt = true
             }
             .onChange(of: activeSide) { _, newSide in
+                // Read before the clears below can overwrite it.
+                let remembered = selectedGameId.map { TrackerSelectionMemory.load(gameId: $0) }
+                if let gid = selectedGameId {
+                    TrackerSelectionMemory.update(gameId: gid) { $0.setPitchingSide(newSide) }
+                }
+                defer {
+                    // Each side comes back to its own pitcher and batter.
+                    if let remembered {
+                        if selectedPitcherId == nil,
+                           let pid = remembered.pitcherId(for: newSide),
+                           SideScope.pitcher(pid, belongsTo: newSide, awayPitcherIds: awayPitcherIds),
+                           let pitcher = pitchers.first(where: { $0.id == pid }) {
+                            applySelectedPitcher(pitcher)
+                        }
+                        if selectedBatterId == nil {
+                            restoreRememberedBatter(from: remembered)
+                        }
+                    }
+                }
                 guard let pid = selectedPitcherId else { return }
-                let stillValid = (newSide == .away) ? awayPitcherIds.contains(pid) : !awayPitcherIds.contains(pid)
+                let stillValid = SideScope.pitcher(pid, belongsTo: newSide, awayPitcherIds: awayPitcherIds)
                 if !stillValid {
                     selectedPitcherId = nil
                     persistSelectedPitcherId(nil)
@@ -11808,6 +12044,12 @@ struct PitchTrackerView: View {
             }
             .onChange(of: selectedBatterId) { _, newId in
                 selectedHitterId = newId.flatMap { hitterIdByJerseyCellId[$0] }
+                // A partner follows the owner's batter through the room;
+                // only the device driving the game remembers it.
+                if let gid = selectedGameId, isOwnerForActiveGame || activeLiveId == nil {
+                    let side = activeSide
+                    TrackerSelectionMemory.update(gameId: gid) { $0.setBatter(newId, for: side) }
+                }
             }
             .onChange(of: jerseyCells.map { $0.id }) { _, validIds in
                 // Deleting a jersey cell happens from several places
@@ -11822,10 +12064,16 @@ struct PitchTrackerView: View {
                 // already in hitterIdByJerseyCellId.values) even though
                 // they were no longer actually in the lineup - only a full
                 // relaunch (which resets this map in chooseGame) cleared it.
-                let validSet = Set(validIds)
-                let pruned = hitterIdByJerseyCellId.filter { validSet.contains($0.key) }
-                guard pruned.count != hitterIdByJerseyCellId.count else { return }
-                hitterIdByJerseyCellId = pruned
+                // Parked, not deleted: a live snapshot can drop a cell for
+                // a moment and bring it back (LineupLinkPrune).
+                let result = LineupLinkPrune.apply(
+                    links: hitterIdByJerseyCellId,
+                    parked: ui.parkedHitterLinks,
+                    cellIds: validIds
+                )
+                if ui.parkedHitterLinks != result.parked { ui.parkedHitterLinks = result.parked }
+                guard result.links != hitterIdByJerseyCellId else { return }
+                hitterIdByJerseyCellId = result.links
                 // The map is persisted now, so a delete has to reach the
                 // stored copy too - otherwise the deleted batter comes back
                 // as a link on the next game open and stays excluded from
@@ -11875,7 +12123,7 @@ struct PitchTrackerView: View {
             .appConfirmationDialog(
                 isPresented: $ui.showCallingPitchesPrompt,
                 title: "Calling Pitches?",
-                message: "Are you calling pitches for this game, or just tracking what happens? You can switch anytime with the Coach/Scout control.",
+                message: "Are you calling pitches for this game, or just tracking what happens? You can switch anytime from the Key menu.",
                 primaryTitle: "I’m Calling Pitches",
                 primaryAction: {
                     currentTrackingMode = .coach
@@ -12029,9 +12277,6 @@ struct PitchTrackerView: View {
                     lineupGroups: lineupGroupsForDetail,
                     unlinkedBatterIds: unlinkedBatterIdsForDetail,
                     selectedLineupBatterId: selectedBatterId,
-                    onSelectLineupBatter: { cell in
-                        syncSelectedBatterFromDetail(cell)
-                    },
                     onEditLineupBatter: { cell in
                         editLineupBatterFromDetail(cell)
                     },
@@ -12054,7 +12299,12 @@ struct PitchTrackerView: View {
                     onEditBenchPlayer: { bench in
                         ui.lineupEditTarget = lineupRosterContext(where: { $0.id == bench.id })
                     },
-                    onHittingStats: { target in showLineupHittingStats(target) }
+                    onHittingStats: { target in showLineupHittingStats(target) },
+                    fieldPositionByBatterId: LineupFieldPositions.decode(activeGameForBatterSetup?.fieldPositionByBatterId),
+                    // A partner sets positions too, through the room.
+                    onFieldPositionsChanged: (isGame && (isOwnerForActiveGame || activeLiveId != nil))
+                        ? { positions in saveFieldPositions(positions) }
+                        : nil
                 )
                 .modifier(LineupPlayerSheets(
                     editTarget: $ui.lineupEditTarget,
@@ -12104,6 +12354,9 @@ struct PitchTrackerView: View {
                 if lastAuthenticatedUserId == nil {
                     lastAuthenticatedUserId = authManager.user?.uid
                 }
+                // Launch only - this also fires on every return to the Game
+                // tab (LaunchHomeGate.claimFirstAppear).
+                guard ui.launchHomeGate.claimFirstAppear() else { return }
                 handleInitialAppear()
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -12579,6 +12832,229 @@ private struct InningAddCircle: View {
     }
 }
 
+/// The progress panel's Runners row. Tap an empty bag to put someone on it
+/// (picked from the batting lineup); tap an occupied bag for what that
+/// runner did between pitches - steal, caught stealing, picked off, advance,
+/// pinch runner - or to take them off as a correction.
+private struct BasesEditorRow: View {
+    let bases: BaseOccupancy
+    let runnerChoices: [BaseRunner]
+    let onSetRunner: (BaseRunner?, Int) -> Void
+    let onRunnerEvent: (RunnerEventKind, Int, BaseRunner?) -> Void
+    let onClearBases: () -> Void
+
+    @State private var selectedBase: Int? = nil
+
+    /// What the runner picker sheet is choosing for.
+    private struct PickerRequest: Identifiable {
+        enum Purpose { case place, pinchRunner }
+        let base: Int
+        let purpose: Purpose
+        var id: String { "\(base)-\(purpose)" }
+    }
+    @State private var pickerRequest: PickerRequest? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Text("Runners")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.black)
+                    .lineLimit(1)
+                    .fixedSize()
+                ZStack {
+                    bagButton(Base.second).offset(y: -18)
+                    bagButton(Base.third).offset(x: -30, y: 6)
+                    bagButton(Base.first).offset(x: 30, y: 6)
+                }
+                .frame(width: 104, height: 64)
+                Spacer(minLength: 0)
+                Button("Clear") {
+                    selectedBase = nil
+                    onClearBases()
+                }
+                .font(.subheadline.weight(.semibold))
+                .buttonStyle(.bordered)
+                .disabled(bases.isEmpty)
+            }
+
+            if let base = selectedBase, let runner = bases[base] {
+                actionPanel(base: base, runner: runner)
+            }
+        }
+        .onChange(of: bases) { _, newValue in
+            if let base = selectedBase, newValue[base] == nil { selectedBase = nil }
+        }
+        .sheet(item: $pickerRequest) { request in
+            RunnerPickerSheet(
+                title: request.purpose == .place
+                    ? "Runner on \(Base.name(request.base))"
+                    : "Pinch runner at \(Base.name(request.base))",
+                choices: runnerChoices.filter { choice in
+                    // Already on base can't be picked again (bare jersey
+                    // runners have no id, so they never collide).
+                    choice.id.isEmpty || !bases.occupiedBases.contains { bases[$0]?.id == choice.id }
+                },
+                onPick: { runner in
+                    switch request.purpose {
+                    case .place: onSetRunner(runner, request.base)
+                    case .pinchRunner: onRunnerEvent(.substitution, request.base, runner)
+                    }
+                    selectedBase = nil
+                    pickerRequest = nil
+                },
+                onCancel: { pickerRequest = nil }
+            )
+            .presentationDetents([.medium, .large])
+            .fixedAppDynamicType()
+        }
+    }
+
+    private func actionPanel(base: Int, runner: BaseRunner) -> some View {
+        let next = min(base + 1, Base.scored)
+        let stealTitle = next == Base.scored ? "Steal Home" : "Steal \(Base.name(next))"
+        let advanceTitle = next == Base.scored ? "Score" : "To \(Base.name(next))"
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("\(runner.label) on \(Base.name(base))")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    actionChip(stealTitle, enabled: BaseRunnerRules.isAllowed(.stolenBase, from: base, bases: bases)) {
+                        onRunnerEvent(.stolenBase, base, nil)
+                    }
+                    actionChip("Caught Stealing", enabled: true) { onRunnerEvent(.caughtStealing, base, nil) }
+                    actionChip("Picked Off", enabled: true) { onRunnerEvent(.pickedOff, base, nil) }
+                    actionChip(advanceTitle, enabled: BaseRunnerRules.isAllowed(.advanced, from: base, bases: bases)) {
+                        onRunnerEvent(.advanced, base, nil)
+                    }
+                    actionChip("Pinch Runner", enabled: true) {
+                        pickerRequest = PickerRequest(base: base, purpose: .pinchRunner)
+                    }
+                    actionChip("Remove", enabled: true, isDestructive: true) {
+                        onSetRunner(nil, base)
+                    }
+                }
+            }
+            .accessibilityIdentifier("runners.actions")
+            Text("Steals, caught stealing and pickoffs count in stats. Advance is a base with no stat (balk, defensive indifference). Remove is a correction.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func actionChip(_ title: String, enabled: Bool, isDestructive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+            selectedBase = nil
+        } label: {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isDestructive ? Color.red : Color.primary)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 36)
+                .background(Capsule().fill(Color(.systemGray5)))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.4)
+    }
+
+    private func bagButton(_ base: Int) -> some View {
+        let runner = bases[base]
+        let isSelected = selectedBase == base
+        return Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            if runner == nil {
+                selectedBase = nil
+                pickerRequest = PickerRequest(base: base, purpose: .place)
+            } else {
+                selectedBase = isSelected ? nil : base
+            }
+        } label: {
+            ZStack {
+                Rectangle()
+                    .fill(runner != nil ? Color.pitchMarkActiveGray : Color(.systemGray5))
+                    .overlay(Rectangle().stroke(isSelected ? Color.black : Color.black.opacity(0.4), lineWidth: isSelected ? 2.5 : 1))
+                    .frame(width: 22, height: 22)
+                    .rotationEffect(.degrees(45))
+                    .scaleEffect(isSelected ? 1.15 : 1)
+                if let runner {
+                    Text(runner.label)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                        .frame(width: 26)
+                }
+            }
+            .frame(width: 40, height: 40)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(runner.map { "\(Base.name(base)), \($0.label)" } ?? "\(Base.name(base)), empty")
+        .accessibilityIdentifier("runners.bag.\(base)")
+        .accessibilityValue(runner?.label ?? "empty")
+    }
+}
+
+/// Picks who is on base: the batting lineup, a typed jersey number, or an
+/// unnamed runner.
+private struct RunnerPickerSheet: View {
+    let title: String
+    let choices: [BaseRunner]
+    let onPick: (BaseRunner) -> Void
+    let onCancel: () -> Void
+
+    @State private var jerseyText = ""
+
+    var body: some View {
+        NavigationView {
+            List {
+                if !choices.isEmpty {
+                    Section("Lineup") {
+                        ForEach(choices, id: \.self) { choice in
+                            Button {
+                                onPick(choice)
+                            } label: {
+                                Text(choice.label)
+                                    .font(.body.weight(.semibold))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                Section("Not in the lineup") {
+                    HStack {
+                        TextField("Jersey #", text: $jerseyText)
+                            .keyboardType(.numberPad)
+                        Button("Add") {
+                            let jersey = jerseyText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !jersey.isEmpty else { return }
+                            onPick(BaseRunner(id: "", label: "#\(jersey)"))
+                        }
+                        .disabled(jerseyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("runnerPicker.add")
+                    }
+                    Button("Unknown runner") { onPick(.manual) }
+                }
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+            }
+        }
+    }
+}
+
 private struct ProgressGameView: View {
     /// Team names for the Score row, already abbreviated by the caller.
     /// Fall back to "US"/"THEM" when a side has no team linked.
@@ -12588,11 +13064,14 @@ private struct ProgressGameView: View {
     @Binding var balls: Int
     @Binding var strikes: Int
     let outs: Int
+    let bases: BaseOccupancy
+    let runnerChoices: [BaseRunner]
+    let onSetRunner: (BaseRunner?, Int) -> Void
+    let onRunnerEvent: (RunnerEventKind, Int, BaseRunner?) -> Void
+    let onClearBases: () -> Void
     let showOutsFlash: Bool
     let onOutsTapIndex: (Int) -> Void
     @Binding var inning: Int
-    @Binding var hits: Int
-    @Binding var walks: Int
     @Binding var us: Int
     @Binding var them: Int
     @Binding var selectedGameId: String?
@@ -12655,6 +13134,15 @@ private struct ProgressGameView: View {
             .padding(.horizontal, 12)
             .padding(.top, 2)
 
+            BasesEditorRow(
+                bases: bases,
+                runnerChoices: runnerChoices,
+                onSetRunner: onSetRunner,
+                onRunnerEvent: onRunnerEvent,
+                onClearBases: onClearBases
+            )
+                .padding(.horizontal, 12)
+
             Divider()
 
             VStack(spacing: 6) {
@@ -12675,12 +13163,6 @@ private struct ProgressGameView: View {
                     Spacer(minLength: 0)
                     StatDivider()
                     StatStepper(label: awayTeamLabel, value: $them, labelPosition: .trailing, onChange: onProgressChange)
-                }
-                StatsPanelCard {
-                    StatStepper(label: "Hits", value: $hits, onChange: {})
-                    StatDivider()
-                    Spacer(minLength: 8)
-                    StatStepper(label: "Walks", value: $walks, labelPosition: .trailing, onChange: {})
                 }
             }
             .padding(.horizontal, 12)
@@ -12767,6 +13249,8 @@ private struct ProgressGameView: View {
                             .foregroundStyle(idx < max(0, min(maxCount, count)) ? filledColor : Color.primary.opacity(0.4))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("count.\(prefix).\(idx)")
+                    .accessibilityValue(idx < max(0, min(maxCount, count)) ? "on" : "off")
                 }
             }
         }
@@ -12887,9 +13371,7 @@ private struct ProgressSummaryView: View {
     }
 
     private func percent(_ part: Int, of total: Int) -> String {
-        guard total > 0 else { return "0%" }
-        let p = (Double(part) / Double(total)) * 100.0
-        return String(format: "%.0f%%", p.rounded())
+        "\(statPercent(part, of: total))%"
     }
     
     private func templateName(for id: String?) -> String {
@@ -12981,7 +13463,7 @@ private struct ProgressSummaryView: View {
                 
                 // Center: Header + Table (constrained and centered)
                 VStack(spacing: 8) {
-                    Text(hasLocationAnalytics ? "Hit Spot Performance" : "Scout Mode Summary")
+                    Text(hasLocationAnalytics ? "Hit Spot Performance" : "Track Game Summary")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -12990,7 +13472,7 @@ private struct ProgressSummaryView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 6) {
                             if !hasLocationAnalytics {
-                                Text("Location-based metrics hidden for Scout Mode events.")
+                                Text("Location-based metrics hidden for Track Game pitches.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                                     .frame(maxWidth: .infinity, alignment: .center)
@@ -13137,6 +13619,9 @@ struct JerseyRow: View {
                     radius: isSelected ? (selectedPulse ? 8 : 3) : 0,
                     x: 0,
                     y: 0)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("atBat.\(cell.jerseyNumber)")
+            .accessibilityValue(isSelected ? "selected" : "")
             .onTapGesture {
                 guard !isReordering else { return }
                 let wasSelected = selectedBatterId == cell.id
@@ -15093,13 +15578,26 @@ private struct ZoneUndoButton: View {
     }
 }
 
-/// Bottom-right: the game stats / game summary pair. Renders nothing
-/// outside game mode.
+/// The game stats / game summary pair, stacked beside the pitcher button.
+/// Renders nothing outside game mode.
 /// Takes bindings, not closures, deliberately: a closure written inline in
 /// `strikeZoneArea` captures `self`, and `self` is a struct with hundreds of
 /// stored properties, so each one costs a full by-value copy of
 /// PitchTrackerView on that function's stack frame. A Binding captures only
 /// the @State box. See the stack-frame note on `strikeZoneArea`.
+/// The material card behind each of the tracker's two top cards.
+private struct TrackerTopCardStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 2)
+    }
+}
+
 private struct ZoneGameStatsButtons: View {
     let isGame: Bool
     @Binding var showStats: Bool
@@ -15107,7 +15605,7 @@ private struct ZoneGameStatsButtons: View {
 
     var body: some View {
         if isGame {
-            HStack(spacing: 8) {
+            VStack(spacing: 6) {
                 Button(action: { showStats = true }) {
                     Image(systemName: "chart.bar")
                         .padding(.horizontal, 12)
@@ -15220,6 +15718,10 @@ struct AddGameCard: View {
     var onCreateTeam: (String, TeamDesignation, @escaping (Team?) -> Void) -> Void
     var onCancel: () -> Void
     var onSave: () -> Void
+    /// Scan Opponent Lineup (Home only): what's waiting for Save, and the
+    /// button that opens the scanner once an opponent team is picked.
+    var lineupSummary: String? = nil
+    var onScanLineup: (() -> Void)? = nil
 
     /// Which side's "New Team…" is currently expanded, if either. One at a
     /// time: the inline form is tall, and two open at once would push Save
@@ -15288,6 +15790,22 @@ struct AddGameCard: View {
 
             if newTeamTarget != nil {
                 newTeamInlineForm
+            }
+
+            if opponentTeamId != nil, newTeamTarget == nil, let onScanLineup {
+                VStack(alignment: .leading, spacing: 4) {
+                    Button(action: onScanLineup) {
+                        Label(lineupSummary == nil ? "Scan Opponent Lineup" : "Scan Again", systemImage: "text.viewfinder")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("newGame.scanLineup")
+                    if let lineupSummary {
+                        Text(lineupSummary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
 
             DatePicker("Date & Time", selection: $gameDate, displayedComponents: [.date, .hourAndMinute])

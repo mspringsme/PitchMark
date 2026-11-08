@@ -130,6 +130,9 @@ struct TeamMembership: Identifiable, Codable {
     var linkedPlayerIds: [String] = []
     var joinedAt: Date = Date()
     var addedByUid: String
+    /// The team invite this membership was joined with; the rules require
+    /// it unless you created the team.
+    var inviteToken: String? = nil
 }
 
 /// A team's roster entry. Separate from `Pitcher` on purpose: a player who
@@ -287,15 +290,23 @@ extension AuthManager {
     }
 
     func loadTeamPlayers(teamId: String, completion: @escaping ([TeamPlayer]) -> Void) {
+        loadTeamPlayersResult(teamId: teamId) { result in
+            completion((try? result.get()) ?? [])
+        }
+    }
+
+    /// `loadTeamPlayers` that keeps a failed read apart from an empty
+    /// roster - what a delete decision needs (ProfileMerge.unreferenced).
+    func loadTeamPlayersResult(teamId: String, completion: @escaping (Result<[TeamPlayer], Error>) -> Void) {
         teamsCollection().document(teamId).collection("players")
             .getDocuments { snapshot, error in
                 if let error {
                     debugLog("❌ loadTeamPlayers error:", error.localizedDescription)
-                    DispatchQueue.main.async { completion([]) }
+                    DispatchQueue.main.async { completion(.failure(error)) }
                     return
                 }
                 let players = (snapshot?.documents ?? []).compactMap { try? $0.data(as: TeamPlayer.self) }
-                DispatchQueue.main.async { completion(players) }
+                DispatchQueue.main.async { completion(.success(players)) }
             }
     }
 
@@ -312,6 +323,19 @@ extension AuthManager {
         battingSide: BattingSide? = nil,
         completion: @escaping (Result<TeamPlayer, Error>) -> Void
     ) {
+        // A live partner adding to the room's opponent: the records are
+        // the coach's (OpponentPartnerAccess.swift).
+        if let grant = OpponentPartnerAccess.shared.grant(for: teamId) {
+            createPlayerForRoomOwner(name: name, positions: positions, battingSide: battingSide, grant: grant) { result in
+                switch result {
+                case .success(let player):
+                    self.addTeamPlayerLinkingPlayer(teamId: teamId, player: player, jerseyNumber: jerseyNumber, completion: completion)
+                case .failure(let error):
+                    completion(.failure(error))
+                }
+            }
+            return
+        }
         createPlayer(name: name, positions: positions, battingSide: battingSide) { result in
             switch result {
             case .success(let player):
@@ -339,15 +363,10 @@ extension AuthManager {
             return
         }
         let ref = teamsCollection().document(teamId).collection("players").document()
-        let teamPlayer = TeamPlayer(
-            id: ref.documentID,
-            name: player.name,
+        let teamPlayer = ProfileMerge.newRosterRow(
+            for: player,
+            rowId: ref.documentID,
             jerseyNumber: jerseyNumber,
-            pitcherId: player.pitcherId,
-            playerId: player.id,
-            hitterId: player.hitterId,
-            positions: player.positions,
-            battingSide: player.battingSide,
             createdByUid: user.uid,
             createdAt: Date()
         )
@@ -620,6 +639,18 @@ extension AuthManager {
                 return
             }
 
+            // Single-use, and expired invites are refused (the rules enforce
+            // both; these give a readable message first).
+            if let expiresAt = (data["expiresAt"] as? Timestamp)?.dateValue(), expiresAt <= Date() {
+                completion(.failure(NSError(domain: "Invite", code: 410, userInfo: [NSLocalizedDescriptionKey: "This invite link has expired. Ask for a new one."])))
+                return
+            }
+            let redeemedByUid = data["redeemedByUid"] as? String
+            if let redeemedByUid, redeemedByUid != user.uid {
+                completion(.failure(NSError(domain: "Invite", code: 409, userInfo: [NSLocalizedDescriptionKey: "This invite link has already been used. Ask for a new one."])))
+                return
+            }
+
             let roleStrings = data["roles"] as? [String] ?? ["parent"]
             let roles = roleStrings.compactMap { TeamRole(rawValue: $0) }
 
@@ -629,29 +660,49 @@ extension AuthManager {
                 uid: user.uid,
                 roles: roles.isEmpty ? [.parent] : roles,
                 joinedAt: Date(),
-                addedByUid: (data["createdByUid"] as? String) ?? user.uid
+                addedByUid: (data["createdByUid"] as? String) ?? user.uid,
+                inviteToken: token
             )
 
-            do {
-                try teamRef.collection("members").document(user.uid).setData(from: membership, merge: true) { memberError in
-                    if let memberError {
-                        completion(.failure(memberError))
+            // Burn the token, then name it on the membership: the rules only
+            // let you join with a team invite you have redeemed, and only
+            // with the roles it grants.
+            let burn: (@escaping () -> Void) -> Void = { next in
+                guard redeemedByUid == nil else { return next() }
+                tokenRef.setData([
+                    "redeemedByUid": user.uid,
+                    "redeemedAt": FieldValue.serverTimestamp()
+                ], merge: true) { burnErr in
+                    if let burnErr {
+                        completion(.failure(burnErr))
                         return
                     }
-                    teamRef.getDocument { teamSnap, teamError in
-                        if let teamError {
-                            completion(.failure(teamError))
-                            return
-                        }
-                        guard let teamSnap, let team = try? teamSnap.data(as: Team.self) else {
-                            completion(.failure(NSError(domain: "Invite", code: 404, userInfo: [NSLocalizedDescriptionKey: "Team not found."])))
-                            return
-                        }
-                        completion(.success(team))
-                    }
+                    next()
                 }
-            } catch {
-                completion(.failure(error))
+            }
+
+            burn {
+                do {
+                    try teamRef.collection("members").document(user.uid).setData(from: membership, merge: true) { memberError in
+                        if let memberError {
+                            completion(.failure(memberError))
+                            return
+                        }
+                        teamRef.getDocument { teamSnap, teamError in
+                            if let teamError {
+                                completion(.failure(teamError))
+                                return
+                            }
+                            guard let teamSnap, let team = try? teamSnap.data(as: Team.self) else {
+                                completion(.failure(NSError(domain: "Invite", code: 404, userInfo: [NSLocalizedDescriptionKey: "Team not found."])))
+                                return
+                            }
+                            completion(.success(team))
+                        }
+                    }
+                } catch {
+                    completion(.failure(error))
+                }
             }
         }
     }

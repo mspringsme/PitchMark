@@ -62,6 +62,8 @@ struct JoinedLiveSession: Identifiable, Equatable {
     let ownerGameId: String?
     let opponent: String
     let joinedAt: Date?
+    /// The code or invite the partner joined with (newer bookmarks only).
+    let credential: LiveJoinCredential?
 
     init?(liveId: String, data: [String: Any]) {
         guard let ownerUid = data["ownerUid"] as? String, !ownerUid.isEmpty else { return nil }
@@ -70,6 +72,7 @@ struct JoinedLiveSession: Identifiable, Equatable {
         self.ownerGameId = data["ownerGameId"] as? String
         self.opponent = (data["opponent"] as? String) ?? "Live Game"
         self.joinedAt = (data["joinedAt"] as? Timestamp)?.dateValue()
+        self.credential = LiveJoinCredential(document: data)
     }
 }
 
@@ -406,10 +409,18 @@ final class LiveGameService {
                 finalIds = jerseys.map { _ in UUID().uuidString }
             }
 
-            self.db.collection(Col.liveGames).document(liveId).updateData([
+            var seed: [String: Any] = [
                 "jerseyNumbers": jerseys,
                 "batterIds": finalIds
-            ]) { err in
+            ]
+            // The lineup's links ride along (LiveLineupLinks), so partners
+            // can tell the two teams' batters apart from the start.
+            if finalIds == batterIds, let links = data[LiveLineupLinks.field] as? [String: String] {
+                for (spot, hitter) in links where finalIds.contains(spot) {
+                    seed["\(LiveLineupLinks.field).\(spot)"] = hitter
+                }
+            }
+            self.db.collection(Col.liveGames).document(liveId).updateData(seed) { err in
                 if let err {
                     debugLog("⚠️ \(self.logPrefix) seed lineup: update live doc failed:", err.localizedDescription)
                 } else {
@@ -707,10 +718,12 @@ final class LiveGameService {
             }
 
             let ownerUid = data[Key.ownerUid] as? String ?? ""
-            self.upsertPresence(liveId: liveId, uid: uid) { result in
+            let credential = LiveJoinCredential(kind: .joinCode, value: code)
+            LiveJoinCredential.remember(credential, for: liveId)
+            self.upsertPresence(liveId: liveId, uid: uid, credential: credential) { result in
                 switch result {
                 case .success:
-                    self.recordJoinedLiveSession(liveId: liveId, ownerUid: ownerUid)
+                    self.recordJoinedLiveSession(liveId: liveId, ownerUid: ownerUid, credential: credential)
                     completion(.success(liveId))
                 case .failure(let e):
                     completion(.failure(e))
@@ -748,10 +761,12 @@ final class LiveGameService {
             }
 
             let ownerUid = data[Key.ownerUid] as? String ?? ""
-            self.upsertPresence(liveId: liveId, uid: uid) { result in
+            let credential = LiveJoinCredential(kind: .inviteToken, value: token)
+            LiveJoinCredential.remember(credential, for: liveId)
+            self.upsertPresence(liveId: liveId, uid: uid, credential: credential) { result in
                 switch result {
                 case .success:
-                    self.recordJoinedLiveSession(liveId: liveId, ownerUid: ownerUid)
+                    self.recordJoinedLiveSession(liveId: liveId, ownerUid: ownerUid, credential: credential)
                     completion(.success(liveId))
                 case .failure(let e):
                     completion(.failure(e))
@@ -765,16 +780,16 @@ final class LiveGameService {
     private func upsertPresence(
         liveId: String,
         uid: String,
+        credential: LiveJoinCredential?,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         let presenceRef = db.collection(Col.liveGames).document(liveId)
             .collection(Col.participants).document(uid)
 
-        presenceRef.setData([
-            Key.uid: uid,
+        presenceRef.setData(LiveJoinCredential.presenceFields(uid: uid, credential: credential, timestamps: [
             Key.joinedAt: FieldValue.serverTimestamp(),
             Key.lastSeenAt: FieldValue.serverTimestamp()
-        ], merge: true) { err in
+        ]), merge: true) { err in
             if let err { completion(.failure(err)); return }
 
             // ✅ Hard connection state: mark connected on join
@@ -806,7 +821,8 @@ final class LiveGameService {
         liveId: String,
         ownerUid: String,
         ownerGameId: String? = nil,
-        opponent: String? = nil
+        opponent: String? = nil,
+        credential: LiveJoinCredential? = nil
     ) {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         var data: [String: Any] = [
@@ -817,6 +833,8 @@ final class LiveGameService {
         ]
         if let ownerGameId, !ownerGameId.isEmpty { data[JoinedSessionKey.ownerGameId] = ownerGameId }
         if let opponent, !opponent.isEmpty { data[JoinedSessionKey.opponent] = opponent }
+        // Kept so re-entering from Home on any device can recreate presence.
+        if let credential { data[credential.field] = credential.value }
 
         db.collection(Col.users).document(uid)
             .collection(Col.joinedLiveSessions).document(liveId)
@@ -832,6 +850,7 @@ final class LiveGameService {
     /// showing up as re-enterable in the games list. Also called from the
     /// participant's own explicit "Disconnect".
     func removeJoinedLiveSession(liveId: String) {
+        LiveJoinCredential.forget(liveId: liveId)
         guard let uid = Auth.auth().currentUser?.uid else { return }
         db.collection(Col.users).document(uid)
             .collection(Col.joinedLiveSessions).document(liveId)
@@ -849,10 +868,11 @@ final class LiveGameService {
         // Keep the UID on every heartbeat. If a presence document is recreated
         // while account deletion is running, the server can still find and
         // remove it with the collection-group UID query.
-        presenceRef.setData([
-            Key.uid: uid,
-            Key.lastSeenAt: FieldValue.serverTimestamp()
-        ], merge: true)
+        presenceRef.setData(LiveJoinCredential.presenceFields(
+            uid: uid,
+            credential: LiveJoinCredential.remembered(for: liveId),
+            timestamps: [Key.lastSeenAt: FieldValue.serverTimestamp()]
+        ), merge: true)
     }
 
     // MARK: - Shared writes

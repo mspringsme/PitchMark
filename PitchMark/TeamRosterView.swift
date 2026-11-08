@@ -51,6 +51,8 @@ struct TeamRosterView: View {
     @State private var players: [TeamPlayer] = []
     @State private var newPlayerName: String = ""
     @State private var newPlayerJersey: String = ""
+    /// Saved as "#12" with no name (NumberOnlyName).
+    @State private var newPlayerNumberOnly = false
     @State private var newPlayerPositions: Set<FieldPosition> = []
     @State private var newPlayerBattingSide: BattingSide? = nil
     @State private var addPlayerErrorMessage: String? = nil
@@ -95,6 +97,8 @@ struct TeamRosterView: View {
     @State private var showArchiveTeamDialog = false
     @State private var showLeaveTeamDialog = false
     @State private var openGameLockMessage: String? = nil
+    @State private var showFieldingStats = false
+    @State private var showBattingStats = false
 
     /// Management rights (add/edit/delete) are gated on actually being the
     /// team's creator - matching exactly what firestore.rules enforces
@@ -122,6 +126,21 @@ struct TeamRosterView: View {
     var body: some View {
         NavigationView {
             List {
+                Section {
+                    Button {
+                        showFieldingStats = true
+                    } label: {
+                        Label("Team Fielding Stats", systemImage: "baseball.diamond.bases")
+                    }
+                    .accessibilityIdentifier("team.fieldingStats")
+                    Button {
+                        showBattingStats = true
+                    } label: {
+                        Label("Team Batting Stats", systemImage: "figure.baseball")
+                    }
+                    .accessibilityIdentifier("team.battingStats")
+                }
+
                 Section("Roster") {
                     if activePlayers.isEmpty {
                         Text(isTeamOwner ? "No players yet - add your first one below." : "No players on this roster yet.")
@@ -162,8 +181,13 @@ struct TeamRosterView: View {
 
                 if isTeamOwner {
                     Section {
-                        TextField("Name", text: $newPlayerName)
-                            .textInputAutocapitalization(.words)
+                        Toggle("Number only (no name)", isOn: $newPlayerNumberOnly)
+                            .accessibilityIdentifier("player.numberOnly")
+
+                        if !newPlayerNumberOnly {
+                            TextField("Name", text: $newPlayerName)
+                                .textInputAutocapitalization(.words)
+                        }
 
                         TextField("Jersey #", text: $newPlayerJersey)
 
@@ -180,7 +204,8 @@ struct TeamRosterView: View {
                         Button("Add") {
                             addPlayer()
                         }
-                        .disabled(newPlayerName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(NumberOnlyName.savedName(typed: newPlayerName, jersey: newPlayerJersey,
+                                                           numberOnly: newPlayerNumberOnly) == nil)
 
                         if let addPlayerErrorMessage {
                             Text(addPlayerErrorMessage)
@@ -297,6 +322,16 @@ struct TeamRosterView: View {
         }
         .sheet(item: $editingPlayer) { player in
             editPlayerSheet(player)
+        }
+        .sheet(isPresented: $showFieldingStats) {
+            TeamFieldingStatsView(team: selection.team, players: players, games: myGames)
+                .environmentObject(authManager)
+                .fixedAppDynamicType()
+        }
+        .sheet(isPresented: $showBattingStats) {
+            TeamBattingStatsView(team: selection.team, players: players, games: myGames)
+                .environmentObject(authManager)
+                .fixedAppDynamicType()
         }
     }
 
@@ -500,7 +535,7 @@ struct TeamRosterView: View {
                         statsButton("Pitching") { openPitchingStats(player) }
                     }
                     if player.hitterId != nil {
-                        statsButton("Hitting") { openHittingStats(player) }
+                        statsButton("Hitting & Fielding") { openHittingStats(player) }
                     }
                 },
                 onCancel: { editingPlayer = nil },
@@ -580,7 +615,8 @@ struct TeamRosterView: View {
 
     private func addPlayer() {
         guard let teamId = selection.team.id else { return }
-        let name = newPlayerName.trimmingCharacters(in: .whitespaces)
+        guard let name = NumberOnlyName.savedName(typed: newPlayerName, jersey: newPlayerJersey,
+                                                  numberOnly: newPlayerNumberOnly) else { return }
         let jersey = newPlayerJersey.trimmingCharacters(in: .whitespaces)
         addPlayerErrorMessage = nil
         authManager.addTeamPlayerCreatingNewPlayer(
@@ -594,6 +630,7 @@ struct TeamRosterView: View {
             case .success:
                 newPlayerName = ""
                 newPlayerJersey = ""
+                newPlayerNumberOnly = false
                 newPlayerPositions = []
                 newPlayerBattingSide = nil
                 reloadEverything()

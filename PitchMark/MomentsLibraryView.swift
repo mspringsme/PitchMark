@@ -110,6 +110,7 @@ struct MomentsLibraryView: View {
     @State private var showOtherDeviceNotice = false
     @State private var duplicateErrorMessage: String? = nil
     @State private var momentPendingMove: Moment? = nil
+    @State private var momentShareRequest: MomentShareRequest? = nil
 
     private enum MomentsLibraryTab {
         case all
@@ -349,6 +350,10 @@ struct MomentsLibraryView: View {
         .sheet(item: $selectedMomentForDetail, onDismiss: { refreshMoments() }) { moment in
             MomentDetailView(moment: moment, allMoments: moments)
         }
+        .sheet(item: $momentShareRequest) { request in
+            ShareSheet(items: request.items)
+                .presentationDetents([.medium, .large])
+        }
         .sheet(item: $momentPendingMove) { moment in
             MoveMomentToFolderView(moment: moment, onMoved: refreshMoments)
                 .environmentObject(authManager)
@@ -379,6 +384,13 @@ struct MomentsLibraryView: View {
             }
             Button("Edit / View Details") {
                 selectedMomentForDetail = momentPendingAction
+            }
+            if let moment = momentPendingAction, let id = moment.id,
+               !MomentShare.sourceFiles(momentId: id, photoCount: moment.photoCount ?? 0).isEmpty {
+                Button("Share…") {
+                    // After the dialog has gone, or the sheet can't present.
+                    DispatchQueue.main.async { momentShareRequest = MomentShare.prepare(moment) }
+                }
             }
             if let moment = momentPendingAction {
                 Button("Duplicate") {

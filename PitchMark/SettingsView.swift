@@ -72,11 +72,11 @@ private struct SettingsGameSummarySheetView: View {
         let outcomeLines = outcomeBreakdown.isEmpty ? "None" : outcomeBreakdown.map { "\($0.name): \($0.count)" }.joined(separator: ", ")
         let hitSpotLine = hasLocationAnalytics
             ? "Hit Spot: \(hitSpots) of \(locationAnalyticsEligibleCount) (\(percent(hitSpots, locationAnalyticsEligibleCount)))"
-            : "Hit Spot: Hidden for Scout Mode events"
+            : "Hit Spot: Hidden for Track Game pitches"
         let firstPitchStrikeLine = "1st Pitch Strike: \(firstPitchStrike.total == 0 ? "0%" : percent(firstPitchStrike.made, firstPitchStrike.total)) (\(firstPitchStrike.made)/\(firstPitchStrike.total))"
         let hitSpotDefinition = hasLocationAnalytics
             ? "Hit Spot % = Location matches / Coach-mode pitches"
-            : "Location-based metrics hidden for Scout Mode events."
+            : "Location-based metrics hidden for Track Game pitches."
         let foulPercentLine = "Foul % = Foul pitches / Total pitches"
         return """
         PitchMark Game Summary
@@ -146,7 +146,7 @@ private struct SettingsGameSummarySheetView: View {
                 if hasLocationAnalytics {
                     Text("Hit Spot % = Location matches / Coach-mode pitches")
                 } else {
-                    Text("Location-based metrics hidden for Scout Mode events.")
+                    Text("Location-based metrics hidden for Track Game pitches.")
                 }
                 Text("Foul % = Foul pitches / Total pitches")
             }
@@ -275,7 +275,7 @@ private struct SettingsGameSummarySheetView: View {
                 if hasLocationAnalytics {
                     Text("Hit Spot % = Location matches / Coach-mode pitches")
                 } else {
-                    Text("Location-based metrics hidden for Scout Mode events.")
+                    Text("Location-based metrics hidden for Track Game pitches.")
                 }
                 Text("Foul % = Foul pitches / Total pitches")
             }
@@ -332,7 +332,7 @@ private struct SettingsGameSummarySheetView: View {
                 Text("Heat Maps By Pitch")
                     .font(.headline)
                 if !hasLocationAnalytics {
-                    Text("Heat maps hidden for Scout Mode events.")
+                    Text("Heat maps hidden for Track Game pitches.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else if heatmapsByPitch.isEmpty {
@@ -593,6 +593,18 @@ struct SettingsView: View {
     @State private var inlineNewGameOpponentTeamId: String? = nil
     @State private var createGameError: String? = nil
     @State private var showArchivedGames = false
+    @State private var showGamesCalendar = false
+    // Scan Opponent Lineup (LineupScanHome.swift / LineupScanSheet.swift).
+    @State private var lineupScan: LineupScanContext? = nil
+    @State private var showLineupScan = false
+    @State private var lineupScanRoster: [TeamPlayer]? = nil
+    @State private var pendingNewGameLineup: PendingNewGameLineup? = nil
+    @State private var isAddingScannedLineup = false
+    @State private var lineupScanNotice: String? = nil
+    @State private var pendingLiveLeave: HomeLiveLeave? = nil
+    /// Home's Players + (HomeAddPlayerSheet). The old name-only sheet
+    /// (`showAddPitcher`) is only Edit now.
+    @State private var showHomeAddPlayer = false
     @State private var showArchivedTeams = false
     @State private var pendingArchiveGame: Game? = nil
     /// Set when an archive was refused because the player is on a team in
@@ -656,16 +668,40 @@ struct SettingsView: View {
         return formatter
     }()
 
-    private func sectionCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    /// Muted tints that tell Home's three main cards apart at a glance.
+    /// Translucent, so they sit on either appearance.
+    enum HomeCardTint {
+        case neutral, games, teams, players
+
+        var fill: Color {
+            switch self {
+            case .neutral: return Color.black.opacity(0.04)
+            case .games: return Color(red: 0.45, green: 0.62, blue: 0.50).opacity(0.16)   // sage
+            case .teams: return Color(red: 0.42, green: 0.53, blue: 0.70).opacity(0.16)   // slate blue
+            case .players: return Color(red: 0.80, green: 0.62, blue: 0.45).opacity(0.18) // sand
+            }
+        }
+
+        var stroke: Color {
+            switch self {
+            case .neutral: return Color.black.opacity(0.08)
+            case .games: return Color(red: 0.45, green: 0.62, blue: 0.50).opacity(0.35)
+            case .teams: return Color(red: 0.42, green: 0.53, blue: 0.70).opacity(0.35)
+            case .players: return Color(red: 0.80, green: 0.62, blue: 0.45).opacity(0.40)
+            }
+        }
+    }
+
+    private func sectionCard<Content: View>(tint: HomeCardTint = .neutral, @ViewBuilder content: () -> Content) -> some View {
         content()
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color.black.opacity(0.04))
+                    .fill(tint.fill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.black.opacity(0.08), lineWidth: 1)
+                    .stroke(tint.stroke, lineWidth: 1)
             )
             .padding(.horizontal)
     }
@@ -942,6 +978,8 @@ struct SettingsView: View {
         dateText: String?,
         isLive: Bool,
         menuGame: Game? = nil,
+        scanAction: (() -> Void)? = nil,
+        disconnectAction: (() -> Void)? = nil,
         action: @escaping () -> Void
     ) -> AnyView {
         AnyView(HStack(spacing: 6) {
@@ -966,7 +1004,7 @@ struct SettingsView: View {
                             .minimumScaleFactor(0.85)
                         if let dateText {
                             Text(dateText)
-                                .font(.caption2)
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -1006,6 +1044,7 @@ struct SettingsView: View {
                         }
                         archivedGameStatsToggle(menuGame)
                     } else {
+                        lineupScanMenuItem(menuGame)
                         Button {
                             guard !(menuGame.id ?? "").isEmpty else { return }
                             pendingArchiveGame = menuGame
@@ -1023,6 +1062,32 @@ struct SettingsView: View {
                         } label: {
                             Label("Close Game (in use)", systemImage: "xmark.circle")
                         }
+                        Button(role: .destructive) {
+                            beginEndLiveSession(menuGame)
+                        } label: {
+                            Label("End Live Session…", systemImage: "antenna.radiowaves.left.and.right.slash")
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else if let scanAction {
+                // A joined live game: a partner can scan the opponent's
+                // lineup into the room.
+                Menu {
+                    Button(action: scanAction) {
+                        Label("Scan Opponent Lineup…", systemImage: "text.viewfinder")
+                    }
+                    if let disconnectAction {
+                        Button(role: .destructive, action: disconnectAction) {
+                            Label("Disconnect", systemImage: "xmark.circle")
+                        }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -1035,6 +1100,227 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
             }
         })
+    }
+
+    // MARK: Scan Opponent Lineup
+
+    /// The own-game menu item. A game with no opponent team picks one
+    /// first (teams created from Home's Teams card or the new-game card).
+    private func lineupScanMenuItem(_ game: Game) -> AnyView {
+        if let awayId = game.awayTeamId, !awayId.isEmpty {
+            return AnyView(Button {
+                beginGameLineupScan(game, teamId: awayId)
+            } label: {
+                Label("Scan Opponent Lineup…", systemImage: "text.viewfinder")
+            })
+        }
+        let candidates = activeTeamEntries.map(\.team).filter { $0.id != nil && $0.id != game.teamId }
+        return AnyView(Menu {
+            if candidates.isEmpty {
+                Text("Add the opponent as a team first")
+            }
+            ForEach(candidates, id: \.id) { team in
+                Button(team.nameWithClass) { setOpponentThenScan(game, team: team) }
+            }
+        } label: {
+            Label("Scan Opponent Lineup…", systemImage: "text.viewfinder")
+        })
+    }
+
+    // MARK: Leaving a live game
+
+    /// The in-use game's room, looked up on tap (Home doesn't track it).
+    private func beginEndLiveSession(_ game: Game) {
+        guard let gameId = game.id, let uid = authManager.user?.uid else { return }
+        authManager.findOpenLiveRoom(ownerUid: uid, gameId: gameId) { liveId in
+            guard let liveId else {
+                lineupScanNotice = "No live session is running for \(matchupTitle(for: game))."
+                return
+            }
+            pendingLiveLeave = .endSession(liveId: liveId, title: matchupTitle(for: game))
+        }
+    }
+
+    private func confirmLiveLeave(_ leave: HomeLiveLeave) {
+        switch leave {
+        case .disconnect(let session):
+            joinedLiveSessions.removeAll { $0.liveId == session.liveId }
+            LiveGameService.shared.removeJoinedLiveSession(liveId: session.liveId)
+            LiveGameService.shared.leaveLiveRoom(liveId: session.liveId)
+            OpponentPartnerAccess.shared.clear(liveId: session.liveId)
+            // If the tracker is in that room, it leaves too. Only with a
+            // game id - without one the post would close whatever is open.
+            if let gameId = session.ownerGameId, !gameId.isEmpty {
+                NotificationCenter.default.post(name: .activeGameShouldClose, object: nil, userInfo: ["gameId": gameId])
+            }
+            lineupScanNotice = "Disconnected from \(session.opponent)."
+        case .endSession(let liveId, let title):
+            // The room's status is what every phone acts on, the coach's
+            // own tracker included (it keeps the game open).
+            LiveGameService.shared.endLiveSession(liveId: liveId) { error in
+                lineupScanNotice = error.map { "Couldn't end the live session: \($0.localizedDescription)" }
+                    ?? "Live session for \(title) ended."
+            }
+        }
+    }
+
+    private var lineupScanBusyOverlay: AnyView {
+        AnyView(ZStack {
+            Color.black.opacity(0.55).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView().tint(.white).scaleEffect(1.4)
+                Text("Adding lineup…")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+        })
+    }
+
+    private var lineupScanSheetContent: AnyView {
+        guard let context = lineupScan else { return AnyView(EmptyView()) }
+        return AnyView(
+            LineupScanSheet(
+                teamName: context.teamName,
+                roster: lineupScanRoster,
+                alreadyInLineup: context.alreadyInLineup,
+                confirmTitle: context.confirmTitle,
+                onConfirm: { decisions, done in confirmLineupScan(context, decisions: decisions, done: done) },
+                onCancel: { showLineupScan = false }
+            )
+            .environmentObject(authManager)
+            .fixedAppDynamicType()
+        )
+    }
+
+    private func teamName(_ teamId: String, fallback: String) -> String {
+        myTeams.first(where: { $0.team.id == teamId })?.team.nameWithClass ?? fallback
+    }
+
+    /// Opens the sheet and loads the roster behind it. A roster that
+    /// can't be read leaves the sheet waiting, with a notice.
+    private func presentLineupScan(_ context: LineupScanContext) {
+        lineupScan = context
+        lineupScanRoster = nil
+        lineupScanNotice = nil
+        showLineupScan = true
+        authManager.loadTeamPlayersResult(teamId: context.teamId) { result in
+            switch result {
+            case .success(let players):
+                lineupScanRoster = players
+            case .failure(let error):
+                showLineupScan = false
+                lineupScanNotice = "Couldn't open \(context.teamName)'s roster: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func beginNewGameLineupScan() {
+        guard let teamId = inlineNewGameOpponentTeamId else { return }
+        presentLineupScan(LineupScanContext(kind: .newGame, teamId: teamId, teamName: teamName(teamId, fallback: inlineNewGameName)))
+    }
+
+    private func beginGameLineupScan(_ game: Game, teamId: String) {
+        presentLineupScan(LineupScanContext(
+            kind: .game(game),
+            teamId: teamId,
+            teamName: teamName(teamId, fallback: game.opponent),
+            alreadyInLineup: LineupScanContext.lineupHitters(of: game)
+        ))
+    }
+
+    private func setOpponentThenScan(_ game: Game, team: Team) {
+        guard let gameId = game.id, let teamId = team.id, let uid = authManager.user?.uid else { return }
+        authManager.setGameAwayTeam(ownerUid: uid, gameId: gameId, teamId: teamId, opponentName: team.name) { error in
+            if let error {
+                lineupScanNotice = "Couldn't set the opponent: \(error.localizedDescription)"
+                return
+            }
+            var updated = game
+            updated.awayTeamId = teamId
+            updated.opponent = team.name
+            if let index = games.firstIndex(where: { $0.id == gameId }) {
+                games[index].awayTeamId = teamId
+                games[index].opponent = team.name
+            }
+            beginGameLineupScan(updated, teamId: teamId)
+        }
+    }
+
+    /// A partner: the room's game says who the opponent is, and the room
+    /// is what opens their roster (OpponentPartnerAccess).
+    private func beginJoinedLineupScan(_ session: JoinedLiveSession) {
+        guard let gameId = session.ownerGameId, !gameId.isEmpty else {
+            lineupScanNotice = "This live game can't take a lineup yet - open it once, then try again."
+            return
+        }
+        lineupScanNotice = nil
+        Firestore.firestore()
+            .collection("users").document(session.ownerUid)
+            .collection("games").document(gameId)
+            .getDocument { snap, error in
+                guard let game = try? snap?.data(as: Game.self) else {
+                    lineupScanNotice = "Couldn't open this live game\(error.map { ": \($0.localizedDescription)" } ?? ".")"
+                    return
+                }
+                guard let teamId = game.awayTeamId, !teamId.isEmpty else {
+                    lineupScanNotice = "The coach hasn't set an opponent team for this game yet."
+                    return
+                }
+                authManager.claimOpponentAccess(teamId: teamId, liveId: session.liveId, ownerUid: session.ownerUid) { granted in
+                    guard granted else {
+                        lineupScanNotice = "Couldn't open the opponent's roster - is the live game still running?"
+                        return
+                    }
+                    presentLineupScan(LineupScanContext(
+                        kind: .joined(session),
+                        teamId: teamId,
+                        teamName: game.opponent,
+                        alreadyInLineup: LineupScanContext.lineupHitters(of: game)
+                    ))
+                }
+            }
+    }
+
+    private func confirmLineupScan(_ context: LineupScanContext, decisions: [LineupScanDecision], done: @escaping (String?) -> Void) {
+        let roster = lineupScanRoster ?? []
+        func finished(_ problem: String?, added: String) {
+            done(nil)
+            showLineupScan = false
+            lineupScanNotice = problem ?? added
+        }
+
+        switch context.kind {
+        case .newGame:
+            pendingNewGameLineup = PendingNewGameLineup(teamId: context.teamId, decisions: decisions, roster: roster)
+            done(nil)
+            showLineupScan = false
+
+        case .game(let game):
+            guard let gameId = game.id, let uid = authManager.user?.uid else { done("This game isn't saved yet."); return }
+            let openInTracker = isActiveGame(game)
+            authManager.findOpenLiveRoom(ownerUid: uid, gameId: gameId) { liveId in
+                let route = LineupScanRoute.decide(isOwner: true, openInTracker: openInTracker, liveRoomOpen: liveId != nil)
+                // No room: the open game closes quietly first, so the
+                // tracker can't save its older lineup over this one.
+                if case .savedGame(closeFirst: true) = route { closeActiveGame(game) }
+                authManager.addScannedLineup(
+                    teamId: context.teamId, decisions: decisions, roster: roster,
+                    alreadyInLineup: context.alreadyInLineup, route: route,
+                    ownerUid: uid, gameId: gameId, liveId: liveId
+                ) { problem in
+                    finished(problem, added: "Lineup added to \(context.teamName).")
+                }
+            }
+
+        case .joined(let session):
+            authManager.addScannedLineup(
+                teamId: context.teamId, decisions: decisions, roster: roster,
+                alreadyInLineup: context.alreadyInLineup, route: .liveRoom(alsoSavedGame: false),
+                ownerUid: session.ownerUid, gameId: session.ownerGameId, liveId: session.liveId
+            ) { problem in
+                finished(problem, added: "Lineup sent to the live game.")
+            }
+        }
     }
 
     private var activeGames: [Game] {
@@ -1076,6 +1362,9 @@ struct SettingsView: View {
         section: HomeOverviewSection,
         trailingSystemImage: String,
         trailingFont: Font = .subheadline,
+        secondarySystemImage: String? = nil,
+        secondaryLabel: String = "",
+        secondaryAction: (() -> Void)? = nil,
         trailingAction: @escaping () -> Void
     ) -> some View {
         let isExpanded = expandedHomeOverviewSection == section
@@ -1099,6 +1388,16 @@ struct SettingsView: View {
             .buttonStyle(.plain)
 
             Spacer()
+
+            if let secondarySystemImage, let secondaryAction {
+                Button(action: secondaryAction) {
+                    Image(systemName: secondarySystemImage)
+                        .font(trailingFont)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(secondaryLabel)
+                .padding(.trailing, 10)
+            }
 
             Button(action: trailingAction) {
                 Image(systemName: trailingSystemImage)
@@ -1385,9 +1684,49 @@ struct SettingsView: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             expandedHomeOverviewSection = .players
         }
-        editingPitcher = nil
-        newPitcherName = ""
-        showAddPitcher = true
+        showHomeAddPlayer = true
+    }
+
+    /// Teams the + can add a player to: active teams this account created
+    /// (only a team's creator can add to its roster).
+    private var teamsForNewPlayer: [Team] {
+        let uid = authManager.user?.uid
+        return activeTeamEntries.map(\.team).filter { uid != nil && $0.createdByUid == uid }
+    }
+
+    private var homeAddPlayerSheet: AnyView {
+        AnyView(
+            HomeAddPlayerSheet(
+                teams: teamsForNewPlayer,
+                onAddToTeam: { teamId, name, jersey, positions, battingSide, completion in
+                    authManager.addTeamPlayerCreatingNewPlayer(
+                        teamId: teamId,
+                        name: name,
+                        jerseyNumber: jersey,
+                        positions: positions,
+                        battingSide: battingSide
+                    ) { result in
+                        switch result {
+                        case .success:
+                            completion(nil)
+                            showHomeAddPlayer = false
+                            refreshRosterEntries()
+                        case .failure(let error):
+                            completion(error.localizedDescription)
+                        }
+                    }
+                },
+                onAddWithoutTeam: { name in
+                    authManager.createPitcher(name: name, templateId: selectedTemplate?.id.uuidString) { created in
+                        if let created { pitchers.append(created) }
+                        showHomeAddPlayer = false
+                    }
+                },
+                onCancel: { showHomeAddPlayer = false }
+            )
+            .environmentObject(authManager)
+            .fixedAppDynamicType()
+        )
     }
 
     /// The Players header carries three controls of its own, so it can't use
@@ -1423,6 +1762,20 @@ struct SettingsView: View {
             )
             .font(.caption)
 
+            // Link Profiles (link across teams / merge / archive) - was its
+            // own Home card until 2026-11-02.
+            Button {
+                showLinkProfiles = true
+            } label: {
+                Image(systemName: "link")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.pitchMarkActiveGray)
+                    .frame(width: 30, height: 30)
+                    .background(Circle().fill(Color(.systemGray6)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Link Profiles")
+
             Spacer(minLength: 4)
 
             Button {
@@ -1450,38 +1803,6 @@ struct SettingsView: View {
             .accessibilityLabel("Add player")
         }
         .padding(.horizontal)
-    }
-
-    /// Its own card, deliberately outside Teams and Players: linking,
-    /// merging and deleting are a separate flow (LinkProfilesView), and the
-    /// lists above simply show the result when the coach comes back.
-    private var linkProfilesCard: some View {
-        Button {
-            showLinkProfiles = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "link")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.pitchMarkActiveGray)
-                    .frame(width: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Link Profiles")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Text("Link players across teams, merge duplicates, delete players")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 4)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -1574,7 +1895,7 @@ struct SettingsView: View {
         }
     }
 
-    /// A two-way player gets a Stats menu (Pitching / Hitting); anyone else
+    /// A two-way player gets a Stats menu (Pitching / Hitting & Fielding); anyone else
     /// keeps the single button straight into the one sheet that applies.
     @ViewBuilder
     private func statsControl(for row: PlayerDirectoryRow) -> some View {
@@ -1583,7 +1904,7 @@ struct SettingsView: View {
         if canPitch && canHit {
             Menu {
                 Button("Pitching Stats") { openPitchingStats(for: row) }
-                Button("Hitting Stats") { openHittingStats(for: row) }
+                Button("Hitting & Fielding Stats") { openHittingStats(for: row) }
             } label: {
                 Text("Stats")
             }
@@ -1842,8 +2163,24 @@ struct SettingsView: View {
                 section: .games,
                 trailingSystemImage: showInlineNewGame ? "xmark.circle.fill" : "plus.circle.fill",
                 trailingFont: .title2,
+                secondarySystemImage: "calendar",
+                secondaryLabel: "Games Calendar",
+                secondaryAction: { showGamesCalendar = true },
                 trailingAction: { toggleInlineNewGame() }
             )
+            .sheet(isPresented: $showLineupScan, onDismiss: { lineupScan = nil }) {
+                lineupScanSheetContent
+            }
+            .sheet(isPresented: $showGamesCalendar) {
+                AnyView(
+                    GamesCalendarView(
+                        games: games,
+                        title: { matchupTitle(for: $0) },
+                        onOpen: { launchGame($0) }
+                    )
+                    .fixedAppDynamicType()
+                )
+            }
 
             if expandedHomeOverviewSection == .games {
                 VStack(spacing: 8) {
@@ -1856,6 +2193,19 @@ struct SettingsView: View {
                                 .foregroundStyle(.red)
                             Spacer(minLength: 8)
                             Button("Dismiss") { self.createGameError = nil }
+                                .font(.caption.weight(.semibold))
+                                .buttonStyle(.plain)
+                        }
+                    }
+
+                    if let lineupScanNotice {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "text.viewfinder")
+                                .foregroundStyle(.secondary)
+                            Text(lineupScanNotice)
+                                .font(.footnote)
+                            Spacer(minLength: 8)
+                            Button("Dismiss") { self.lineupScanNotice = nil }
                                 .font(.caption.weight(.semibold))
                                 .buttonStyle(.plain)
                         }
@@ -1885,14 +2235,22 @@ struct SettingsView: View {
                                 }
                             },
                             onCancel: { closeInlineNewGame() },
-                            onSave: { createInlineGame() }
+                            onSave: { createInlineGame() },
+                            lineupSummary: pendingNewGameLineup.flatMap { $0.teamId == inlineNewGameOpponentTeamId ? $0.summary : nil },
+                            onScanLineup: { beginNewGameLineupScan() }
                         )
                     }
 
                     // Live-joined games first - they're the ones with a
                     // clock on them (owner can end the session any time).
                     ForEach(joinedLiveSessions) { session in
-                        gameRow(opponent: session.opponent, dateText: nil, isLive: true) {
+                        gameRow(
+                            opponent: session.opponent,
+                            dateText: nil,
+                            isLive: true,
+                            scanAction: { beginJoinedLineupScan(session) },
+                            disconnectAction: { pendingLiveLeave = .disconnect(session) }
+                        ) {
                             rejoinLiveSession(session)
                         }
                     }
@@ -2032,6 +2390,7 @@ struct SettingsView: View {
         // single team shouldn't have to pick it every game.
         inlineNewGameTeamId = myTeams.count == 1 ? myTeams.first?.team.id : nil
         inlineNewGameOpponentTeamId = nil
+        pendingNewGameLineup = nil
         createGameError = nil
         withAnimation(.easeInOut(duration: 0.2)) {
             expandedHomeOverviewSection = .games
@@ -2046,6 +2405,7 @@ struct SettingsView: View {
         inlineNewGameName = ""
         inlineNewGameTeamId = nil
         inlineNewGameOpponentTeamId = nil
+        pendingNewGameLineup = nil
     }
 
     /// Creates the game and puts it straight in the list. The row is real
@@ -2068,8 +2428,35 @@ struct SettingsView: View {
         // The opponent is a real Team now, so the away roster is linked
         // from the start instead of being set up later from the tracker.
         newGame.awayTeamId = inlineNewGameOpponentTeamId
+        // A scanned lineup for this opponent: make its new roster rows
+        // first, then the game is created with the lineup already in it.
+        let scanned = pendingNewGameLineup.flatMap { $0.teamId == inlineNewGameOpponentTeamId ? $0 : nil }
         closeInlineNewGame()
 
+        guard let scanned else {
+            saveInlineGame(newGame, name: name)
+            return
+        }
+        isAddingScannedLineup = true
+        let plan = LineupScanPlan.make(scanned.decisions, alreadyInLineup: [])
+        var rowIdByHitter: [String: String] = [:]
+        for player in scanned.roster {
+            if let hitterId = player.hitterId, let id = player.id { rowIdByHitter[hitterId] = id }
+        }
+        authManager.resolveScanPlan(teamId: scanned.teamId, plan: plan, existingTeamPlayerIds: rowIdByHitter) { entries, failed in
+            isAddingScannedLineup = false
+            var game = newGame
+            game.jerseyNumbers = entries.map(\.display)
+            game.batterIds = entries.map(\.cellId)
+            game.hitterIdByBatterId = Dictionary(uniqueKeysWithValues: entries.map { ($0.cellId, $0.hitterId) })
+            if failed > 0 {
+                lineupScanNotice = "\(failed) new player\(failed == 1 ? "" : "s") couldn't be added to the roster."
+            }
+            saveInlineGame(game, name: name)
+        }
+    }
+
+    private func saveInlineGame(_ newGame: Game, name: String) {
         var stampedId: String? = nil
         authManager.saveGame(
             newGame,
@@ -2285,7 +2672,7 @@ struct SettingsView: View {
     }
 
     private var addPitcherSheetTitle: String {
-        editingPitcher == nil ? "New Pitcher" : "Edit Pitcher"
+        editingPitcher == nil ? "New Player" : "Edit Player"
     }
 
     private func dismissPitcherEditor() {
@@ -3228,20 +3615,16 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 20) {
                         homeHeaderRow
 
-                        sectionCard {
+                        sectionCard(tint: .games) {
                             gamesOverviewSection
                         }
 
-                        sectionCard {
+                        sectionCard(tint: .teams) {
                             myTeamsSection
                         }
 
-                        sectionCard {
+                        sectionCard(tint: .players) {
                             playersOverviewSection
-                        }
-
-                        sectionCard {
-                            linkProfilesCard
                         }
 
                         sectionCard {
@@ -3273,6 +3656,10 @@ struct SettingsView: View {
                     .padding(.vertical, 8)
                     .padding(.horizontal)
                     .background(.ultraThinMaterial)
+                }
+
+                if isAddingScannedLineup {
+                    lineupScanBusyOverlay
                 }
             }
             .sheet(isPresented: $showInviteJoinSheet) {
@@ -3314,6 +3701,7 @@ struct SettingsView: View {
             } message: {
                 Text("This device doesn’t have a camera available.")
             }
+            .homeLiveLeaveDialog(pending: $pendingLiveLeave) { leave in confirmLiveLeave(leave) }
             .archiveGameDialog(game: $pendingArchiveGame, title: matchupTitle) { game, keepInStats in
                 guard let id = game.id, !id.isEmpty else { return }
                 authManager.archiveGame(gameId: id, keepInStats: keepInStats)
@@ -3615,6 +4003,9 @@ struct SettingsView: View {
             .sheet(isPresented: $showAddPitcher) {
                 addPitcherSheetView
                     .fixedAppDynamicType()
+            }
+            .sheet(isPresented: $showHomeAddPlayer) {
+                homeAddPlayerSheet
             }
             .sheet(isPresented: $showPitcherPhotoPicker) {
                 PitcherImagePicker { image in
@@ -4150,7 +4541,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var strikePercent: Int {
-        totalCount == 0 ? 0 : Int(Double(strikeCount) / Double(totalCount) * 100)
+        statPercent(strikeCount, of: totalCount)
     }
 
     private var ballCount: Int {
@@ -4158,7 +4549,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var ballPercent: Int {
-        totalCount == 0 ? 0 : Int(Double(ballCount) / Double(totalCount) * 100)
+        statPercent(ballCount, of: totalCount)
     }
 
     private var locationAnalyticsEligibleCount: Int {
@@ -4166,19 +4557,19 @@ struct PitcherStatsSheetView: View {
     }
 
     private var swingingStrikeCount: Int {
-        activeStats?.swingingStrikeCount ?? filteredEvents.filter { $0.strikeSwinging && $0.outcome == "K" }.count
+        activeStats?.swingingStrikeCount ?? filteredEvents.filter(PitchStatsCalculator.isStrikeoutSwinging).count
     }
 
     private var lookingStrikeCount: Int {
-        activeStats?.lookingStrikeCount ?? filteredEvents.filter { $0.strikeLooking && $0.outcome == "ꓘ" }.count
+        activeStats?.lookingStrikeCount ?? filteredEvents.filter(PitchStatsCalculator.isStrikeoutLooking).count
     }
 
     private var swingingStrikeEvents: [PitchEvent] {
-        filteredEvents.filter { $0.strikeSwinging && $0.outcome == "K" }
+        filteredEvents.filter(PitchStatsCalculator.isStrikeoutSwinging)
     }
 
     private var lookingStrikeEvents: [PitchEvent] {
-        filteredEvents.filter { $0.strikeLooking && $0.outcome == "ꓘ" }
+        filteredEvents.filter(PitchStatsCalculator.isStrikeoutLooking)
     }
 
     private var wildPitchCount: Int {
@@ -4190,10 +4581,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var walkCount: Int {
-        return activeStats?.walkCount ?? filteredEvents.filter {
-            guard let outcome = $0.outcome, !outcome.isEmpty else { return false }
-            return outcome == "BB" || outcome == "Walk"
-        }.count
+        return activeStats?.walkCount ?? filteredEvents.filter(PitchStatsCalculator.isWalk).count
     }
 
     private var hitCount: Int {
@@ -4213,7 +4601,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var hitSpotPercent: Int {
-        locationAnalyticsEligibleCount == 0 ? 0 : Int(Double(hitSpotCount) / Double(locationAnalyticsEligibleCount) * 100)
+        statPercent(hitSpotCount, of: locationAnalyticsEligibleCount)
     }
 
     private var firstPitchStrike: (made: Int, total: Int) {
@@ -4221,7 +4609,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var firstPitchStrikePercent: Int {
-        firstPitchStrike.total == 0 ? 0 : Int(Double(firstPitchStrike.made) / Double(firstPitchStrike.total) * 100)
+        statPercent(firstPitchStrike.made, of: firstPitchStrike.total)
     }
 
     private var hasLocationAnalytics: Bool {
@@ -4279,13 +4667,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var heatmapPitchTypes: [String] {
-        let unique = Set(
-            filteredEvents
-                .filter(\.supportsLocationAnalytics)
-                .map { $0.pitch.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-        )
-        return unique.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        HeatmapSelection.pitchTypes(filteredEvents)
     }
 
     private var selectedHeatmapPitchResolved: String? {
@@ -4295,52 +4677,27 @@ struct PitcherStatsSheetView: View {
         return heatmapPitchTypes.first
     }
 
-    private var heatmapEventsForSelectedPitch: [PitchEvent] {
-        guard let pitch = selectedHeatmapPitchResolved else { return [] }
-        return filteredEvents
-            .filter { $0.supportsLocationAnalytics && $0.pitch == pitch }
-            .sorted { $0.timestamp < $1.timestamp }
-    }
-
-    private func heatmapLocationIsStrikeZone(_ rawLocation: String) -> Bool {
-        let trimmed = rawLocation.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = trimmed.lowercased()
-        if lower.hasPrefix("strike ") { return true }
-        if lower.hasPrefix("ball ") { return false }
-
-        let legacyStrikeLabels: Set<String> = [
-            "up & out", "up", "up & in",
-            "out", "middle", "in",
-            "↓ & out", "↓", "↓ & in",
-            "down & out", "down", "down & in",
-            "low & out", "low", "low & in",
-            "high"
-        ]
-        return legacyStrikeLabels.contains(lower)
-    }
-
     private var heatmapEventsForSelectedPitchFiltered: [PitchEvent] {
-        let events = heatmapEventsForSelectedPitch
-        switch heatmapZoneFilter {
-        case .all:
-            return events
-        case .onlyStrikes:
-            return events.filter { heatmapLocationIsStrikeZone($0.location) }
-        case .onlyBalls:
-            return events.filter { !heatmapLocationIsStrikeZone($0.location) }
-        }
+        guard let pitch = selectedHeatmapPitchResolved else { return [] }
+        let zone: HeatmapSelection.Zone = {
+            switch heatmapZoneFilter {
+            case .all: return .all
+            case .onlyStrikes: return .strikes
+            case .onlyBalls: return .balls
+            }
+        }()
+        return HeatmapSelection.events(filteredEvents, pitch: pitch, zone: zone)
     }
 
     private var heatmapCountByPitch: [String: Int] {
-        Dictionary(grouping: filteredEvents.filter(\.supportsLocationAnalytics), by: { $0.pitch })
-            .mapValues(\.count)
+        HeatmapSelection.counts(filteredEvents)
     }
 
     private var pitchStats: [(name: String, count: Int, hitSpotPct: Int)] {
         if let stats = activeStats {
             let rows = stats.pitchStats.map { key, value in
                 let total = value.count
-                let hitSpotPct = total == 0 ? 0 : Int(Double(value.hitSpotCount) / Double(total) * 100)
+                let hitSpotPct = statPercent(value.hitSpotCount, of: total)
                 return (key, total, hitSpotPct)
             }
             return rows
@@ -4357,7 +4714,7 @@ struct PitcherStatsSheetView: View {
             let total = events.count
             let eligible = events.filter(\.supportsLocationAnalytics).count
             let hitSpots = events.filter { $0.supportsLocationAnalytics && strictIsLocationMatch($0) }.count
-            let hitSpotPct = eligible == 0 ? 0 : Int(Double(hitSpots) / Double(eligible) * 100)
+            let hitSpotPct = statPercent(hitSpots, of: eligible)
             rows.append((pitch, total, hitSpotPct))
         }
         return rows
@@ -4658,7 +5015,7 @@ struct PitcherStatsSheetView: View {
                             HStack(spacing: 2) {
                                 if includeIntended {
                                     let stat = row.callKey.flatMap { callSuccessByKey[$0] } ?? (hits: 0, total: 0)
-                                    let pct = stat.total == 0 ? 0 : Int((Double(stat.hits) / Double(stat.total) * 100.0).rounded())
+                                    let pct = statPercent(stat.hits, of: stat.total)
                                     Text("\(pct)% (\(stat.hits)/\(stat.total))")
                                         .font(.caption.weight(.semibold))
                                         .foregroundColor(.secondary)
@@ -4939,7 +5296,7 @@ struct PitcherStatsSheetView: View {
 
             if !hasLocationAnalytics {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Heat maps hidden for Scout Mode events.")
+                    Text("Heat maps hidden for Track Game pitches.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -5055,9 +5412,7 @@ struct PitcherStatsSheetView: View {
     }
 
     private var catcherReadAccuracyPercent: Int {
-        catcherReadEvents.isEmpty
-            ? 0
-            : Int(Double(catcherReadEvents.filter(catcherEstimateLocationMatches).count) / Double(catcherReadEvents.count) * 100)
+        statPercent(catcherReadEvents.filter(catcherEstimateLocationMatches).count, of: catcherReadEvents.count)
     }
 
     private var catcherEstimatedPitchBreakdown: [(name: String, count: Int)] {
@@ -5345,7 +5700,7 @@ struct PitcherStatsSheetView: View {
                 if hasLocationAnalytics {
                     Text("Hit-Spot % = Location matches (\(hitSpotCount)) / Coach-mode pitches (\(locationAnalyticsEligibleCount))")
                 } else {
-                    Text("Location-based metrics hidden for Scout Mode events.")
+                    Text("Location-based metrics hidden for Track Game pitches.")
                 }
             }
             .font(.caption)
@@ -5814,8 +6169,8 @@ enum OpenGameLock {
         return Set([game.teamId, game.awayTeamId].compactMap { $0 }.filter { !$0.isEmpty })
     }
 
-    static func message(for subject: String, plural: Bool = false) -> String {
-        "\(subject) \(plural ? "are" : "is") on a team in the game that's open right now. Close the game first, then archive."
+    static func message(for subject: String, plural: Bool = false, then action: String = "archive") -> String {
+        "\(subject) \(plural ? "are" : "is") on a team in the game that's open right now. Close the game first, then \(action)."
     }
 }
 
@@ -5826,6 +6181,26 @@ extension View {
     /// Archiving never deletes; the only question is whether this user's
     /// stats keep counting the game (every pitch in it, both teams). The
     /// answer stays changeable from the archived game's menu.
+    /// Root of Home (CLAUDE.md, Dialogs): confirms a Disconnect or End
+    /// Live Session picked from a game row's ⋯ menu.
+    func homeLiveLeaveDialog(pending: Binding<HomeLiveLeave?>, onConfirm: @escaping (HomeLiveLeave) -> Void) -> some View {
+        let current = pending.wrappedValue
+        return appConfirmationDialog(
+            isPresented: Binding(
+                get: { pending.wrappedValue != nil },
+                set: { if !$0 { pending.wrappedValue = nil } }
+            ),
+            title: current?.title ?? "",
+            message: current?.message ?? "",
+            primaryTitle: current?.confirmTitle ?? "OK",
+            primaryRole: .destructive,
+            primaryAction: {
+                if let current { onConfirm(current) }
+            },
+            secondaryTitle: "Cancel"
+        )
+    }
+
     func archiveGameDialog(
         game: Binding<Game?>,
         title: @escaping (Game) -> String,

@@ -404,6 +404,9 @@ struct PlayerDirectoryAvatar: View {
                 Circle().fill(Color(.systemGray3))
                 Text(initials)
                     .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .padding(.horizontal, size * 0.08)
                     .foregroundStyle(.white)
             }
             .frame(width: size, height: size)
@@ -412,9 +415,7 @@ struct PlayerDirectoryAvatar: View {
     }
 
     private var initials: String {
-        let parts = row.name.split(whereSeparator: { $0.isWhitespace }).prefix(2)
-        let initials = parts.compactMap { $0.first }.map(String.init).joined()
-        return initials.isEmpty ? "?" : initials.uppercased()
+        NumberOnlyName.avatarText(for: row.name, fallback: "?")
     }
 }
 

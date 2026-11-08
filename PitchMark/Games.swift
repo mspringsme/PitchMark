@@ -38,6 +38,8 @@ struct JerseyCellView: View {
 let sampleJerseyCells: [JerseyCell] = [
 ]
 
+/// Shown as "Call Pitches" / "Track Game" (2026-11-02). The raw values
+/// stay coach/scout - they're stored on every saved pitch.
 enum TrackingMode: String, Codable, CaseIterable {
     case coach
     case scout
@@ -45,9 +47,9 @@ enum TrackingMode: String, Codable, CaseIterable {
     var displayName: String {
         switch self {
         case .coach:
-            return "Coach Mode"
+            return "Call Pitches"
         case .scout:
-            return "Scout Mode"
+            return "Track Game"
         }
     }
 }
@@ -110,6 +112,10 @@ struct Game: Identifiable, Codable {
     // the live merge), stale keys are harmless, and a cell added on another
     // device simply has no entry.
     var hitterIdByBatterId: [String: String]? = nil
+    /// This game's field positions: batterId -> "SS", "CF", ... set from
+    /// the gear sheet (LineupFieldPositions). Same targeted-write rule as
+    /// the map above.
+    var fieldPositionByBatterId: [String: String]? = nil
     var participants: [String: Bool] = [:]
     var selectedBatterId: String? = nil
     var selectedBatterJersey: String? = nil
@@ -170,5 +176,17 @@ struct Game: Identifiable, Codable {
         self.jerseyNumbers = jerseyNumbers
         self.batterIds = batterIds
         self.trackingMode = trackingMode
+    }
+}
+
+extension Game {
+    /// Whether this game counts toward a viewer's stats: an open game always
+    /// does; an archived one only if the viewer chose to keep it
+    /// (`users/{uid}/meta/statsPreferences`). Every stats screen goes through
+    /// `AuthManager.gameCountsInStats`, which asks this.
+    func countsInStats(includedArchivedIds: Set<String>) -> Bool {
+        guard isArchived else { return true }
+        guard let id else { return false }
+        return includedArchivedIds.contains(id)
     }
 }

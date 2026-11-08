@@ -37,6 +37,11 @@ func pitchEventForcesStrikeResult(_ event: PitchEvent) -> Bool {
 }
 
 func inferredPitchResultType(for event: PitchEvent) -> PitchEventResultType? {
+    // A hit batter is a ball, whatever else the pitch carries ("Hit By
+    // Pitch" text would otherwise read as a ball in play).
+    if (event.outcome ?? "").trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("HBP") == .orderedSame {
+        return .ball
+    }
     if pitchEventForcesStrikeResult(event) {
         return .strike
     }
@@ -64,6 +69,12 @@ func inferredPitchResultType(for event: PitchEvent) -> PitchEventResultType? {
     return nil
 }
 
+/// First-pitch strikes: the first pitch of each plate appearance, and how
+/// many were strikes (balls in play included). A plate appearance starts
+/// when the game changes, the batter changes, or the previous pitch ended an
+/// at-bat - so the same jersey leading off the next game, or batting again
+/// after the lineup turns over, starts a new one. Pitches with no batter
+/// recorded can't be placed in a plate appearance and are skipped.
 func sharedFirstPitchStrikeMetrics(for events: [PitchEvent]) -> (made: Int, total: Int) {
     let ordered = events.sorted { lhs, rhs in
         if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
@@ -80,21 +91,36 @@ func sharedFirstPitchStrikeMetrics(for events: [PitchEvent]) -> (made: Int, tota
         return nil
     }
 
+    func gameKey(for event: PitchEvent) -> String {
+        event.gameId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
     var total = 0
     var made = 0
-    var previousBatterKey: String? = nil
+    var previous: (game: String, batter: String, endedAtBat: Bool)? = nil
 
     for event in ordered {
         guard let key = batterKey(for: event) else { continue }
-        guard key != previousBatterKey else { continue }
-        total += 1
-        if inferredPitchResultType(for: event) == .strike {
-            made += 1
+        let game = gameKey(for: event)
+        let startsPlateAppearance = previous.map { $0.game != game || $0.batter != key || $0.endedAtBat } ?? true
+        if startsPlateAppearance {
+            total += 1
+            if inferredPitchResultType(for: event) == .strike {
+                made += 1
+            }
         }
-        previousBatterKey = key
+        previous = (game, key, event.atBatEnd != nil)
     }
 
     return (made: made, total: total)
+}
+
+/// A whole-number percentage, rounded to the nearest (2 of 3 is 67), and 0
+/// with nothing to divide by. Every stats percentage goes through here so
+/// the in-game summary and the stats screens agree.
+func statPercent(_ part: Int, of total: Int) -> Int {
+    guard total > 0 else { return 0 }
+    return Int((Double(part) / Double(total) * 100).rounded())
 }
 
 func pitchEventCountsAsHit(_ event: PitchEvent) -> Bool {
@@ -225,11 +251,11 @@ struct PitchSummary {
     let ballSuccesses: Int
 
     var strikeSuccessRate: Int {
-        calledStrikes == 0 ? 0 : Int(Double(strikeSuccesses) / Double(calledStrikes) * 100)
+        statPercent(strikeSuccesses, of: calledStrikes)
     }
 
     var ballSuccessRate: Int {
-        calledBalls == 0 ? 0 : Int(Double(ballSuccesses) / Double(calledBalls) * 100)
+        statPercent(ballSuccesses, of: calledBalls)
     }
 }
 

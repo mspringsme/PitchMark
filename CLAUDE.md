@@ -43,16 +43,23 @@ during a merge — the resolution is to leave it out of the exception list.
 
 ## Verification constraints
 
-There is **no test target**, and the sandbox has no tap automation (`osascript`
-is blocked by TCC) and no video decoding. Practically:
+**There are test targets now (2026-10-31) - see TESTING.md for the exact
+commands and what's covered.** `PitchMarkTests` (unit, hosted in the app),
+`PitchMarkUITests` (XCUITest, launches the demo game with `-UITestDemo`),
+`PitchmarkDisplayTests`, and `rules-tests/` (Firestore emulator, needs
+JDK 21+). The user's testing policy applies to every feature: tests before
+"done", rules tests before any rules deploy, list the rules being tested
+and get approval before writing tests, and break high-risk logic on
+purpose to prove a test catches it.
 
-- Pure logic gets verified by compiling a standalone Swift script that imports
-  nothing and asserts against the rules directly. `AtBatCountRules` was validated
-  this way with 27 assertions plus a full at-bat simulation before shipping.
-- Anything involving touch has to be verified by the user on a device or
-  simulator. Ask; don't claim it works.
-- Screenshots of the running simulator do work and are worth taking for layout
-  changes.
+- Logic buried in a view gets moved to a plain type so it can be unit
+  tested (`GameProgress`, `PlayDraft`, `StatsEventFilter` are examples).
+- New test files in a test folder join their target automatically (the
+  folders are file-system-synchronized).
+- Still manual: real two-device live sessions, real-device performance,
+  and visual/feel checks. Ask the user for those; don't claim them.
+- Screenshots of the running simulator do work and are worth taking for
+  layout changes.
 
 ## The count (balls/strikes)
 
@@ -68,6 +75,13 @@ Two rules that are easy to violate by accident:
    display label must not be able to disagree.
 2. **`atBatCount` is display-only and is never parsed back into a count.** On a
    terminal pitch it holds text like `"Ball 4"` or `"Strikeout"`, not `"3-2"`.
+   The review step (`buildSavedPlayReviewedEvent`) goes through
+   `applyCount` too (`PitchEventEdit.stampReviewedCount`); it used to write
+   `"b-s"` by hand and turned every walk/strikeout label into `"0-0"`.
+3. **Editing a saved pitch counts from the pitch before it**
+   (`PitchEventEdit.countBefore`, passed as `countSeedOverride`), not the
+   batter's latest pitch, and only an edit of the game's latest pitch moves
+   the tracker's count. Later pitches keep their labels (user's choice).
 
 In `PitchResultsSheetView`, the count is *derived* (`countSeed` + current
 selection) rather than stored. The `.onChange(of: resolvedCount)` publisher is
@@ -75,6 +89,15 @@ gated on `isPresented` — without that guard, `resetSelections()` during sheet
 teardown publishes the stale pre-pitch seed over the count that was just saved.
 That regression is subtle and reproduced as a sequence like `["1-0","0-1","1-0"]`
 with the main screen stuck at `0-0`.
+
+## Stats
+
+One rule per number, shared by every screen (batch 6, 2026-11-01):
+whether a pitch ended an at-bat is `PitchEvent.atBatEnd`
+(`AtBatCountRules.endOfAtBat`) for pitcher *and* hitter stats - don't
+count strikeouts or walks by their K/ꓘ/Walk label alone, older pitches
+carry none. Percentages go through `statPercent` (rounded, user's
+choice). Strike/ball is `inferredPitchResultType`; hit-by-pitch is a ball.
 
 ## Firestore: things that will hang or clobber
 
@@ -146,11 +169,220 @@ A `.removed` also has to be pruned from `seededGamePitchEventsForLive`, or
 `mergeLiveAndSeededEvents` re-adds the deleted pitch from the stale seed array
 and the card reappears on the next snapshot.
 
+**A change to a saved pitch reaches the career records directly
+(2026-11-01).** Edits, deletes, undo, pitcher moves and batter changes
+plan their writes with `EventCopyTargets` / `EventCopyPlan`
+(EventCopies.swift), which include `pitchers/{pid}/pitchEvents` and
+`hitters/{hid}/pitchEvents`. Career stats read those, and the owner's
+mirror only carries changes while a live room is open - so before this an
+edit made after the game never reached them, and a pitch moved to another
+pitcher vanished from both. An edit starts from the saved pitch and takes
+only what the sheet answers (`PitchEventEdit.applying`); rebuilding it
+field by field is how tracking mode, catcher's estimate, hitter link,
+author, count and markers were lost.
+
+**Knowing a document's id is never a credential (2026-10-31).** Joining a
+live room (`participants/{uid}`), adding yourself to a pitcher's
+`sharedWith`, and joining a team (`members/{uid}`) each require the write
+to name a code or invite the rules can check: `joinCode`/`inviteToken`
+(or `displayInviteToken`) for this room, unexpired; a pitcher invite for
+this pitcher that you redeemed; a team invite for this team that you
+redeemed, granting the roles you write. Invites are burned first, then
+named. A partner's credential is remembered per room
+(`LiveJoinCredential`) and in the joined-session bookmark, because
+presence is deleted and recreated in ordinary use. App Store builds from
+before this don't send it - **the rules can't be deployed until the new
+build is out**, or partners on old builds can't join.
+
 **Never put join codes or invite tokens on `/liveGames/{liveId}`.** That document
 is readable by display participants and display-only sessions, which are meant to
 render a called pitch and nothing else — a credential there lets a display device
 rejoin as a full participant with write access to pitch events. They live in
 `users/{uid}/liveSessions/{liveId}`, which is owner-only.
+
+## Fielding stats (2026-11-03)
+
+- **Each game pitch carries a copy of the defense** (`PitchEvent.defense`,
+  stamped in `persistPitchEvent` from the pitching team's lineup cells and
+  `Game.fieldPositionByBatterId`) plus `fieldingTeamId`. Credit goes to
+  whoever held the position on *that* pitch - never read the game's
+  current positions for stats, they change mid-game.
+- Who fielded is `fieldingOuts` (one entry per out, fielders in order,
+  last = putout) and `errorPositions`, answered on the result sheet's
+  Fielded by row (`FieldedByView`). A strikeout is the catcher's putout
+  and is never asked. Rules: `FieldingPlay` (shared with Display) and
+  `FieldingLedger` (FieldingStats.swift, PitchMark only).
+- Every rebuild of a pitch keeps them through
+  `FieldingPlay.consistentOuts/consistentErrors` (review step, edit,
+  save). The edit sheet starts from the saved fielders and its saved play.
+- **Picking FC on the bases diamond puts the lead forced runner out**
+  (`PlayDraft.fieldersChoiceRunner` / `batterCreditChanged`), unless a
+  runner is already out; leaving FC puts them back. That out is what the
+  Fielded by row asks about (6-4). One fielder = unassisted (6U / F8).
+- The player sheet is "Player Stats" with Hitting and Fielding headers;
+  every fielding table shows `FieldingStatsKey`. Its buttons say
+  "Hitting & Fielding (Stats)" on Home and the roster, "Hit & Field" in
+  the gear sheet's batter rows (the long label overflows that row).
+- **RBI and R (2026-11-05)** come from each pitch's saved play
+  (`HittingStatLine.runsBattedIn(for:)`). No RBI on ROE, on a play with
+  2+ outs, or for a run tagged E/WP/PB; runner moves on a hit carry no
+  reason, so a run an error helped still counts. R as a runner reads the
+  game pitches' `basesBefore[from].hitterId` - hand-added runners credit
+  nobody. Only a HR counts on a pitch saved before plays existed.
+- Stats read the **owner's game pitchEvents** (fielding is on the other
+  team's pitches, not in `/hitters`), so another coach's games don't
+  count. No rules change was needed.
+
+## Result sheet field (2026-11-04)
+
+**There is one field.** The hit-location field (`FieldOverlayView`) is
+never swapped out; the batter, runners, bags, credit chips and prompt are
+`BasesFieldLayer`, drawn over it through its `overlay` hook at the bag
+positions measured on FieldImage2 (`BasesFieldLayer.normalizedPoint`).
+User's call - the separate diamond hid the hit marker, and a tap meant
+for the field landed on a bag and made an Out batter safe. `fieldStage`
+now only says whether the bags/prompt are live; with Out selected a bag
+tap never places the batter.
+The batter is always drawn (`batterToken`): dark, in their box at home
+with "AT BAT" until placed, red "OUT" when out; runners are white. Runner
+tokens take taps only once the batter's result is known, and the picked
+runner lives in the sheet (`selectedRunnerBase`) so Refresh clears it.
+
+## Team batting and the gear sheet (2026-11-05)
+
+- **Team Batting Stats** (roster screen, beside Team Fielding) is
+  `TeamBattingStatsView` / `TeamBatting` (TeamBattingStats.swift). It reads
+  the team's games, not /hitters: the batting team is whoever wasn't
+  `fieldingTeamId`; a pitch without one counts only for a linked roster
+  batter. The Team row includes jersey-only batters and every run scored.
+- **The lineup gear sheet never changes the game's batter.** Its
+  highlight is its own (`viewedBatterId`, starting on the game's
+  batter); notes, pitch cards, Order arrows and the action row follow it.
+  User's call - looking at a player isn't picking them to bat. Don't wire
+  a sheet tap back to `syncSelectedBatterFromDetail`.
+
+## Home calendar, number-only players, result sheet (2026-11-05)
+
+- **A number-only player is saved with the name "#12"** - no flag
+  (`NumberOnlyName`, Utilities.swift). Every screen already reads it, and
+  avatars show the whole number (`NumberOnlyName.avatarText`). The roster
+  add form, Player Details and the in-game quick add all have the toggle.
+  Changing a number-only player's jersey renames them to the new number,
+  through the normal rename path.
+- Home's Games header has a calendar button (`GamesCalendarView`); a game
+  tapped there opens like its row.
+- **The Safe/Out + Save Result row is sticky** (`StickyActionBar`): it
+  stays in place until it reaches the top of whatever scrolls, then stays
+  there while the field scrolls under it. The tracker wraps the card and
+  the sheet in an *outer* ScrollView, so a pinned LazyVStack header inside
+  the sheet never pins - the bar measures the divider above it in both
+  named coordinate spaces (`outerScrollSpace`, set on the tracker's two
+  wrappers, and `ownScrollSpace`) and offsets itself. A bottom
+  `.safeAreaInset` was tried first and landed under the field.
+  The catcher's pop-up button is "Skip".
+- **The card's result box says each thing once** (`outcomeSummaryLines`):
+  the play line is `BaseRunnerRules.cardSummary` ("2B", "1B + E · Safe at
+  2nd · 1 run"), the stored outcome isn't repeated under it, and ball type
+  + region share one line ("Line · Deep Right", "Hit" dropped on a hit).
+  The box is ~3 lines tall; the spray chart reads these lines for color
+  ("safe"/"1b".../"out"), so keep those words in them.
+- **The review sheet's Save opens where Save Result was** (user's call:
+  two quick taps in one spot). Save Result's global frame rides in the
+  review draft (`saveAnchor`); `ReviewSaveLayout` puts Back + Save at
+  that height, the title/count above only if they fit, the rest
+  scrolling below. Track Game's Save Event passes no anchor, so its
+  review keeps Back/Save at the bottom.
+- **Home's Players + is `HomeAddPlayerSheet`**: team (teams you created,
+  or No team = a bare player record), number only, name, jersey,
+  positions, batting side. The old name-only sheet is Edit only.
+
+## Scan Opponent Lineup (2026-11-06)
+
+- **Home only, three places:** the new-game card (once an opponent team
+  is picked; the reviewed lineup waits and is written when Save creates
+  the game), an own game's ⋯ menu, and a joined live game's ⋯ menu (a
+  partner). Rules: `LineupScan.swift` (parser, roster match, plan,
+  route); reading: `LineupScanReader` (Vision, on device, image never
+  saved); UI: `LineupScanSheet`; writes: `OpponentPartnerAccess.swift`.
+- **Where it's written (`LineupScanRoute`):** no live room = the saved
+  game, in one transaction, after quietly closing the game if it's open
+  in the tracker (the tracker only reloads its lineup when empty, so it
+  would save its older one back). An open room = the room, and the
+  coach's phone also writes the saved game with the same spot ids.
+- **Partners get the room's opponent roster** (rules: OPPONENT ACCESS FOR
+  LIVE PARTNERS). The claim is `teams/{teamId}/partnerAccess/{uid}`
+  naming the room; the rules re-check room open, partner in it, team
+  still `awayTeamId` on every use. Read, add, edit name/jersey/positions/
+  batting side; never archive or delete. The game's own team is
+  **read-only** for partners (H1-H4, 2026-11-07) - claimed with
+  `canEdit: false`, which never records a grant.
+  A partner's new opponent player's Pitcher/Hitter/Player records are
+  **the coach's** (`createdViaLiveId`), or the coach's phone couldn't
+  save that batter's pitches (hitters are ownerUid-only). A partner
+  rename names the row (`renamedVia`). Both live in
+  `addTeamPlayerCreatingNewPlayer` / `PlayerDetailsSheet` behind
+  `OpponentPartnerAccess.shared.grant(for:)` - don't add a third path
+  that skips it. Partners never run `backfillRosterLinks`.
+- **Real screenshots are mostly not lineup** (box scores: tabs, team
+  names, stat columns, TB:/SB: footers). The parser marks
+  `likelyBatter`; the review starts with only those kept and puts the
+  rest under "Other text found" (`LineupReviewList`). Numbers right of a
+  name are stat columns. The GameChanger fixture test is the check -
+  run it after any parser change.
+- **A partner loads the owner's game itself** (`loadGameForPartner`,
+  once per room, off the room's `ownerGameId`): Home's rejoin and other
+  join paths pass no game id, and without the Game a partner has no team
+  ids - no rosters, no opponent claim, an empty gear sheet. The lineup
+  cells stay the room's. Field positions ride the room too
+  (`fieldPositionByBatterId`, whole map); a partner has every control
+  except calling pitches.
+- **Leaving a live game (2026-11-07):** the tracker's top menus have
+  End Live Session… (coach's Key menu, opens the old dialog) and
+  Disconnect (partner's mode menu); Home's ⋯ menus have the same
+  (`HomeLiveLeave`, confirmed by `homeLiveLeaveDialog` at Home's root).
+  Home's End looks the room up (`findOpenLiveRoom`) and only sets
+  `status: "ended"` - every phone, the coach's own tracker included,
+  acts on that. Home's Disconnect posts `activeGameShouldClose` only
+  with a game id; without one it would close whatever game is open.
+- **Lineup links ride the room** (`hitterIdByBatterId` on
+  `/liveGames`, one dotted field per spot). `persistHitterLinks`
+  publishes them; the coach's phone merges them in `applyRoomLineup`
+  and saves links and the room's lineup to the game - only for
+  server-confirmed snapshots. Before this a partner's Bench / Put In Game
+  never reached the saved game.
+
+## Tracker naming and memory (2026-11-02)
+
+- **Coach/Scout are shown as "Call Pitches" / "Track Game"** and live in
+  the Key menu (the assistant gets a mode menu of its own). The stored
+  `TrackingMode` raw values stay `coach`/`scout` - every saved pitch
+  carries them.
+- **The tracker's top is two cards (2026-11-03)**, built in
+  `pitchSelectionStrip`: who's pitching (Pitching side chips, pitcher,
+  stats buttons) and what's thrown (Key menu - or the assistant's mode
+  menu - and pitch chips). There is no separate top bar any more.
+  The pitching card hugs its contents; the Key card gets the rest.
+- **Gear sheet: Order arrows and field positions (2026-11-03).** Drag
+  to reorder is gone; the Order arrows move the selected batter within
+  their team. Each row's position button sets this game's position
+  (`Game.fieldPositionByBatterId`, plain strings because the sheet is in
+  the Display target; one per position per team, `LineupFieldPositions`).
+  The field icon beside Order opens `FieldPositionsView`, which sets the
+  same map through the same `assign` - don't give it a separate store.
+- **Leaving a game remembers who was pitching and who was up, per side**
+  (`TrackerSelectionMemory`, device-local). A partner in a live room
+  follows the owner's room instead.
+- **A player's name on Home is their oldest roster row's**
+  (`PlayerProfile.name`), the same one the Edit sheet changes; a rename
+  reaches every record the Player doc links (`PlayerLinks.renameTargets`).
+  Picking the alphabetically-first Pitcher made Juju show as her old
+  record's "Jug".
+
+- **The tracker's `.onAppear` fires on every return to the Game tab**,
+  not once - the boot flow (`handleInitialAppear`) runs only on the first
+  (`LaunchHomeGate.claimFirstAppear`). Rerunning it re-applied the
+  15-minute "start on Home" rule mid-session and bounced every trip back
+  to the game straight to Home.
 
 ## Primary-device session (two devices, one account)
 
@@ -222,8 +454,19 @@ Duplicates' cleanup of rows/records it has folded into another profile.
 **Nothing on the open game's teams can be archived.** While a game is open in
 the tracker, `OpenGameLock` (SettingsView.swift) refuses player archive,
 roster Remove and Archive Team for either side's team, and offers Close Game.
+Merge Duplicates (and Link when it combines profiles) is locked the same way,
+because it removes the extra roster row (batch 7, user's choice).
 Unarchive and Restore are never locked. Every new archive path needs the same
 check.
+
+**Merge cleanup deletes only on certainty (batch 7, 2026-11-01).** The
+decisions live in `ProfileMerge` (ProfileMerge.swift); the AuthManager code
+carries them out. Nothing is deleted if any team's roster read fails
+(`loadTeamPlayersResult` - plain `loadTeamPlayers` turns a failure into
+`[]`, which made that team's references invisible). A Hitter's history is
+its pitches *and* its runner events (a pinch runner's steals). A `Player`
+doc's `linkedPitcherIds`/`linkedHitterIds` move onto the kept player before
+the doc is deleted, or it stays.
 
 **A player archive hides them from games, so it must never be silent.**
 Every archive confirms with the names `ArchiveScope` reads off the roster

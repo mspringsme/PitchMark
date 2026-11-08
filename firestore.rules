@@ -44,6 +44,86 @@ service cloud.firestore {
         && request.auth.token.admin == true;
     }
 
+    // ─────────────────────────────────────────────
+    // OPPONENT ACCESS FOR LIVE PARTNERS (2026-11-06, Scan Opponent Lineup)
+    // A parent connected to an active, unexpired live room may read and
+    // edit (never remove) the roster of that room's game's opponent team
+    // (`awayTeamId` on the owner's game). The credential is the room: the
+    // partner names it in teams/{teamId}/partnerAccess/{uid}, and every
+    // use re-checks that the room is still open, they're still in it, and
+    // the team is still its opponent. Knowing a team id is not enough.
+    // ─────────────────────────────────────────────
+    function liveRoomPath(liveId) {
+      return /databases/$(database)/documents/liveGames/$(liveId);
+    }
+
+    function inOpenRoom(liveId) {
+      return liveId is string
+        && exists(liveRoomPath(liveId))
+        && get(liveRoomPath(liveId)).data.status == "active"
+        && notExpired(get(liveRoomPath(liveId)).data)
+        && exists(/databases/$(database)/documents/liveGames/$(liveId)/participants/$(uid()));
+    }
+
+    function roomOpponentIs(liveId, teamId) {
+      let room = get(liveRoomPath(liveId)).data;
+      return get(/databases/$(database)/documents/users/$(room.ownerUid)/games/$(room.ownerGameId))
+        .data.get("awayTeamId", null) == teamId;
+    }
+
+    // The room's game's own team (H1): partners read it, never write it.
+    function roomOwnTeamIs(liveId, teamId) {
+      let room = get(liveRoomPath(liveId)).data;
+      return get(/databases/$(database)/documents/users/$(room.ownerUid)/games/$(room.ownerGameId))
+        .data.get("teamId", null) == teamId;
+    }
+
+    function partnerGrantPath(teamId) {
+      return /databases/$(database)/documents/teams/$(teamId)/partnerAccess/$(uid());
+    }
+
+    function isOpponentPartnerOf(teamId) {
+      return signedIn()
+        && exists(partnerGrantPath(teamId))
+        && inOpenRoom(get(partnerGrantPath(teamId)).data.liveId)
+        && roomOpponentIs(get(partnerGrantPath(teamId)).data.liveId, teamId);
+    }
+
+    // Read-only: either team of the room's game (H1, H3).
+    function isRoomPartnerOf(teamId) {
+      return signedIn()
+        && exists(partnerGrantPath(teamId))
+        && inOpenRoom(get(partnerGrantPath(teamId)).data.liveId)
+        && (roomOpponentIs(get(partnerGrantPath(teamId)).data.liveId, teamId)
+            || roomOwnTeamIs(get(partnerGrantPath(teamId)).data.liveId, teamId));
+    }
+
+    // A new opponent player's records belong to the room's owner, made by
+    // a partner connected to that owner's room (createdViaLiveId).
+    function createdForRoomOwner(data) {
+      return signedIn()
+        && data.keys().hasAny(["createdViaLiveId"])
+        && inOpenRoom(data.createdViaLiveId)
+        && get(liveRoomPath(data.createdViaLiveId)).data.ownerUid == data.ownerUid
+        && data.get("createdByUid", null) == uid();
+    }
+
+    // A partner's rename of a record (name only), naming the opponent
+    // roster row that links it (`renamedVia: {teamId, rowId}`). The
+    // record must belong to that room's owner.
+    function renamedViaOpponentRow(linkField, docId) {
+      let via = request.resource.data.get("renamedVia", null);
+      return signedIn()
+        && via is map
+        && via.get("teamId", null) is string
+        && via.get("rowId", null) is string
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "renamedVia"])
+        && exists(/databases/$(database)/documents/teams/$(via.teamId)/players/$(via.rowId))
+        && get(/databases/$(database)/documents/teams/$(via.teamId)/players/$(via.rowId)).data.get(linkField, null) == docId
+        && isOpponentPartnerOf(via.teamId)
+        && get(liveRoomPath(get(partnerGrantPath(via.teamId)).data.liveId)).data.ownerUid == resource.data.ownerUid;
+    }
+
     // Tombstones are server-owned barriers. Clients may not inspect, create,
     // change, or remove them, including the user identified by the document ID.
     match /accountDeletionTombstones/{tombstonedUid} {
@@ -79,6 +159,15 @@ service cloud.firestore {
     // TOP-LEVEL PITCHERS: /pitchers/{pitcherId}
     // ─────────────────────────────────────────────
     match /pitchers/{pitcherId} {
+      function redeemedPitcherInvite(data) {
+        let path = /databases/$(database)/documents/pitcherInviteTokens/$(data.inviteToken);
+        return data.inviteToken is string
+          && exists(path)
+          && get(path).data.pitcherId == pitcherId
+          && get(path).data.get("redeemedByUid", null) == uid()
+          && notExpired(get(path).data);
+      }
+
       allow get: if signedIn()
         && (
           resource.data.ownerUid == uid()
@@ -95,6 +184,13 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid();
 
+      // A partner's new opponent pitcher: the owner's, shared with nobody else.
+      allow create: if createdForRoomOwner(request.resource.data)
+        && request.resource.data.get("sharedWith", []).hasOnly([request.resource.data.ownerUid])
+        && request.resource.data.get("claimedByUid", request.resource.data.ownerUid) == request.resource.data.ownerUid;
+
+      allow update: if renamedViaOpponentRow("pitcherId", pitcherId);
+
       allow update: if signedIn()
         && (
           resource.data.ownerUid == uid()
@@ -105,10 +201,15 @@ service cloud.firestore {
             && request.resource.data.claimedByUid == uid()
           )
           || (
-            request.writeFields.hasOnly(["sharedWith"])
-            && request.resource.data.sharedWith.size() >= resource.data.sharedWith.size()
-            && request.resource.data.sharedWith.hasAll(resource.data.sharedWith)
+            // Adding yourself to sharedWith takes an invite for THIS
+            // pitcher that you have just redeemed (joinPitcherByInviteToken
+            // burns it first, then names it here). Knowing a pitcher's id is
+            // not enough - every live-room pitch carries it.
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(["sharedWith", "inviteToken"])
+            && request.resource.data.sharedWith.size() >= resource.data.get("sharedWith", []).size()
+            && request.resource.data.sharedWith.hasAll(resource.data.get("sharedWith", []))
             && request.resource.data.sharedWith.hasAny([uid()])
+            && redeemedPitcherInvite(request.resource.data)
           )
         );
 
@@ -173,7 +274,9 @@ service cloud.firestore {
     match /players/{playerId} {
       allow get, list: if signedIn() && resource.data.ownerUid == uid();
       allow create: if signedIn() && request.resource.data.ownerUid == uid();
+      allow create: if createdForRoomOwner(request.resource.data);
       allow update, delete: if signedIn() && resource.data.ownerUid == uid();
+      allow update: if renamedViaOpponentRow("playerId", playerId);
     }
 
     // ─────────────────────────────────────────────
@@ -187,9 +290,25 @@ service cloud.firestore {
     match /hitters/{hitterId} {
       allow get, list: if signedIn() && resource.data.ownerUid == uid();
       allow create: if signedIn() && request.resource.data.ownerUid == uid();
+      allow create: if createdForRoomOwner(request.resource.data);
       allow update, delete: if signedIn() && resource.data.ownerUid == uid();
+      allow update: if renamedViaOpponentRow("hitterId", hitterId);
 
       match /pitchEvents/{eventId} {
+        function hitterDoc() {
+          return get(/databases/$(database)/documents/hitters/$(hitterId)).data;
+        }
+
+        allow get, list: if signedIn() && hitterDoc().ownerUid == uid();
+        allow create: if signedIn() && hitterDoc().ownerUid == uid()
+          && request.resource.data.createdByUid == uid();
+        allow update, delete: if signedIn() && hitterDoc().ownerUid == uid();
+      }
+
+      // Steals / caught stealing / pickoffs (RunnerEventStore) - same
+      // ownerUid-only shape as pitchEvents; the owner's device mirrors
+      // live-session copies in.
+      match /runnerEvents/{eventId} {
         function hitterDoc() {
           return get(/databases/$(database)/documents/hitters/$(hitterId)).data;
         }
@@ -258,9 +377,20 @@ service cloud.firestore {
         return get(/databases/$(database)/documents/teams/$(teamId)).data.createdByUid == uid();
       }
 
+      function redeemedTeamInvite(data) {
+        let path = /databases/$(database)/documents/teamInviteTokens/$(data.inviteToken);
+        return data.inviteToken is string
+          && exists(path)
+          && get(path).data.teamId == teamId
+          && get(path).data.get("redeemedByUid", null) == uid()
+          && notExpired(get(path).data)
+          && data.roles.hasOnly(get(path).data.roles);
+      }
+
       allow get: if signedIn() && (
         resource.data.createdByUid == uid()
         || exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()))
+        || isRoomPartnerOf(teamId)
       );
       allow list: if false; // fetched individually via the members collectionGroup query
 
@@ -283,7 +413,11 @@ service cloud.firestore {
         // used by anything yet, so deny it here explicitly.
         allow list: if false;
 
-        allow create: if signedIn() && memberUid == uid() && request.resource.data.uid == uid();
+        // Only yourself, and only as the team's creator or with a team
+        // invite you have just redeemed, with no role the invite didn't
+        // grant. Knowing a team's id is not enough.
+        allow create: if signedIn() && memberUid == uid() && request.resource.data.uid == uid()
+          && (isTeamCreator() || redeemedTeamInvite(request.resource.data));
         allow update: if signedIn() && isTeamCreator();
         // A member can remove their own membership (Leave Team) without
         // needing the creator to do it for them; the creator can still
@@ -296,6 +430,33 @@ service cloud.firestore {
         allow get, list: if signedIn()
           && exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()));
         allow create, update, delete: if signedIn() && isTeamCreator();
+
+        // A live partner on this team as the room's opponent: read, add
+        // and edit - never remove (archivedAt) or delete.
+        allow get, list: if isRoomPartnerOf(teamId);
+        allow create: if isOpponentPartnerOf(teamId)
+          && request.resource.data.get("createdByUid", null) == uid()
+          && request.resource.data.get("archivedAt", null) == null;
+        allow update: if isOpponentPartnerOf(teamId)
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(["name", "jerseyNumber", "positions", "battingSide"]);
+      }
+
+      // The partner's claim to a roster of the room's game - the opponent
+      // (read + add/edit) or the game's own team (read only): the live
+      // room they're in. Re-checked on every use (isOpponentPartnerOf), so it lapses
+      // with the room.
+      match /partnerAccess/{partnerUid} {
+        allow get: if signedIn() && (partnerUid == uid() || isTeamCreator());
+        allow list: if false;
+        allow create, update: if signedIn()
+          && partnerUid == uid()
+          && request.resource.data.keys().hasOnly(["uid", "liveId", "grantedAt"])
+          && request.resource.data.uid == uid()
+          && inOpenRoom(request.resource.data.liveId)
+          && (roomOpponentIs(request.resource.data.liveId, teamId)
+              || roomOwnTeamIs(request.resource.data.liveId, teamId));
+        allow delete: if signedIn() && (partnerUid == uid() || isTeamCreator());
       }
     }
 
@@ -322,8 +483,21 @@ service cloud.firestore {
     // TEAM INVITE TOKENS: /teamInviteTokens/{token}
     // ─────────────────────────────────────────────
     match /teamInviteTokens/{token} {
-      allow get: if signedIn();
+      // Holding the token is the credential, so any signed-in user may read
+      // it - until it expires (its creator still can).
+      allow get: if signedIn()
+        && (resource == null || notExpired(resource.data) || resource.data.createdByUid == uid());
       allow list: if false;
+
+      // Single-use: the redeemer burns it, once, as themselves, before
+      // naming it on their membership. Same shape as pitcherInviteTokens.
+      allow update: if signedIn()
+        && resource != null
+        && !(resource.data.keys().hasAny(['redeemedByUid']))
+        && notExpired(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['redeemedByUid', 'redeemedAt'])
+        && request.resource.data.redeemedByUid == uid();
 
       allow create: if signedIn()
         && request.resource.data.createdByUid == uid()
@@ -373,7 +547,7 @@ service cloud.firestore {
     match /joinCodes/{code} {
       allow get: if signedIn()
         && (resource == null || notExpired(resource.data) || resource.data.ownerUid == uid());
-      allow list: if signedIn() && request.query.where("ownerUid", "==", uid());
+      allow list: if signedIn() && resource.data.ownerUid == uid();
 
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid()
@@ -391,7 +565,7 @@ service cloud.firestore {
     match /inviteTokens/{token} {
       allow get: if signedIn()
         && (resource == null || notExpired(resource.data) || resource.data.ownerUid == uid());
-      allow list: if signedIn() && request.query.where("ownerUid", "==", uid());
+      allow list: if signedIn() && resource.data.ownerUid == uid();
 
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid()
@@ -409,7 +583,7 @@ service cloud.firestore {
     match /displayInviteTokens/{token} {
       allow get: if signedIn()
         && (resource == null || notExpired(resource.data) || resource.data.ownerUid == uid());
-      allow list: if signedIn() && request.query.where("ownerUid", "==", uid());
+      allow list: if signedIn() && resource.data.ownerUid == uid();
 
       allow create: if signedIn()
         && request.resource.data.ownerUid == uid()
@@ -449,6 +623,28 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/users/$(uid())/meta/activeSession).data.liveId == liveId;
       }
 
+      function roomOwnedByMe() {
+        return get(/databases/$(database)/documents/liveGames/$(liveId)).data.ownerUid == uid();
+      }
+
+      function opensRoom(collection, token) {
+        let path = /databases/$(database)/documents/$(collection)/$(token);
+        return token is string
+          && exists(path)
+          && get(path).data.liveId == liveId
+          && notExpired(get(path).data);
+      }
+
+      function credentialOpensRoom(data) {
+        return (data.keys().hasAny(["joinCode"]) && opensRoom("joinCodes", data.joinCode))
+          || (data.keys().hasAny(["inviteToken"]) && opensRoom("inviteTokens", data.inviteToken));
+      }
+
+      function displayInviteOpensRoom(data) {
+        return data.keys().hasAny(["displayInviteToken"])
+          && opensRoom("displayInviteTokens", data.displayInviteToken);
+      }
+
       allow get: if signedIn() && (isOwner() || isParticipant() || isDisplayParticipant() || isDisplayOnlySessionForLive());
       allow list: if false;
 
@@ -469,8 +665,11 @@ service cloud.firestore {
       allow update: if isOwner() || participantAllowedUpdate();
       allow delete: if isOwner();
 
+      // Inside these subcollections `resource` is the presence document,
+      // so the room's owner is checked against the room (roomOwnedByMe),
+      // not isOwner() - which read the presence doc and never matched.
       match /participants/{participantUid} {
-        allow get: if signedIn() && (isOwner() || uid() == participantUid);
+        allow get: if signedIn() && (roomOwnedByMe() || uid() == participantUid);
 
         allow list: if signedIn()
           && (
@@ -478,32 +677,70 @@ service cloud.firestore {
             || exists(/databases/$(database)/documents/liveGames/$(liveId)/participants/$(uid()))
           );
 
-        allow create: if signedIn() && uid() == participantUid;
+        // Joining takes the room's owner, or a join code / invite for THIS
+        // room that hasn't expired, named on the presence document. Knowing
+        // a room's id is not enough.
+        allow create: if signedIn() && uid() == participantUid
+          && (roomOwnedByMe() || credentialOpensRoom(request.resource.data));
 
         allow update: if signedIn()
           && uid() == participantUid
-          && request.writeFields.hasOnly(["uid", "joinedAt", "lastSeenAt"]);
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(["uid", "joinedAt", "lastSeenAt", "joinCode", "inviteToken"]);
 
         // ✅ Let participant remove their own presence (optional but nice)
-        allow delete: if isOwner() || (signedIn() && uid() == participantUid);
+        allow delete: if roomOwnedByMe() || (signedIn() && uid() == participantUid);
       }
 
       match /displayParticipants/{participantUid} {
-        allow get: if signedIn() && (isOwner() || uid() == participantUid);
+        allow get: if signedIn() && (roomOwnedByMe() || uid() == participantUid);
 
         allow list: if signedIn()
           && (get(/databases/$(database)/documents/liveGames/$(liveId)).data.ownerUid == uid());
 
-        allow create: if signedIn() && uid() == participantUid;
+        // Same as participants, with a display invite as the credential.
+        allow create: if signedIn() && uid() == participantUid
+          && (roomOwnedByMe() || displayInviteOpensRoom(request.resource.data));
 
         allow update: if signedIn()
           && uid() == participantUid
-          && request.writeFields.hasOnly(["uid", "joinedAt", "lastSeenAt"]);
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(["uid", "joinedAt", "lastSeenAt", "displayInviteToken"]);
 
-        allow delete: if isOwner() || (signedIn() && uid() == participantUid);
+        allow delete: if roomOwnedByMe() || (signedIn() && uid() == participantUid);
       }
 
       match /pitchEvents/{eventId} {
+        function liveDoc() {
+          return get(/databases/$(database)/documents/liveGames/$(liveId)).data;
+        }
+
+        function liveOwner() {
+          return signedIn() && liveDoc().ownerUid == uid();
+        }
+
+        function liveParticipant() {
+          return signedIn()
+            && exists(/databases/$(database)/documents/liveGames/$(liveId)/participants/$(uid()));
+        }
+
+        function liveDisplayParticipant() {
+          return signedIn()
+            && exists(/databases/$(database)/documents/liveGames/$(liveId)/displayParticipants/$(uid()));
+        }
+
+        allow get, list: if liveOwner() || liveParticipant() || liveDisplayParticipant();
+
+        allow create: if signedIn()
+          && (liveOwner() || liveParticipant())
+          && request.resource.data.createdByUid == uid();
+
+        allow update, delete: if liveOwner()
+          || (liveParticipant() && resource.data.createdByUid == uid());
+      }
+
+      // Between-pitch runner events - same access as pitchEvents.
+      match /runnerEvents/{eventId} {
         function liveDoc() {
           return get(/databases/$(database)/documents/liveGames/$(liveId)).data;
         }
@@ -599,6 +836,18 @@ service cloud.firestore {
       allow list: if false;
 
       match /pitchEvents/{eventId} {
+        allow get, list: if signedIn() && uid() == ownerUid;
+        allow get, list: if isActiveParticipantForThisGame();
+
+        allow create: if (isActiveParticipantForThisGame() || isActiveParticipantByLiveId())
+          && request.resource.data.createdByUid == uid();
+
+        allow update, delete: if signedIn() && uid() == ownerUid;
+      }
+
+      // Runner events: same as pitchEvents - a partner creates, only the
+      // owner (and the owner's live mirror) edits or deletes.
+      match /runnerEvents/{eventId} {
         allow get, list: if signedIn() && uid() == ownerUid;
         allow get, list: if isActiveParticipantForThisGame();
 

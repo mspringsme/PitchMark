@@ -314,11 +314,7 @@ extension Pitcher {
     }
 
     var avatarInitials: String {
-        let parts = name
-            .split(whereSeparator: { $0.isWhitespace })
-            .prefix(2)
-        let initials = parts.compactMap { $0.first }.map(String.init).joined()
-        return initials.isEmpty ? "P" : initials.uppercased()
+        NumberOnlyName.avatarText(for: name, fallback: "P")
     }
 }
 
@@ -411,6 +407,46 @@ extension UIImage {
     }
 }
 
+/// A player entered by number only (2026-11-05) is saved with the name
+/// "#12" - no separate flag, so every screen that shows a name already
+/// reads sensibly, and their avatar shows the whole number.
+enum NumberOnlyName {
+    /// "#12" for a number-only player.
+    static func name(forJersey jersey: String) -> String {
+        "#" + jersey.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The number when `name` is a number-only name, else nil.
+    static func number(in name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("#") else { return nil }
+        let rest = trimmed.dropFirst()
+        guard !rest.isEmpty, rest.count <= 4, !rest.contains(where: { $0.isWhitespace || $0 == "#" }) else { return nil }
+        return String(rest)
+    }
+
+    /// What an avatar circle shows: the whole number for a number-only
+    /// player, otherwise up to two initials (`fallback` when there are none).
+    static func avatarText(for name: String, fallback: String) -> String {
+        if let number = number(in: name) { return number }
+        let parts = name.split(whereSeparator: { $0.isWhitespace }).prefix(2)
+        let initials = parts.compactMap { $0.first }.map(String.init).joined()
+        return initials.isEmpty ? fallback : initials.uppercased()
+    }
+
+    /// The name to save from an add/edit form, or nil when it can't be
+    /// saved: number only needs a jersey, otherwise a name is needed.
+    static func savedName(typed: String, jersey: String, numberOnly: Bool) -> String? {
+        if numberOnly {
+            let number = jersey.trimmingCharacters(in: .whitespaces)
+            guard !number.isEmpty, number.count <= 4, !number.contains(where: { $0.isWhitespace }) else { return nil }
+            return name(forJersey: number)
+        }
+        let trimmed = typed.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 struct PitcherAvatarView: View {
     let pitcher: Pitcher?
     var size: CGFloat = 28
@@ -444,6 +480,9 @@ struct PitcherAvatarView: View {
             } else {
                 Text(pitcher?.avatarInitials ?? "P")
                     .font(.system(size: size * 0.42, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .padding(.horizontal, size * 0.08)
                     .foregroundStyle(.white)
             }
         }

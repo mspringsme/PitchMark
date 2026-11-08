@@ -57,6 +57,28 @@ struct PitchStatsSnapshot {
 }
 
 enum PitchStatsCalculator {
+    /// A strikeout, however it was recorded - an explicit K/ꓘ or a third
+    /// strike stored at 0-0 (AtBatCountRules.endOfAtBat), the same rule the
+    /// hitter's line uses.
+    static func isStrikeout(_ event: PitchEvent) -> Bool {
+        event.atBatEnd == .strikeout
+    }
+
+    /// Called third strike: marked looking, or recorded as ꓘ.
+    static func isStrikeoutLooking(_ event: PitchEvent) -> Bool {
+        isStrikeout(event) && (event.strikeLooking || event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines) == "ꓘ")
+    }
+
+    static func isStrikeoutSwinging(_ event: PitchEvent) -> Bool {
+        isStrikeout(event) && !isStrikeoutLooking(event)
+    }
+
+    /// A walk, however it was recorded - "Walk"/"BB" or a fourth ball
+    /// stored at 0-0.
+    static func isWalk(_ event: PitchEvent) -> Bool {
+        event.atBatEnd == .walk
+    }
+
     static func snapshot(for events: [PitchEvent]) -> PitchStatsSnapshot {
         let strikePitches = events.filter { inferredPitchResultType(for: $0) == .strike }.count
         let ballPitches = events.filter { inferredPitchResultType(for: $0) == .ball }.count
@@ -92,10 +114,7 @@ enum PitchStatsCalculator {
                 let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 return outcome.caseInsensitiveCompare("Foul") == .orderedSame || event.isFoulInferred || event.foulMarker != nil
             }.count,
-            walkCount: events.filter { event in
-                guard let outcome = event.outcome?.trimmingCharacters(in: .whitespacesAndNewlines), !outcome.isEmpty else { return false }
-                return outcome == "BB" || outcome == "Walk"
-            }.count,
+            walkCount: events.filter(isWalk).count,
             hitCount: events.filter(pitchEventIsCreditedHit).count,
             wildPitchCount: events.filter { $0.wildPitch }.count,
             passedBallCount: events.filter { $0.passedBall }.count,
@@ -103,5 +122,59 @@ enum PitchStatsCalculator {
             pitchBreakdown: pitchBreakdown,
             outcomeBreakdown: outcomeBreakdown
         )
+    }
+}
+
+/// What the pitcher stats heatmap shows: one pitch type's coach-mode pitches
+/// (`supportsLocationAnalytics`), optionally only those recorded in or out of
+/// the zone. Pitch names are compared trimmed - the picker lists trimmed
+/// names, so an untrimmed "Fastball " used to drop out of its own map.
+enum HeatmapSelection {
+    enum Zone { case all, strikes, balls }
+
+    static func pitchName(_ event: PitchEvent) -> String {
+        event.pitch.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func eligible(_ events: [PitchEvent]) -> [PitchEvent] {
+        events.filter { $0.supportsLocationAnalytics && !pitchName($0).isEmpty }
+    }
+
+    static func pitchTypes(_ events: [PitchEvent]) -> [String] {
+        Set(eligible(events).map(pitchName))
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    static func counts(_ events: [PitchEvent]) -> [String: Int] {
+        Dictionary(grouping: eligible(events), by: pitchName).mapValues(\.count)
+    }
+
+    static func events(_ events: [PitchEvent], pitch: String, zone: Zone) -> [PitchEvent] {
+        eligible(events)
+            .filter { pitchName($0) == pitch }
+            .filter { event in
+                switch zone {
+                case .all: return true
+                case .strikes: return isStrikeZone(event.location)
+                case .balls: return !isStrikeZone(event.location)
+                }
+            }
+            .sorted { $0.timestamp < $1.timestamp }
+    }
+
+    /// "Strike …" / "Ball …", or one of the old unprefixed in-zone labels.
+    static func isStrikeZone(_ rawLocation: String) -> Bool {
+        let lower = rawLocation.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.hasPrefix("strike ") { return true }
+        if lower.hasPrefix("ball ") { return false }
+        let legacyStrikeLabels: Set<String> = [
+            "up & out", "up", "up & in",
+            "out", "middle", "in",
+            "↓ & out", "↓", "↓ & in",
+            "down & out", "down", "down & in",
+            "low & out", "low", "low & in",
+            "high"
+        ]
+        return legacyStrikeLabels.contains(lower)
     }
 }
