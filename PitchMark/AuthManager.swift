@@ -940,7 +940,7 @@ class AuthManager: ObservableObject {
             "sharedWith": template.sharedWith,
             "sharedWithEmails": template.sharedWithEmails,
             "updatedAt": FieldValue.serverTimestamp()
-        ]
+        ].merging(template.printSizeFirestoreFields) { $1 }
         
         templateRef.setData(data) { error in
             if let error = error {
@@ -1197,7 +1197,7 @@ class AuthManager: ObservableObject {
                     let sharedWith = data["sharedWith"] as? [String] ?? []
                     let sharedWithEmails = data["sharedWithEmails"] as? [String] ?? []
 
-                    let template = PitchTemplate(
+                    var template = PitchTemplate(
                         id: templateId,
                         name: name,
                         pitches: pitches,
@@ -1218,6 +1218,7 @@ class AuthManager: ObservableObject {
                         strikeLocationCells: strikeLocationCells,
                         ballsLocationCells: ballsLocationCells
                     )
+                    if let size = PitchTemplate.savedPrintSize(data) { template.setPrintSize(size) }
 
                     templatesById[templateId] = template
                 }
@@ -1816,7 +1817,7 @@ class AuthManager: ObservableObject {
                 let isEncrypted = data["isEncrypted"] as? Bool ?? false
                 let codeMode = PitchCodeMode(rawValue: data["codeMode"] as? String ?? "") ?? .advanced
 
-                return PitchTemplate(
+                var template = PitchTemplate(
                     id: UUID(uuidString: id) ?? UUID(),
                     name: name,
                     pitches: pitches,
@@ -1834,6 +1835,8 @@ class AuthManager: ObservableObject {
                     strikeLocationCells: strikeLocationCells,
                     ballsLocationCells: ballsLocationCells
                 )
+                if let size = PitchTemplate.savedPrintSize(data) { template.setPrintSize(size) }
+                return template
             }
         } catch {
             debugLog("❌ loadTemplate(async) error:", error.localizedDescription)

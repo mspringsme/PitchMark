@@ -543,6 +543,12 @@ struct PitchTemplate: Identifiable, Hashable, Codable {
     var codeMode: PitchCodeMode = .advanced
     var strikeLocationCells: [[String]] = []          // 3 x 3, single-character-per-cell, used only when codeMode == .normal
     var ballsLocationCells: [[String]] = []           // 3 x 3, same; [1][1] is the disabled "Ball, Middle" cell
+
+    // The printed key's size, chosen in its editor (2026-11-10). Optional:
+    // keys saved before then have none and print at the default
+    // (GridKeyPrint.swift, PitchMark only).
+    var printWidthInches: Double? = nil
+    var printHeightInches: Double? = nil
 }
 
 enum BatterSide: String, CaseIterable, Identifiable, Codable {

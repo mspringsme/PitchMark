@@ -45,7 +45,25 @@ private struct FulfillmentOrder: Identifiable {
     let shippingCountry: String
     let orderedTemplateSnapshotJson: String
     let retailProductId: String
+    /// The size saved with the order. Only custom orders need it; standard
+    /// sizes come from the product id.
+    let orderedPrintSize: GridKeyPrintSize?
     let archivedAt: Date?
+
+    /// Printed on a card (grid keys, Batter & Runner Grids), not the sheet.
+    var isGridKey: Bool {
+        GridKeyProduct.printsOnCard(retailProductId)
+    }
+
+    var gridKeyPrintSize: GridKeyPrintSize? {
+        GridKeyProduct.printSize(productId: retailProductId, custom: orderedPrintSize)
+    }
+
+    /// Set when the PDF can't be made at the size the customer bought -
+    /// custom orders placed before sizes were saved with the order.
+    var printSizeProblem: String? {
+        GridKeyProduct.printSizeProblem(productId: retailProductId, orderedSize: orderedPrintSize)
+    }
 
     var shippingAddressBlock: String {
         let parts = [
@@ -104,10 +122,15 @@ private final class RetailFulfillmentAdminViewModel: ObservableObject {
                 let status = FulfillmentStatus(rawValue: data["fulfillmentStatus"] as? String ?? "") ?? .new
                 let templateName = (data["storeTemplateName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let fallback = (data["retailProductId"] as? String) ?? document.documentID
+                let orderedPrintSize = GridKeyProduct.orderPrintSize(data)
+                let baseTitle = templateName.isEmpty ? fallback : templateName
+                let sizedTitle = GridKeyProduct.isCustom(data["retailProductId"] as? String ?? "")
+                    ? "\(baseTitle) (\(orderedPrintSize?.label ?? "size not recorded"))"
+                    : baseTitle
 
                 return FulfillmentOrder(
                     id: document.documentID,
-                    title: templateName.isEmpty ? fallback : templateName,
+                    title: sizedTitle,
                     customerEmail: data["customerEmail"] as? String ?? "",
                     amountText: amountText,
                     createdAtText: createdAtText,
@@ -124,6 +147,7 @@ private final class RetailFulfillmentAdminViewModel: ObservableObject {
                     shippingCountry: (data["shippingAddress"] as? [String: Any])?["country"] as? String ?? "",
                     orderedTemplateSnapshotJson: data["orderedTemplateSnapshotJson"] as? String ?? "",
                     retailProductId: data["retailProductId"] as? String ?? "",
+                    orderedPrintSize: orderedPrintSize,
                     archivedAt: (data["archivedAt"] as? Timestamp)?.dateValue()
                 )
             }
@@ -283,6 +307,7 @@ struct RetailFulfillmentAdminView: View {
 
         Order ID: \(order.id)
         Item: \(order.title)
+        Print Size: \(order.gridKeyPrintSize?.label ?? (order.isGridKey ? "NOT RECORDED" : "8.5 x 11 in"))
         Amount: \(order.amountText)
         Order Date: \(order.createdAtText)
         Customer Email: \(order.customerEmail)
@@ -308,77 +333,37 @@ struct RetailFulfillmentAdminView: View {
 
     private func makeOrderPrintPDF(for order: FulfillmentOrder) -> URL? {
         guard !order.orderedTemplateSnapshotJson.isEmpty else { return nil }
+        if order.retailProductId == SignGridCallingCardPrint.waterproofProductId {
+            let safeId = order.id.replacingOccurrences(of: "/", with: "_")
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("order_print_\(safeId).pdf")
+            return SignGridCallingCardPrint.writeWaterproofOrderPDF(
+                snapshotJson: order.orderedTemplateSnapshotJson,
+                to: url
+            ) ? url : nil
+        }
+        if order.retailProductId == GridKeyProduct.signGridProductId {
+            let safeId = order.id.replacingOccurrences(of: "/", with: "_")
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("order_print_\(safeId).pdf")
+            return SignGridPrint.writeOrderPDF(
+                snapshotJson: order.orderedTemplateSnapshotJson,
+                orderedSize: order.orderedPrintSize,
+                to: url
+            ) ? url : nil
+        }
         guard let data = order.orderedTemplateSnapshotJson.data(using: .utf8) else { return nil }
         guard let snapshot = try? JSONDecoder().decode(PitchTemplate.self, from: data) else { return nil }
 
         if order.retailProductId == "sheet_8_5x11" {
             return makePrintableSheetPDF(for: snapshot, orderId: order.id)
         }
-        return makeGridKeyPDF(for: snapshot, orderId: order.id, retailProductId: order.retailProductId)
+        return makeGridKeyPDF(for: snapshot, order: order)
     }
 
-    private func makeGridKeyPDF(for template: PitchTemplate, orderId: String, retailProductId: String) -> URL? {
-        let sizeInches: CGSize
-        switch retailProductId {
-        case "grid_3_5x2_75":
-            sizeInches = CGSize(width: 3.5, height: 2.75)
-        case "grid_custom":
-            sizeInches = CGSize(width: 5.0, height: 3.0)
-        default:
-            sizeInches = CGSize(width: 5.0, height: 3.0)
-        }
-
-        let pointsPerInch: CGFloat = 72
-        let targetSize = CGSize(width: sizeInches.width * pointsPerInch, height: sizeInches.height * pointsPerInch)
-        let baseContentSize = PrintableEncryptedGridsView.baseContentSize(for: template.pitchGridValues)
-        let outerPadding: CGFloat = 24
-        let contentSize = CGSize(
-            width: baseContentSize.width + (outerPadding * 2),
-            height: baseContentSize.height + (outerPadding * 2)
-        )
-        let scaleFactor = min(targetSize.width / max(contentSize.width, 1), targetSize.height / max(contentSize.height, 1))
-
-        let printableView = PrintableEncryptedGridsView(
-            grid: template.pitchGridValues,
-            pitchHeaders: template.pitchGridHeaders,
-            strikeTopRow: template.strikeTopRow,
-            strikeRows: template.strikeRows,
-            ballsTopRow: template.ballsTopRow,
-            ballsRows: template.ballsRows,
-            pitchFirstColors: template.pitchFirstColors,
-            locationFirstColors: template.locationFirstColors,
-            outerPadding: outerPadding,
-            scale: scaleFactor,
-            textScale: 1.5,
-            codeMode: template.codeMode,
-            strikeLocationCells: template.strikeLocationCells,
-            ballsLocationCells: template.ballsLocationCells
-        )
-
-        guard let image = printableView.renderAsPNG(size: targetSize, scale: 3.0, alignment: .center) else {
-            return nil
-        }
-
-        let safeId = orderId.replacingOccurrences(of: "/", with: "_")
+    private func makeGridKeyPDF(for template: PitchTemplate, order: FulfillmentOrder) -> URL? {
+        guard let size = order.gridKeyPrintSize else { return nil }
+        let safeId = order.id.replacingOccurrences(of: "/", with: "_")
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("order_print_\(safeId).pdf")
-        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: targetSize))
-
-        do {
-            try renderer.writePDF(to: url) { context in
-                context.beginPage()
-                image.draw(in: CGRect(origin: .zero, size: targetSize))
-                let guideRect = CGRect(origin: .zero, size: targetSize).insetBy(dx: 8, dy: 8)
-                let guidePath = UIBezierPath(roundedRect: guideRect, cornerRadius: 6)
-                UIColor.black.withAlphaComponent(0.16).setStroke()
-                guidePath.setLineDash([5, 4], count: 2, phase: 0)
-                guidePath.lineWidth = 1
-                guidePath.stroke()
-            }
-            return url
-        } catch {
-            debugLog("❌ Failed to generate grid print PDF:", error.localizedDescription)
-            return nil
-        }
+        return GridKeyPrint.writePDF(for: template, size: size, to: url) ? url : nil
     }
 
     private func makePrintableSheetPDF(for template: PitchTemplate, orderId: String) -> URL? {
@@ -483,10 +468,17 @@ private struct RetailFulfillmentOrderRow: View {
             }
             .buttonStyle(.bordered)
 
+            if let problem = order.printSizeProblem {
+                Text(problem)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+
             Button("Generate Print PDF") {
                 onGeneratePrintPDF(order)
             }
             .buttonStyle(.borderedProminent)
+            .disabled(order.printSizeProblem != nil)
 
             if order.isArchived {
                 Button("Unarchive Order") {

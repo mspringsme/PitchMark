@@ -9,6 +9,7 @@ private struct RetailOrderHistoryItem: Identifiable {
     let storeTemplateName: String
     let templateName: String
     let retailProductId: String
+    let printSize: GridKeyPrintSize?
     let amountTotalCents: Int?
     let currency: String
     let customerEmail: String
@@ -32,9 +33,16 @@ private struct RetailOrderHistoryItem: Identifiable {
     }
 
     var titleText: String {
-        if !storeTemplateName.isEmpty { return storeTemplateName }
-        if !templateName.isEmpty { return templateName }
-        return retailProductId.isEmpty ? "Order" : retailProductId
+        let base: String
+        if !storeTemplateName.isEmpty {
+            base = storeTemplateName
+        } else if !templateName.isEmpty {
+            base = templateName
+        } else {
+            base = retailProductId.isEmpty ? "Order" : retailProductId
+        }
+        guard GridKeyProduct.isCustom(retailProductId), let printSize else { return base }
+        return "\(base) (\(printSize.label))"
     }
 
     var dateText: String {
@@ -93,6 +101,7 @@ private final class RetailOrderHistoryViewModel: ObservableObject {
                     storeTemplateName: data["storeTemplateName"] as? String ?? "",
                     templateName: data["templateName"] as? String ?? "",
                     retailProductId: data["retailProductId"] as? String ?? "",
+                    printSize: GridKeyProduct.orderPrintSize(data),
                     amountTotalCents: centsValue(from: data["amountTotal"]),
                     currency: data["currency"] as? String ?? "usd",
                     customerEmail: data["customerEmail"] as? String ?? "",

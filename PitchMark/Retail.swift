@@ -124,6 +124,41 @@ struct StorefrontView: View {
                     }
                 }
 
+                Section(header: Text("Batting Bases & Fielding")) {
+                    Text("Your own sign grids, printed at the size you chose")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 8, trailing: 16))
+
+                    ForEach(signGridTemplates) { template in
+                        NavigationLink(value: StorefrontRoute.product(template)) {
+                            HStack(spacing: 12) {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(.gray.opacity(0.15))
+                                    .frame(width: 56, height: 56)
+                                    .overlay(
+                                        Image(systemName: template.icon)
+                                            .font(.title3)
+                                            .foregroundStyle(.secondary)
+                                    )
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(template.name)
+                                        .font(.headline)
+                                    Text(template.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Text(template.price, format: .currency(code: "USD"))
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                }
 
                 Section(header: Text("PitchMark Pro")) {
                     VStack(alignment: .leading, spacing: 10) {
@@ -242,6 +277,10 @@ struct StorefrontView: View {
                         TemplateDetailView(template: template)
                     case .printableSheet:
                         PrintableSheetDetailView(template: template)
+                    case .signGrid:
+                        SignGridStoreDetailView(template: template)
+                    case .callingCard:
+                        CallingCardStoreDetailView(template: template)
                     }
                 case .checkoutReceipt:
                     RetailOrderHistoryView(uid: authManager.user?.uid ?? "", showReceiptOnLoad: true)
@@ -465,6 +504,8 @@ struct StorefrontView_Previews: PreviewProvider {
 private enum StoreItemKind: Hashable {
     case gridKey
     case printableSheet
+    case signGrid
+    case callingCard
 }
 
 private enum StorefrontRoute: Hashable {
@@ -482,10 +523,16 @@ private struct StoreTemplate: Identifiable, Hashable {
     let retailProductId: String
 }
 
+/// One pitching key item, printed at the key's own size (2026-11-10) -
+/// the set 5 x 3 and 3.5 x 2.75 items are gone from the app. Their product
+/// ids stay on the server for older app builds and their orders.
 private let gridKeyTemplates: [StoreTemplate] = [
-    .init(name: "5 x 3 in.", subtitle: "4 inserts; 2 thicknesses (8 cards), Waterproof", icon: "squareshape.split.3x3", price: 12, kind: .gridKey, retailProductId: "grid_5x3"),
-    .init(name: "3.5 x 2.75 in.", subtitle: "4 inserts; 2 thicknesses (8 cards)", icon: "squareshape.split.3x3", price: 12, kind: .gridKey, retailProductId: "grid_3_5x2_75"),
-    .init(name: "Custom", subtitle: "4 inserts; 2 thicknesses (8 cards)", icon: "squareshape.split.3x3", price: 14, kind: .gridKey, retailProductId: "grid_custom")
+    .init(name: "Pitching Key", subtitle: "4 inserts; 2 thicknesses (8 cards), waterproof, printed at your key's size", icon: "squareshape.split.3x3", price: 14, kind: .gridKey, retailProductId: GridKeyProduct.customProductId)
+]
+
+private let signGridTemplates: [StoreTemplate] = [
+    .init(name: "Batter & Runner Grid", subtitle: "14 cards printed at your grid's size, plus the coach's calling card", icon: "tablecells", price: 20, kind: .signGrid, retailProductId: GridKeyProduct.signGridProductId),
+    .init(name: "Waterproof Calling Cards", subtitle: "4 pocket cards (4 1/4 x 5 1/2 in) of your grid's coach's calling card, waterproof", icon: "list.number", price: SignGridCallingCardPrint.waterproofPrice, kind: .callingCard, retailProductId: SignGridCallingCardPrint.waterproofProductId)
 ]
 
 private let printableSheetTemplates: [StoreTemplate] = [
@@ -509,148 +556,36 @@ private struct TemplateDetailView: View {
     @State private var animatePreviewWatermark: Bool = false
     @State private var pdfURL: URL? = nil
     @State private var showShareSheet = false
-    @State private var customWidthInches: Double = 3.0
-    @State private var customHeightInches: Double = 2.0
-    private let customWidthRange = 3.0...7.0
-    private let customHeightRange = 2.0...5.0
-
-    private var widthOptions: [Double] {
-        stride(from: customWidthRange.lowerBound, through: customWidthRange.upperBound, by: 0.25).map { $0 }
-    }
-
-    private var heightOptions: [Double] {
-        stride(from: customHeightRange.lowerBound, through: customHeightRange.upperBound, by: 0.25).map { $0 }
-    }
+    /// What this order prints at: the key's own size, chosen in its editor.
+    /// The same value the preview, the free PDF and checkout use.
+    private var printSize: GridKeyPrintSize? { selectedTemplate?.printSize }
 
     private func formatInches(_ value: Double) -> String {
-        let rounded = (value * 4).rounded() / 4
-        let whole = Int(rounded)
-        let fraction = Int((rounded - Double(whole)) * 4)
-        switch fraction {
-        case 1:
-            return "\(whole) 1/4 in"
-        case 2:
-            return "\(whole) 1/2 in"
-        case 3:
-            return "\(whole) 3/4 in"
-        default:
-            return "\(whole) in"
-        }
-    }
-
-    private func selectedSizeInches(for storeTemplate: StoreTemplate) -> CGSize {
-        let name = storeTemplate.name.lowercased()
-        if name.contains("5 x 3") {
-            return CGSize(width: 5.0, height: 3.0)
-        }
-        if name.contains("3.5 x 2.75") {
-            return CGSize(width: 3.5, height: 2.75)
-        }
-        if name.contains("custom") {
-            return CGSize(width: customWidthInches, height: customHeightInches)
-        }
-        return CGSize(width: 5.0, height: 3.0)
+        "\(GridKeyPrintSize.inchText(value)) in"
     }
 
     private func generatePreviewImage(for template: PitchTemplate, storeTemplate: StoreTemplate) {
-        let sizeInches = selectedSizeInches(for: storeTemplate)
-        let pointsPerInch: CGFloat = 72
-        let targetSize = CGSize(width: sizeInches.width * pointsPerInch,
-                                height: sizeInches.height * pointsPerInch)
-
-        let baseContentSize = PrintableEncryptedGridsView.baseContentSize(for: template.pitchGridValues)
-        let outerPadding: CGFloat = 24
-        let contentSize = CGSize(
-            width: baseContentSize.width + (outerPadding * 2),
-            height: baseContentSize.height + (outerPadding * 2)
-        )
-        let scaleFactor = min(targetSize.width / max(contentSize.width, 1),
-                              targetSize.height / max(contentSize.height, 1))
-        let textScale: CGFloat = 1.5
-
-        let preview = PrintableEncryptedGridsView(
-            grid: template.pitchGridValues,
-            pitchHeaders: template.pitchGridHeaders,
-            strikeTopRow: template.strikeTopRow,
-            strikeRows: template.strikeRows,
-            ballsTopRow: template.ballsTopRow,
-            ballsRows: template.ballsRows,
-            pitchFirstColors: template.pitchFirstColors,
-            locationFirstColors: template.locationFirstColors,
-            outerPadding: outerPadding,
-            scale: scaleFactor,
-            textScale: textScale,
-            codeMode: template.codeMode,
-            strikeLocationCells: template.strikeLocationCells,
-            ballsLocationCells: template.ballsLocationCells
-        )
-
-        if let img = preview.renderAsPNG(size: targetSize, scale: 2.0, alignment: Alignment.center) {
+        guard let printSize else { return }
+        if let img = GridKeyPrint.image(for: template, size: printSize, pixelScale: 2.0) {
             self.renderedPreview = img
         }
     }
 
     private func buildInsertPDFURL(for template: PitchTemplate, storeTemplate: StoreTemplate) -> URL? {
-        let sizeInches = selectedSizeInches(for: storeTemplate)
-        let pointsPerInch: CGFloat = 72
-        let targetSize = CGSize(width: sizeInches.width * pointsPerInch,
-                                height: sizeInches.height * pointsPerInch)
-
-        let baseContentSize = PrintableEncryptedGridsView.baseContentSize(for: template.pitchGridValues)
-        let outerPadding: CGFloat = 24
-        let contentSize = CGSize(
-            width: baseContentSize.width + (outerPadding * 2),
-            height: baseContentSize.height + (outerPadding * 2)
-        )
-        let scaleFactor = min(targetSize.width / max(contentSize.width, 1),
-                              targetSize.height / max(contentSize.height, 1))
-        let textScale: CGFloat = 1.5
-
-        let printableView = PrintableEncryptedGridsView(
-            grid: template.pitchGridValues,
-            pitchHeaders: template.pitchGridHeaders,
-            strikeTopRow: template.strikeTopRow,
-            strikeRows: template.strikeRows,
-            ballsTopRow: template.ballsTopRow,
-            ballsRows: template.ballsRows,
-            pitchFirstColors: template.pitchFirstColors,
-            locationFirstColors: template.locationFirstColors,
-            outerPadding: outerPadding,
-            scale: scaleFactor,
-            textScale: textScale,
-            codeMode: template.codeMode,
-            strikeLocationCells: template.strikeLocationCells,
-            ballsLocationCells: template.ballsLocationCells
-        )
-
-        guard let image = printableView.renderAsPNG(size: targetSize, scale: 3.0, alignment: .center) else {
-            return nil
-        }
-
-        let safeName = storeTemplate.name
+        guard let printSize else { return nil }
+        let safeName = printSize.label
             .replacingOccurrences(of: " ", with: "_")
             .replacingOccurrences(of: ".", with: "")
             .replacingOccurrences(of: "/", with: "-")
-        let filename = "PitchMark_GridKey_\(safeName).pdf"
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: targetSize))
-
-        do {
-            try renderer.writePDF(to: url, withActions: { context in
-                context.beginPage()
-                image.draw(in: CGRect(origin: .zero, size: targetSize))
-            })
-            return url
-        } catch {
-            return nil
-        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("PitchMark_GridKey_\(safeName).pdf")
+        return GridKeyPrint.writePDF(for: template, size: printSize, to: url) ? url : nil
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                let sizeInches = selectedSizeInches(for: template)
-                let ratio = max(sizeInches.width, 0.01) / max(sizeInches.height, 0.01)
+                let sizeInches = printSize ?? PitchTemplate.defaultPrintSize
+                let ratio = max(sizeInches.widthInches, 0.01) / max(sizeInches.heightInches, 0.01)
 
                 RoundedRectangle(cornerRadius: 12)
                     .fill(.white)
@@ -738,55 +673,6 @@ private struct TemplateDetailView: View {
                 }
                 .buttonStyle(.bordered)
 
-                if template.name == "Custom" {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Custom Size (inches)")
-                            .font(.headline)
-
-                        HStack(spacing: 12) {
-                            Menu {
-                                ForEach(widthOptions, id: \.self) { value in
-                                    Button(formatInches(value)) {
-                                        customWidthInches = value
-                                    }
-                                }
-                            } label: {
-                                HStack {
-                                    Text("Width")
-                                        .font(.subheadline.weight(.semibold))
-                                    Spacer()
-                                    Text(formatInches(customWidthInches))
-                                        .font(.subheadline)
-                                    Image(systemName: "chevron.up.chevron.down")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.vertical, 8)
-                            }
-                            .buttonStyle(.bordered)
-
-                            Menu {
-                                ForEach(heightOptions, id: \.self) { value in
-                                    Button(formatInches(value)) {
-                                        customHeightInches = value
-                                    }
-                                }
-                            } label: {
-                                HStack {
-                                    Text("Height")
-                                        .font(.subheadline.weight(.semibold))
-                                    Spacer()
-                                    Text(formatInches(customHeightInches))
-                                        .font(.subheadline)
-                                    Image(systemName: "chevron.up.chevron.down")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.vertical, 8)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-                }
-
                 Button {
                     guard let current = selectedTemplate else { return }
                     generatePreviewImage(for: current, storeTemplate: template)
@@ -801,14 +687,10 @@ private struct TemplateDetailView: View {
                 .buttonStyle(.bordered)
 
                 Button {
-                    guard let current = selectedTemplate else { return }
+                    guard let current = selectedTemplate,
+                          let request = RetailCheckoutRequest.gridKey(current, storeTemplateName: template.name) else { return }
                     Task {
-                        await stripeCheckoutManager.beginCheckout(
-                            retailProductId: template.retailProductId,
-                            kind: template.kind,
-                            selectedTemplate: current,
-                            storeTemplate: template
-                        )
+                        await stripeCheckoutManager.beginCheckout(request)
                         if let checkoutURL = stripeCheckoutManager.checkoutURL {
                             openURL(checkoutURL)
                         }
@@ -818,7 +700,17 @@ private struct TemplateDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(selectedTemplate == nil || stripeCheckoutManager.isLoading)
+                .disabled(selectedTemplate == nil || printSize == nil || stripeCheckoutManager.isLoading)
+
+                if let current = selectedTemplate {
+                    Text(current.printSize.map { "Prints at \($0.label). Change the size in the key's editor on Home." }
+                         ?? "This key's size can't be printed. Pick a new size in its editor on Home.")
+                        .font(.footnote)
+                        .foregroundStyle(current.printSize == nil ? .red : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .multilineTextAlignment(.center)
+                        .accessibilityIdentifier("store.gridKey.printsAt")
+                }
 
                 if stripeCheckoutManager.isLoading {
                     ProgressView("Preparing checkout…")
@@ -875,15 +767,152 @@ private struct TemplateDetailView: View {
             .presentationDetents([.medium])
             .fixedAppDynamicType()
         }
-        .onChange(of: customWidthInches) { _, _ in
-            guard template.name.lowercased().contains("custom"),
-                  let current = selectedTemplate else { return }
-            generatePreviewImage(for: current, storeTemplate: template)
+    }
+}
+
+// MARK: - Batter & Runner Grid
+
+/// Orders a Batter & Runner Grid. The size comes from the grid itself -
+/// it's set in the grid's editor on Home, so the store has nothing to pick
+/// but which grid.
+private struct SignGridStoreDetailView: View {
+    let template: StoreTemplate
+
+    @EnvironmentObject var authManager: AuthManager
+    @Environment(\.openURL) private var openURL
+    @StateObject private var stripeCheckoutManager = StripeCheckoutManager()
+    @StateObject private var store = SignGridStore()
+    @State private var selectedGridId: String? = nil
+    @State private var pdfURL: URL? = nil
+    @State private var showShareSheet = false
+
+    private var selectedGrid: SignGrid? {
+        store.activeGrids.first { $0.id == selectedGridId } ?? store.activeGrids.first
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let grid = selectedGrid {
+                    GeometryReader { proxy in
+                        let size = grid.chosenSize
+                        let width = proxy.size.width
+                        let height = width * size.heightInches / max(size.widthInches, 0.01)
+                        SignGridCardView(grid: grid, size: CGSize(width: width, height: height))
+                            .overlay(Rectangle().stroke(Color.black.opacity(0.18), lineWidth: 1))
+                    }
+                    .aspectRatio(grid.widthInches / max(grid.heightInches, 0.01), contentMode: .fit)
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.white)
+                        .overlay(Image(systemName: template.icon).font(.largeTitle).foregroundStyle(.secondary))
+                        .aspectRatio(3.5 / 2.75, contentMode: .fit)
+                }
+
+                Text(template.name)
+                    .font(.title.bold())
+                Text(template.subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Text("Choose grid to ship")
+                    .font(.headline)
+
+                if store.activeGrids.isEmpty {
+                    Text("Make a grid on Home under Batting Bases & Fielding first.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Menu {
+                        ForEach(store.activeGrids) { grid in
+                            Button {
+                                selectedGridId = grid.id
+                            } label: {
+                                HStack {
+                                    Text(grid.name)
+                                    if selectedGrid?.id == grid.id { Image(systemName: "checkmark") }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "tablecells")
+                            Text(selectedGrid?.name ?? "Select Grid")
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down").foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button {
+                    guard let grid = selectedGrid, let size = grid.printSize else { return }
+                    let url = SignGridPrint.fileURL(for: grid)
+                    if SignGridPrint.writePDF(for: grid, size: size, to: url) {
+                        pdfURL = url
+                        showShareSheet = true
+                    }
+                } label: {
+                    Label("Download Free PDF", systemImage: "arrow.down.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(selectedGrid?.printSize == nil)
+
+                Button {
+                    guard let grid = selectedGrid,
+                          let request = RetailCheckoutRequest.signGrid(grid, storeTemplateName: template.name) else { return }
+                    Task {
+                        await stripeCheckoutManager.beginCheckout(request)
+                        if let checkoutURL = stripeCheckoutManager.checkoutURL {
+                            openURL(checkoutURL)
+                        }
+                    }
+                } label: {
+                    Label("Order Shipped Product for \(template.price, format: .currency(code: "USD"))", systemImage: "shippingbox")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedGrid?.printSize == nil || stripeCheckoutManager.isLoading)
+
+                if let grid = selectedGrid {
+                    Text(grid.printSize.map { "Prints at \($0.label). Change the size in the grid's editor on Home." }
+                         ?? "This grid's size can't be printed. Pick a new size in its editor on Home.")
+                        .font(.footnote)
+                        .foregroundStyle(grid.printSize == nil ? .red : .secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .multilineTextAlignment(.center)
+                }
+
+                if stripeCheckoutManager.isLoading {
+                    ProgressView("Preparing checkout…")
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                if let checkoutError = stripeCheckoutManager.lastErrorMessage ?? store.errorMessage {
+                    Text(checkoutError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding()
+            .padding(.top, 16)
         }
-        .onChange(of: customHeightInches) { _, _ in
-            guard template.name.lowercased().contains("custom"),
-                  let current = selectedTemplate else { return }
-            generatePreviewImage(for: current, storeTemplate: template)
+        .background(Color(.systemGray6))
+        .navigationTitle(template.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: authManager.user?.uid) {
+            store.start(uid: authManager.user?.uid)
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let url = pdfURL {
+                ShareSheet(items: [url])
+                    .fixedAppDynamicType()
+            }
         }
     }
 }
@@ -1020,7 +1049,13 @@ struct PrintableLocationSheetView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let headerHeight: CGFloat = 62
+            // Title row + spacing + legend row + its bottom padding + spacing,
+            // each pinned to these heights below so the blocks get exactly
+            // the rest of the page.
+            let titleRowHeight: CGFloat = 20
+            let legendRowHeight: CGFloat = 16
+            let legendBottomPadding: CGFloat = 6
+            let headerHeight = titleRowHeight + legendRowHeight + legendBottomPadding + (blockSpacing * 2)
             let availableHeight = proxy.size.height - (pagePadding * 2) - headerHeight
             let columns = locations.chunked(into: 2)
             let leftColumn = columns.first ?? []
@@ -1035,7 +1070,10 @@ struct PrintableLocationSheetView: View {
             let availableForCodes = max(0, tableWidth - pitchColumnWidth)
             let codeColumnWidth = availableForCodes / CGFloat(columnCount)
             let rowCount = max(printablePitchRows.count + 1, 2)
-            let rowHeight = max(16, blockHeight / CGFloat(rowCount))
+            // 16pt rows until the pitches would overrun the block, then
+            // shrink so every row stays on the page (8+ pitches ran off it).
+            let fittedRowHeight = blockHeight / CGFloat(max(printablePitchRows.count, 1))
+            let rowHeight = min(max(16, blockHeight / CGFloat(rowCount)), fittedRowHeight)
 
             VStack(alignment: .leading, spacing: blockSpacing) {
                 HStack(spacing: 12) {
@@ -1047,7 +1085,7 @@ struct PrintableLocationSheetView: View {
                     Text(title)
                         .font(.system(size: 14, weight: .medium))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: titleRowHeight, maxHeight: titleRowHeight, alignment: .leading)
 
                 HStack(spacing: 12) {
                     Image("Pitch Location code Key")
@@ -1075,8 +1113,8 @@ struct PrintableLocationSheetView: View {
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.bottom, 6)
+                .frame(maxWidth: .infinity, minHeight: legendRowHeight, maxHeight: legendRowHeight, alignment: .center)
+                .padding(.bottom, legendBottomPadding)
 
                 HStack(alignment: .top, spacing: columnSpacing) {
                     VStack(alignment: .leading, spacing: blockSpacing) {
@@ -1148,7 +1186,7 @@ struct PrintableLocationSheetView: View {
             Rectangle()
                 .stroke(Color.black, lineWidth: 1)
             Text(text)
-                .font(.system(size: 11, weight: bold ? .semibold : .regular, design: .monospaced))
+                .font(.system(size: min(11, height * 0.7), weight: bold ? .semibold : .regular, design: .monospaced))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.4)
@@ -1388,26 +1426,28 @@ private final class StripeCheckoutManager: ObservableObject {
         retailProductId: String,
         kind: StoreItemKind,
         selectedTemplate: PitchTemplate,
-        storeTemplate: StoreTemplate
+        storeTemplate: StoreTemplate,
+        printSize: GridKeyPrintSize? = nil
     ) async {
+        await beginCheckout(RetailCheckoutRequest(
+            retailProductId: retailProductId,
+            itemKind: kind == .gridKey ? "gridKey" : "printableSheet",
+            templateId: selectedTemplate.id.uuidString,
+            templateName: selectedTemplate.name,
+            storeTemplateName: storeTemplate.name,
+            templateSnapshotJson: RetailCheckoutRequest.snapshotJson(selectedTemplate),
+            printSize: printSize
+        ))
+    }
+
+    func beginCheckout(_ request: RetailCheckoutRequest) async {
         guard !isLoading else { return }
         isLoading = true
         lastErrorMessage = nil
         checkoutURL = nil
-        let requestFingerprint = [retailProductId, kind == .gridKey ? "gridKey" : "printableSheet", selectedTemplate.id.uuidString, storeTemplate.name]
-            .joined(separator: "|")
-        let idempotencyKey = idempotencyKeyByRequest[requestFingerprint] ?? makeIdempotencyKey()
-        idempotencyKeyByRequest[requestFingerprint] = idempotencyKey
-
-        let payload: [String: Any] = [
-            "retailProductId": retailProductId,
-            "itemKind": kind == .gridKey ? "gridKey" : "printableSheet",
-            "templateId": selectedTemplate.id.uuidString,
-            "templateName": selectedTemplate.name,
-            "storeTemplateName": storeTemplate.name,
-            "templateSnapshotJson": makeTemplateSnapshotJson(selectedTemplate),
-            "idempotencyKey": idempotencyKey
-        ]
+        let idempotencyKey = idempotencyKeyByRequest[request.fingerprint] ?? makeIdempotencyKey()
+        idempotencyKeyByRequest[request.fingerprint] = idempotencyKey
+        let payload = request.payload(idempotencyKey: idempotencyKey)
 
         do {
             let callable = Functions.functions().httpsCallable("createRetailCheckoutSession")
@@ -1433,15 +1473,6 @@ private final class StripeCheckoutManager: ObservableObject {
 
     private func makeIdempotencyKey() -> String {
         "pm_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
-    }
-
-    private func makeTemplateSnapshotJson(_ template: PitchTemplate) -> String {
-        do {
-            let data = try JSONEncoder().encode(template)
-            return String(data: data, encoding: .utf8) ?? ""
-        } catch {
-            return ""
-        }
     }
 
     private func userFacingCheckoutErrorMessage(from error: Error) -> String {
@@ -1679,5 +1710,140 @@ private struct RetailGridStaticPreview: View {
         let totalWidth = paletteWidth + spacerWidth + rightWidth + trailingPadding
         let totalHeight = max(paletteHeight, rightHeight)
         return CGSize(width: totalWidth, height: totalHeight)
+    }
+}
+
+/// Waterproof Calling Cards (2026-11-10): 4 copies of one grid's pocket
+/// calling card, cut from one letter sheet, $8.
+private struct CallingCardStoreDetailView: View {
+    let template: StoreTemplate
+
+    @EnvironmentObject var authManager: AuthManager
+    @Environment(\.openURL) private var openURL
+    @StateObject private var stripeCheckoutManager = StripeCheckoutManager()
+    @StateObject private var store = SignGridStore()
+    @State private var selectedGridId: String? = nil
+    @State private var pdfURL: URL? = nil
+    @State private var showShareSheet = false
+
+    private var selectedGrid: SignGrid? {
+        store.activeGrids.first { $0.id == selectedGridId } ?? store.activeGrids.first
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                if let grid = selectedGrid {
+                    // The pocket card as it prints.
+                    SignGridCallingCardPagePreview(card: SignGridCallingCard(grid: grid), format: .pocket)
+                        .overlay(Rectangle().stroke(Color.black.opacity(0.18), lineWidth: 1))
+                        .frame(maxWidth: 300)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.white)
+                        .overlay(Image(systemName: template.icon).font(.largeTitle).foregroundStyle(.secondary))
+                        .aspectRatio(306.0 / 396.0, contentMode: .fit)
+                        .frame(maxWidth: 300)
+                        .frame(maxWidth: .infinity)
+                }
+
+                Text(template.name)
+                    .font(.title.bold())
+                    .accessibilityIdentifier("store.callingCard.title")
+                Text(template.subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                Text("Choose grid")
+                    .font(.headline)
+
+                if store.activeGrids.isEmpty {
+                    Text("Make a grid on Home under Batting Bases & Fielding first.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Menu {
+                        ForEach(store.activeGrids) { grid in
+                            Button {
+                                selectedGridId = grid.id
+                            } label: {
+                                HStack {
+                                    Text(grid.name)
+                                    if selectedGrid?.id == grid.id { Image(systemName: "checkmark") }
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Image(systemName: "tablecells")
+                            Text(selectedGrid?.name ?? "Select Grid")
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down").foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Button {
+                    guard let grid = selectedGrid else { return }
+                    let url = SignGridCallingCardPrint.fileURL(for: grid, format: .pocket)
+                    if SignGridCallingCardPrint.writePDF(for: grid, format: .pocket, to: url) {
+                        pdfURL = url
+                        showShareSheet = true
+                    }
+                } label: {
+                    Label("Download Free Pocket PDF", systemImage: "arrow.down.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(selectedGrid == nil)
+
+                Button {
+                    guard let grid = selectedGrid else { return }
+                    let request = RetailCheckoutRequest.waterproofCallingCards(grid, storeTemplateName: template.name)
+                    Task {
+                        await stripeCheckoutManager.beginCheckout(request)
+                        if let checkoutURL = stripeCheckoutManager.checkoutURL {
+                            openURL(checkoutURL)
+                        }
+                    }
+                } label: {
+                    Label("Order Shipped Product for \(template.price, format: .currency(code: "USD"))", systemImage: "shippingbox")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedGrid == nil || stripeCheckoutManager.isLoading)
+
+                if stripeCheckoutManager.isLoading {
+                    ProgressView("Preparing checkout…")
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+
+                if let checkoutError = stripeCheckoutManager.lastErrorMessage ?? store.errorMessage {
+                    Text(checkoutError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding()
+            .padding(.top, 16)
+        }
+        .background(Color(.systemGray6))
+        .navigationTitle(template.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: authManager.user?.uid) {
+            store.start(uid: authManager.user?.uid)
+        }
+        .sheet(isPresented: $showShareSheet) {
+            if let url = pdfURL {
+                ShareSheet(items: [url])
+                    .fixedAppDynamicType()
+            }
+        }
     }
 }

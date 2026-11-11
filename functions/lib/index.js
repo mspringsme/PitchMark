@@ -45,16 +45,11 @@ const firestore_1 = require("firebase-admin/firestore");
 const app_store_server_library_1 = require("@apple/app-store-server-library");
 const stripe_1 = __importDefault(require("stripe"));
 const appleRootCertificates_1 = require("./appleRootCertificates");
+const gridKeyPrintSize_1 = require("./gridKeyPrintSize");
+const retailCatalog_1 = require("./retailCatalog");
 (0, app_1.initializeApp)();
 const db = (0, firestore_1.getFirestore)();
 const auth = (0, auth_1.getAuth)();
-const retailCatalog = {
-    grid_5x3: { priceId: "price_1TWMl2HGR9piiykP6OCTEeNJ", label: "Grid Key 5 x 3", unitAmountCents: 1200 },
-    grid_3_5x2_75: { priceId: "price_1TWMlwHGR9piiykP0L1a4G1a", label: "Grid Key 3.5 x 2.75", unitAmountCents: 1200 },
-    grid_custom: { priceId: "price_1TWMmuHGR9piiykPW7qo1LHY", label: "Grid Key Custom", unitAmountCents: 1400 },
-    sheet_8_5x11: { priceId: "price_1TWMpLHGR9piiykPw9kDjvkm", label: "Printable Sheet 8.5 x 11", unitAmountCents: 1200 }
-};
-const allowedItemKinds = new Set(["gridKey", "printableSheet", ""]);
 const idempotencyKeyPattern = /^[a-zA-Z0-9._-]{8,80}$/;
 const checkoutThrottleWindowMs = 60_000;
 const checkoutThrottleMaxAttempts = 5;
@@ -578,13 +573,18 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
     if (!retailProductId) {
         throw new https_1.HttpsError("invalid-argument", "retailProductId is required.");
     }
-    if (!allowedItemKinds.has(itemKind)) {
+    if (!retailCatalog_1.allowedItemKinds.has(itemKind)) {
         throw new https_1.HttpsError("invalid-argument", "itemKind is invalid.");
     }
-    const catalogItem = retailCatalog[retailProductId];
+    const catalogItem = retailCatalog_1.retailCatalog[retailProductId];
     if (!catalogItem) {
         throw new https_1.HttpsError("invalid-argument", "Unknown retailProductId.");
     }
+    const printSizeResolution = (0, gridKeyPrintSize_1.resolveGridKeyPrintSize)(retailProductId, data.printWidthInches, data.printHeightInches);
+    if (!printSizeResolution.ok) {
+        throw new https_1.HttpsError("invalid-argument", printSizeResolution.message);
+    }
+    const printSize = printSizeResolution.size;
     if (idempotencyKey && !stripeTestMode) {
         const idemRef = db.collection("checkoutRequests").doc(request.auth.uid).collection("keys").doc(idempotencyKey);
         const idemSnap = await idemRef.get();
@@ -615,9 +615,13 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
         templateId: sanitizeMetadataValue(templateId, 128),
         templateName: sanitizeMetadataValue(templateName, 120),
         storeTemplateName: sanitizeMetadataValue(storeTemplateName, 120),
-        checkoutRequestKey: sanitizeMetadataValue(idempotencyKey, 80)
+        checkoutRequestKey: sanitizeMetadataValue(idempotencyKey, 80),
+        ...(printSize ? {
+            printWidthInches: String(printSize.widthInches),
+            printHeightInches: String(printSize.heightInches)
+        } : {})
     };
-    const lineItem = stripeTestMode ? {
+    const lineItem = (stripeTestMode || !catalogItem.priceId) ? {
         quantity: 1,
         price_data: {
             currency: shippingCurrency,
@@ -724,6 +728,8 @@ exports.createRetailCheckoutSession = (0, https_1.onCall)({ region: "us-central1
                 templateName,
                 storeTemplateName,
                 templateSnapshotJson,
+                printWidthInches: printSize?.widthInches ?? null,
+                printHeightInches: printSize?.heightInches ?? null,
                 checkoutConfigVersion,
                 stripeTestMode,
                 createdAt: firestore_1.FieldValue.serverTimestamp()
@@ -784,6 +790,7 @@ async function persistRetailOrder(session, fulfillmentState) {
             logger.error("Unable to load checkout request snapshot", { uid, checkoutRequestKey, error });
         }
     }
+    const printSize = (0, gridKeyPrintSize_1.printSizeFromMetadata)(metadata);
     const orderRef = db.collection("retailOrders").doc(sessionId);
     await db.runTransaction(async (tx) => {
         const [existingSnap, tombstoneSnapshot] = await Promise.all([
@@ -824,6 +831,8 @@ async function persistRetailOrder(session, fulfillmentState) {
             templateId: metadata.templateId ?? "",
             templateName: metadata.templateName ?? "",
             storeTemplateName: metadata.storeTemplateName ?? "",
+            printWidthInches: printSize?.widthInches ?? null,
+            printHeightInches: printSize?.heightInches ?? null,
             orderedTemplateSnapshotJson: templateSnapshotJson,
             fulfillmentStatus: typeof existing.fulfillmentStatus === "string" && existing.fulfillmentStatus
                 ? existing.fulfillmentStatus

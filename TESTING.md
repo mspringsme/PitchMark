@@ -22,6 +22,9 @@ xcodebuild test -scheme "Pitchmark Display" \
   -destination 'platform=iOS Simulator,name=iPhone 17' \
   -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO
 
+# Cloud Functions helpers (node:test, builds lib/ first)
+cd functions && npm test && cd ..
+
 # Firestore rules, against the local emulator (needs JDK 21+, see below)
 cd rules-tests && npm install && npm test
 ```
@@ -67,6 +70,27 @@ one lineup batter `#1`. UI tests find controls by accessibility identifier:
 `runners.bag.{1,2,3}` (value = runner label or `empty`), `count.{B,S,O}.{i}`
 (value `on`/`off`), `score.home` / `score.away` (value = runs),
 `runners.actions`, `runnerPicker.add`.
+
+**`-UITestSignGrids`** opens Batting Bases & Fielding grids alone (list + editor,
+in memory, nothing written): `signGrid.new`, `signGrid.name`,
+`signGrid.{rows,columns,grids}.{minus,plus,value}`, `signGrid.currentGrid`,
+`signGrid.previousGrid` / `nextGrid`, `signGrid.wire.{index}` (the whole-card
+wireframe), `signGrid.cell.{r}.{c}` (value = cell text), `signGrid.cellText`,
+`signGrid.style.{row,column,cell}.{b,f,n}` (value `On`/`Off`), `signGrid.fillColor` (the current grid's color),
+`signGrid.keyboardDone`, `signGrid.quickFill` (rows `signGrid.quickFill.{label}`), `signGrid.save`, `signGrid.row.{name}`,
+`signGrid.callingCard.{name}` (opens the calling card: `callingCard.call.{label}`, `callingCard.share`, `callingCard.done`),
+`signGrid.addToQuickFill` (on the keyboard), `signGrid.randomize` (sheet: `signGrid.randomize.pick.{label}` value `On`/`Off`, `signGrid.randomize.fill`).
+
+`HomeLayoutUITests` uses the real Home through Skip for Now (demo mode):
+`home.logo`, `home.armbandKeys`, `home.section.pitching`, `home.section.batting`. It also opens the store
+from Team Supplies and finds Waterproof Calling Cards (`store.callingCard.title`)
+and the one Pitching Key item (`store.gridKey.printsAt`), and opens a new
+pitching key's editor (`gridKey.printWidth` / `gridKey.printHeight`).
+
+**`-UITestHomeActions`** opens Home's row of three alone:
+`home.action.{supplies,join,account}`, `home.signedIn` (the signed-in
+line, plain text), and harness-only `harness.opened` (value `join` /
+`account`), `harness.store`, `harness.toggleSignIn`.
 
 Logic is tested through plain types pulled out of the views for this:
 `GameProgress` (tracker: bases, outs, score, runner events, undo),

@@ -6209,7 +6209,7 @@ struct PitchTrackerView: View {
                     requestCodeGridKeys(createNew: !allCodeGridKeysAreArchived)
                 } label: {
                     Label(
-                        allCodeGridKeysAreArchived ? "Open Code Grid Keys" : "Create a Key",
+                        allCodeGridKeysAreArchived ? "Open Pitching Keys" : "Create a Key",
                         systemImage: "key.badge.plus"
                     )
                 }
@@ -15464,7 +15464,7 @@ struct NoCodeGridKeyBlocker: View {
     }
 
     private var actionTitle: String {
-        allArchived ? "Open Code Grid Keys" : "Create a Key"
+        allArchived ? "Open Pitching Keys" : "Create a Key"
     }
 
     var body: some View {

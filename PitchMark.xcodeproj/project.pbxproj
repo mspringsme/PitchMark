@@ -101,6 +101,7 @@
 				FieldingPlay.swift,
 				FieldPositionsView.swift,
 				Games.swift,
+				GridKeyPrintSize.swift,
 				LineupFieldPositions.swift,
 				Notifications.swift,
 				"Pitch%.swift",

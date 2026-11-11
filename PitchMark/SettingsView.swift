@@ -1337,13 +1337,19 @@ struct SettingsView: View {
     /// sheet is gone (2026-10-21): Code Grid Keys and store became Home
     /// sections of their own and Sound Credits moved into the account
     /// sheet, so the sheet had nothing left to hold.
+    static let logoImageName = "SoftballBaseballWtitle4"
+
     private var homeHeaderRow: some View {
-        HStack {
-            Text("PitchMark")
-                .font(.title2.weight(.bold))
-            Spacer()
-        }
-        .padding(.horizontal)
+        Image(Self.logoImageName)
+            .resizable()
+            .scaledToFit()
+            .frame(height: 120)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .accessibilityElement()
+            .accessibilityLabel("PitchMark")
+            .accessibilityAddTraits([.isHeader, .isImage])
+            .accessibilityIdentifier("home.logo")
+            .padding(.horizontal)
     }
 
     private enum HomeOverviewSection {
@@ -1351,6 +1357,7 @@ struct SettingsView: View {
         case teams
         case players
         case templates
+        case signGrids
     }
 
     /// Shared collapsible-header row for Home's two accordion sections -
@@ -2092,9 +2099,10 @@ struct SettingsView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Text("Code Grid Keys")
+                        Text("Pitching")
                             .font(.headline)
                             .foregroundStyle(.primary)
+                            .accessibilityIdentifier("home.section.pitching")
                         Image(systemName: "chevron.down")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
@@ -2514,54 +2522,16 @@ struct SettingsView: View {
         }
     }
 
-    private var joinGameButtonLabel: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "person.2")
-                .font(.subheadline.weight(.semibold))
-            Text("Join Someone's Game")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+    /// Join a Game (Home's row of three): the QR scanner, Pro only.
+    private func startJoinFlow() {
+        if !subscriptionManager.isPro {
+            proGateMessage = "Joining games requires PitchMark Pro."
+            showProGateAlert = true
+            return
         }
-        .foregroundColor(.black)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(
-            Capsule().fill(Color.black.opacity(0.06))
-        )
-        .overlay(
-            Capsule().stroke(Color.black, lineWidth: 1)
-        )
-    }
-
-    private var accountFooterButtonLabel: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "person.crop.circle")
-                .font(.footnote.weight(.semibold))
-            Text("Signed in as: \(authManager.userEmail)")
-                .font(.footnote.weight(.semibold))
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-                .multilineTextAlignment(.leading)
-            Image(systemName: "chevron.up")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.secondary)
-        }
-        .foregroundColor(.black)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .padding(.horizontal, 16)
-        .frame(minHeight: 44)
-        .background(
-            Capsule().fill(Color.black.opacity(0.06))
-        )
-        .overlay(
-            Capsule().stroke(Color.black.opacity(0.12), lineWidth: 1)
-        )
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
-        .background(.clear)
+        inviteJoinError = nil
+        inviteJoinText = ""
+        showQRScanner = true
     }
 
     private func deletePendingTemplate() {
@@ -3125,78 +3095,8 @@ struct SettingsView: View {
         }
     }
 
-    /// The glow's two `repeatForever` animations used to drive @State on
-    /// SettingsView itself, which was survivable inside a dedicated
-    /// Settings sheet but not on Home: every frame of the animation would
-    /// invalidate the whole screen - the Players list included - which is
-    /// the same defect `atBatPulse` has in the tracker. `StoreGlowLabel`
-    /// owns that state now, so only the capsule redraws. (The two
-    /// `.animation(nil, value: storeGlow*)` guards on the toolbar button
-    /// existed only to blunt that same bleed, and went with it.)
-    private var storeSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            NavigationLink {
-                Storefront
-            } label: {
-                StoreGlowLabel()
-            }
-        }
-    }
-
     // soundCreditsSection's capsule row lived in the Settings sheet. The
     // list itself now opens from the account sheet, below Terms of Use.
-
-    /// Extracted so its two `repeatForever` animations invalidate only this
-    /// capsule instead of all of Home - see `storeSection` above.
-    private struct StoreGlowLabel: View {
-        @State private var glowAngle: Double = 0
-        @State private var glowPulse = false
-
-        var body: some View {
-            HStack(spacing: 8) {
-                Image(systemName: "cart")
-                    .font(.subheadline.weight(.semibold))
-                Text("store")
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .foregroundColor(.black)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                Capsule().fill(Color.black.opacity(0.06))
-            )
-            .overlay(
-                Capsule().stroke(Color.black, lineWidth: 1)
-            )
-            .overlay(
-                Capsule()
-                    .stroke(
-                        AngularGradient(
-                            gradient: Gradient(colors: [.cyan, .magenta, .yellow, .lime, .orange]),
-                            center: .center,
-                            angle: .degrees(glowAngle)
-                        ),
-                        lineWidth: 2
-                    )
-                    .blur(radius: 2)
-                    .opacity(0.9)
-            )
-            .shadow(color: Color.cyan.opacity(glowPulse ? 0.6 : 0.3), radius: glowPulse ? 10 : 4)
-            .padding(.horizontal)
-            .onAppear {
-                withAnimation(.linear(duration: 3).repeatForever(autoreverses: false)) {
-                    glowAngle = 360
-                }
-                withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
-                    glowPulse = true
-                }
-            }
-        }
-    }
 
     @ViewBuilder
     private var accountActionsSheetView: some View {
@@ -3627,35 +3527,41 @@ struct SettingsView: View {
                             playersOverviewSection
                         }
 
+                        // Pitching and Batting keys are both worn on the
+                        // armband (2026-11-10).
+                        Divider()
+                            .padding(.horizontal)
+                        Text("Armband Keys")
+                            .font(.title3.weight(.bold))
+                            .padding(.horizontal)
+                            .padding(.bottom, -8)
+                            .accessibilityAddTraits(.isHeader)
+                            .accessibilityIdentifier("home.armbandKeys")
+
                         sectionCard {
                             templatesOverviewSection
                         }
 
                         sectionCard {
-                            storeSection
+                            SignGridsHomeSection(isExpanded: Binding(
+                                get: { expandedHomeOverviewSection == .signGrids },
+                                set: { expandedHomeOverviewSection = $0 ? .signGrids : nil }
+                            ))
                         }
 
+
                         Color.clear.frame(height: 8)
-                        Image("SoftballBaseballWtitle4")
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 90)
-                            .frame(maxWidth: .infinity, alignment: .center)
                     }
                     .padding(.top, 4)
                 }
                 .safeAreaInset(edge: .bottom) {
-                    Button {
+                    HomeBottomBar(email: authManager.user?.email) {
+                        Storefront
+                    } onJoin: {
+                        startJoinFlow()
+                    } onAccount: {
                         showAccountActionsSheet = true
-                    } label: {
-                        accountFooterButtonLabel
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Account options")
-                    .accessibilityHint("Opens account actions including sign out and account management.")
-                    .padding(.vertical, 8)
-                    .padding(.horizontal)
-                    .background(.ultraThinMaterial)
                 }
 
                 if isAddingScannedLineup {
@@ -3950,32 +3856,10 @@ struct SettingsView: View {
                     revokePitcherTarget = nil
                 }
             )
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        if !subscriptionManager.isPro {
-                            proGateMessage = "Joining games requires PitchMark Pro."
-                            showProGateAlert = true
-                            return
-                        }
-                        inviteJoinError = nil
-                        inviteJoinText = ""
-                        showQRScanner = true
-                    } label: {
-                        joinGameButtonLabel
-                    }
-                    .accessibilityLabel("Join Someone's Game")
-                    .accessibilityHint("Open join flow for invite link or QR code.")
-                    .transaction { transaction in
-                        transaction.animation = nil
-                    }
-                }
-                // The X that used to sit here (go to the Game tab, gated on
-                // "Select Game First") is gone - the bottom tab bar is what
-                // controls flow between Home/Game/Moments, and the gate
-                // actively got in the way once a game could be closed out
-                // of in-use status from this screen.
-            }
+            // No toolbar: Join a Game moved into Home's row of three
+            // (2026-11-10). The X that used to sit there (go to the Game
+            // tab, gated on "Select Game First") is gone too - the bottom
+            // tab bar controls flow between Home/Game/Moments.
             .sheet(item: $editorTemplate) { template in
                 TemplateEditorView(
                     template: template,

@@ -11,7 +11,8 @@
     "set:admin-claim": "node scripts/setAdminClaim.js",
     "serve": "firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions",
-    "lint": "echo 'No lint configured'"
+    "lint": "echo 'No lint configured'",
+    "test": "tsc && node --test \"test/*.test.js\""
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",

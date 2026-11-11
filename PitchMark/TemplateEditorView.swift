@@ -618,6 +618,9 @@ struct TemplateEditorView: View {
     // The code-length mode (Advanced/4-char vs Normal/3-char). Fixed at creation: the two modes use
     // different location-grid editors (header+body vs single-cell), so it isn't a small in-place edit.
     @State private var codeMode: PitchCodeMode
+    /// The printed key's size (2026-11-10), like a Batting card's.
+    @State private var printWidthInches: Double
+    @State private var printHeightInches: Double
     private let isNewTemplate: Bool
 
     @StateObject private var topRowCoordinator = TopRowValidationCoordinator()
@@ -690,7 +693,9 @@ struct TemplateEditorView: View {
             locationFirstColors: locationFirstColors,
             codeMode: codeMode,
             strikeLocationCells: normalLocationCoordinator.strikeCells,
-            ballsLocationCells: normalLocationCoordinator.ballsCells
+            ballsLocationCells: normalLocationCoordinator.ballsCells,
+            printWidthInches: printWidthInches,
+            printHeightInches: printHeightInches
         )
         Self.saveActivePitches(for: templateID, active: selectedPitches)
         onSave(newTemplate)
@@ -735,6 +740,9 @@ struct TemplateEditorView: View {
         _initialBallsLocationCells = State(initialValue: ballsLocationCells)
         _gridPaletteSelections = State(initialValue: initialPalette)
         _codeMode = State(initialValue: template?.codeMode ?? .advanced)
+        let printSize = template?.chosenPrintSize ?? PitchTemplate.defaultPrintSize
+        _printWidthInches = State(initialValue: printSize.widthInches)
+        _printHeightInches = State(initialValue: printSize.heightInches)
         self.isNewTemplate = (template?.pitchGridValues ?? []).isEmpty
         self.templateID = id
 
@@ -751,6 +759,34 @@ struct TemplateEditorView: View {
         return Array(selections.prefix(5))
     }
     
+    /// Width or Height for the printed key - the same choices and limits
+    /// as a Batting Bases & Fielding card (GridKeyProduct).
+    private func printSizeMenu(title: String, value: Double, options: [Double],
+                               set: @escaping (Double) -> Void) -> some View {
+        Menu {
+            ForEach(options, id: \.self) { option in
+                Button("\(GridKeyPrintSize.inchText(option)) in") { set(option) }
+            }
+        } label: {
+            HStack {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(GridKeyPrintSize.inchText(value)) in")
+                    .font(.subheadline)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .background(Capsule().fill(Color(.systemGray5)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("gridKey.print\(title)")
+    }
+
     private var availablePitches: [String] {
         // Base pitch order followed by any custom pitches the user adds
         pitchOrder + customPitches
@@ -1084,6 +1120,26 @@ struct TemplateEditorView: View {
                                     .buttonStyle(.plain)
                                     .accessibilityLabel("Edit template name")
                                 }
+                        }
+                    }
+
+                    sectionCard {
+                        VStack(spacing: 8) {
+                            Text("Print Size")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.black)
+                            HStack(spacing: 8) {
+                                printSizeMenu(title: "Width", value: printWidthInches,
+                                              options: GridKeyProduct.customWidthOptions) {
+                                    printWidthInches = $0
+                                    hasUnsavedChanges = true
+                                }
+                                printSizeMenu(title: "Height", value: printHeightInches,
+                                              options: GridKeyProduct.customHeightOptions) {
+                                    printHeightInches = $0
+                                    hasUnsavedChanges = true
+                                }
+                            }
                         }
                     }
 
@@ -3139,7 +3195,7 @@ private extension PrintableEncryptedGridsView {
         border: Color,
         highlightBodyCell: (row: Int, col: Int)?
     ) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: s(8)) {
             VStack(spacing: 0) {
                 // Header row (3)
                 HStack(spacing: 0) {
@@ -3197,7 +3253,7 @@ private extension PrintableEncryptedGridsView {
         border: Color,
         highlightCell: (row: Int, col: Int)?
     ) -> some View {
-        VStack(spacing: 8) {
+        VStack(spacing: s(8)) {
             VStack(spacing: 0) {
                 ForEach(0..<3, id: \.self) { r in
                     HStack(spacing: 0) {

@@ -604,6 +604,150 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   tapping Home from a game). A row helper reused by several `ForEach`es is the
   first thing to erase.
 
+## Grid key printing (2026-11-08)
+
+- **One place owns print size:** `GridKeyPrintSize.swift` (the size
+  type, `GridKeyProduct` sizes and custom limits, a key's own size -
+  shared with Display, because AuthManager saves and loads it),
+  `GridKeyPrint.swift` (`fitScale`/`writePDF`, PitchMark only) and the
+  server twin `functions/src/gridKeyPrintSize.ts`. The store preview, the
+  free PDF and the fulfillment PDF all go through it - keep the two files'
+  sizes and limits identical. A PDF page is 72 pt per inch, so a page
+  `size.points` big prints at exactly that size.
+- **A custom size rides the order:** checkout sends
+  `printWidthInches`/`printHeightInches`, the server validates them (3-7 x
+  2-5 in, quarter inches), puts them in Stripe metadata and saves them on
+  `retailOrders`. Never fall back to a standard size - every Custom order
+  used to print at 5 x 3. The server refuses a Custom order with no size
+  (user's call), so deploy functions before the app that sends it.
+- **Fit is measured, not just estimated:** `fitScale` starts from
+  `baseContentSize` and shrinks until the real render fits. Spacing inside
+  `PrintableEncryptedGridsView` must go through `s()`; an unscaled 8 pt
+  gap ran cards 2-5% past their edge.
+- **A pitching key has its own size (2026-11-10)**, picked in its
+  editor (Width/Height, the same 3-7 x 2-5 in quarter-inch choices as a
+  Batting card), saved as `printWidthInches`/`printHeightInches` on the
+  template (optional - older keys print at the 5 x 3 default). The store
+  sells **one** "Pitching Key" item ($14, `grid_custom`) at the key's
+  size (`RetailCheckoutRequest.gridKey`) - no size pickers. `grid_5x3`
+  and `grid_3_5x2_75` stay on the server for older app builds.
+- The 8.5 x 11 sheet shrinks rows once pitches would overrun a block (8+
+  pitches ran off the page). No cut guide is drawn on fulfillment PDFs.
+- `functions/lib` is checked in and deploy ships it as-is: run
+  `npm test` (or `npm run build`) in `functions/` after any `src` change.
+
+## Batting Bases & Fielding grids (2026-11-08, several grids 2026-11-09; was Batter & Runner Grids)
+
+- **A sign card the coach builds from scratch** (`SignGrid.swift` = model,
+  layout, PDF, store; `SignGridViews.swift` = Home section, editor). A card
+  is 1-9 grids pieced together (like a wristband card), all sharing the
+  card's 1-12 rows and columns, free text per cell (24 chars). Print size
+  is the **whole card**, with the custom grid key limits (3-7 x 2-5 in,
+  quarter inches). The arrangement (across x down) is picked
+  automatically from the card size (`SignGridArrangement.bestFit`); the
+  editor's wireframe and the PDF use the same `SignGridCardLayout`.
+- **Styles are B (bold) and F (fill), N clears both.** Each grid has its
+  own fill color (2026-11-10; the picker sits between the Row and Col
+  styles). A grid with none - every grid on a card saved before then -
+  uses the card's `fillColorHex`, which is also new grids' default.
+- **New cells come numbered** (`SignGrid.headerLabel`): the top row is
+  the grid's digit + column ("01 02" on grid 1, "11 12" on grid 2), the
+  first column 1, 2, 3, the corner blank; columns past 9 get none (user's
+  call). Only new cells (new card, grid, row, column) are numbered -
+  loading never renumbers, and a grid holding only its numbers removes
+  without asking.
+  A cell's own style overrides its row and column (user's call); with
+  none, it's row + column together. Styling a row or column again
+  resets its cells' own styles - the latest change wins.
+- Saved at `users/{uid}/signGrids/{id}` (the users/** catch-all rule; no
+  rules change). `grids` is an array of maps; cells are flat row-major
+  arrays and styles arrays of maps - Firestore crashes on nested arrays.
+  Docs saved before 2026-11-09 (one grid, `boldRows`/`boldColumns`/
+  `boldCells`) load as a one-grid card. Archived, never deleted.
+- Styles are `[Int: SignGridStyle]` so the JSON snapshot (checkout
+  fingerprint) encodes them in a fixed order - don't key them by a struct.
+- **The PDF is vector** (`ImageRenderer.render` into a PDF context), one
+  page exactly the chosen size. Tests read text, bold and fill back off it.
+- **Store product `sign_grid_custom`**, $20 for 14 cards (user's call),
+  priced in code (`price_data`, no Stripe price object). It's sized like
+  `grid_custom` on the server and in `GridKeyProduct.isCustom`; itemKind
+  `signGrid`; fulfillment decodes the snapshot as a `SignGrid`.
+- **The checkout fingerprint includes a hash of the design**, so an edited
+  key or grid ordered again in the same session gets a new Stripe session
+  instead of the first one's saved copy (that used to print the old key).
+- **Quick Fill** (under the cell text box) puts a common call's short
+  label in the selected cell (`SignGridQuickFill`, the user's list); the
+  cell stays selected. It's a List in a sheet, not a Menu (scroll loss).
+- **My Calls (2026-11-10):** while a cell is being typed in, a bar on
+  top of the keyboard has **Add to Quick Fill** - a bottom
+  `.safeAreaInset`, not a keyboard toolbar (that floats over the B F N).
+  Added calls are the account's (`users/{uid}/meta/signGridQuickFill`,
+  the meta rule; `SignGridMyCalls`/`SignGridMyCallsStore`,
+  SignGridMyCalls.swift), shown first in Quick Fill and swiped away
+  there. No repeats of a built-in or own call, ignoring case.
+- **Randomize** (Whole Card section) fills only the **empty** call cells
+  on every grid (user's call) with the Quick Fill calls the coach picks,
+  spread evenly (each within one use of the others) in random cells
+  (`SignGrid.randomFill`). Typed cells and the numbers are kept; the
+  picks stay while the editor is open.
+- The keyboard's hide button is in the top bar: a keyboard toolbar button
+  floats over the cell's B F N. UI tests open the list and editor alone
+  with `-UITestSignGrids`.
+
+## Coach's calling card (2026-11-10)
+
+- **Each Batting Bases & Fielding card has a calling card**
+  (`SignGridCallingCard`, SignGridCallingCard.swift): every call on the
+  armband card, A to Z (user's call), with the number of every cell it's
+  in. A number is the cell's **column header + row header** from its own
+  grid ("13" + "2" = "132"), read from the cells, so edited headers
+  carry through; a cell with no header number isn't listed (columns past
+  9 have none) and the card says how many.
+- The list row's numbered-list button opens it (`SignGridCallingCardSheet`)
+  with Share/Print: one US letter page, shrunk to fit. **Store orders
+  print it as page 2** of the fulfillment PDF (`writeOrderPDF` →
+  `includingCallingCard`); the free card PDF stays one page. No server
+  change - it's built from the same snapshot.
+- **Two sizes (2026-11-10):** Share asks Full Page (8 1/2 x 11) or
+  Pocket (4 1/4 x 5 1/2, a quarter sheet) - `SignGridCallingCardPrint.Format`.
+  **The store preview is drawn the way it prints**
+  (`SignGridCallingCardPagePreview`, same margins and `layout(for:format:)`)
+  - laying the card out freely let a big card run past its box.
+  **A card too tall for its page is laid out wider and shrunk back to
+  the page's width** (`SignGridCallingCardPrint.Layout`: columns, layout
+  width, fit), so it always fills the width; it may also take up to 2
+  more columns. **Every box is the same height**: numbers in even lines
+  (`codesPerLine`), every box padded to the most lines any box needs,
+  every label one size on a band of one height. The height is worked
+  out (`SignGridCallingCardView.height`), not rendered - rendering to
+  measure inside the search took minutes on a big card; a test checks
+  it against a real render.
+- **Store: Waterproof Calling Cards**, `calling_card_waterproof`, $8 for
+  4 pocket cards the user cuts from one letter sheet (user's call),
+  priced in code. Same snapshot as a grid order (itemKind `signGrid`), no
+  size. Fulfillment prints one letter page with the pocket card in each
+  quarter (`sheetQuarters`), no cut guides (user's call). New catalog
+  entry in `functions/src/retailCatalog.ts` - deploy functions first.
+- **Return in the cell box skips the numbered top row and first column**
+  (`SignGrid.cellAfter`); typing a call into a number broke that row's
+  codes. Tapping a number cell still edits it.
+
+## Home's row of three (2026-11-10)
+
+- **Team Supplies, Join a Game, Account** sit side by side, pinned at
+  the bottom of Home just above the signed-in line (`HomeBottomBar`, a
+  `.safeAreaInset`; the cards scroll under it), each with
+  the `SoftballAndBaseball` art. Team Supplies is the store; Join a Game
+  is the old top-bar button's flow (`startJoinFlow`, Pro only); Account
+  opens the account sheet. Home has no toolbar items now. The header is
+  the PitchMark logo, centered (`SettingsView.logoImageName`), not text.
+- **"Armband Keys"** (under a divider) heads **Pitching** (was Code Grid
+  Keys; the tracker's button says "Open Pitching Keys") and **Batting
+  Bases & Fielding** (was Batter & Runner Grids, also in the store).
+- The bottom of Home is plain text, "Signed in as {email}"
+  (`HomeSignedInFooter`), read from `authManager.user` so it follows
+  sign-in and sign-out. It is not a button.
+
 ## Known open items
 
 - **HBP cannot be saved on its own.** Save Result is gated on one of

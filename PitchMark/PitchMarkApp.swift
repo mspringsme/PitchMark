@@ -36,10 +36,19 @@ struct RootView: View {
     /// UI tests launch with `-UITestDemo` to open the local demo game
     /// directly - no sign-in, nothing written to Firestore.
     private static let isUITestDemo = ProcessInfo.processInfo.arguments.contains("-UITestDemo")
+    /// `-UITestSignGrids`: Batter & Runner Grids on their own, in memory.
+    private static let isUITestSignGrids = ProcessInfo.processInfo.arguments.contains("-UITestSignGrids")
+
+    /// `-UITestHomeActions`: Home's row of three and signed-in line alone.
+    private static let isUITestHomeActions = ProcessInfo.processInfo.arguments.contains("-UITestHomeActions")
 
     var body: some View {
         Group {
-            if Self.isUITestDemo {
+            if Self.isUITestSignGrids {
+                SignGridUITestHarness()
+            } else if Self.isUITestHomeActions {
+                HomeActionsUITestHarness()
+            } else if Self.isUITestDemo {
                 PitchTrackerView(isDemoMode: true, onRequireSignIn: {})
                     .id("uitest-demo")
             } else if authManager.isCheckingAuth {
