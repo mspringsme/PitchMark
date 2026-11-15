@@ -71,7 +71,8 @@ struct MomentGridView: View {
     var emptyMessage: String = "No Moments yet."
     let onTap: (Moment) -> Void
 
-    @State private var selectedTimeFilter: MomentTimeFilter? = nil
+    /// The library's long-press actions (MomentActions.swift); nil = none.
+    @Environment(\.momentQuickAction) private var quickAction
 
     private let columns = [GridItem(.adaptive(minimum: 100, maximum: 160), spacing: 10)]
 
@@ -82,10 +83,6 @@ struct MomentGridView: View {
 
     private var sections: [TimeSection] {
         let now = Date()
-        if let selectedTimeFilter {
-            let filtered = moments.filter { timeSectionTitle(for: $0.createdAt, now: now) == selectedTimeFilter.rawValue }
-            return [TimeSection(title: selectedTimeFilter.rawValue, moments: filtered)]
-        }
         var order: [String] = []
         var grouped: [String: [Moment]] = [:]
         for moment in moments {
@@ -126,32 +123,23 @@ struct MomentGridView: View {
                                             isSelected: selectedMomentIds.contains(moment.id ?? "")
                                         )
                                         .onTapGesture { onTap(moment) }
+                                        .contextMenu {
+                                            if !isSelecting, let quickAction {
+                                                MomentQuickActionMenu(moment: moment, perform: quickAction)
+                                            }
+                                        }
                                     }
                                 }
                                 .padding(.horizontal)
                             }
                         } header: {
-                            Menu {
-                                Button("All Time") { selectedTimeFilter = nil }
-                                ForEach(MomentTimeFilter.allCases) { filter in
-                                    Button(filter.rawValue) { selectedTimeFilter = filter }
-                                }
-                            } label: {
-                                HStack(spacing: 4) {
-                                    Text(section.title)
-                                        .font(.subheadline.weight(.semibold))
-                                    Image(systemName: "chevron.down")
-                                        .font(.caption2.weight(.semibold))
-                                }
+                            Text(section.title)
+                                .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.primary)
-                                .padding(.horizontal, 14)
+                                .padding(.horizontal)
                                 .padding(.vertical, 6)
-                                .background(Capsule(style: .continuous).fill(Color(.secondarySystemBackground)))
-                            }
-                            .padding(.horizontal)
-                            .padding(.vertical, 4)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(.secondarySystemBackground))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(.secondarySystemBackground))
                         }
                     }
                 }
@@ -325,6 +313,93 @@ private struct MomentGridCell: View {
         .onAppear {
             guard thumbnail == nil else { return }
             momentThumbnail(for: moment) { thumbnail = $0 }
+        }
+    }
+}
+
+/// A tile's long-press menu. Edit isn't here - tapping the tile opens it.
+struct MomentQuickActionMenu: View {
+    let moment: Moment
+    let perform: (Moment, MomentQuickAction) -> Void
+
+    var body: some View {
+        Button { perform(moment, .play) } label: { Label("Play", systemImage: "play.fill") }
+        if let id = moment.id, !MomentShare.sourceFiles(momentId: id, photoCount: moment.photoCount ?? 0).isEmpty {
+            Button { perform(moment, .share) } label: { Label("Share…", systemImage: "square.and.arrow.up") }
+        }
+        Button { perform(moment, .move) } label: { Label("Move to Folder…", systemImage: "folder") }
+        Button { perform(moment, .duplicate) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+        if let id = moment.id, momentHasEdits(id) {
+            Button { perform(moment, .duplicateOriginal) } label: { Label("Duplicate Original", systemImage: "film") }
+        }
+        Divider()
+        Button(role: .destructive) { perform(moment, .delete) } label: { Label("Delete", systemImage: "trash") }
+    }
+}
+
+/// The All tab's filter chips (2026-11-15) - replaces the time filter
+/// that was hidden inside the section headers.
+enum MomentLibraryFilter: String, CaseIterable, Identifiable {
+    case all, favorites, videos, photos, thisWeek
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .favorites: return "Favorites"
+        case .videos: return "Videos"
+        case .photos: return "Photos"
+        case .thisWeek: return "This Week"
+        }
+    }
+
+    func includes(_ moment: Moment, now: Date = Date()) -> Bool {
+        switch self {
+        case .all: return true
+        case .favorites: return moment.isFavorite == true
+        case .videos: return moment.momentKind != .photoCreation
+        case .photos: return moment.momentKind == .photoCreation || (moment.photoCount ?? 0) > 0
+        case .thisWeek:
+            guard let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: now) else { return true }
+            return moment.createdAt >= weekAgo
+        }
+    }
+
+    func apply(to moments: [Moment], now: Date = Date()) -> [Moment] {
+        moments.filter { includes($0, now: now) }
+    }
+}
+
+struct MomentFilterChips: View {
+    @Binding var selection: MomentLibraryFilter
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(MomentLibraryFilter.allCases) { filter in
+                    let isOn = selection == filter
+                    Button {
+                        selection = filter
+                    } label: {
+                        HStack(spacing: 4) {
+                            if filter == .favorites {
+                                Image(systemName: "heart.fill")
+                                    .font(.caption2)
+                            }
+                            Text(filter.title)
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundStyle(isOn ? Color.white : Color.primary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(isOn ? Color.pitchMarkActiveGray : Color(.secondarySystemBackground)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("moments.filter.\(filter.rawValue)")
+                }
+            }
+            .padding(.horizontal, 2)
         }
     }
 }

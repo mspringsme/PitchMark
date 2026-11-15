@@ -1923,6 +1923,11 @@ struct SettingsView: View {
             isArchived: isArchived,
             isOtherCoachesPlayer: row.isOnlyOnOtherCoachesTeams(uid: authManager.user?.uid)
         ) {
+            PlayerMomentsButton(
+                name: row.name,
+                hitterIds: row.hitterIds + [row.hitterId].compactMap { $0 },
+                pitcherIds: row.pitcherIds + [row.pitcherId].compactMap { $0 }
+            )
             statsControl(for: row)
 
             Menu {
@@ -3787,9 +3792,14 @@ struct SettingsView: View {
             .onChange(of: isHomeTabActive) { active in
                 // Synchronous with the tab switch, so a section opened by a
                 // deferred request (`createCodeGridKeyRequested`) still wins.
-                if active { expandedHomeOverviewSection = nil }
+                if active {
+                    expandedHomeOverviewSection = nil
+                    // Moments recorded since - the rows' Moments buttons.
+                    PlayerMomentsIndex.shared.refresh(authManager)
+                }
             }
             .onAppear {
+                PlayerMomentsIndex.shared.refresh(authManager)
                 loadHiddenIds()
                 startPitchersListenerIfNeeded()
                 refreshMyHitters()

@@ -154,6 +154,12 @@ struct Moment: Identifiable, Codable {
     /// off or the location/geocode lookup failed - same Optional
     /// reasoning as every other field here.
     var cityName: String? = nil
+    /// 2026-11-15 (MomentGameCaption.swift): the game as it stood when this
+    /// was captured, the caption choices last applied, and who it's about.
+    /// Optional for the same reason as every field added after Phase 6.
+    var gameContext: MomentGameContext? = nil
+    var gameCaption: GameCaptionOptions? = nil
+    var playerTags: [MomentPlayerTag]? = nil
 
     init(
         createdAt: Date = Date(),
@@ -317,20 +323,32 @@ private let pitchMarkPhotosAlbumName = "PitchMark"
 /// the Moment exactly as successfully saved as it already was - this is a
 /// bonus, never a requirement, same "never worse" discipline
 /// `refreshFadeIfNeeded` already uses for its own fire-and-forget rebake.
+/// On unless the coach turned it off (default changed 2026-11-15: the
+/// video otherwise lives only on the phone that recorded it).
+var momentsAutoBackupToPhotosEnabled: Bool {
+    UserDefaults.standard.object(forKey: momentsAutoBackupToPhotosKey) as? Bool ?? true
+}
+
 func autoBackupMomentVideoToPhotosIfEnabled(sourceURL: URL) {
-    guard UserDefaults.standard.bool(forKey: momentsAutoBackupToPhotosKey) else { return }
+    guard momentsAutoBackupToPhotosEnabled else { return }
     PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
         guard status == .authorized || status == .limited else { return }
         findOrCreatePitchMarkPhotosAlbum { collection in
-            guard let collection else { return }
+            // Add-only access can't see or make albums, so `collection`
+            // is usually nil - save the video anyway. Requiring the album
+            // made backup silently do nothing (found 2026-11-15).
             PHPhotoLibrary.shared().performChanges({
-                guard let creationRequest = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: sourceURL),
-                      let placeholder = creationRequest.placeholderForCreatedAsset,
-                      let albumChangeRequest = PHAssetCollectionChangeRequest(for: collection) else {
+                guard let creationRequest = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: sourceURL) else {
                     return
                 }
-                albumChangeRequest.addAssets([placeholder] as NSArray)
-            }, completionHandler: nil)
+                if let collection,
+                   let placeholder = creationRequest.placeholderForCreatedAsset,
+                   let albumChangeRequest = PHAssetCollectionChangeRequest(for: collection) {
+                    albumChangeRequest.addAssets([placeholder] as NSArray)
+                }
+            }) { success, error in
+                if !success { debugLog("⚠️ Moment Photos backup failed:", error?.localizedDescription ?? "") }
+            }
         }
     }
 }
@@ -340,6 +358,19 @@ func autoBackupMomentVideoToPhotosIfEnabled(sourceURL: URL) {
 /// "create if missing" convenience of its own - both steps need their own
 /// `performChanges`/fetch round trip, which is why this isn't folded
 /// directly into `autoBackupMomentVideoToPhotosIfEnabled` above.
+/// A photo taken in PitchMark's camera, backed up as itself.
+func autoBackupMomentPhotoToPhotosIfEnabled(_ data: Data) {
+    guard momentsAutoBackupToPhotosEnabled else { return }
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+        guard status == .authorized || status == .limited else { return }
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
+        }) { success, error in
+            if !success { debugLog("⚠️ Moment photo backup failed:", error?.localizedDescription ?? "") }
+        }
+    }
+}
+
 private func findOrCreatePitchMarkPhotosAlbum(completion: @escaping (PHAssetCollection?) -> Void) {
     let fetchOptions = PHFetchOptions()
     fetchOptions.predicate = NSPredicate(format: "title = %@", pitchMarkPhotosAlbumName)
@@ -1074,7 +1105,8 @@ extension AuthManager {
             )
             self.saveMoment(newMoment) { result in
                 if case .success(let saved) = result, let newId = saved.id {
-                    saveLocalMomentVideo(from: builtURL, momentId: newId)
+                    // Its photo came from a library - nothing to back up.
+                    saveLocalMomentVideo(from: builtURL, momentId: newId, autoBackupToPhotos: false)
                     saveLocalMomentPhoto(photoData, momentId: newId, index: 0)
                 }
                 completion()

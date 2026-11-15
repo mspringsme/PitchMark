@@ -72,7 +72,7 @@ struct HighlightReelEditorView: View {
         NavigationView {
             List {
                 Section {
-                    Text("Drag to reorder. The reel plays each clip in this order, full-length. Tap \u{270F}\u{FE0F} to trim, speed up, or otherwise edit a clip before it's combined.")
+                    Text("Drag to reorder. The mixtape plays each clip in this order, full-length. Tap \u{270F}\u{FE0F} to trim, speed up, or otherwise edit a clip before it's combined.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -128,7 +128,7 @@ struct HighlightReelEditorView: View {
                     } label: {
                         HStack {
                             Spacer()
-                            Text("Create Highlight Reel")
+                            Text("Make Mixtape")
                                 .font(.headline)
                             Spacer()
                         }
@@ -137,7 +137,7 @@ struct HighlightReelEditorView: View {
                 }
             }
             .environment(\.editMode, .constant(.active))
-            .navigationTitle("New Highlight Reel")
+            .navigationTitle("New Mixtape")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -157,7 +157,7 @@ struct HighlightReelEditorView: View {
                     Color.black.opacity(0.55).ignoresSafeArea()
                     VStack(spacing: 12) {
                         ProgressView().tint(.white)
-                        Text("Creating Reel…")
+                        Text("Making Mixtape…")
                             .foregroundStyle(.white)
                             .font(.subheadline.weight(.semibold))
                     }
@@ -243,7 +243,7 @@ struct HighlightReelEditorView: View {
                 saveLocalMomentVideo(from: tempURL, momentId: id)
                 authManager.getOrCreateHighlightReelsFolder { folderResult in
                     isExporting = false
-                    var fields: [String: Any] = ["title": "Highlight Reel"]
+                    var fields: [String: Any] = ["title": "Mixtape"]
                     if case .success(let folder) = folderResult, let folderId = folder.id {
                         fields["momentFolderId"] = folderId
                     }

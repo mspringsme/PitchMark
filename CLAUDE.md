@@ -790,6 +790,47 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   says its codes aren't recorded. Not in the assistant's menu yet.
 - Planned next: logging called signs to a game (step 4).
 
+## Moments (2026-11-15)
+
+- **The idea log is `docs/MOMENTS_ROADMAP.md`** - update it as items
+  ship. Moments is a main competitive edge (user).
+- **Clip actions live in `MomentActions`** (MomentActions.swift), shared
+  by the library's long-press menu (`MomentQuickActionMenu`, given to
+  every grid through the `momentQuickAction` environment value) and the
+  clip screen's ⋯ menu. Tapping a clip opens it; there is no action list.
+- **Photos backup is on by default** (`momentsAutoBackupToPhotosEnabled`,
+  missing key = on). Add-only access can't see albums, so the save must
+  not require the "PitchMark" album - requiring it made backup a no-op.
+  Only camera captures are backed up (`fromCamera`); imports came from
+  Photos.
+- **Game caption = a text overlay** with assetID `GameCaption.overlayAssetID`,
+  baked through the overlay frozen base (`GameCaptionApplier`), so it
+  shows and can be edited in the Overlays editor. The game state comes
+  from the tracker through `MomentsLibraryView.currentGameContext`
+  (`momentGameContextSnapshot`); a capture saves it on the Moment
+  (`gameContext`) with `playerTags` (Hitter/Pitcher ids).
+- **A player's clips** match on `playerTags` hitter/pitcher ids
+  (`PlayerMoments.matches`) - the same ids stats read. They're reached by
+  a button on the player's row (`PlayerMomentsButton`, Home Players and
+  team rosters), not on the stats sheets (user's call). The rows share
+  one load (`PlayerMomentsIndex.shared`); the button is its own view
+  with its own sheet so Home's type doesn't grow.
+- **Compare saves** through `MomentCompareExporter` (custom compositor,
+  Core Image). Preview panes use the saved video's pane shape
+  (`CompareLayout.paneAspect`) and the same framing math
+  (`ComparePaneMath.placement`), so what's framed is what's saved.
+  **Upright frames with `CIImage.oriented(CompareOrientation...)`, never
+  by applying `preferredTransform` in Core Image** - CI's y axis points
+  up, which turns a portrait clip's 90° the wrong way (saved upside
+  down). MomentFilterCompositor still applies the transform directly and
+  may share the bug on rotated clips - unverified.
+- **Compare's loop guards its restart** (`isRestartingLoop`): the time
+  observer keeps firing during the jump back to Start, and each tick
+  started another seek + play until the players wedged.
+- **Highlight Reel is "Mixtape" to users.** The code, the folder flag
+  (`isHighlightReelsFolder`) and old folder names keep "Highlight Reel";
+  `MomentFolder.displayName` shows "Mixtapes".
+
 ## Known open items
 
 - **HBP cannot be saved on its own.** Save Result is gated on one of

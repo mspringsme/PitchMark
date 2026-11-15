@@ -31,6 +31,12 @@ struct MomentFolder: Identifiable, Codable {
     /// second one on the next reel export. Nil/false for every ordinary,
     /// user-created folder.
     var isHighlightReelsFolder: Bool? = nil
+
+    /// The Mixtapes folder shows as "Mixtapes" even where it was created
+    /// as "Highlight Reels" (renamed 2026-11-15).
+    var displayName: String {
+        isHighlightReelsFolder == true ? "Mixtapes" : name
+    }
 }
 
 struct MomentBucket: Identifiable, Codable {
@@ -78,7 +84,7 @@ extension AuthManager {
                 completion(.success(existing))
                 return
             }
-            self.createMomentFolder(name: "Highlight Reels", isHighlightReelsFolder: true, completion: completion)
+            self.createMomentFolder(name: "Mixtapes", isHighlightReelsFolder: true, completion: completion)
         }
     }
 

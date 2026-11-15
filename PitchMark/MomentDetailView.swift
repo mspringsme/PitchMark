@@ -14,6 +14,7 @@
 import SwiftUI
 import AVKit
 import PhotosUI
+import FirebaseFirestore
 
 private struct FullScreenPhoto: Identifiable {
     let id: Int
@@ -66,6 +67,9 @@ struct MomentDetailView: View {
     /// so the "From Moments Library" photo source can offer every other
     /// Moment to pick a photo from.
     let allMoments: [Moment]
+    /// The game open in the tracker right now, for a Moment that wasn't
+    /// recorded during one (MomentGameCaption.swift).
+    var currentGameContext: (() -> MomentGameContext?)? = nil
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -123,6 +127,17 @@ struct MomentDetailView: View {
     /// the same URL, discarding playback position back to frame 0. Only
     /// reloaded explicitly, when the underlying file actually changes.
     @State private var player: AVPlayer? = nil
+    // The ⋯ menu (2026-11-15): Move, Duplicate, Revert, Delete were only
+    // in the library's tap list before.
+    @State private var showMoveSheet = false
+    @State private var showDeleteConfirm = false
+    @State private var showRevertConfirm = false
+    @State private var actionMessage: String? = nil
+    // Game Info (MomentGameCaption.swift).
+    @State private var captionSheet: CaptionContextBox? = nil
+    @State private var showNoGameInfo = false
+    @State private var isApplyingCaption = false
+    @State private var showTagPlayers = false
     /// Lets the preview expand to full screen from right here in the
     /// edit screen - with every editor a fullScreenCover of its own,
     /// the user is repeatedly bounced back to this screen to check an
@@ -130,9 +145,10 @@ struct MomentDetailView: View {
     /// leaving to re-open the Moment from the library.
     @State private var showFullScreenPlayback = false
 
-    init(moment: Moment, allMoments: [Moment]) {
+    init(moment: Moment, allMoments: [Moment], currentGameContext: (() -> MomentGameContext?)? = nil) {
         _moment = State(initialValue: moment)
         self.allMoments = allMoments
+        self.currentGameContext = currentGameContext
         _isFavorite = State(initialValue: moment.isFavorite ?? false)
         _title = State(initialValue: moment.title ?? "")
         _photoCount = State(initialValue: moment.photoCount ?? 0)
@@ -160,6 +176,7 @@ struct MomentDetailView: View {
                     if hasLocalMedia {
                         editActionsSection
                     }
+                    playersSection
                     photosSection
                 }
                 .padding()
@@ -202,10 +219,75 @@ struct MomentDetailView: View {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .accessibilityLabel("Share")
+                    if hasLocalMedia { moreMenu }
                     Button("Done") { dismiss() }
                 }
             }
         }
+        .sheet(item: $captionSheet) { box in
+            GameCaptionSheet(
+                context: box.context,
+                initialOptions: moment.gameCaption,
+                canRemove: moment.gameCaption != nil,
+                onApply: { options in
+                    captionSheet = nil
+                    applyCaption(options, context: box.context)
+                },
+                onRemove: {
+                    captionSheet = nil
+                    applyCaption(nil, context: box.context)
+                },
+                onSkip: { captionSheet = nil }
+            )
+        }
+        .appConfirmationDialog(
+            isPresented: $showNoGameInfo,
+            title: "No Game Info",
+            message: "This Moment wasn't recorded during a game, and no game is open. Open a game first to use its inning, count, score and players.",
+            primaryTitle: "OK",
+            primaryAction: {},
+            secondaryTitle: "Cancel"
+        )
+        .overlay {
+            if isApplyingCaption {
+                GameCaptionWorkingOverlay(text: "Adding game info…")
+            }
+        }
+        .sheet(isPresented: $showTagPlayers) {
+            MomentPlayerTagSheet(
+                initialTags: moment.playerTags ?? [],
+                onSave: { tags in
+                    showTagPlayers = false
+                    saveTags(tags)
+                },
+                onCancel: { showTagPlayers = false }
+            )
+            .environmentObject(authManager)
+        }
+        .sheet(isPresented: $showMoveSheet) {
+            MoveMomentToFolderView(moment: moment, onMoved: refreshMoment)
+                .environmentObject(authManager)
+        }
+        .appConfirmationDialog(
+            isPresented: $showDeleteConfirm,
+            title: "Delete \(moment.displayTitle)?",
+            message: "This removes it from PitchMark. The video can't be recovered afterward unless you save a copy first.",
+            primaryTitle: "Delete",
+            primaryRole: .destructive,
+            primaryAction: { deleteThisMoment(saveFirst: false) },
+            secondaryTitle: "Cancel",
+            alternateTitle: "Save to Camera Roll, then Delete",
+            alternateAction: { deleteThisMoment(saveFirst: true) }
+        )
+        .appConfirmationDialog(
+            isPresented: $showRevertConfirm,
+            title: "Revert to Original?",
+            message: "Every edit on \(moment.displayTitle) is removed - trim, speed, zoom, crop, freeze frame, filters, overlays, markup, audio and fades - and it goes back to the video as recorded. Its photos stay. Duplicate it first to keep this version.",
+            primaryTitle: "Revert",
+            primaryRole: .destructive,
+            primaryAction: { revertThisMoment() },
+            secondaryTitle: "Cancel"
+        )
         .sheet(item: $shareRequest) { request in
             ShareSheet(items: request.items)
                 .presentationDetents([.medium, .large])
@@ -389,6 +471,149 @@ struct MomentDetailView: View {
         .onDisappear { commitTitle() }
     }
 
+    private var moreMenu: some View {
+        Menu {
+            Button { showMoveSheet = true } label: { Label("Move to Folder…", systemImage: "folder") }
+            Button { duplicateThisMoment(fromOriginal: false) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+            if momentHasEdits(momentId) {
+                Button { duplicateThisMoment(fromOriginal: true) } label: { Label("Duplicate Original", systemImage: "film") }
+                Button { showRevertConfirm = true } label: { Label("Revert to Original", systemImage: "arrow.uturn.backward") }
+            }
+            Divider()
+            Button(role: .destructive) { showDeleteConfirm = true } label: { Label("Delete", systemImage: "trash") }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel("More")
+        .accessibilityIdentifier("momentDetail.more")
+    }
+
+    /// Who this Moment is about (PlayerMoments.swift) - shows on their
+    /// stats sheets and in the library's Player filter.
+    private var playersSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Players")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showTagPlayers = true
+                } label: {
+                    Label((moment.playerTags ?? []).isEmpty ? "Tag Players" : "Edit", systemImage: "person.badge.plus")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .accessibilityIdentifier("momentDetail.tagPlayers")
+            }
+            let tags = moment.playerTags ?? []
+            if tags.isEmpty {
+                Text("Tag the players in this Moment to find it on their stats.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(tags, id: \.self) { tag in
+                            Label(tag.name, systemImage: tag.pitcherId != nil && tag.hitterId == nil ? "baseball" : "person.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Capsule().fill(Color.pitchMarkActiveGray.opacity(0.14)))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+        )
+    }
+
+    private func saveTags(_ tags: [MomentPlayerTag]) {
+        moment.playerTags = tags
+        let value: Any = tags.isEmpty ? FieldValue.delete() : tags.compactMap { try? Firestore.Encoder().encode($0) }
+        authManager.updateMomentFields(momentId: momentId, fields: ["playerTags": value]) { error in
+            if let error { actionMessage = "Couldn't save the players: \(error.localizedDescription)" }
+            refreshMoment()
+        }
+    }
+
+    private struct CaptionContextBox: Identifiable {
+        let id = UUID()
+        let context: MomentGameContext
+    }
+
+    /// The game saved with the Moment, else the one open now.
+    private func openGameInfo() {
+        player?.pause()
+        if let context = moment.gameContext ?? currentGameContext?() {
+            captionSheet = CaptionContextBox(context: context)
+        } else {
+            showNoGameInfo = true
+        }
+    }
+
+    /// nil options removes the caption.
+    private func applyCaption(_ options: GameCaptionOptions?, context: MomentGameContext) {
+        isApplyingCaption = true
+        actionMessage = nil
+        let needsTags = (moment.playerTags ?? []).isEmpty
+        GameCaptionApplier.apply(momentId: momentId, context: context, options: options, authManager: authManager) { error in
+            isApplyingCaption = false
+            if let error {
+                actionMessage = "Couldn't update the game info: \(error.localizedDescription)"
+            }
+            // A Moment given the open game's info is about its players too.
+            let tags = GameCaption.playerTags(from: context)
+            if needsTags, !tags.isEmpty {
+                let encoded = tags.compactMap { try? Firestore.Encoder().encode($0) }
+                authManager.updateMomentFields(momentId: momentId, fields: ["playerTags": encoded]) { _ in refreshMoment() }
+            }
+            reloadPlayer()
+            refreshMoment()
+        }
+    }
+
+    private func duplicateThisMoment(fromOriginal: Bool) {
+        actionMessage = nil
+        MomentActions.duplicate(moment, fromOriginal: fromOriginal, authManager: authManager) { result in
+            switch result {
+            case .success: actionMessage = fromOriginal ? "Duplicated the original into your library." : "Duplicated into your library."
+            case .failure(let error): actionMessage = "Couldn't duplicate: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func revertThisMoment() {
+        actionMessage = nil
+        MomentActions.revertToOriginal(moment, authManager: authManager) { error in
+            if let error {
+                actionMessage = "Couldn't revert: \(error.localizedDescription)"
+            }
+            fadeInEnabled = false
+            fadeOutEnabled = false
+            reloadPlayer()
+            refreshMoment()
+        }
+    }
+
+    private func deleteThisMoment(saveFirst: Bool) {
+        actionMessage = nil
+        let done: (Error?) -> Void = { error in
+            if let error {
+                actionMessage = error.localizedDescription
+            } else {
+                dismiss()
+            }
+        }
+        if saveFirst {
+            MomentActions.saveThenDelete(moment, authManager: authManager, completion: done)
+        } else {
+            MomentActions.delete(moment, authManager: authManager, completion: done)
+        }
+    }
+
     @ViewBuilder
     private var playbackSection: some View {
         if let player {
@@ -441,6 +666,11 @@ struct MomentDetailView: View {
         Text(moment.createdAt.formatted(date: .abbreviated, time: .shortened))
             .font(.caption)
             .foregroundStyle(.secondary)
+        if let actionMessage {
+            Text(actionMessage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
     }
 
 
@@ -471,32 +701,56 @@ struct MomentDetailView: View {
         return "\(count) added"
     }
 
+    // E (2026-11-15): grouped, with icons, and every applied edit marked.
+    private var speedApplied: Bool { !(moment.speedKeyframes ?? []).isEmpty }
+    private var zoomApplied: Bool { !(moment.zoomRegions ?? []).isEmpty }
+    private var overlaysApplied: Bool { !(moment.overlays ?? []).isEmpty }
+    private var audioApplied: Bool {
+        !(moment.audioOverlays ?? []).isEmpty
+            || (moment.originalAudioVolume.map { $0 != 1 } ?? false)
+            || !(moment.originalVolumeKeyframes ?? []).isEmpty
+            || !(moment.originalMuteRegions ?? []).isEmpty
+    }
+
+    private func editGroupHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .padding(.top, 4)
+    }
+
     private var editActionsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            editGroupHeader("Clip")
             LazyVGrid(columns: editActionColumns, spacing: 10) {
-                editActionButton("Trim") { startTrimEditor() }
-                editActionButton("Speed") { showSpeedEditor = true }
-                editActionButton("Zoom") { showZoomEditor = true }
-                editActionButton("Crop", caption: cropCaption) { showCropEditor = true }
-                editActionButton("Freeze Frame", caption: moment.freezeFrame != nil ? "Applied" : nil) {
-                    // Same reasoning as the fullscreen-expand button above
-                    // - this sheet gets its own AVPlayer too
-                    // (MomentFreezeEditorView), and a still-playing inline
-                    // player left running behind it is exactly what
-                    // produced the overlapping audio the user reported.
+                editActionButton("Trim", icon: "scissors") { startTrimEditor() }
+                editActionButton("Speed", icon: "speedometer", caption: speedApplied ? "On" : nil) { showSpeedEditor = true }
+                editActionButton("Zoom", icon: "plus.magnifyingglass", caption: zoomApplied ? "On" : nil) { showZoomEditor = true }
+                editActionButton("Crop", icon: "crop", caption: cropCaption) { showCropEditor = true }
+                editActionButton("Freeze Frame", icon: "pause.rectangle", caption: moment.freezeFrame != nil ? "On" : nil) {
                     player?.pause()
                     showFreezeEditor = true
                 }
-                editActionButton("Filters", caption: filterCaption) { showFilterEditor = true }
-                editActionButton("Overlays") {
+            }
+            editGroupHeader("Look")
+            LazyVGrid(columns: editActionColumns, spacing: 10) {
+                editActionButton("Filters", icon: "camera.filters", caption: filterCaption) { showFilterEditor = true }
+                fadeGridCell
+            }
+            editGroupHeader("Add")
+            LazyVGrid(columns: editActionColumns, spacing: 10) {
+                editActionButton("Overlays", icon: "textformat", caption: overlaysApplied ? "\(moment.overlays?.count ?? 0) added" : nil) {
                     authManager.loadLibraryAssets { assets in
                         overlayEditorAssets = assets
                         showOverlayEditor = true
                     }
                 }
-                editActionButton("Markup", caption: markupCaption) { showMarkupEditor = true }
-                editActionButton("Audio") { showAudioEditor = true }
-                fadeGridCell
+                editActionButton("Markup", icon: "pencil.tip.crop.circle", caption: markupCaption) { showMarkupEditor = true }
+                editActionButton("Audio", icon: "music.note", caption: audioApplied ? "On" : nil) { showAudioEditor = true }
+                editActionButton("Game Info", icon: "sportscourt", caption: moment.gameCaption != nil ? "On" : nil) {
+                    openGameInfo()
+                }
             }
 
             if isApplyingFade {
@@ -519,18 +773,30 @@ struct MomentDetailView: View {
     }
 
     @ViewBuilder
-    private func editActionButton(_ title: String, caption: String? = nil, action: @escaping () -> Void) -> some View {
+    private func editActionButton(_ title: String, icon: String, caption: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 2) {
-                Text(title)
+            HStack(spacing: 8) {
+                Image(systemName: icon)
                     .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                if let caption {
-                    Text(caption)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    if let caption {
+                        Text(caption)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.pitchMarkActiveGray)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                if caption != nil {
+                    Circle()
+                        .fill(Color.pitchMarkActiveGray)
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel("Applied")
                 }
             }
             .actionTileStyle()
@@ -538,17 +804,6 @@ struct MomentDetailView: View {
         .buttonStyle(.plain)
     }
 
-    /// Fade In and Fade Out share a single grid cell (the tenth, next to
-    /// Audio) rather than getting their own labeled section - there's no
-    /// third state or extra chrome to justify a header, just two small
-    /// toggles. Each applies on tap rather than waiting for a separate
-    /// "Apply" button - there's no state where flipping one of these and
-    /// not exporting makes sense. Deliberately NOT disabled just because
-    /// both are off: that's exactly the state needed to remove a
-    /// previously-applied fade (re-bake from the pre-fade base with
-    /// neither fade active). Disabling that case once made an applied
-    /// fade permanent - reported by the user as "unable to remove a fade
-    /// in or out after Apply Fade."
     private var fadeGridCell: some View {
         HStack(spacing: 4) {
             fadeToggleButton("Fade In", isOn: fadeInEnabled) {

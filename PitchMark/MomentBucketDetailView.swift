@@ -62,7 +62,7 @@ struct MomentBucketDetailView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Create Reel (\(selectedMomentIdsForReel.count))") {
+                    Button("Make Mixtape (\(selectedMomentIdsForReel.count))") {
                         showHighlightReelEditor = true
                     }
                     .disabled(selectedMomentIdsForReel.isEmpty)

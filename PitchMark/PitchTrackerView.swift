@@ -239,6 +239,39 @@ struct PitchTrackerView: View {
         let home = side(activeHomeTeamName, activeHomeTeamClass)
         return away.isEmpty ? home : "\(home) vs. \(away)"
     }
+    /// The open game right now, for Moments' game caption
+    /// (MomentGameCaption.swift). nil with no game open.
+    private func momentGameContextSnapshot() -> MomentGameContext? {
+        guard isGame, let gid = selectedGameId, let game = games.first(where: { $0.id == gid }) else { return nil }
+        let ours = activeHomeTeamName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let theirs: String = {
+            let away = activeAwayTeamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return away.isEmpty ? (opponentName ?? game.opponent).trimmingCharacters(in: .whitespacesAndNewlines) : away
+        }()
+        let batterCell = selectedBatterId.flatMap { id in jerseyCells.first { $0.id == id } }
+        let batterName: String? = batterCell.map { cell in
+            lineupBatterNamesById[cell.id] ?? (cell.jerseyNumber.isEmpty ? "" : "#\(cell.jerseyNumber)")
+        }
+        let pitcher = pitchers.first { $0.id == selectedPitcherId }
+        var context = MomentGameContext()
+        context.gameId = gid
+        context.gameName = ours.isEmpty ? (theirs.isEmpty ? nil : "vs. \(theirs)") : (theirs.isEmpty ? ours : "\(ours) vs. \(theirs)")
+        context.gameDate = game.date
+        context.inning = inning
+        context.balls = balls
+        context.strikes = strikes
+        context.outs = outs
+        context.ourName = ours.isEmpty ? nil : ours
+        context.theirName = theirs.isEmpty ? nil : theirs
+        context.ourScore = us
+        context.theirScore = them
+        context.batterName = batterName
+        context.batterHitterId = batterCell.flatMap { hitterIdByJerseyCellId[$0.id] }
+        context.pitcherName = pitcher?.name
+        context.pitcherId = pitcher?.id
+        return context
+    }
+
     @State private var homeRoster: [TeamPlayer] = []
     private var showSetMyTeamSheet: Bool { get { ui.showSetMyTeamSheet } nonmutating set { ui.showSetMyTeamSheet = newValue } }
     @State private var myTeamCandidates: [(team: Team, membership: TeamMembership)] = []
@@ -12610,7 +12643,10 @@ struct PitchTrackerView: View {
                 .tabItem { Label(HomeArea.home.title, systemImage: HomeArea.home.systemImage) }
                 .tag(HomeArea.home)
 
-            MomentsLibraryView(onSwitchToArea: { selectHomeArea($0) })
+            MomentsLibraryView(
+                onSwitchToArea: { selectHomeArea($0) },
+                currentGameContext: { momentGameContextSnapshot() }
+            )
                 .fixedAppDynamicType()
                 .tabItem { Label(HomeArea.moments.title, systemImage: HomeArea.moments.systemImage) }
                 .tag(HomeArea.moments)

@@ -251,6 +251,7 @@ struct TeamRosterView: View {
             }
         }
         .onAppear {
+            PlayerMomentsIndex.shared.refresh(authManager)
             teamName = selection.team.name
             teamDesignation = selection.team.designation
             refreshPlayers()
@@ -400,12 +401,15 @@ struct TeamRosterView: View {
         }
 
         if isTeamOwner {
-            Button {
-                beginEditing(player)
-            } label: {
-                label.contentShape(Rectangle())
+            HStack(spacing: 8) {
+                Button {
+                    beginEditing(player)
+                } label: {
+                    label.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                momentsButton(player)
             }
-            .buttonStyle(.plain)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(role: .destructive) {
                     if isInOpenGame {
@@ -421,11 +425,24 @@ struct TeamRosterView: View {
                 unarchivePlayerAction(player)
             }
         } else {
-            label
-                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                    unarchivePlayerAction(player)
-                }
+            HStack(spacing: 8) {
+                label
+                momentsButton(player)
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                unarchivePlayerAction(player)
+            }
         }
+    }
+
+    /// Their Moments (PlayerMoments.swift) - only when they have some.
+    private func momentsButton(_ player: TeamPlayer) -> some View {
+        let profile = person(for: player)
+        return PlayerMomentsButton(
+            name: player.name,
+            hitterIds: (profile?.hitterIds ?? []) + [player.hitterId].compactMap { $0 },
+            pitcherIds: (profile?.pitcherIds ?? []) + [player.pitcherId].compactMap { $0 }
+        )
     }
 
     /// Archiving a player (Home's Players list or Link Profiles) is per

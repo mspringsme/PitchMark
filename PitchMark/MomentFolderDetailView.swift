@@ -93,7 +93,7 @@ struct MomentFolderDetailView: View {
                     moments: directMoments,
                     isSelecting: isSelectingForReel,
                     selectedMomentIds: selectedMomentIdsForReel,
-                    emptyMessage: "No Moments directly in \(folder.name) yet.",
+                    emptyMessage: "No Moments directly in \(folder.displayName) yet.",
                     onTap: { moment in
                         if isSelectingForReel {
                             toggleReelSelection(moment)
@@ -105,7 +105,7 @@ struct MomentFolderDetailView: View {
             }
             .padding(.vertical)
         }
-        .navigationTitle(folder.name)
+        .navigationTitle(folder.displayName)
         .toolbar {
             if isSelectingForReel {
                 ToolbarItem(placement: .topBarLeading) {
@@ -115,7 +115,7 @@ struct MomentFolderDetailView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Create Reel (\(selectedMomentIdsForReel.count))") {
+                    Button("Make Mixtape (\(selectedMomentIdsForReel.count))") {
                         showHighlightReelEditor = true
                     }
                     .disabled(selectedMomentIdsForReel.isEmpty)
@@ -170,7 +170,7 @@ struct MomentFolderDetailView: View {
         .appConfirmationDialog(
             isPresented: $showDeleteDialog,
             title: "Delete \u{201C}\(bucketPendingDelete?.name ?? "this bucket")\u{201D}?",
-            message: "Every Moment inside falls back to being filed directly in \(folder.name), not deleted.",
+            message: "Every Moment inside falls back to being filed directly in \(folder.displayName), not deleted.",
             primaryTitle: "Delete",
             primaryRole: .destructive,
             primaryAction: { deletePendingBucket() },

@@ -56,7 +56,7 @@ struct MomentFoldersView: View {
                         .environmentObject(authManager)
                 } label: {
                     MomentFolderRow(
-                        name: highlightReelsFolder.name,
+                        name: highlightReelsFolder.displayName,
                         representativeMoment: momentsInFolder(highlightReelsFolder).first,
                         count: momentsInFolder(highlightReelsFolder).count
                     )

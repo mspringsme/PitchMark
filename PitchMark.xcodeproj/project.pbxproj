@@ -696,7 +696,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PitchMark can tag a Moment with the city it was recorded in, if you choose to.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PitchMark uses the microphone to record audio with Moments videos.";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "PitchMark saves a copy of a Moment's video to your Photos library when you choose to.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "PitchMark backs up your Moments' videos to your Photos library so they aren't lost with your phone. You can turn this off in Moments settings.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "PitchMark needs photo library access so you can choose a pitcher image.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -744,7 +744,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "© 2026 PitchMark Live";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "PitchMark can tag a Moment with the city it was recorded in, if you choose to.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PitchMark uses the microphone to record audio with Moments videos.";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "PitchMark saves a copy of a Moment's video to your Photos library when you choose to.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "PitchMark backs up your Moments' videos to your Photos library so they aren't lost with your phone. You can turn this off in Moments settings.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "PitchMark needs photo library access so you can choose a pitcher image.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

@@ -71,6 +71,9 @@ struct MomentsLibraryView: View {
     var contextPlayer: TeamPlayer? = nil
     var contextTeamId: String? = nil
     var onSwitchToArea: ((HomeArea) -> Void)? = nil
+    /// The game open in the tracker, as it stands right now - nil when no
+    /// game is open (MomentGameCaption.swift).
+    var currentGameContext: (() -> MomentGameContext?)? = nil
 
     @EnvironmentObject var authManager: AuthManager
     @Environment(\.dismiss) private var dismiss
@@ -92,11 +95,9 @@ struct MomentsLibraryView: View {
     /// `autoBackupMomentVideoToPhotosIfEnabled` (Moment.swift) via the
     /// exact same UserDefaults key string - that's a plain free function,
     /// not a View, so it can't use this `@AppStorage` property directly.
-    @AppStorage("momentsAutoBackupToPhotosEnabled") private var autoBackupToPhotos = false
+    @AppStorage("momentsAutoBackupToPhotosEnabled") private var autoBackupToPhotos = true
     @State private var showMomentsSettings = false
 
-    @State private var momentPendingAction: Moment? = nil
-    @State private var showMomentActionsDialog = false
     @State private var momentForPlayback: Moment? = nil
     /// Tapping a Moment whose video never synced to this device (see
     /// `momentVideoExistsLocally`'s doc comment, Moment.swift) shows this
@@ -116,7 +117,12 @@ struct MomentsLibraryView: View {
         case all
         case folders
     }
-    @State private var libraryTab: MomentsLibraryTab = .folders
+    /// Opens on All (2026-11-15): on Folders, a coach with no folders saw
+    /// "No folders yet" and their unfiled recordings looked missing.
+    @State private var libraryTab: MomentsLibraryTab = .all
+    @State private var libraryFilter: MomentLibraryFilter = .all
+    /// The Player filter: a tagged player's name, or nil for everyone.
+    @State private var playerFilterName: String? = nil
     @State private var showCreateFolder = false
 
     @State private var mediaPickerSelections: [PhotosPickerItem] = []
@@ -142,6 +148,28 @@ struct MomentsLibraryView: View {
     @State private var selectedMomentIdsForReel: Set<String> = []
     @State private var showHighlightReelEditor = false
 
+    /// After a capture during a game: which new Moments to caption.
+    struct CaptionPrompt: Identifiable {
+        let id = UUID()
+        let momentIds: [String]
+        let context: MomentGameContext
+    }
+    @State private var captionPrompt: CaptionPrompt? = nil
+
+    /// What picking clips is for: a Mixtape, or Compare (exactly two).
+    enum SelectIntent { case mixtape, compare }
+    @State private var selectIntent: SelectIntent = .mixtape
+    struct CompareRequest: Identifiable {
+        let id = UUID()
+        let a: Moment
+        let b: Moment
+        let urlA: URL
+        let urlB: URL
+    }
+    @State private var compareRequest: CompareRequest? = nil
+    @State private var isApplyingCaption = false
+    @State private var captionErrorMessage: String? = nil
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -150,6 +178,19 @@ struct MomentsLibraryView: View {
                         recordButton
                         importVideoButton
                         assetsButton
+                    }
+
+                    // Mixtape (was Highlight Reel) and Compare, 2026-11-15 -
+                    // their own buttons rather than only behind Select.
+                    if !isSelectingForReel {
+                        HStack(spacing: 10) {
+                            makeButton("Mixtape", systemImage: "film.stack", id: "moments.mixtape", disabled: moments.isEmpty) {
+                                startSelecting(.mixtape)
+                            }
+                            makeButton("Compare", systemImage: "rectangle.split.2x1", id: "moments.compare", disabled: moments.count < 2) {
+                                startSelecting(.compare)
+                            }
+                        }
                     }
 
                     if let player = contextPlayer {
@@ -173,6 +214,11 @@ struct MomentsLibraryView: View {
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
+                    if let captionErrorMessage {
+                        Text(captionErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
 
                     if !isSelectingForReel {
                         HStack(spacing: 24) {
@@ -193,7 +239,15 @@ struct MomentsLibraryView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 8)
-                        .padding(.bottom, 16)
+                        .padding(.bottom, libraryTab == .all ? 8 : 16)
+
+                        if libraryTab == .all {
+                            HStack(spacing: 8) {
+                                playerFilterMenu
+                                MomentFilterChips(selection: $libraryFilter)
+                            }
+                            .padding(.bottom, 8)
+                        }
 
                         Divider()
                     }
@@ -204,10 +258,10 @@ struct MomentsLibraryView: View {
                 Group {
                     if libraryTab == .all || isSelectingForReel {
                         MomentGridView(
-                            moments: moments,
+                            moments: gridMoments,
                             isSelecting: isSelectingForReel,
                             selectedMomentIds: selectedMomentIdsForReel,
-                            emptyMessage: "No Moments yet. Record one above.",
+                            emptyMessage: gridEmptyMessage,
                             onTap: { moment in
                                 if isSelectingForReel {
                                     guard let id = moment.id, momentVideoExistsLocally(for: id) else {
@@ -233,6 +287,7 @@ struct MomentsLibraryView: View {
                         .environmentObject(authManager)
                     }
                 }
+                .environment(\.momentQuickAction, { moment, action in performQuickAction(action, on: moment) })
             }
             .navigationTitle("Moments")
             .navigationBarTitleDisplayMode(.inline)
@@ -259,33 +314,23 @@ struct MomentsLibraryView: View {
                         }
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .principal) {
                     if isSelectingForReel {
-                        Button("Create Reel (\(selectedMomentIdsForReel.count))") {
-                            showHighlightReelEditor = true
-                        }
-                        .disabled(selectedMomentIdsForReel.isEmpty)
-                    } else {
-                        Button("Select") {
-                            // Reel multi-select always operates on the
-                            // flat list, never a Folder/Bucket subset.
-                            libraryTab = .all
-                            isSelectingForReel = true
-                        }
-                        .disabled(moments.isEmpty)
+                        Text(selectIntent == .compare ? "Pick 2 to Compare" : "Pick Mixtape Clips")
+                            .font(.subheadline.weight(.semibold))
                     }
                 }
-                if !isSelectingForReel {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        // When shown as a main TabView sibling, onSwitchToArea
-                        // switches back to Games; nil falls back to the
-                        // ordinary sheet dismiss.
-                        Button("Done") {
-                            if let onSwitchToArea {
-                                onSwitchToArea(.games)
-                            } else {
-                                dismiss()
+                ToolbarItem(placement: .topBarTrailing) {
+                    if isSelectingForReel {
+                        if selectIntent == .compare {
+                            Button("Compare (\(selectedMomentIdsForReel.count)/2)") { openCompare() }
+                                .disabled(selectedMomentIdsForReel.count != 2)
+                                .accessibilityIdentifier("moments.compare.go")
+                        } else {
+                            Button("Make Mixtape (\(selectedMomentIdsForReel.count))") {
+                                showHighlightReelEditor = true
                             }
+                            .disabled(selectedMomentIdsForReel.isEmpty)
                         }
                     }
                 }
@@ -338,17 +383,47 @@ struct MomentsLibraryView: View {
             // Moments Library" picker).
             MomentCameraPicker { url, duration, photos in
                 showCameraPicker = false
-                if let url {
-                    saveRecordedMoment(from: url, duration: duration, capturedPhotos: [])
-                }
-                if !photos.isEmpty {
-                    saveCapturedPhotosAsIndividualMoments(photos)
+                // The game as it stood when recording stopped.
+                let context = currentGameContext?()
+                Task {
+                    var ids: [String] = []
+                    if let url, let id = await saveRecordedMomentAndWait(
+                        from: url, duration: duration, capturedPhotos: [], momentKind: nil,
+                        fromCamera: true, gameContext: context
+                    ) {
+                        ids.append(id)
+                    }
+                    ids += await saveCapturedPhotosAsIndividualMoments(photos, gameContext: context)
+                    guard let context, !ids.isEmpty else { return }
+                    // After the camera sheet has finished going away.
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    await MainActor.run {
+                        captionPrompt = CaptionPrompt(momentIds: ids, context: context)
+                    }
                 }
             }
             .ignoresSafeArea()
         }
         .sheet(item: $selectedMomentForDetail, onDismiss: { refreshMoments() }) { moment in
-            MomentDetailView(moment: moment, allMoments: moments)
+            MomentDetailView(moment: moment, allMoments: moments, currentGameContext: currentGameContext)
+        }
+        .sheet(item: $captionPrompt) { prompt in
+            GameCaptionSheet(
+                context: prompt.context,
+                initialOptions: nil,
+                momentCount: prompt.momentIds.count,
+                onApply: { options in
+                    captionPrompt = nil
+                    applyCaption(options, to: prompt)
+                },
+                onSkip: { captionPrompt = nil }
+            )
+            .interactiveDismissDisabled()
+        }
+        .overlay {
+            if isApplyingCaption {
+                GameCaptionWorkingOverlay(text: "Adding game info…")
+            }
         }
         .sheet(item: $momentShareRequest) { request in
             ShareSheet(items: request.items)
@@ -365,6 +440,13 @@ struct MomentsLibraryView: View {
             HighlightReelEditorView(initialMoments: momentsSelectedForReel, onCreated: refreshMoments)
                 .environmentObject(authManager)
         }
+        .fullScreenCover(item: $compareRequest) { request in
+            MomentCompareView(momentA: request.a, momentB: request.b, urlA: request.urlA, urlB: request.urlB) {
+                compareRequest = nil
+                refreshMoments()
+            }
+            .environmentObject(authManager)
+        }
         .fullScreenCover(item: $momentForPlayback) { moment in
             if let id = moment.id, let url = resolvedMomentPlaybackURL(for: id) {
                 MomentPlaybackView(videoURL: url)
@@ -374,53 +456,6 @@ struct MomentsLibraryView: View {
         // into MomentDetailView - Play is a dedicated, landscape-capable
         // full-bleed viewer (MomentPlaybackView) with none of
         // MomentDetailView's editing chrome.
-        .confirmationDialog(
-            momentPendingAction?.displayTitle ?? "Moment",
-            isPresented: $showMomentActionsDialog,
-            titleVisibility: .visible
-        ) {
-            Button("Play") {
-                momentForPlayback = momentPendingAction
-            }
-            Button("Edit / View Details") {
-                selectedMomentForDetail = momentPendingAction
-            }
-            if let moment = momentPendingAction, let id = moment.id,
-               !MomentShare.sourceFiles(momentId: id, photoCount: moment.photoCount ?? 0).isEmpty {
-                Button("Share…") {
-                    // After the dialog has gone, or the sheet can't present.
-                    DispatchQueue.main.async { momentShareRequest = MomentShare.prepare(moment) }
-                }
-            }
-            if let moment = momentPendingAction {
-                Button("Duplicate") {
-                    duplicateMoment(moment, fromOriginal: false)
-                }
-                // Only offered when an edited file actually exists -
-                // otherwise "current" and "original" are the same file,
-                // and a second, identical option would just be confusing.
-                if let id = moment.id, let editedURL = localMomentEditedVideoURL(for: id), FileManager.default.fileExists(atPath: editedURL.path) {
-                    Button("Duplicate to Original") {
-                        duplicateMoment(moment, fromOriginal: true)
-                    }
-                }
-            }
-            Button("Move to Folder…") {
-                momentPendingMove = momentPendingAction
-            }
-            // Grid cells have no swipe-to-delete (a List-only affordance) -
-            // Delete lives here instead, reusing the same confirmation
-            // flow swipe-to-delete already triggers.
-            if let moment = momentPendingAction {
-                Button("Delete", role: .destructive) {
-                    momentPendingDelete = moment
-                    showDeleteDialog = true
-                }
-            }
-            Button("Cancel", role: .cancel) {
-                momentPendingAction = nil
-            }
-        }
         .appConfirmationDialog(
             isPresented: $showOtherDeviceNotice,
             title: "On Another Device",
@@ -509,6 +544,23 @@ struct MomentsLibraryView: View {
         .disabled(isImportingMedia)
     }
 
+    private func makeButton(_ title: String, systemImage: String, id: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: systemImage)
+                Text(title)
+            }
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.5 : 1)
+        .accessibilityIdentifier(id)
+    }
+
     private var assetsButton: some View {
         Button {
             showAssetLibrary = true
@@ -523,6 +575,49 @@ struct MomentsLibraryView: View {
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+
+    /// The All tab's clips, after its filter chip (selecting ignores it).
+    private var gridMoments: [Moment] {
+        if isSelectingForReel { return moments }
+        let filtered = libraryFilter.apply(to: moments)
+        guard let name = playerFilterName else { return filtered }
+        return filtered.filter { PlayerMoments.isTagged($0, name: name) }
+    }
+
+    /// Only shown once some Moment is tagged with a player.
+    @ViewBuilder
+    private var playerFilterMenu: some View {
+        let names = PlayerMoments.taggedNames(in: moments)
+        if !names.isEmpty {
+            Menu {
+                Button("Everyone") { playerFilterName = nil }
+                ForEach(names, id: \.self) { name in
+                    Button(name) { playerFilterName = name }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.fill")
+                        .font(.caption)
+                    Text(playerFilterName ?? "Player")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(playerFilterName == nil ? Color.primary : Color.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(playerFilterName == nil ? Color(.secondarySystemBackground) : Color.pitchMarkActiveGray))
+            }
+            .accessibilityIdentifier("moments.filter.player")
+        }
+    }
+
+    private var gridEmptyMessage: String {
+        if moments.isEmpty { return "No Moments yet. Record one above." }
+        if let playerFilterName { return "No \(libraryFilter == .all ? "" : libraryFilter.title + " ")Moments of \(playerFilterName)." }
+        return "No Moments match \(libraryFilter.title)."
     }
 
     private func isMomentSelectedForReel(_ moment: Moment) -> Bool {
@@ -544,17 +639,59 @@ struct MomentsLibraryView: View {
             showOtherDeviceNotice = true
             return
         }
-        momentPendingAction = moment
-        showMomentActionsDialog = true
+        selectedMomentForDetail = moment
+    }
+
+    /// A tile's long-press menu (MomentQuickActionMenu).
+    private func performQuickAction(_ action: MomentQuickAction, on moment: Moment) {
+        guard let id = moment.id, momentVideoExistsLocally(for: id) else {
+            momentPendingOtherDeviceNotice = moment
+            showOtherDeviceNotice = true
+            return
+        }
+        switch action {
+        case .play:
+            momentForPlayback = moment
+        case .share:
+            DispatchQueue.main.async { momentShareRequest = MomentShare.prepare(moment) }
+        case .duplicate:
+            duplicateMoment(moment, fromOriginal: false)
+        case .duplicateOriginal:
+            duplicateMoment(moment, fromOriginal: true)
+        case .move:
+            momentPendingMove = moment
+        case .delete:
+            momentPendingDelete = moment
+            showDeleteDialog = true
+        }
     }
 
     private func toggleReelSelection(_ moment: Moment) {
         guard let id = moment.id else { return }
         if selectedMomentIdsForReel.contains(id) {
             selectedMomentIdsForReel.remove(id)
-        } else {
+        } else if selectIntent == .mixtape || selectedMomentIdsForReel.count < 2 {
             selectedMomentIdsForReel.insert(id)
         }
+    }
+
+    /// Picking always works on the whole library, never a folder.
+    private func startSelecting(_ intent: SelectIntent) {
+        selectIntent = intent
+        libraryTab = .all
+        selectedMomentIdsForReel = []
+        isSelectingForReel = true
+    }
+
+    private func openCompare() {
+        let picked = momentsSelectedForReel
+        guard picked.count == 2,
+              let idA = picked[0].id, let idB = picked[1].id,
+              let urlA = resolvedMomentPlaybackURL(for: idA),
+              let urlB = resolvedMomentPlaybackURL(for: idB) else { return }
+        compareRequest = CompareRequest(a: picked[0], b: picked[1], urlA: urlA, urlB: urlB)
+        isSelectingForReel = false
+        selectedMomentIdsForReel = []
     }
 
     /// `moments` is already ordered (newest-first, per loadMoments) -
@@ -570,43 +707,25 @@ struct MomentsLibraryView: View {
     }
 
     private func deletePendingMoment() {
-        guard let moment = momentPendingDelete, let id = moment.id else { return }
+        guard let moment = momentPendingDelete else { return }
         momentPendingDelete = nil
         deleteErrorMessage = nil
-        authManager.deleteMoment(momentId: id) { error in
-            if let error {
-                deleteErrorMessage = "Couldn't delete: \(error.localizedDescription)"
-                return
-            }
-            removeAllLocalMomentFiles(momentId: id, photoCount: moment.photoCount ?? 0)
+        MomentActions.delete(moment, authManager: authManager) { error in
+            if let error { deleteErrorMessage = "Couldn't delete: \(error.localizedDescription)" }
             refreshMoments()
         }
     }
 
     private func saveToCameraRollThenDelete() {
-        guard let moment = momentPendingDelete, let id = moment.id else { return }
+        guard let moment = momentPendingDelete else { return }
+        momentPendingDelete = nil
         deleteErrorMessage = nil
-        saveMomentVideoToCameraRoll(momentId: id) { result in
-            switch result {
-            case .success:
-                deletePendingMoment()
-            case .failure(let error):
-                momentPendingDelete = nil
-                deleteErrorMessage = "Couldn't save to Camera Roll, so nothing was deleted: \(error.localizedDescription)"
-            }
+        MomentActions.saveThenDelete(moment, authManager: authManager) { error in
+            if let error { deleteErrorMessage = error.localizedDescription }
+            refreshMoments()
         }
     }
 
-    /// Sorts a mixed picker selection into at most one video (first one
-    /// found; `FileRepresentation` streams it to a temp file rather than
-    /// loading it into memory, the same standard pattern used anywhere
-    /// PhotosPicker hands back video) plus any number of photos, then
-    /// decides what kind of Moment that makes:
-    /// - video (+ maybe photos) -> the existing saveRecordedMoment path,
-    ///   `.mixedCreation` if photos came along, else plain `.video`.
-    /// - photos only -> `buildVideoFromPhotos` turns them into a real
-    ///   video first (MomentPhotoVideoBuilder.swift), so this still ends
-    ///   up a completely ordinary Moment to every other screen.
     private func importMedia(_ items: [PhotosPickerItem]) {
         isImportingMedia = true
         importMediaErrorMessage = nil
@@ -707,10 +826,15 @@ struct MomentsLibraryView: View {
         }
     }
 
-    private func saveRecordedMomentAndWait(from tempURL: URL, duration: Double?, capturedPhotos: [Data], momentKind: MomentKind?) async {
+    @discardableResult
+    private func saveRecordedMomentAndWait(
+        from tempURL: URL, duration: Double?, capturedPhotos: [Data], momentKind: MomentKind?,
+        fromCamera: Bool = false, gameContext: MomentGameContext? = nil
+    ) async -> String? {
         await withCheckedContinuation { continuation in
-            saveRecordedMoment(from: tempURL, duration: duration, capturedPhotos: capturedPhotos, momentKind: momentKind) {
-                continuation.resume()
+            saveRecordedMoment(from: tempURL, duration: duration, capturedPhotos: capturedPhotos, momentKind: momentKind,
+                               fromCamera: fromCamera, gameContext: gameContext) { id in
+                continuation.resume(returning: id)
             }
         }
     }
@@ -723,17 +847,45 @@ struct MomentsLibraryView: View {
     /// concurrently), matching `importMediaSeparately`, so `isSaving`
     /// stays true for the whole batch instead of flipping false after
     /// the first photo finishes.
-    private func saveCapturedPhotosAsIndividualMoments(_ photos: [Data]) {
-        Task {
-            for data in photos {
-                guard let image = UIImage(data: data) else { continue }
-                let built: URL? = await withCheckedContinuation { continuation in
-                    buildVideoFromPhotos([image]) { result in
-                        continuation.resume(returning: try? result.get())
-                    }
+    private func saveCapturedPhotosAsIndividualMoments(_ photos: [Data], gameContext: MomentGameContext?) async -> [String] {
+        var ids: [String] = []
+        for data in photos {
+            guard let image = UIImage(data: data) else { continue }
+            let built: URL? = await withCheckedContinuation { continuation in
+                buildVideoFromPhotos([image]) { result in
+                    continuation.resume(returning: try? result.get())
                 }
-                guard let built else { continue }
-                await saveRecordedMomentAndWait(from: built, duration: defaultSlideshowPhotoDuration, capturedPhotos: [data], momentKind: .photoCreation)
+            }
+            guard let built else { continue }
+            if let id = await saveRecordedMomentAndWait(
+                from: built, duration: defaultSlideshowPhotoDuration, capturedPhotos: [data],
+                momentKind: .photoCreation, fromCamera: true, gameContext: gameContext
+            ) {
+                ids.append(id)
+            }
+        }
+        return ids
+    }
+
+    /// Bakes the chosen caption into each new Moment, one at a time.
+    private func applyCaption(_ options: GameCaptionOptions, to prompt: CaptionPrompt) {
+        isApplyingCaption = true
+        captionErrorMessage = nil
+        Task {
+            var failed = 0
+            for id in prompt.momentIds {
+                let error: Error? = await withCheckedContinuation { continuation in
+                    GameCaptionApplier.apply(momentId: id, context: prompt.context, options: options,
+                                             authManager: authManager) { continuation.resume(returning: $0) }
+                }
+                if error != nil { failed += 1 }
+            }
+            await MainActor.run {
+                isApplyingCaption = false
+                if failed > 0 {
+                    captionErrorMessage = "Couldn't add the game info to \(failed) Moment\(failed == 1 ? "" : "s")."
+                }
+                refreshMoments()
             }
         }
     }
@@ -746,53 +898,27 @@ struct MomentsLibraryView: View {
     /// the untouched original instead, discarding any trim/overlays/
     /// speed changes baked into an edited file - a way to start fresh
     /// editing again while leaving the current Moment exactly as it is.
-    /// Metadata is deliberately NOT cloned (title/favorite/game info/
-    /// photos/overlays/speed keyframes) - only player/team context
-    /// carries over, matching "capture now, create later": the new
-    /// Moment starts as plain, undecorated footage, same as any other
-    /// freshly-added one.
+    /// The copy keeps the title, favorite, folder, photos, game and
+    /// players (2026-11-15, MomentActions.duplicate); its edit settings
+    /// aren't copied - their result is already in the copied video.
     private func duplicateMoment(_ moment: Moment, fromOriginal: Bool) {
         duplicateErrorMessage = nil
-        guard let id = moment.id else { return }
-        let sourceURL = fromOriginal ? localMomentVideoURL(for: id) : resolvedMomentPlaybackURL(for: id)
-        guard let sourceURL, FileManager.default.fileExists(atPath: sourceURL.path) else {
-            duplicateErrorMessage = "Couldn't duplicate: video file not found."
-            return
-        }
-
-        Task {
-            let asset = AVURLAsset(url: sourceURL)
-            let loadedDuration = try? await asset.load(.duration)
-            let seconds = loadedDuration?.seconds.isFinite == true ? loadedDuration!.seconds : moment.durationSeconds
-
-            await MainActor.run {
-                let newMoment = Moment(
-                    teamId: moment.teamId,
-                    playerId: moment.playerId,
-                    playerName: moment.playerName,
-                    durationSeconds: seconds
-                )
-                authManager.saveMoment(newMoment) { result in
-                    switch result {
-                    case .success(let saved):
-                        if let newId = saved.id {
-                            // Never re-trigger the Photos auto-backup here -
-                            // see saveLocalMomentVideo's doc comment. A
-                            // duplicate's video was already backed up (if
-                            // the toggle was on) when its original Moment
-                            // was first created.
-                            saveLocalMomentVideo(from: sourceURL, momentId: newId, autoBackupToPhotos: false)
-                        }
-                        refreshMoments()
-                    case .failure(let error):
-                        duplicateErrorMessage = "Couldn't duplicate: \(error.localizedDescription)"
-                    }
-                }
+        MomentActions.duplicate(moment, fromOriginal: fromOriginal, authManager: authManager) { result in
+            if case .failure(let error) = result {
+                duplicateErrorMessage = "Couldn't duplicate: \(error.localizedDescription)"
             }
+            refreshMoments()
         }
     }
 
-    private func saveRecordedMoment(from tempURL: URL, duration: Double?, capturedPhotos: [Data], momentKind: MomentKind? = nil, completion: @escaping () -> Void = {}) {
+    /// `fromCamera`: recorded or taken in PitchMark, so it's backed up to
+    /// Photos (when that's on). Imports came from Photos and aren't copied
+    /// back; a photo is backed up as the photo, not its built video.
+    private func saveRecordedMoment(
+        from tempURL: URL, duration: Double?, capturedPhotos: [Data], momentKind: MomentKind? = nil,
+        fromCamera: Bool = false, gameContext: MomentGameContext? = nil,
+        completion: @escaping (String?) -> Void = { _ in }
+    ) {
         isSaving = true
 
         func finishSaving(cityName: String?) {
@@ -806,20 +932,29 @@ struct MomentsLibraryView: View {
                 momentKind: momentKind,
                 cityName: cityName
             )
-            authManager.saveMoment(moment) { result in
+            var tagged = moment
+            if let gameContext {
+                tagged.gameContext = gameContext
+                let tags = GameCaption.playerTags(from: gameContext)
+                tagged.playerTags = tags.isEmpty ? nil : tags
+            }
+            authManager.saveMoment(tagged) { result in
                 isSaving = false
-                defer { completion() }
                 switch result {
                 case .success(let saved):
+                    defer { completion(saved.id) }
                     if let id = saved.id {
-                        saveLocalMomentVideo(from: tempURL, momentId: id)
+                        saveLocalMomentVideo(from: tempURL, momentId: id,
+                                             autoBackupToPhotos: fromCamera && momentKind != .photoCreation)
                         for (index, data) in capturedPhotos.enumerated() {
                             saveLocalMomentPhoto(data, momentId: id, index: index)
+                            if fromCamera { autoBackupMomentPhotoToPhotosIfEnabled(data) }
                         }
                     }
                     refreshMoments()
                 case .failure(let error):
                     debugLog("❌ saveMoment failed:", error.localizedDescription)
+                    completion(nil)
                 }
             }
         }
@@ -859,7 +994,7 @@ struct MomentsSettingsView: View {
                 Section {
                     Toggle("Back up new Moments to Photos", isOn: $autoBackupToPhotos)
                 } footer: {
-                    Text("Automatically saves a copy of each newly recorded or imported Moment's video into a \"PitchMark\" album in your Photos library. Later edits aren't re-saved - use \"Save to Camera Roll\" on a specific Moment for that.")
+                    Text("Saves a copy of each newly recorded or imported Moment's video to your Photos library, so it isn't lost if this phone is. Later edits aren't re-saved - share or save a specific Moment for that.")
                 }
             }
             .navigationTitle("Moments Settings")

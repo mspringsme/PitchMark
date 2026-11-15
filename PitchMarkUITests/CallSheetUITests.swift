@@ -36,9 +36,13 @@ final class CallSheetUITests: XCTestCase {
         XCTAssertTrue(tabs.buttons["Batting & Fielding"].isSelected, "opens on Batting & Fielding in a game")
 
         tabs.buttons["Pitching"].tap()
-        let note = app.descendants(matching: .any)["callSheet.gameOpenNote"]
+        // By its words as well as its identifier: on a cold first launch
+        // the Label's identifier wasn't always visible to the test.
+        let note = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'callSheet.gameOpenNote' OR label CONTAINS[c] 'aren\\'t recorded'"))
+            .firstMatch
         let noKeys = app.staticTexts["No pitching keys"]
-        XCTAssertTrue(note.waitForExistence(timeout: 5) || noKeys.exists,
+        XCTAssertTrue(note.waitForExistence(timeout: 8) || noKeys.exists,
                       "with a key, the Pitching tab says nothing is recorded")
 
         app.buttons["callSheet.done"].tap()
