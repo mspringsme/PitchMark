@@ -486,6 +486,11 @@ struct PitcherAvatarView: View {
                     .foregroundStyle(.white)
             }
         }
+        // The portrait is read from disk in `body`, so nothing about the
+        // inputs changes when a new one is saved. `refreshToken` has to be
+        // read here or bumping it invalidates nothing - the circle stayed
+        // stale until the list was rebuilt (2026-11-14).
+        .id(refreshToken)
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(

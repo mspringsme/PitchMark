@@ -170,6 +170,13 @@ struct PlayerDirectoryRow: Identifiable {
     /// whose older record was archived is still an active player. Keying on
     /// the primary record alone hid the whole person the moment a link made
     /// an archived record primary.
+    /// On at least one team, and every one of them created by another
+    /// coach - their roster rows aren't this account's to edit (2026-11-14).
+    func isOnlyOnOtherCoachesTeams(uid: String?) -> Bool {
+        guard let uid, !teams.isEmpty else { return false }
+        return teams.allSatisfy { $0.createdByUid != uid }
+    }
+
     func isArchived(in archivedPitcherIds: Set<String>) -> Bool {
         let ids = pitcherIds.isEmpty ? [pitcherId].compactMap { $0 } : pitcherIds
         return !ids.isEmpty && ids.allSatisfy { archivedPitcherIds.contains($0) }
@@ -427,6 +434,8 @@ struct PlayerDirectoryRowView<Accessory: View>: View {
     let row: PlayerDirectoryRow
     var isArchived: Bool = false
     var isSelected: Bool = false
+    /// Home marks a player who is only on other coaches' teams.
+    var isOtherCoachesPlayer: Bool = false
     @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
@@ -468,6 +477,16 @@ struct PlayerDirectoryRowView<Accessory: View>: View {
                     Text("Archived")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
+                }
+                if isOtherCoachesPlayer {
+                    Label("Another coach's team", systemImage: "lock.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        .accessibilityIdentifier("player.otherCoachBadge")
                 }
             }
 

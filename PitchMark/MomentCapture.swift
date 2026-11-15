@@ -223,6 +223,10 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
     private let photoCountLabel = UILabel()
     private let zoom1xButton = UIButton(type: .system)
     private let zoom2xButton = UIButton(type: .system)
+    /// Continuous zoom, 1x to the camera's limit (2026-11-14). Pinch and
+    /// the 1x/2x pills move it too, and it follows the camera on a flip.
+    private let zoomSlider = UISlider()
+    private let zoomValueLabel = UILabel()
     private let focusReticle = UIView()
     private let timerLabel = UILabel()
     private let finishingOverlay = UIView()
@@ -516,6 +520,7 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
             self.recordButton.isEnabled = true
             self.shutterButton.isEnabled = true
             self.flipButton.isEnabled = true
+            self.syncZoomSlider()
         }
     }
 
@@ -620,6 +625,7 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
             self.shutterButton.isEnabled = true
             self.flipButton.isEnabled = false
             self.flipButton.alpha = 0.35
+            self.syncZoomSlider()
         }
     }
 
@@ -698,6 +704,29 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         styleZoomPill(zoom2xButton, title: "2x")
         zoom2xButton.addTarget(self, action: #selector(zoom2xTapped), for: .touchUpInside)
         view.addSubview(zoom2xButton)
+
+        zoomSlider.translatesAutoresizingMaskIntoConstraints = false
+        zoomSlider.minimumValue = 1
+        zoomSlider.maximumValue = Float(maxZoomFactor)
+        zoomSlider.value = 1
+        zoomSlider.minimumTrackTintColor = .white
+        zoomSlider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.35)
+        zoomSlider.minimumValueImage = UIImage(systemName: "minus.magnifyingglass")
+        zoomSlider.maximumValueImage = UIImage(systemName: "plus.magnifyingglass")
+        zoomSlider.tintColor = .white
+        zoomSlider.addTarget(self, action: #selector(zoomSliderChanged(_:)), for: .valueChanged)
+        zoomSlider.accessibilityLabel = "Zoom"
+        view.addSubview(zoomSlider)
+
+        zoomValueLabel.translatesAutoresizingMaskIntoConstraints = false
+        zoomValueLabel.textColor = .white
+        zoomValueLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        zoomValueLabel.textAlignment = .center
+        zoomValueLabel.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        zoomValueLabel.layer.cornerRadius = 10
+        zoomValueLabel.layer.masksToBounds = true
+        zoomValueLabel.text = "1.0x"
+        view.addSubview(zoomValueLabel)
 
         focusReticle.translatesAutoresizingMaskIntoConstraints = false
         focusReticle.frame = CGRect(x: 0, y: 0, width: 70, height: 70)
@@ -785,6 +814,15 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
             zoom2xButton.bottomAnchor.constraint(equalTo: recordButton.topAnchor, constant: -20),
             zoom2xButton.widthAnchor.constraint(equalToConstant: 40),
             zoom2xButton.heightAnchor.constraint(equalToConstant: 40),
+
+            zoomSlider.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 32),
+            zoomSlider.trailingAnchor.constraint(equalTo: zoomValueLabel.leadingAnchor, constant: -10),
+            zoomSlider.bottomAnchor.constraint(equalTo: zoom2xButton.topAnchor, constant: -14),
+
+            zoomValueLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -24),
+            zoomValueLabel.centerYAnchor.constraint(equalTo: zoomSlider.centerYAnchor),
+            zoomValueLabel.widthAnchor.constraint(equalToConstant: 44),
+            zoomValueLabel.heightAnchor.constraint(equalToConstant: 22),
 
             timerLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             timerLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
@@ -943,6 +981,8 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         } else {
             torchButton.isHidden = false
         }
+        // Each camera keeps its own zoom; show the one now on screen.
+        syncZoomSlider()
     }
 
     @objc private func torchTapped() {
@@ -990,7 +1030,7 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
 
     private func setZoom(_ factor: CGFloat) {
         guard let device = currentCameraInput?.device else { return }
-        let clamped = min(factor, min(maxZoomFactor, device.activeFormat.videoMaxZoomFactor))
+        let clamped = min(max(factor, 1), min(maxZoomFactor, device.activeFormat.videoMaxZoomFactor))
         do {
             try device.lockForConfiguration()
             device.videoZoomFactor = clamped
@@ -998,6 +1038,24 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         } catch {
             // Non-essential control; ignore a transient lock failure.
         }
+        syncZoomSlider()
+    }
+
+    @objc private func zoomSliderChanged(_ slider: UISlider) {
+        setZoom(CGFloat(slider.value))
+    }
+
+    /// Range and position from the camera on screen - the front camera's
+    /// limit can be lower than the back's.
+    private func syncZoomSlider() {
+        guard let device = currentCameraInput?.device else { return }
+        let maxAllowed = min(maxZoomFactor, device.activeFormat.videoMaxZoomFactor)
+        zoomSlider.maximumValue = Float(max(maxAllowed, 1))
+        zoomSlider.isEnabled = maxAllowed > 1
+        if !zoomSlider.isTracking {
+            zoomSlider.value = Float(device.videoZoomFactor)
+        }
+        zoomValueLabel.text = String(format: "%.1fx", device.videoZoomFactor)
     }
 
     @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
@@ -1014,12 +1072,15 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
                 // Non-essential control; ignore a transient lock failure.
             }
             gesture.scale = 1
+            syncZoomSlider()
         default:
             break
         }
     }
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        // A tap on the zoom slider's track is a zoom, not a focus point.
+        if view.hitTest(gesture.location(in: view), with: nil) is UIControl { return }
         guard let previewLayer = currentPreviewLayer, let device = currentCameraInput?.device, device.isFocusPointOfInterestSupported else { return }
         let point = gesture.location(in: view)
         let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: point)

@@ -228,7 +228,13 @@ struct PitchTrackerView: View {
             ? (opponentName ?? "")
             : side(activeAwayTeamName, activeAwayTeamClass)
         guard !activeHomeTeamName.isEmpty else {
-            return "vs. \(away.isEmpty ? "Game" : away)"
+            // No team of ours on this game: the date is what tells two
+            // games against the same opponent apart (2026-11-14).
+            let date = selectedGameId
+                .flatMap { gid in games.first(where: { $0.id == gid }) }
+                .map { $0.date.formatted(.dateTime.month(.abbreviated).day()) }
+            let base = "vs. \(away.isEmpty ? "Game" : away)"
+            return date.map { "\(base) · \($0)" } ?? base
         }
         let home = side(activeHomeTeamName, activeHomeTeamClass)
         return away.isEmpty ? home : "\(home) vs. \(away)"
@@ -6221,6 +6227,14 @@ struct PitchTrackerView: View {
                 }
             }
 
+            // Calling armband signs from the phone (CallSheet.swift):
+            // Batting & Fielding mid-game, pitch codes without recording.
+            Button {
+                ui.showCallSheet = true
+            } label: {
+                Label("Open Call Sheet", systemImage: "rectangle.grid.3x2")
+            }
+
             Button {
                 triggerAssistantCodeLink()
             } label: {
@@ -7593,6 +7607,13 @@ struct PitchTrackerView: View {
     static func abbreviatedTeamName(_ name: String, maxLength: Int = 10) -> String {
         if name.count <= maxLength { return name }
         let words = name.split(whereSeparator: { $0.isWhitespace })
+        // A name that leads with its own short form keeps it: "MHJ
+        // Fastpitch" is "MHJ", not "MF" (2026-11-14).
+        if let first = words.first, first.count >= 2, first.count <= maxLength,
+           first.allSatisfy({ $0.isNumber || ($0.isLetter && $0.isUppercase) }),
+           first.contains(where: \.isLetter) {
+            return String(first)
+        }
         if words.count > 1 {
             let initials = words.compactMap { $0.first }.map(String.init).joined().uppercased()
             if initials.count <= maxLength, !initials.isEmpty { return initials }
@@ -10898,7 +10919,8 @@ struct PitchTrackerView: View {
             shareCode: $ui.shareCode,
             codeShareSheetID: $codeShareSheetID,
             showCodeShareModePicker: $ui.showCodeShareModePicker,
-            onSwitchToArea: { selectHomeArea($0) }
+            onSwitchToArea: { selectHomeArea($0) },
+            isHomeTabActive: activeHomeArea == .home
         )
         .environmentObject(authManager)
         .environmentObject(subscriptionManager)
@@ -12575,6 +12597,11 @@ struct PitchTrackerView: View {
         // own share action and iOS's share-sheet recents.
         return TabView(selection: $activeHomeArea) {
             gamesTabContent
+                .modifier(CallSheetPresenter(
+                    isPresented: $ui.showCallSheet,
+                    pitchKeys: visibleTemplates,
+                    keyId: selectedTemplate?.id
+                ))
                 .tabItem { Label(HomeArea.games.title, systemImage: HomeArea.games.systemImage) }
                 .tag(HomeArea.games)
 

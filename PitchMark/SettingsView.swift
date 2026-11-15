@@ -525,6 +525,11 @@ struct SettingsView: View {
     @Binding var codeShareSheetID: UUID
     @Binding var showCodeShareModePicker: Bool
     var onSwitchToArea: ((HomeArea) -> Void)? = nil
+    /// True while Home is the selected tab. Each switch to Home collapses
+    /// every section (user's call, 2026-11-14). Keyed off the tab rather
+    /// than `.onAppear`, which also fires on popping back from a pushed
+    /// screen inside Home - that shouldn't fold the list you came from.
+    var isHomeTabActive: Bool = true
 
     @EnvironmentObject var authManager: AuthManager
     @EnvironmentObject var subscriptionManager: SubscriptionManager
@@ -567,7 +572,7 @@ struct SettingsView: View {
     // The row model, row view, scope, filter and loader all live in
     // PlayerDirectory.swift - the pitcher picker and "Link Existing Player"
     // render the same rows from the same code.
-    @State private var playersScope: PlayerDirectoryScope = .pitchers
+    @State private var playersScope: PlayerDirectoryScope = .all
     @State private var showPlayersFilterSheet = false
     @State private var showLinkProfiles = false
     /// Set by tapping a team row's circle; drives `teamImageEditor`.
@@ -613,11 +618,26 @@ struct SettingsView: View {
     /// A player archive waiting on its confirmation, which names everyone
     /// it would hide (`ArchiveScope`).
     @State private var pendingPlayerArchive: PendingPlayerArchive? = nil
-    // Accordion: expanding one of Home's two collapsible sections closes
-    // the other. nil means both collapsed; .games is the default open one.
-    @State private var expandedHomeOverviewSection: HomeOverviewSection? = .games
+    // Accordion: expanding one of Home's collapsible sections closes the
+    // others. nil means all collapsed - Home opens that way, and every
+    // return to the Home tab collapses them again (`isHomeTabActive`).
+    @State private var expandedHomeOverviewSection: HomeOverviewSection? = nil
     @State private var editorTemplate: PitchTemplate? = nil
     @State private var showAddPitcher = false
+    /// Edit on a Players row that has a roster row on one of my teams opens
+    /// Player Details (HomePlayerEditSheet); otherwise the name-only sheet.
+    @State private var homePlayerEditTarget: HomePlayerEditTarget? = nil
+    /// Edit on a player with no roster row at all: name + Add to Team.
+    @State private var homeNoTeamEditTarget: HomeNoTeamPlayerEditTarget? = nil
+    /// Pitching Call Sheet (PitchKeyCaller.swift). With a game open, Call
+    /// asks first (`pendingPitchCallTemplate`): the game screen is where
+    /// called pitches get recorded.
+    @State private var pitchCallTemplate: PitchTemplate? = nil
+    @State private var pendingPitchCallTemplate: PitchTemplate? = nil
+    /// Its own flag: the dialog sets isPresented false *before* running a
+    /// button's action, so a binding derived from the pending key cleared
+    /// it first and Codes Only had nothing to open.
+    @State private var showPitchCallGameOpen = false
     @State private var newPitcherName: String = ""
     @State private var editingPitcher: Pitcher? = nil
     @State private var showPitcherPhotoPicker = false
@@ -725,7 +745,12 @@ struct SettingsView: View {
     @State private var isCopyingPitcher = false
     @State private var ownedPitchersListener: ListenerRegistration? = nil
     @State private var sharedPitchersListener: ListenerRegistration? = nil
-    @State private var livePitchersById: [String: Pitcher] = [:]
+    /// Each listener's latest snapshot, kept apart so a snapshot can
+    /// *replace* its own source's pitchers. One shared upsert-only map never
+    /// dropped a deleted Pitcher: Merge Duplicates' cleanup deletes the
+    /// duplicate's empty record, and it kept listing as its own "No team"
+    /// row until the app relaunched (2026-11-14).
+    @State private var livePitcherSources = LivePitcherSources()
     
     private var sortedTemplates: [PitchTemplate] {
         templates.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
@@ -945,6 +970,14 @@ struct SettingsView: View {
     /// games against same-named teams in different classes can be told
     /// apart. Falls back to the stored opponent text for whichever side
     /// isn't one of my teams (or a game created before teams were linked).
+    /// "MHJ Fastpitch (Nov 14)" for the game open in the tracker.
+    private var openGameDescription: String {
+        guard let gid = activeGameId, let game = games.first(where: { $0.id == gid }) else { return "A game" }
+        let title = matchupTitle(for: game)
+        let date = game.date.formatted(.dateTime.month(.abbreviated).day())
+        return title.isEmpty ? "The \(date) game" : "\(title) (\(date))"
+    }
+
     private func matchupTitle(for game: Game) -> String {
         func team(_ id: String?) -> Team? {
             guard let id, !id.isEmpty else { return nil }
@@ -1885,7 +1918,11 @@ struct SettingsView: View {
     /// Home's contribution is the trailing Stats button + gear menu.
     private func playerListRowView(_ row: PlayerDirectoryRow) -> some View {
         let isArchived = row.isArchived(in: hiddenPitcherIds)
-        return PlayerDirectoryRowView(row: row, isArchived: isArchived) {
+        return PlayerDirectoryRowView(
+            row: row,
+            isArchived: isArchived,
+            isOtherCoachesPlayer: row.isOnlyOnOtherCoachesTeams(uid: authManager.user?.uid)
+        ) {
             statsControl(for: row)
 
             Menu {
@@ -1975,12 +2012,45 @@ struct SettingsView: View {
                 Label("Image", systemImage: "photo")
             }
 
+            let editRoute = HomePlayerEditRoute.route(for: row, entries: rosterEntries, uid: authManager.user?.uid)
+            if editRoute == .locked {
+                // Their roster rows and records are the other coach's: a
+                // rename here was refused or left the names disagreeing
+                // (2026-11-14, user's call). Shown, not hidden, so the
+                // reason is in the menu.
+                Button {} label: {
+                    Label(
+                        row.teams.count == 1
+                            ? "Only \(row.teams[0].name)'s coach can edit"
+                            : "Only their teams' coaches can edit",
+                        systemImage: "lock.fill"
+                    )
+                }
+                .disabled(true)
+            } else {
             Button {
-                editingPitcher = pitcher
-                newPitcherName = pitcher.name
-                showAddPitcher = true
+                switch editRoute {
+                case .addToTeam:
+                    // On no team at all: name, plus a team to add them to.
+                    homeNoTeamEditTarget = HomeNoTeamPlayerEditTarget(
+                        pitcher: pitcher,
+                        playerId: row.playerId,
+                        hitterId: row.hitterId ?? row.hitterIds.first
+                    )
+                case .nameOnly, .locked:
+                    editingPitcher = pitcher
+                    newPitcherName = pitcher.name
+                    showAddPitcher = true
+                case .playerDetails:
+                    homePlayerEditTarget = HomePlayerEditTarget(
+                        name: row.name,
+                        entries: PlayerDirectory.editableEntries(for: row, in: rosterEntries, uid: authManager.user?.uid),
+                        allTeams: row.teams
+                    )
+                }
             } label: {
                 Label("Edit", systemImage: "pencil")
+            }
             }
 
             if pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
@@ -2876,21 +2946,18 @@ struct SettingsView: View {
         let ownedRef = db.collection("pitchers").whereField("ownerUid", isEqualTo: uid)
         let sharedRef = db.collection("pitchers").whereField("sharedWith", arrayContains: uid)
 
-        func mergeDocs(_ docs: [QueryDocumentSnapshot]) {
+        func apply(_ docs: [QueryDocumentSnapshot], from source: LivePitcherSources.Source) {
             Task { @MainActor in
-                var map = livePitchersById
+                var decoded: [Pitcher] = []
                 for doc in docs {
                     do {
-                        let pitcher = try doc.data(as: Pitcher.self)
-                        if let id = pitcher.id {
-                            map[id] = pitcher
-                        }
+                        decoded.append(try doc.data(as: Pitcher.self))
                     } catch {
                         debugLog("❌ Pitcher decode failed (listener) docId=\(doc.documentID) error=\(error)")
                     }
                 }
-                livePitchersById = map
-                pitchers = Array(map.values)
+                livePitcherSources.apply(decoded, from: source)
+                pitchers = livePitcherSources.all
             }
         }
 
@@ -2899,8 +2966,7 @@ struct SettingsView: View {
                 debugLog("❌ owned pitchers listener error:", error.localizedDescription)
                 return
             }
-            let docs = snapshot?.documents ?? []
-            mergeDocs(docs)
+            apply(snapshot?.documents ?? [], from: .owned)
         }
 
         sharedPitchersListener = sharedRef.addSnapshotListener { snapshot, error in
@@ -2908,8 +2974,7 @@ struct SettingsView: View {
                 debugLog("❌ shared pitchers listener error:", error.localizedDescription)
                 return
             }
-            let docs = snapshot?.documents ?? []
-            mergeDocs(docs)
+            apply(snapshot?.documents ?? [], from: .shared)
         }
     }
 
@@ -3042,6 +3107,18 @@ struct SettingsView: View {
                         }
                         .buttonStyle(.bordered)
                         .disabled(!isTemplateEditable(template) || isCheckingPurchasedTemplate)
+
+                        Button("Call") {
+                            if activeGameId != nil {
+                                pendingPitchCallTemplate = template
+                                showPitchCallGameOpen = true
+                            } else {
+                                pitchCallTemplate = template
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.pitchMarkActiveGray)
+                        .accessibilityIdentifier("pitchKey.call")
 
                         Spacer()
 
@@ -3532,7 +3609,8 @@ struct SettingsView: View {
                         Divider()
                             .padding(.horizontal)
                         Text("Armband Keys")
-                            .font(.title3.weight(.bold))
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal)
                             .padding(.bottom, -8)
                             .accessibilityAddTraits(.isHeader)
@@ -3543,10 +3621,14 @@ struct SettingsView: View {
                         }
 
                         sectionCard {
-                            SignGridsHomeSection(isExpanded: Binding(
-                                get: { expandedHomeOverviewSection == .signGrids },
-                                set: { expandedHomeOverviewSection = $0 ? .signGrids : nil }
-                            ))
+                            SignGridsHomeSection(
+                                isExpanded: Binding(
+                                    get: { expandedHomeOverviewSection == .signGrids },
+                                    set: { expandedHomeOverviewSection = $0 ? .signGrids : nil }
+                                ),
+                                pitchKeys: visibleTemplates,
+                                gameOpen: activeGameId != nil
+                            )
                         }
 
 
@@ -3702,6 +3784,11 @@ struct SettingsView: View {
                 },
                 secondaryTitle: "Not Now"
             )
+            .onChange(of: isHomeTabActive) { active in
+                // Synchronous with the tab switch, so a section opened by a
+                // deferred request (`createCodeGridKeyRequested`) still wins.
+                if active { expandedHomeOverviewSection = nil }
+            }
             .onAppear {
                 loadHiddenIds()
                 startPitchersListenerIfNeeded()
@@ -3890,6 +3977,53 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showHomeAddPlayer) {
                 homeAddPlayerSheet
+            }
+            .sheet(item: $homePlayerEditTarget) { target in
+                HomePlayerEditSheet(
+                    target: target,
+                    onClose: { homePlayerEditTarget = nil },
+                    onSaved: { refreshRosterEntries() }
+                )
+                .environmentObject(authManager)
+                .fixedAppDynamicType()
+            }
+            .fullScreenCover(item: $pitchCallTemplate) { template in
+                CallSheetHost(
+                    pitchKeys: visibleTemplates,
+                    initialTab: .pitching,
+                    initialKeyId: template.id,
+                    gameOpen: activeGameId != nil
+                ) { pitchCallTemplate = nil }
+                .environmentObject(authManager)
+                .fixedAppDynamicType()
+            }
+            .appConfirmationDialog(
+                isPresented: $showPitchCallGameOpen,
+                title: "A Game Is Open",
+                message: "\(openGameDescription) is open. Call pitches from the game screen to record them with the game. Codes Only shows the codes here and records nothing.",
+                primaryTitle: "Go to Game",
+                primaryAction: {
+                    pendingPitchCallTemplate = nil
+                    onSwitchToArea?(.games)
+                },
+                secondaryTitle: "Cancel",
+                secondaryAction: { pendingPitchCallTemplate = nil },
+                alternateTitle: "Codes Only",
+                alternateAction: {
+                    let template = pendingPitchCallTemplate
+                    pendingPitchCallTemplate = nil
+                    pitchCallTemplate = template
+                }
+            )
+            .sheet(item: $homeNoTeamEditTarget) { target in
+                HomeNoTeamPlayerEditSheet(
+                    target: target,
+                    teams: teamsForNewPlayer,
+                    onClose: { homeNoTeamEditTarget = nil },
+                    onSaved: { refreshMyTeams() }
+                )
+                .environmentObject(authManager)
+                .fixedAppDynamicType()
             }
             .sheet(isPresented: $showPitcherPhotoPicker) {
                 PitcherImagePicker { image in

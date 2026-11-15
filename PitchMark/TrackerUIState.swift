@@ -42,6 +42,8 @@ final class TrackerUIState: ObservableObject {
 
     @Published var didAutoDismissCodeSheetForLiveId: String? = nil
     @Published var uiConnected: Bool = false
+    /// The Key menu's Open Call Sheet (CallSheet.swift).
+    @Published var showCallSheet: Bool = false
     @Published var showCodeAssignmentSheet: Bool = false
     @Published var pitcherName: String = ""
     @Published var lastObservedPendingCallId: String? = nil

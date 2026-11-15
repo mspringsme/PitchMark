@@ -748,6 +748,48 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   (`HomeSignedInFooter`), read from `authManager.user` so it follows
   sign-in and sign-out. It is not a button.
 
+## Home Players edit and list (2026-11-14)
+
+- **Edit on a Players row picks its editor by who owns the roster rows**
+  (`PlayerDirectory.editableEntries`, HomePlayerEditSheet.swift): rows on
+  your teams = Player Details (a "Which team?" list first when there are
+  several); no team at all = name + Add to Team (`adoptAndLinkPlayer`,
+  keeps their Pitcher so history comes along); only on other coaches'
+  teams = no Edit, a disabled "Only {team}'s coach can edit" line, and a
+  lock badge on the row (`isOnlyOnOtherCoachesTeams`).
+- **Home's pitcher listeners replace, never upsert** - one map per
+  listener. The old shared upsert map never dropped a deleted Pitcher, so
+  Merge Duplicates' cleaned-up duplicate stayed listed until relaunch.
+- Home opens with every section collapsed and collapses them on every
+  switch to the Home tab (`isHomeTabActive`, not `.onAppear`, which also
+  fires on popping back inside Home). Players starts on All.
+
+## Call Sheet (2026-11-14)
+
+- **Coaches call armband signs from the phone.** Batting Bases &
+  Fielding: a card row's Call (`SignGridCallSheet`, SignGridCaller.swift),
+  numbers from `SignGridCallingCard`. Pitching: a key's Call on Home
+  (`PitchKeyCallSheet`, PitchKeyCaller.swift), codes from
+  `EncryptedCodeGenerator` on a cleaned copy like the print; the pad is
+  the key's Strikes/Balls grids by position. Classic keys map spots by the
+  tracker's right-handed labels.
+- **Rotation is `CodeRotation`, shared** (user's picks): never the same
+  code twice in a row for a call, every code used evenly. Nothing is
+  recorded and nothing goes to Display.
+- **With a game open, pitch calling belongs to the game screen** (it
+  records). Home's Call asks: Go to Game / Codes Only / Cancel. The
+  dialog sets isPresented false *before* running an action - give a
+  dialog its own Bool, never a binding derived from the pending value.
+- **One Call Sheet, two tabs (step 3):** `CallSheetView` (CallSheet.swift)
+  holds every caller keyed by key/card id, so rotation and recent calls
+  survive tab and key switches; the panels are `PitchKeyCallPanel` and
+  `SignGridCallPanel`. Ways in: Home key Call (Pitching tab), Home card
+  Call (Batting tab), the coach's Key menu → Open Call Sheet (Batting tab,
+  `CallSheetPresenter` - a modifier struct so the tracker's body stays
+  small; flag is `ui.showCallSheet`). With a game open the Pitching tab
+  says its codes aren't recorded. Not in the assistant's menu yet.
+- Planned next: logging called signs to a game (step 4).
+
 ## Known open items
 
 - **HBP cannot be saved on its own.** Save Result is gated on one of

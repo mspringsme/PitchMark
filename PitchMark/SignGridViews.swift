@@ -770,6 +770,8 @@ struct SignGridRow: View {
     let onPrint: () -> Void
     let onArchive: (Bool) -> Void
     var onCallingCard: () -> Void = {}
+    /// Opens the Call Sheet (SignGridCaller.swift).
+    var onCall: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 10) {
@@ -787,6 +789,17 @@ struct SignGridRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("signGrid.row.\(grid.name)")
+
+            if !grid.isArchived {
+                Button(action: onCall) {
+                    Text("Call")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.pitchMarkActiveGray)
+                .accessibilityLabel("Call signs from \(grid.name)")
+                .accessibilityIdentifier("signGrid.call.\(grid.name)")
+            }
 
             Button(action: onPrint) {
                 Image(systemName: "printer")
@@ -827,10 +840,14 @@ struct SignGridListView: View {
     @ObservedObject var store: SignGridStore
     @ObservedObject var myCalls: SignGridMyCallsStore
     @Binding var editing: SignGrid?
+    /// For the Call Sheet's Pitching tab.
+    var pitchKeys: [PitchTemplate] = []
+    var gameOpen: Bool = false
 
     @State private var showArchived = false
     @State private var pdf: SignGridPDF? = nil
     @State private var callingCardGrid: SignGrid? = nil
+    @State private var callGrid: SignGrid? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -884,6 +901,16 @@ struct SignGridListView: View {
             SignGridCallingCardSheet(grid: grid) { callingCardGrid = nil }
                 .fixedAppDynamicType()
         }
+        .fullScreenCover(item: $callGrid) { grid in
+            CallSheetView(
+                pitchKeys: pitchKeys,
+                gridStore: store,
+                initialTab: .batting,
+                initialGridId: grid.id,
+                gameOpen: gameOpen
+            ) { callGrid = nil }
+            .fixedAppDynamicType()
+        }
     }
 
     private func row(_ grid: SignGrid) -> some View {
@@ -892,7 +919,8 @@ struct SignGridListView: View {
             onEdit: { editing = grid },
             onPrint: { print(grid) },
             onArchive: { store.setArchived(grid, $0) },
-            onCallingCard: { callingCardGrid = grid }
+            onCallingCard: { callingCardGrid = grid },
+            onCall: { callGrid = grid }
         )
     }
 
@@ -910,6 +938,8 @@ struct SignGridListView: View {
 /// SettingsView type-depth crash in CLAUDE.md.
 struct SignGridsHomeSection: View {
     @Binding var isExpanded: Bool
+    var pitchKeys: [PitchTemplate] = []
+    var gameOpen: Bool = false
 
     @EnvironmentObject private var authManager: AuthManager
     @StateObject private var store = SignGridStore()
@@ -951,8 +981,14 @@ struct SignGridsHomeSection: View {
             .padding(.horizontal)
 
             if isExpanded {
-                SignGridListView(store: store, myCalls: myCalls, editing: $editing)
-                    .padding(.horizontal)
+                SignGridListView(
+                    store: store,
+                    myCalls: myCalls,
+                    editing: $editing,
+                    pitchKeys: pitchKeys,
+                    gameOpen: gameOpen
+                )
+                .padding(.horizontal)
             }
         }
         .task(id: authManager.user?.uid) {
