@@ -23,44 +23,90 @@ struct AssetThumbnailStrip: View {
     let assets: [LibraryAsset]
     var onSelect: ((LibraryAsset) -> Void)? = nil
 
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
-                ForEach(assets) { asset in
-                    Button {
-                        onSelect?(asset)
-                    } label: {
-                        VStack(spacing: 4) {
-                            thumbnail(for: asset)
-                            Text(asset.name)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal)
-        }
+    /// "Mine" or an icon category (2026-11-15) - 67 icons in one row was
+    /// too long to scroll.
+    @State private var section: String? = nil
+
+    static let mineSection = "Mine"
+
+    private var sections: [String] {
+        let mine = assets.contains { $0.category == nil } ? [Self.mineSection] : []
+        let categories = OverlayIconCategory.allCases.map(\.rawValue).filter { name in assets.contains { $0.category == name } }
+        return mine + categories
     }
 
-    @ViewBuilder
-    private func thumbnail(for asset: LibraryAsset) -> some View {
-        Group {
-            if let image = asset.image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(8)
-            } else {
-                Image(systemName: "photo")
-                    .foregroundStyle(.secondary)
+    private var shown: [LibraryAsset] {
+        let current = section ?? sections.first
+        return assets.filter { ($0.category ?? Self.mineSection) == current }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if sections.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(sections, id: \.self) { name in
+                            let isOn = name == (section ?? sections.first)
+                            Button {
+                                section = name
+                            } label: {
+                                Text(name == Self.mineSection ? "My Assets" : name)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(isOn ? Color.white : Color.primary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Capsule().fill(isOn ? Color.pitchMarkActiveGray : Color(.secondarySystemBackground)))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("assetStrip.section.\(name)")
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(shown) { asset in
+                        Button {
+                            onSelect?(asset)
+                        } label: {
+                            VStack(spacing: 4) {
+                                assetThumbnail(asset, size: 64, padding: 10)
+                                Text(asset.name)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            .frame(width: 70)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
             }
         }
-        .frame(width: 64, height: 64)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
+}
+
+/// A library thumbnail. Built-in icons are white images, so they're drawn
+/// in the text color here to show on any background.
+@ViewBuilder
+func assetThumbnail(_ asset: LibraryAsset, size: CGFloat, padding: CGFloat) -> some View {
+    Group {
+        if let image = asset.image {
+            Image(uiImage: image)
+                .renderingMode(asset.isTintable ? .template : .original)
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(Color.primary)
+                .padding(padding)
+        } else {
+            Image(systemName: "photo")
+                .foregroundStyle(.secondary)
+        }
+    }
+    .frame(width: size, height: size)
+    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: size * 0.16, style: .continuous))
 }
 
 /// Which asset's file gets overwritten when `AssetCropView`'s `onSave`
@@ -241,27 +287,16 @@ struct AssetLibraryView: View {
                 }
             }
 
-            Section("Library") {
-                ForEach(libraryAssets) { asset in
-                    Button {
-                        assetPendingAction = asset
-                        showActionsDialog = true
-                    } label: {
-                        assetRow(asset)
-                    }
-                    .buttonStyle(.plain)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        if asset.isDeletable {
-                            Button(role: .destructive) {
-                                assetPendingDelete = asset
-                                showDeleteDialog = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    }
+            Section("My Assets") {
+                let mine = libraryAssets.filter { $0.category == nil }
+                if mine.isEmpty {
+                    Text("Nothing here yet. Import a photo or create one above.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-
+                ForEach(mine) { asset in
+                    libraryRow(asset)
+                }
                 if let deleteErrorMessage {
                     Text(deleteErrorMessage)
                         .font(.caption)
@@ -273,25 +308,45 @@ struct AssetLibraryView: View {
                         .foregroundStyle(.red)
                 }
             }
+
+            // Built-in icons (OverlayIcons.swift), by category.
+            ForEach(OverlayIconCategory.allCases, id: \.self) { category in
+                let icons = libraryAssets.filter { $0.category == category.rawValue }
+                if !icons.isEmpty {
+                    Section("Icons: \(category.rawValue)") {
+                        ForEach(icons) { asset in
+                            libraryRow(asset)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func libraryRow(_ asset: LibraryAsset) -> some View {
+        Button {
+            assetPendingAction = asset
+            showActionsDialog = true
+        } label: {
+            assetRow(asset)
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if asset.isDeletable {
+                Button(role: .destructive) {
+                    assetPendingDelete = asset
+                    showDeleteDialog = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
         }
     }
 
     @ViewBuilder
     private func assetRow(_ asset: LibraryAsset) -> some View {
         HStack(spacing: 12) {
-            Group {
-                if let image = asset.image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(6)
-                } else {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: 44, height: 44)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            assetThumbnail(asset, size: 44, padding: 8)
 
             Text(asset.name)
                 .font(.subheadline)

@@ -108,7 +108,13 @@ final class MomentFilterCompositor: NSObject, AVVideoCompositing {
         // `transformed(by:)` rotates/translates the raw decoded frame
         // into display orientation - see this file's header comment for
         // why that's this file's own job, not something inherited free.
-        let rotated = CIImage(cvPixelBuffer: sourceBuffer).transformed(by: instruction.transform)
+        // Uprighted with `oriented`, not by applying the track transform:
+        // Core Image's y axis points up, which turned a portrait clip the
+        // wrong way - filtered videos saved upside down (2026-11-16, same
+        // fix as Compare's export).
+        var rotated = CIImage(cvPixelBuffer: sourceBuffer)
+            .oriented(CompareOrientation.orientation(for: instruction.transform))
+        rotated = rotated.transformed(by: CGAffineTransform(translationX: -rotated.extent.minX, y: -rotated.extent.minY))
 
         let filter = CIFilter(name: "CIColorControls")
         filter?.setValue(rotated, forKey: kCIInputImageKey)

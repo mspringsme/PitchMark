@@ -291,11 +291,11 @@ struct OverlayEditorView: View {
     /// views at once. Raised from 0.2 to 0.25 same day, per the user -
     /// 20% was cramping the control panel (content getting cut off at
     /// the bottom edge in a follow-up screenshot).
-    private let bottomAreaFraction: CGFloat = 0.25
+    private let bottomAreaFraction: CGFloat = 0.42
     /// Floor so the controls stay usable on a short screen even though
     /// 25% of it would be cramped - on any iPhone this session has
     /// targeted, 25% alone already exceeds this, so it rarely binds.
-    private let minimumBottomAreaHeight: CGFloat = 210
+    private let minimumBottomAreaHeight: CGFloat = 320
 
     init(momentId: String, videoURL: URL, libraryAssets: [LibraryAsset], initialOverlays: [OverlayItem], onExported: @escaping () -> Void = {}) {
         self.momentId = momentId
@@ -309,6 +309,15 @@ struct OverlayEditorView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+        // Shared editor frame (MomentEditorChrome.swift, 2026-11-16).
+        MomentEditorTopBar(
+            title: "Overlays", systemImage: "textformat",
+            saveTitle: isExporting ? "Saving…" : "Save",
+            saveEnabled: !isExporting && !overlays.isEmpty,
+            onCancel: { dismiss() },
+            onSave: { startExport() }
+        )
         GeometryReader { screenGeometry in
             let bottomHeight = max(screenGeometry.size.height * bottomAreaFraction, minimumBottomAreaHeight)
             // The whole screen ignores the safe area (full-bleed video),
@@ -343,9 +352,11 @@ struct OverlayEditorView: View {
                 bottomControlsArea
                     .padding(.bottom, bottomSafeInset)
                     .frame(height: bottomHeight)
+                    .background(Color(.systemBackground))
             }
         }
-        .background(Color(.systemBackground).ignoresSafeArea())
+        }
+        .background(Color.black.ignoresSafeArea())
         .onChange(of: selectedOverlayID) { _, _ in
             syncSliders()
             let isText = overlays.first(where: { $0.id == selectedOverlayID })?.textContent != nil
@@ -364,34 +375,6 @@ struct OverlayEditorView: View {
         // .ignoresSafeArea() on the fullScreenCover), so a bare `.padding()`
         // landed the button right under the notch/Dynamic Island, where
         // it was effectively untappable.
-        .overlay(alignment: .topTrailing) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.white, .black.opacity(0.5))
-            }
-            .padding(.top, 50)
-            .padding(.trailing, 20)
-        }
-        // Same top-inset reasoning as the close button - this whole
-        // screen ignores the safe area, so a bare `.padding()` would land
-        // under the notch/Dynamic Island.
-        .overlay(alignment: .topLeading) {
-            Button {
-                startExport()
-            } label: {
-                Text("Export")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.white, in: Capsule())
-            }
-            .padding(.top, 50)
-            .padding(.leading, 20)
-            .disabled(isExporting || overlays.isEmpty)
-        }
         .overlay {
             if isExporting {
                 ZStack {
@@ -466,11 +449,16 @@ struct OverlayEditorView: View {
             Group {
                 if let textContent = item.textContent {
                     overlayTextCardPreview(textContent, minDimension: min(videoRect.width, videoRect.height))
-                } else if let asset = libraryAssets.first(where: { $0.id == item.assetID }), let image = asset.image {
+                } else if let asset = libraryAssets.first(where: { $0.id == item.assetID }),
+                          let image = OverlayIconImages.image(forAssetId: item.assetID, weight: item.iconWeight) ?? asset.image {
                     let baseSize = overlayBaseSizeFraction * min(videoRect.width, videoRect.height)
+                    // A built-in icon takes its overlay's color (white
+                    // when none) and weight - the export does the same.
                     Image(uiImage: image)
+                        .renderingMode(asset.isTintable ? .template : .original)
                         .resizable()
                         .scaledToFit()
+                        .foregroundStyle(item.tintHex.flatMap { hexToColor($0) } ?? .white)
                         .frame(width: baseSize, height: baseSize)
                 }
             }
@@ -572,7 +560,19 @@ struct OverlayEditorView: View {
     /// once (the pre-2026-09-30 shape) was most of what pushed the video
     /// down to a sliver of the screen.
     private var bottomControlsArea: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 6) {
+            EditorScrubBar(
+                currentTime: currentTime, duration: duration, isPlaying: isPlaying,
+                onTogglePlay: { togglePlayback() },
+                onSeek: { time in
+                    if isPlaying { togglePlayback() }
+                    currentTime = time
+                    player.seek(to: CMTime(seconds: time, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+                }
+            )
+            .padding(.horizontal)
+            .padding(.top, 8)
+
             // Ruler only now - the play button used to be its own row
             // below this (transportControls), and the "Selected Overlay"
             // panel had its own separate header row above its tabs; both
@@ -592,6 +592,7 @@ struct OverlayEditorView: View {
                 selectedOverlayID: $selectedOverlayID,
                 selectedKeyframe: $selectedKeyframe,
                 showTracks: selectedOverlayID == nil,
+                showsRuler: false,
                 onCommit: persistOverlays
             )
             .padding(.horizontal)
@@ -617,16 +618,12 @@ struct OverlayEditorView: View {
     /// "Selected Overlay" label and trash button only join it when an
     /// overlay is actually selected, sharing the one row instead of
     /// stacking a second one just for delete.
+    @ViewBuilder
     private var playbackHeaderRow: some View {
+        // Play lives in the scrub bar above now (2026-11-16); this row is
+        // just the selected overlay's Delete and Add More.
+        if selectedOverlayID != nil {
         HStack {
-            Button {
-                togglePlayback()
-            } label: {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 24))
-            }
-            .buttonStyle(.plain)
-
             if selectedOverlayID != nil {
                 Text("Selected Overlay")
                     .font(.caption.weight(.semibold))
@@ -639,11 +636,26 @@ struct OverlayEditorView: View {
                         .font(.system(size: 22))
                         .foregroundStyle(.white, .red)
                 }
+                // Back to the add strip for another overlay (2026-11-15).
+                // The only way back used to be tapping empty video, so it
+                // looked like one overlay per export.
+                Button {
+                    selectedOverlayID = nil
+                    selectedKeyframe = nil
+                    persistOverlays()
+                } label: {
+                    Label("Add More", systemImage: "plus.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.pitchMarkActiveGray)
+                .accessibilityIdentifier("overlay.addMore")
             } else {
                 Spacer()
             }
         }
         .padding(.horizontal)
+        }
     }
 
     /// The selected overlay's controls, one category at a time (see
@@ -664,6 +676,10 @@ struct OverlayEditorView: View {
             let categories = isText ? OverlayControlCategory.allCases : OverlayControlCategory.allCases.filter { $0 != .text }
 
             VStack(alignment: .leading, spacing: 6) {
+                if !isText, libraryAssets.first(where: { $0.id == overlays[index].assetID })?.isTintable == true {
+                    iconColorRow(index: index)
+                    iconWeightRow(index: index)
+                }
                 Picker("", selection: $selectedControlCategory) {
                     ForEach(categories) { category in
                         Label(category.rawValue, systemImage: category.systemImage)
@@ -691,6 +707,76 @@ struct OverlayEditorView: View {
             .padding(.horizontal)
             .padding(.top, 4)
         }
+    }
+
+    /// A built-in icon's line weight, each choice drawn in that weight.
+    private func iconWeightRow(index: Int) -> some View {
+        let item = overlays[index]
+        let current = item.iconWeight.flatMap(OverlayIconWeight.init(rawValue:))
+            ?? OverlayIconImages.defaultWeight(of: item.assetID) ?? .regular
+        return HStack(spacing: 6) {
+            Text("Weight")
+                .font(.caption)
+            ForEach(OverlayIconWeight.allCases) { weight in
+                let isOn = weight == current
+                Button {
+                    overlays[index].iconWeight = weight == OverlayIconImages.defaultWeight(of: item.assetID) ? nil : weight.rawValue
+                    persistOverlays()
+                } label: {
+                    Group {
+                        if let image = OverlayIconImages.image(forAssetId: item.assetID, weight: weight.rawValue) {
+                            Image(uiImage: image)
+                                .renderingMode(.template)
+                                .resizable()
+                                .scaledToFit()
+                        }
+                    }
+                    .foregroundStyle(isOn ? Color.white : Color.primary)
+                    .padding(5)
+                    .frame(width: 36, height: 36)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(isOn ? Color.pitchMarkActiveGray : Color(.secondarySystemBackground)))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(weight.title)
+                .accessibilityAddTraits(isOn ? .isSelected : [])
+                .accessibilityIdentifier("overlay.iconWeight.\(weight.rawValue)")
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// A built-in icon's color: quick swatches plus any color.
+    private func iconColorRow(index: Int) -> some View {
+        let swatches = ["#FFFFFF", "#000000", "#FFD60A", "#FF3B30", "#34C759", "#0A84FF"]
+        let current = overlays[index].tintHex ?? "#FFFFFF"
+        return HStack(spacing: 8) {
+            Text("Color")
+                .font(.caption)
+            ForEach(swatches, id: \.self) { hex in
+                Button {
+                    overlays[index].tintHex = hex == "#FFFFFF" ? nil : hex
+                    persistOverlays()
+                } label: {
+                    Circle()
+                        .fill(hexToColor(hex) ?? .white)
+                        .frame(width: 24, height: 24)
+                        .overlay(Circle().stroke(Color.secondary.opacity(0.6), lineWidth: 1))
+                        .overlay(Circle().stroke(Color.accentColor, lineWidth: current.uppercased() == hex ? 3 : 0).padding(-3))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Color \(hex)")
+            }
+            ColorPicker("", selection: Binding(
+                get: { hexToColor(current) ?? .white },
+                set: { newColor in
+                    overlays[index].tintHex = colorToHex(newColor)
+                    persistOverlays()
+                }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            Spacer(minLength: 0)
+        }
+        .accessibilityIdentifier("overlay.iconColor")
     }
 
     /// Line 1 (bold)/Line 2 (normal) text fields, an adjustable color,
@@ -1025,10 +1111,8 @@ struct OverlayEditorView: View {
                     try? FileManager.default.removeItem(at: destination)
                     try FileManager.default.copyItem(at: tempURL, to: destination)
                     try? FileManager.default.removeItem(at: tempURL)
-                    // Every other frozen-base ring member now misses
-                    // these overlay pixels - see Moment.swift's
-                    // invalidateOtherFrozenBases doc comment.
-                    invalidateOtherFrozenBases(momentId: momentId, except: [.overlay])
+                    // Other editors' copies are overlay-free by design now - nothing to
+                    // throw away (OverlayLayer.swift, 2026-11-16).
                     // See MomentAudioEditorView.swift's identical comment.
                     refreshFadeIfNeeded(momentId: momentId, authManager: authManager) { onExported() }
                     onExported()

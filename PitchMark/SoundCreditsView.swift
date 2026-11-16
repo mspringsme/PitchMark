@@ -17,8 +17,42 @@
 import SwiftUI
 
 struct SoundCreditsView: View {
+    /// The full MIT notice shipped with the icons.
+    private var licenseText: String? {
+        Bundle.main.url(forResource: "PHOSPHOR-LICENSE", withExtension: "txt")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+    }
+
     var body: some View {
         List {
+            // The built-in overlay icons (OverlayIcons.swift) - MIT asks
+            // for the notice to travel with them (2026-11-15).
+            Section("Icons") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Phosphor Icons")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Copyright (c) 2023 Phosphor Icons")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("MIT License")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    if let url = URL(string: "https://phosphoricons.com") {
+                        Link("phosphoricons.com", destination: url)
+                            .font(.caption2)
+                    }
+                    if let licenseText {
+                        Text(licenseText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 4)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+
+            if !bundledAudioAssets.isEmpty {
+            Section("Sounds") {
             ForEach(bundledAudioAssets) { asset in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(asset.name)
@@ -40,8 +74,10 @@ struct SoundCreditsView: View {
                 }
                 .padding(.vertical, 2)
             }
+            }
+            }
         }
-        .navigationTitle("Sound Credits")
+        .navigationTitle("Credits")
         .navigationBarTitleDisplayMode(.inline)
     }
 }

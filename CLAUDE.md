@@ -822,11 +822,65 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   **Upright frames with `CIImage.oriented(CompareOrientation...)`, never
   by applying `preferredTransform` in Core Image** - CI's y axis points
   up, which turns a portrait clip's 90° the wrong way (saved upside
-  down). MomentFilterCompositor still applies the transform directly and
-  may share the bug on rotated clips - unverified.
+  down). Compare and Filters both had it; both fixed.
 - **Compare's loop guards its restart** (`isRestartingLoop`): the time
   observer keeps firing during the jump back to Start, and each tick
   started another seek + play until the players wedged.
+- **Built-in overlay images are Phosphor icons** (2026-11-15, MIT,
+  `PHOSPHOR-LICENSE.txt` shipped and shown under Account → Credits).
+  The list is `overlayIcons` (OverlayIcons.swift); the SVGs are template
+  imagesets in `Assets 2.xcassets/Overlay Icons/` (`ph-<name>-<weight>`).
+  Each icon is bundled in all six weights; an overlay's color and weight
+  (`OverlayItem.tintHex`, `iconWeight`) apply in the editor preview and
+  the export alike (`OverlayIconImages.image(forAssetId:weight:)`). The old Circle/Arrow are gone. SF Symbols
+  were passed over: Apple's license may not cover symbols burned into
+  exported videos.
+- **Built-in sounds (2026-11-15)** are `PitchMark/Sounds/` + `sounds.json`;
+  a sound's `category` is its library group (`BundledSoundGroup.order`:
+  Hits & Impacts, Crowd & Stadium, Reactions, Stingers, Whooshes &
+  Transitions, Music). 45 Kenney effects (CC0), 5 kept Freesound CC0
+  originals (crowd, airhorn, bat swoosh), 17 Kevin MacLeod tracks (CC BY
+  4.0 - the credit and the "shortened to 60s" change note are required;
+  they show in Credits). Adding one = file + manifest row, no code.
+  Kenney's site only gives download links to a browser - the user
+  downloads packs; don't script around it.
+- **Every Moment editor uses one frame (2026-11-16, MomentEditorChrome.swift):**
+  `MomentEditorTopBar` (Cancel · name · Save, inside the safe area) and
+  `EditorScrubBar` (big play button, 44pt-tall scrub strip, thick track,
+  big thumb; no play button for frame pickers like Freeze/Markup). Editors
+  are no longer presented with `.ignoresSafeArea()` - only their black
+  background extends; that's what put controls on the home bar. Panels
+  below the video need `Color(.systemBackground)` or they show black.
+  `-UITestMomentEditors` opens a Moment's details on a generated test
+  video, for screenshots/UI tests of every editor.
+- **Overlays are the top layer (2026-11-16, OverlayLayer.swift).** Every
+  other editor (and Trim) opens on `videoBelowOverlays` - the overlay
+  "before" copy when the Moment has overlays - and after it saves,
+  `MomentDetailView.afterEdit` redraws the overlays on top
+  (`OverlayLayer.redraw`). Overlay saves (editor, game caption) no longer
+  invalidate other editors' copies, and other editors no longer drop the
+  overlay copy (`invalidateOtherFrozenBases` skips `.overlay`; only
+  Revert/Delete remove it) - so a missing copy at save time means the
+  overlays are baked in, and the redraw is skipped rather than doubling
+  them. Game Info refuses to change a baked-in caption
+  (`GameCaptionApplier.bakedInErrorCode`) and offers Revert instead of
+  reporting a false success. Crop asks to remove game info first
+  (user's call). Before this, any other save threw
+  the overlay copy away and the next overlay edit doubled every overlay
+  (a doubled caption after Crop). Clips already flattened that way stay
+  doubled until Revert to Original.
+  `videoBelowOverlays` goes by the files (overlay copy exists → use it),
+  never the on-screen overlay list, which lags right after a capture.
+  After another editor saves, `OverlayLayer.afterOtherEdit` reads the
+  saved overlay list: redraw on top if there's a copy, drop the copy if
+  there are no overlays, leave it if overlays exist without a copy
+  (baked in). Each editor's "before" copy lasts the life of the clip, so
+  copies made by older builds could hold the caption - Crop then brought
+  it back after a removal. `OverlayLayerMigration` drops the other
+  editors' copies once per clip (marker `<id>-layers-v2`).
+- **Linked players are opt-in (2026-11-16, user's call):** a capture
+  links nobody; the Add Game Info sheet and the clip's Players chips
+  offer the game's batter/pitcher as toggles, off by default.
 - **Highlight Reel is "Mixtape" to users.** The code, the folder flag
   (`isHighlightReelsFolder`) and old folder names keep "Highlight Reel";
   `MomentFolder.displayName` shows "Mixtapes".

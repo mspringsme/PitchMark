@@ -187,6 +187,15 @@ private func fittedFontSize(_ text: String, fontName: String, idealSize: CGFloat
     return idealSize * scale
 }
 
+/// The picture an image overlay bakes in: a built-in icon at its weight and
+/// color, anything else as the library has it.
+func overlayExportImage(for item: OverlayItem, resolveImage: (String) -> UIImage?) -> UIImage? {
+    guard OverlayIconImages.isIcon(assetId: item.assetID) else { return resolveImage(item.assetID) }
+    guard let icon = OverlayIconImages.image(forAssetId: item.assetID, weight: item.iconWeight)
+            ?? resolveImage(item.assetID) else { return nil }
+    return OverlayIconImages.tinted(icon, hex: item.tintHex)
+}
+
 func exportMomentWithOverlays(
     sourceURL: URL,
     overlays: [OverlayItem],
@@ -271,7 +280,7 @@ func exportMomentWithOverlays(
             let layer: CALayer
             if let textContent = item.textContent {
                 layer = buildTextCardLayer(textContent, size: textCardSize)
-            } else if let cgImage = resolveImage(item.assetID)?.cgImage {
+            } else if let cgImage = overlayExportImage(for: item, resolveImage: resolveImage)?.cgImage {
                 let imageLayer = CALayer()
                 imageLayer.bounds = CGRect(x: 0, y: 0, width: overlayBaseSize, height: overlayBaseSize)
                 imageLayer.contents = cgImage

@@ -37,6 +37,7 @@ import SwiftUI
 import AVFoundation
 import PhotosUI
 import UniformTypeIdentifiers
+import FirebaseFirestore
 
 /// Bridges a PhotosPicker-selected video into a local temp file PitchMark
 /// owns - `FileRepresentation` streams the asset to disk rather than
@@ -412,17 +413,21 @@ struct MomentsLibraryView: View {
                 context: prompt.context,
                 initialOptions: nil,
                 momentCount: prompt.momentIds.count,
-                onApply: { options in
+                onApply: { options, links in
                     captionPrompt = nil
+                    linkPlayers(links, to: prompt.momentIds)
                     applyCaption(options, to: prompt)
                 },
-                onSkip: { captionPrompt = nil }
+                onSkip: { links in
+                    captionPrompt = nil
+                    linkPlayers(links, to: prompt.momentIds)
+                }
             )
             .interactiveDismissDisabled()
         }
         .overlay {
             if isApplyingCaption {
-                GameCaptionWorkingOverlay(text: "Adding game info…")
+                GameCaptionWorkingOverlay(text: "Updating game info…")
             }
         }
         .sheet(item: $momentShareRequest) { request in
@@ -867,6 +872,16 @@ struct MomentsLibraryView: View {
         return ids
     }
 
+    /// The players switched on in the Add Game Info sheet.
+    private func linkPlayers(_ tags: [MomentPlayerTag], to momentIds: [String]) {
+        guard !tags.isEmpty else { return }
+        let encoded = tags.compactMap { try? Firestore.Encoder().encode($0) }
+        for id in momentIds {
+            authManager.updateMomentFields(momentId: id, fields: ["playerTags": encoded]) { _ in }
+        }
+        refreshMoments()
+    }
+
     /// Bakes the chosen caption into each new Moment, one at a time.
     private func applyCaption(_ options: GameCaptionOptions, to prompt: CaptionPrompt) {
         isApplyingCaption = true
@@ -934,15 +949,23 @@ struct MomentsLibraryView: View {
             )
             var tagged = moment
             if let gameContext {
+                // Players aren't linked until the coach switches them on in
+                // the Add Game Info sheet (2026-11-16, user's call).
                 tagged.gameContext = gameContext
-                let tags = GameCaption.playerTags(from: gameContext)
-                tagged.playerTags = tags.isEmpty ? nil : tags
             }
             authManager.saveMoment(tagged) { result in
                 isSaving = false
                 switch result {
                 case .success(let saved):
                     defer { completion(saved.id) }
+                    if tagLocation, let id = saved.id {
+                        MomentLocationTagger.shared.fetchCityName { city in
+                            guard let city else { return }
+                            authManager.updateMomentFields(momentId: id, fields: ["cityName": city]) { _ in
+                                refreshMoments()
+                            }
+                        }
+                    }
                     if let id = saved.id {
                         saveLocalMomentVideo(from: tempURL, momentId: id,
                                              autoBackupToPhotos: fromCamera && momentKind != .photoCreation)
@@ -959,13 +982,9 @@ struct MomentsLibraryView: View {
             }
         }
 
-        if tagLocation {
-            MomentLocationTagger.shared.fetchCityName { city in
-                finishSaving(cityName: city)
-            }
-        } else {
-            finishSaving(cityName: nil)
-        }
+        // Saved now; the city follows when the phone finds it (up to 10s).
+        // Waiting for it first held every new clip back (2026-11-16).
+        finishSaving(cityName: nil)
     }
 }
 

@@ -64,6 +64,8 @@ struct OverlayTimelineView: View {
     /// times either way - this only hides the secondary "tap a marker on
     /// the timeline to retime it precisely" path while that panel is up.
     var showTracks: Bool = true
+    /// The overlay editor draws its own big scrub bar now (2026-11-16).
+    var showsRuler: Bool = true
     let onCommit: () -> Void
 
     private let trackHeight: CGFloat = 32
@@ -76,7 +78,7 @@ struct OverlayTimelineView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            rulerRow
+            if showsRuler { rulerRow }
 
             if showTracks, !overlays.isEmpty {
                 ScrollView {

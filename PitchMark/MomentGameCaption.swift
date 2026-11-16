@@ -48,18 +48,20 @@ struct MomentPlayerTag: Codable, Equatable, Hashable {
     var pitcherId: String? = nil
 }
 
-/// Which game items go in the caption, and how it shows.
+/// Which game items go in the caption, and how it shows. The defaults
+/// are what's on after a recording or photo (user's picks, 2026-11-16):
+/// batter, inning, game and date, for 3 seconds, fading out.
 struct GameCaptionOptions: Codable, Equatable {
     var batter = true
     var pitcher = false
     var inning = true
-    var count = true
+    var count = false
     var outs = false
-    var score = true
+    var score = false
     var gameName = true
     var date = true
     /// 0 = the whole clip.
-    var seconds: Double = 5
+    var seconds: Double = 3
     var fadeOut = true
 
     static let durationChoices: [Double] = [3, 5, 10, 0]

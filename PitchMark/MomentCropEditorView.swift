@@ -73,94 +73,70 @@ struct MomentCropEditorView: View {
     }
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                videoArea
-                    .background(Color.black)
-                    .frame(maxHeight: .infinity)
+        // Shared editor frame (MomentEditorChrome.swift, 2026-11-16).
+        VStack(spacing: 0) {
+            MomentEditorTopBar(
+                title: "Crop", systemImage: "crop",
+                saveTitle: isExporting ? "Saving…" : "Save",
+                saveEnabled: !isExporting,
+                onCancel: { dismiss() },
+                onSave: { startExport() }
+            )
 
-                scrubberRow
-                    .padding(.horizontal)
-                    .padding(.top, 8)
+            videoArea
+                .background(Color.black)
+                .frame(maxHeight: .infinity)
 
-                HStack {
-                    Button {
-                        togglePlayback()
-                    } label: {
-                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 32))
+            VStack(alignment: .leading, spacing: 14) {
+                EditorScrubBar(
+                    currentTime: currentTime, duration: duration, isPlaying: isPlaying,
+                    onTogglePlay: { togglePlayback() },
+                    onSeek: { time in
+                        if isPlaying { togglePlayback() }
+                        seek(to: time)
                     }
-                    Spacer()
+                )
+
+                Picker("Aspect", selection: $cropSettings.aspect) {
+                    ForEach(CropAspect.allCases, id: \.self) { aspect in
+                        Text(aspect.displayName).tag(aspect)
+                    }
                 }
-                .padding(.horizontal)
-                .padding(.top, 10)
+                .pickerStyle(.segmented)
+                .controlSize(.large)
 
-                VStack(alignment: .leading, spacing: 12) {
-                    Picker("Aspect", selection: $cropSettings.aspect) {
-                        ForEach(CropAspect.allCases, id: \.self) { aspect in
-                            Text(aspect.displayName).tag(aspect)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    // Zoom is available on every aspect, Original included -
-                    // zooming into the original aspect is a real "zoom crop"
-                    // on its own, not just a pan-position aid for the other
-                    // two. Only the drag hint is aspect-conditional, since
-                    // Original has no pan slack to speak of until zoomed in.
-                    HStack {
-                        Image(systemName: "minus.magnifyingglass")
-                            .foregroundStyle(.secondary)
-                        Slider(
-                            value: Binding(
-                                get: { cropSettings.resolvedScale },
-                                set: { cropSettings.scale = $0 }
-                            ),
-                            in: minCropZoomScale...maxCropZoomScale
-                        )
-                        Image(systemName: "plus.magnifyingglass")
-                            .foregroundStyle(.secondary)
-                        Text(String(format: "%.1fx", cropSettings.resolvedScale))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .frame(width: 36, alignment: .trailing)
-                    }
-
-                    if cropSettings.aspect != .original || cropSettings.resolvedScale > minCropZoomScale {
-                        Text("Drag the video to reposition the crop window.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let exportErrorMessage {
-                        Text(exportErrorMessage)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-
-                    Button {
-                        startExport()
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Text(isExporting ? "Applying Crop…" : "Apply Crop")
-                                .font(.headline)
-                            Spacer()
-                        }
-                    }
-                    .disabled(isExporting)
+                HStack(spacing: 10) {
+                    Image(systemName: "minus.magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    Slider(
+                        value: Binding(
+                            get: { cropSettings.resolvedScale },
+                            set: { cropSettings.scale = $0 }
+                        ),
+                        in: minCropZoomScale...maxCropZoomScale
+                    )
+                    Image(systemName: "plus.magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    Text(String(format: "%.1fx", cropSettings.resolvedScale))
+                        .font(.subheadline.monospacedDigit().weight(.semibold))
+                        .frame(width: 44, alignment: .trailing)
                 }
-                .padding()
-            }
-            .navigationTitle("Crop")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(isExporting)
+
+                Text(cropSettings.aspect != .original || cropSettings.resolvedScale > minCropZoomScale
+                     ? "Drag the video to move the crop."
+                     : "Pick a shape, then zoom in and drag the video to frame it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if let exportErrorMessage {
+                    Text(exportErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
             }
+            .editorControlsPanel()
         }
+        .background(Color.black.ignoresSafeArea())
         .onAppear {
             setUpPlayer()
         }
@@ -183,36 +159,6 @@ struct MomentCropEditorView: View {
     /// tracks/keyframes Crop has no use for: a time label, a draggable
     /// playhead over a capsule track, and drag-to-seek with zero
     /// tolerance so the preview lands frame-accurately while scrubbing.
-    private var scrubberRow: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("\(formattedTime(currentTime)) / \(formattedTime(duration))")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color(.systemGray4))
-                        .frame(height: 4)
-
-                    Image(systemName: "arrowtriangle.down.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.accentColor)
-                        .offset(x: timeToX(time: currentTime, duration: duration, trackWidth: geometry.size.width) - 5)
-                }
-                .frame(height: 16, alignment: .top)
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            seek(to: xToTime(x: value.location.x, duration: duration, trackWidth: geometry.size.width))
-                        }
-                )
-            }
-            .frame(height: 20)
-        }
-    }
-
     private func formattedTime(_ seconds: Double) -> String {
         let total = Int(seconds.rounded())
         return String(format: "%d:%02d", total / 60, total % 60)

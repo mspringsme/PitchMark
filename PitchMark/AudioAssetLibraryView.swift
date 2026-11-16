@@ -43,6 +43,8 @@ struct AudioAssetLibraryView: View {
     @State private var showRecorder = false
     @State private var showMicDeniedDialog = false
     @State private var showMixCreator = false
+    /// The group chip that's on; nil = All.
+    @State private var shownGroup: String? = nil
 
     @State private var assetPendingAction: LibraryAudioAsset? = nil
     @State private var showAudioActionsDialog = false
@@ -181,18 +183,32 @@ struct AudioAssetLibraryView: View {
                 }
             }
 
-            if !sfxAssets.isEmpty {
-                Section("SFX") {
-                    assetRows(sfxAssets)
+            // Built-in sounds by group (2026-11-15), with chips to show
+            // one group at a time, like the overlay icons.
+            if groupNames.count > 1 {
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            groupChip(nil, title: "All")
+                            ForEach(groupNames, id: \.self) { name in
+                                groupChip(name, title: name)
+                            }
+                            groupChip(Self.myRecordingsGroup, title: "My Recordings")
+                        }
+                    }
+                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                 }
             }
 
-            if !musicAssets.isEmpty {
-                Section("Music") {
-                    assetRows(musicAssets)
+            ForEach(groupNames, id: \.self) { name in
+                if shownGroup == nil || shownGroup == name {
+                    Section(name) {
+                        assetRows(audioAssets.filter { $0.category == name })
+                    }
                 }
             }
 
+            if shownGroup == nil || shownGroup == Self.myRecordingsGroup {
             Section("My Recordings") {
                 if myRecordings.isEmpty {
                     Text("No recordings yet. Record one above.")
@@ -208,15 +224,39 @@ struct AudioAssetLibraryView: View {
                         .foregroundStyle(.red)
                 }
             }
+            }
         }
     }
 
-    /// Bundled clips are grouped by category (from the manifest);
-    /// user-recorded ones (no category) get their own section - same
-    /// row/dialog/swipe-delete behavior in every section, just grouped.
-    private var sfxAssets: [LibraryAudioAsset] { audioAssets.filter { $0.category == "sfx" } }
-    private var musicAssets: [LibraryAudioAsset] { audioAssets.filter { $0.category == "music" } }
+    /// Bundled clips are grouped by the manifest's `category` - a group
+    /// name like "Hits & Impacts" (2026-11-15; was just sfx/music).
+    /// User-recorded ones (no category) are My Recordings.
     private var myRecordings: [LibraryAudioAsset] { audioAssets.filter { $0.category == nil } }
+
+    static let myRecordingsGroup = "__mine"
+
+    /// Known groups in this order, then any other the manifest names.
+    private var groupNames: [String] {
+        let present = Set(audioAssets.compactMap(\.category))
+        let known = BundledSoundGroup.order.filter { present.contains($0) }
+        return known + present.subtracting(known).sorted()
+    }
+
+    private func groupChip(_ group: String?, title: String) -> some View {
+        let isOn = shownGroup == group
+        return Button {
+            shownGroup = group
+        } label: {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(isOn ? Color.white : Color.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(isOn ? Color.pitchMarkActiveGray : Color(.secondarySystemBackground)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("audioLibrary.group.\(title)")
+    }
 
     private func assetRows(_ assets: [LibraryAudioAsset]) -> some View {
         ForEach(assets) { asset in
@@ -234,40 +274,72 @@ struct AudioAssetLibraryView: View {
         }
     }
 
+    /// A play/stop button on every row and, when picking audio for a
+    /// Moment, an Add button - no pop-up per row (2026-11-16). In the
+    /// plain library a row tap still opens Rename and the rest.
     @ViewBuilder
     private func assetRow(_ asset: LibraryAudioAsset) -> some View {
-        Button {
-            // Same dialog either way now (see the confirmationDialog's
-            // own comment) - picker mode used to add on tap immediately,
-            // with no way to hear the sound first.
-            assetPendingAction = asset
-            showAudioActionsDialog = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: playingAssetId == asset.id ? "waveform.circle.fill" : "waveform.circle")
-                    .font(.title2)
-                    .foregroundStyle(Color.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(asset.name)
-                        .font(.subheadline.weight(.semibold))
-                    Text(formattedDuration(asset.durationSeconds))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if !asset.isDeletable {
-                    Text("Bundled")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+        let isPlaying = playingAssetId == asset.id
+        HStack(spacing: 12) {
+            Button {
+                togglePreview(asset)
+            } label: {
+                Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(Color.pitchMarkActiveGray)
             }
-            .padding(.vertical, 2)
-            .contentShape(Rectangle())
+            .buttonStyle(.borderless)
+            .accessibilityLabel(isPlaying ? "Stop \(asset.name)" : "Play \(asset.name)")
+            .accessibilityIdentifier("audioRow.play.\(asset.name)")
+
+            Button {
+                if onPick != nil {
+                    togglePreview(asset)
+                } else {
+                    assetPendingAction = asset
+                    showAudioActionsDialog = true
+                }
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(asset.name)
+                            .font(.subheadline.weight(.semibold))
+                        Text(formattedDuration(asset.durationSeconds))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    if onPick == nil, !asset.isDeletable {
+                        Text("Bundled")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if let onPick {
+                Button {
+                    previewPlayer?.stop()
+                    onPick(asset)
+                    dismiss()
+                } label: {
+                    Label("Add", systemImage: "plus")
+                        .font(.subheadline.weight(.bold))
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.pitchMarkActiveGray)
+                .accessibilityIdentifier("audioRow.add.\(asset.name)")
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 2)
     }
 
     private func formattedDuration(_ seconds: Double) -> String {
+        // Most built-in effects are under a second - "0:00" said nothing.
+        if seconds < 10 { return String(format: "%.1fs", seconds) }
         let total = Int(seconds.rounded())
         return String(format: "%d:%02d", total / 60, total % 60)
     }

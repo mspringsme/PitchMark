@@ -156,6 +156,12 @@ struct OverlayItem: Identifiable, Codable {
     /// have no "textContent" key, and nil unambiguously means "this is
     /// an image overlay," never a third state.
     var textContent: OverlayTextContent? = nil
+    /// A built-in icon's color, "#RRGGBB" (2026-11-15). nil = white, as
+    /// drawn. Ignored for photos and text.
+    var tintHex: String? = nil
+    /// A built-in icon's line weight (OverlayIconWeight raw value).
+    /// nil = the icon's default - every overlay placed before weights.
+    var iconWeight: String? = nil
 
     init(id: UUID = UUID(), assetID: String, startTime: Double, endTime: Double, keyframes: [OverlayKeyframe] = [], fadeInEnabled: Bool? = nil, fadeOutEnabled: Bool? = nil, textContent: OverlayTextContent? = nil) {
         self.id = id

@@ -38,10 +38,24 @@ final class MomentsTests: XCTestCase {
     func testThePlayGoesOnTopAndTheGameUnderIt() {
         var o = GameCaptionOptions()
         o.pitcher = true
+        o.count = true
         o.outs = true
+        o.score = true
         let lines = GameCaption.lines(context: game(), options: o)
         XCTAssertEqual(lines?.line1, "Kenzie · P: Lauren · Inn 3 · 1-2 · 2 Outs")
         XCTAssertEqual(lines?.line2.hasPrefix("Reds 10U vs. MHJ Fastpitch · Reds 3, MHJ 2 · Nov 14"), true)
+    }
+
+    /// What's on after a recording or photo (user's picks, 2026-11-16).
+    func testTheDefaultsAreBatterInningGameAndDateForThreeSecondsFadingOut() {
+        let o = GameCaptionOptions()
+        XCTAssertTrue(o.batter && o.inning && o.gameName && o.date)
+        XCTAssertFalse(o.pitcher || o.count || o.outs || o.score)
+        XCTAssertEqual(o.seconds, 3)
+        XCTAssertTrue(o.fadeOut)
+        let lines = GameCaption.lines(context: game(), options: o)
+        XCTAssertEqual(lines?.line1, "Kenzie · Inn 3")
+        XCTAssertEqual(lines?.line2.hasPrefix("Reds 10U vs. MHJ Fastpitch · Nov 14"), true)
     }
 
     func testOneOutIsSingular() {
@@ -277,4 +291,73 @@ final class MomentsTests: XCTestCase {
         XCTAssertFalse(MomentActions.editFieldNames.contains("photoCount"), "photos stay")
         XCTAssertFalse(MomentActions.editFieldNames.contains("playerTags"), "players stay")
     }
+}
+
+/// 2026-11-16: overlays are the top layer. Other editors work from the
+/// video without them, so nothing bakes them in twice (the doubled
+/// caption after a crop).
+final class OverlayLayerTests: XCTestCase {
+    private let id = "overlay-layer-test"
+
+    override func tearDown() {
+        removeAllLocalMomentFiles(momentId: id, photoCount: 0)
+        if let base = localMomentOverlayBaseVideoURL(for: id) { try? FileManager.default.removeItem(at: base) }
+    }
+
+    private func write(_ url: URL?) {
+        guard let url else { return XCTFail("no path") }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: url.path, contents: Data("x".utf8))
+    }
+
+    func testOtherEditorsUseTheOverlaysCopyWheneverItExists() {
+        write(localMomentEditedVideoURL(for: id))
+        write(localMomentOverlayBaseVideoURL(for: id))
+        XCTAssertEqual(videoBelowOverlays(momentId: id), localMomentOverlayBaseVideoURL(for: id))
+    }
+
+    func testWithoutTheCopyTheyUseTheCurrentVideo() {
+        write(localMomentEditedVideoURL(for: id))
+        XCTAssertEqual(videoBelowOverlays(momentId: id), resolvedMomentVideoURL(for: id))
+    }
+
+    /// Copies from older builds may hold the caption; the first open on
+    /// this build drops them, once.
+    func testTheOneTimeCleanupDropsOtherEditorsCopiesOnce() {
+        if let marker = OverlayLayerMigration.markerURL(for: id) { try? FileManager.default.removeItem(at: marker) }
+        write(localMomentCropBaseVideoURL(for: id))
+        write(localMomentOverlayBaseVideoURL(for: id))
+        OverlayLayerMigration.runIfNeeded(momentId: id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localMomentCropBaseVideoURL(for: id)!.path), "Crop's old copy goes")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localMomentOverlayBaseVideoURL(for: id)!.path), "the overlays' copy stays")
+        write(localMomentCropBaseVideoURL(for: id))
+        OverlayLayerMigration.runIfNeeded(momentId: id)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localMomentCropBaseVideoURL(for: id)!.path), "only once")
+        if let marker = OverlayLayerMigration.markerURL(for: id) { try? FileManager.default.removeItem(at: marker) }
+        if let crop = localMomentCropBaseVideoURL(for: id) { try? FileManager.default.removeItem(at: crop) }
+    }
+
+    /// Another editor's save keeps the overlays' copy - the redraw
+    /// replaces it. A missing copy then means the overlays are part of the
+    /// video, and the redraw is skipped instead of doubling them.
+    func testAnotherEditorsSaveKeepsTheOverlaysCopy() {
+        write(localMomentOverlayBaseVideoURL(for: id))
+        invalidateOtherFrozenBases(momentId: id, except: [.crop])
+        invalidateOtherFrozenBases(momentId: id, except: [])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localMomentOverlayBaseVideoURL(for: id)!.path))
+    }
+
+    func testDeletingTheMomentRemovesTheOverlaysCopy() {
+        write(localMomentOverlayBaseVideoURL(for: id))
+        removeAllLocalMomentFiles(momentId: id, photoCount: 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: localMomentOverlayBaseVideoURL(for: id)!.path))
+    }
+
+    func testRemovingGameInfoFromAVideoWithItBakedInSaysSo() {
+        let baked = NSError(domain: "GameCaption", code: GameCaptionApplier.bakedInErrorCode)
+        XCTAssertTrue(GameCaptionApplier.isBakedIn(baked))
+        XCTAssertFalse(GameCaptionApplier.isBakedIn(NSError(domain: "GameCaption", code: -1)))
+        XCTAssertFalse(GameCaptionApplier.isBakedIn(nil))
+    }
+
 }

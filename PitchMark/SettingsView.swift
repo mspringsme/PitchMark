@@ -3215,7 +3215,7 @@ struct SettingsView: View {
                 HStack {
                     Image(systemName: "quote.bubble")
                         .foregroundStyle(.secondary)
-                    Text("Sound Credits")
+                    Text("Credits")
                         .font(.headline)
                     Spacer()
                 }

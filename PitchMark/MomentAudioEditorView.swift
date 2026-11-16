@@ -129,20 +129,37 @@ struct MomentAudioEditorView: View {
     }
 
     var body: some View {
+        // Shared editor frame (MomentEditorChrome.swift, 2026-11-16).
         VStack(spacing: 0) {
+            MomentEditorTopBar(
+                title: "Audio", systemImage: "music.note",
+                saveTitle: isExporting ? "Saving…" : "Save",
+                saveEnabled: !isExporting,
+                onCancel: { dismiss() },
+                onSave: { startExport() }
+            )
+
             PlayerContainerView(player: player)
                 .background(Color.black)
                 .frame(maxHeight: .infinity)
 
+            // Stays put while the tracks below scroll.
+            EditorScrubBar(
+                currentTime: currentTime, duration: totalDuration, isPlaying: isPlaying,
+                playDisabled: isBuildingPreview,
+                onTogglePlay: { togglePlayback() },
+                onSeek: { time in
+                    if isPlaying { togglePlayback() }
+                    seek(to: time)
+                }
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 6)
+            .background(Color(.systemBackground))
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(formattedTime(currentTime)) / \(formattedTime(totalDuration))")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        scrubRuler
-                    }
-
                     if let previewErrorMessage {
                         Text(previewErrorMessage)
                             .font(.caption)
@@ -151,7 +168,10 @@ struct MomentAudioEditorView: View {
 
                     originalAudioSection
 
-                    Divider()
+                        .padding(12)
+
+                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(.secondarySystemBackground)))
+
 
                     overlaysSection
                 }
@@ -159,57 +179,20 @@ struct MomentAudioEditorView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 4)
             }
+            .background(Color(.systemBackground))
 
-            HStack {
-                Button {
-                    togglePlayback()
-                } label: {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 32))
-                }
-
-                Spacer()
-
-                Button {
-                    showAssetPicker = true
-                } label: {
-                    Label("Add Audio", systemImage: "waveform.badge.plus")
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
-        }
-        .background(Color(.systemBackground).ignoresSafeArea())
-        .overlay(alignment: .topLeading) {
             Button {
-                startExport()
+                showAssetPicker = true
             } label: {
-                Text("Export")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.white, in: Capsule())
+                Label("Add Audio", systemImage: "waveform.badge.plus")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .padding(.top, 50)
-            .padding(.leading, 20)
-            .disabled(isExporting)
+            .buttonStyle(.bordered)
+            .tint(Color.pitchMarkActiveGray)
+            .editorControlsPanel()
         }
-        .overlay(alignment: .topTrailing) {
-            // This whole screen ignores the safe area (see
-            // MomentDetailView's .ignoresSafeArea() on the
-            // fullScreenCover) - a bare `.padding()` here would land
-            // under the notch/Dynamic Island, same lesson as every other
-            // full-bleed editor in this app.
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.white, .black.opacity(0.5))
-            }
-            .padding(.top, 50)
-            .padding(.trailing, 20)
-        }
+        .background(Color.black.ignoresSafeArea())
         .overlay {
             if isExporting || isBuildingPreview {
                 ZStack {
@@ -279,8 +262,7 @@ struct MomentAudioEditorView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Original Audio")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.semibold))
                 Spacer()
                 if originalVolumeKeyframes.isEmpty {
                     Button {
@@ -525,16 +507,99 @@ struct MomentAudioEditorView: View {
 
     // MARK: Overlays
 
+    /// One lane per added clip, each its own color (2026-11-16): they used
+    /// to share one lane in one purple, so overlapping clips blurred
+    /// together. Tap a lane to edit that clip in the card below.
     private var overlaysSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Added Audio")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(audioOverlays.isEmpty ? "Added Audio" : "Added Audio (\(audioOverlays.count))")
+                .font(.subheadline.weight(.semibold))
 
-            timelineTrack
+            if audioOverlays.isEmpty {
+                Text("Tap Add Audio below to put music or a sound on this clip.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(spacing: 6) {
+                    ForEach(Array(audioOverlays.enumerated()), id: \.element.id) { position, overlay in
+                        overlayLane(overlay, color: Self.laneColor(position))
+                    }
+                }
+                if selectedOverlayID == nil {
+                    Text("Tap a clip to change its timing, trim and volume.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
-            selectedOverlayRow
+            if let selected = audioOverlays.first(where: { $0.id == selectedOverlayID }) {
+                let color = laneColor(for: selected)
+                selectedOverlayRow
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(color.opacity(0.07)))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(color.opacity(0.6), lineWidth: 1.5))
+            }
         }
+    }
+
+    static let laneColors: [Color] = [.purple, .orange, .teal, .pink, .indigo, .green]
+
+    static func laneColor(_ position: Int) -> Color { laneColors[position % laneColors.count] }
+
+    private func laneColor(for overlay: AudioOverlayItem) -> Color {
+        Self.laneColor(audioOverlays.firstIndex(where: { $0.id == overlay.id }) ?? 0)
+    }
+
+    private func overlayLane(_ overlay: AudioOverlayItem, color: Color) -> some View {
+        let isSelected = overlay.id == selectedOverlayID
+        let name = audioAssetsById[overlay.assetId]?.name ?? "Audio"
+        return Button {
+            selectedOverlayID = isSelected ? nil : overlay.id
+            selectedOverlayKeyframeID = nil
+        } label: {
+            HStack(spacing: 8) {
+                Circle().fill(color).frame(width: 10, height: 10)
+                Text(name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .frame(width: 96, alignment: .leading)
+                GeometryReader { geometry in
+                    let width = geometry.size.width
+                    let assetDuration = audioAssetsById[overlay.assetId]?.durationSeconds ?? 1
+                    let trimmed = trimmedDuration(for: overlay, assetDuration: assetDuration)
+                    let endTime = min(overlay.startTime + trimmed, max(totalDuration, overlay.startTime))
+                    let x = timeToX(time: overlay.startTime, duration: totalDuration, trackWidth: width)
+                    let endX = timeToX(time: endTime, duration: totalDuration, trackWidth: width)
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color(.systemGray5)).frame(height: 22)
+                        Capsule()
+                            .fill(color.opacity(isSelected ? 0.9 : 0.55))
+                            .frame(width: max(endX - x, 6), height: 22)
+                            .offset(x: x)
+                        Capsule()
+                            .fill(Color.primary)
+                            .frame(width: 2, height: 28)
+                            .offset(x: timeToX(time: currentTime, duration: totalDuration, trackWidth: width) - 1)
+                    }
+                    .frame(height: 28)
+                }
+                .frame(height: 28)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isSelected ? color.opacity(0.12) : Color(.secondarySystemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isSelected ? color : Color.clear, lineWidth: 2)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(name)\(isSelected ? ", selected" : "")")
     }
 
     /// Tap-to-select only - deliberately no gesture attached here at
@@ -589,11 +654,13 @@ struct MomentAudioEditorView: View {
             let trimmed = trimmedDuration(for: overlay, assetDuration: assetDuration)
             let clipEnd = max(overlay.startTime + trimmed, overlay.startTime + 0.01)
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
+            let color = laneColor(for: overlay)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Circle().fill(color).frame(width: 12, height: 12)
                     Text(name)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.headline)
+                        .lineLimit(1)
                     Spacer()
                     Button(role: .destructive) {
                         audioOverlays.remove(at: index)
@@ -602,9 +669,14 @@ struct MomentAudioEditorView: View {
                         persistOverlays()
                     } label: {
                         Label("Delete", systemImage: "trash")
-                            .font(.caption)
+                            .font(.subheadline.weight(.semibold))
                     }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
                 }
+                Text("Starts on the video at")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
 
                 HStack {
                     Text("Start")
@@ -626,9 +698,10 @@ struct MomentAudioEditorView: View {
                         .frame(width: 40, alignment: .trailing)
                 }
 
+                Divider()
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Trim")
-                        .font(.caption2)
+                    Text("Trim the clip")
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                     HStack {
                         Text("Start")
@@ -670,9 +743,10 @@ struct MomentAudioEditorView: View {
                     }
                 }
 
+                Divider()
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Volume")
-                        .font(.caption2)
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
 
                     // This clip's own waveform - separate from the
@@ -690,7 +764,7 @@ struct MomentAudioEditorView: View {
                                 trimEnd: audioOverlays[index].trimEnd ?? assetDuration,
                                 assetDuration: assetDuration
                             ),
-                            color: Color.purple.opacity(0.55)
+                            color: color.opacity(0.55)
                         )
                         if !(audioOverlays[index].volumeKeyframes ?? []).isEmpty {
                             VolumeKeyframeStrip(

@@ -105,32 +105,48 @@ struct MomentZoomEditorView: View {
     }
 
     var body: some View {
+        // Shared editor frame (MomentEditorChrome.swift, 2026-11-16).
         VStack(spacing: 0) {
+            MomentEditorTopBar(
+                title: "Zoom", systemImage: "plus.magnifyingglass",
+                saveTitle: isExporting ? "Saving…" : "Save",
+                saveEnabled: !isExporting && !regions.isEmpty,
+                onCancel: { dismiss() },
+                onSave: { startExport() }
+            )
+
             videoArea
                 .background(Color.black)
                 .frame(maxHeight: .infinity)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("\(formattedTime(currentTime)) / \(formattedTime(duration))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                timelineTrack
-
-                HStack {
-                    Text("Zoom Areas")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        addZoomRegion()
-                    } label: {
-                        Label("Add Zoom Area", systemImage: "arrow.up.left.and.arrow.down.right.circle.fill")
-                            .font(.caption)
+            VStack(alignment: .leading, spacing: 12) {
+                EditorScrubBar(
+                    currentTime: currentTime, duration: duration, isPlaying: isPlaying,
+                    onTogglePlay: { togglePlayback() },
+                    onSeek: { time in
+                        if isPlaying { togglePlayback() }
+                        seek(to: time)
                     }
+                )
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Zoom areas along the clip - tap one to edit it")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    timelineTrack
                 }
 
                 regionDetailPanel
+
+                Button {
+                    addZoomRegion()
+                } label: {
+                    Label("Add Zoom Area Here", systemImage: "plus.circle.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.pitchMarkActiveGray)
 
                 if let exportErrorMessage {
                     Text(exportErrorMessage)
@@ -138,47 +154,9 @@ struct MomentZoomEditorView: View {
                         .foregroundStyle(.red)
                 }
             }
-            .padding(.horizontal)
-            .padding(.top, 8)
-
-            HStack {
-                Button {
-                    togglePlayback()
-                } label: {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 32))
-                }
-                Spacer()
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
+            .editorControlsPanel()
         }
-        .background(Color(.systemBackground).ignoresSafeArea())
-        .overlay(alignment: .topLeading) {
-            Button {
-                startExport()
-            } label: {
-                Text("Export")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.white, in: Capsule())
-            }
-            .padding(.top, 50)
-            .padding(.leading, 20)
-            .disabled(isExporting || regions.isEmpty)
-        }
-        .overlay(alignment: .topTrailing) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.white, .black.opacity(0.5))
-            }
-            .padding(.top, 50)
-            .padding(.trailing, 20)
-        }
+        .background(Color.black.ignoresSafeArea())
         .overlay {
             if isExporting {
                 ZStack {
@@ -287,6 +265,11 @@ struct MomentZoomEditorView: View {
                         .frame(width: videoRect.width, height: videoRect.height)
                         .scaleEffect(liveScale, anchor: UnitPoint(x: liveCenter.x, y: liveCenter.y))
                         .clipped()
+                        // Scaled up, the video view still took touches over
+                        // its whole enlarged size - including the top bar's
+                        // Save/Cancel (2026-11-16). The drag is on the clear
+                        // layer below, so the video needs none.
+                        .allowsHitTesting(false)
 
                     // The drag gesture lives on this plain, transparent
                     // SwiftUI view stacked over the video, not on
@@ -380,9 +363,10 @@ struct MomentZoomEditorView: View {
                     regionBar(region, trackWidth: width)
                 }
 
-                Rectangle()
-                    .fill(Color.white)
-                    .frame(width: 2, height: 36)
+                // Dark so it shows on the light panel (was white).
+                Capsule()
+                    .fill(Color.primary)
+                    .frame(width: 3, height: 40)
                     .position(x: timeToX(time: currentTime, duration: duration, trackWidth: width), y: 20)
             }
             .contentShape(Rectangle())

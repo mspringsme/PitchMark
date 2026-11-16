@@ -22,6 +22,7 @@
 import SwiftUI
 import AVFoundation
 import CoreImage
+import Combine
 
 struct MomentFilterEditorView: View {
     let momentId: String
@@ -40,6 +41,10 @@ struct MomentFilterEditorView: View {
     @State private var isExporting = false
     @State private var exportErrorMessage: String? = nil
 
+    // Live preview (2026-11-16): the clip plays with the chosen look, and
+    // can be scrubbed - it used to be one still frame.
+    @StateObject private var preview = FilterLivePreview()
+
     init(momentId: String, videoURL: URL, initialFilterPreset: FilterPreset?, onExported: @escaping () -> Void = {}) {
         self.momentId = momentId
         self.videoURL = videoURL
@@ -49,64 +54,67 @@ struct MomentFilterEditorView: View {
     }
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 16) {
-                Group {
-                    if let previewImage {
-                        Image(uiImage: previewImage)
+        // Shared editor frame (MomentEditorChrome.swift, 2026-11-16).
+            VStack(spacing: 0) {
+                MomentEditorTopBar(
+                    title: "Filters", systemImage: "camera.filters",
+                    saveTitle: isExporting ? "Saving…" : "Save",
+                    saveEnabled: !isExporting && !isLoadingSwatches,
+                    onCancel: { dismiss() },
+                    onSave: { startExport() }
+                )
+                ZStack {
+                    PlayerContainerView(player: preview.player)
+                    // Paused or scrubbing: the exact frame through the
+                    // look, drawn the way the swatches are - always right,
+                    // even where live filtered video can't draw (it's
+                    // black in the simulator).
+                    if !preview.isPlaying, let still = preview.stillFrame {
+                        Image(uiImage: still)
                             .resizable()
                             .scaledToFit()
-                    } else {
-                        ProgressView()
                     }
                 }
                 .frame(maxHeight: .infinity)
                 .background(Color.black)
+                .allowsHitTesting(false)
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        swatchButton(title: "None", image: baseFrameImage, isSelected: selectedPreset == nil) {
-                            selectedPreset = nil
-                        }
-                        ForEach(FilterPreset.allCases, id: \.self) { preset in
-                            swatchButton(title: preset.displayName, image: swatches[preset], isSelected: selectedPreset == preset) {
-                                selectedPreset = preset
+                VStack(alignment: .leading, spacing: 10) {
+                    EditorScrubBar(
+                        currentTime: preview.currentTime, duration: preview.duration, isPlaying: preview.isPlaying,
+                        onTogglePlay: { preview.togglePlay() },
+                        onSeek: { preview.seek(to: $0) }
+                    )
+
+                    Text("Pick a look")
+                        .font(.subheadline.weight(.semibold))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            swatchButton(title: "None", image: baseFrameImage, isSelected: selectedPreset == nil) {
+                                selectedPreset = nil
+                            }
+                            ForEach(FilterPreset.allCases, id: \.self) { preset in
+                                swatchButton(title: preset.displayName, image: swatches[preset], isSelected: selectedPreset == preset) {
+                                    selectedPreset = preset
+                                }
                             }
                         }
                     }
-                    .padding(.horizontal)
-                }
-
-                if let exportErrorMessage {
-                    Text(exportErrorMessage)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                Button {
-                    startExport()
-                } label: {
-                    HStack {
-                        Spacer()
-                        Text(isExporting ? "Applying…" : "Apply")
-                            .font(.headline)
-                        Spacer()
+                    if let exportErrorMessage {
+                        Text(exportErrorMessage)
+                            .font(.caption)
+                            .foregroundStyle(.red)
                     }
                 }
-                .padding(.horizontal)
-                .padding(.bottom)
-                .disabled(isExporting || isLoadingSwatches)
+                .editorControlsPanel()
             }
-            .navigationTitle("Filters")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(isExporting)
-                }
-            }
+            .background(Color.black.ignoresSafeArea())
+        .onAppear {
+            loadFrameAndSwatches()
+            preview.load(url: previewBaseURL, preset: selectedPreset)
         }
-        .onAppear { loadFrameAndSwatches() }
+        .onDisappear { preview.pause() }
+        .onChange(of: selectedPreset) { _, newPreset in preview.setPreset(newPreset) }
     }
 
     private var previewImage: UIImage? {
@@ -235,5 +243,146 @@ struct MomentFilterEditorView: View {
                 }
             }
         }
+    }
+}
+
+/// The Filters editor's playing preview: the clip through the chosen look,
+/// via a CI-filter video composition, so changing the look shows at once.
+final class FilterLivePreview: ObservableObject {
+    let player = AVPlayer()
+    @Published var currentTime: Double = 0
+    @Published var duration: Double = 0
+    @Published var isPlaying = false
+    /// The paused frame through the current look.
+    @Published var stillFrame: UIImage? = nil
+
+    private var asset: AVURLAsset?
+    private var stillGeneration = 0
+    private let ciContext = CIContext()
+
+    /// Read by the composition on its own thread for every frame.
+    private let lock = NSLock()
+    private var preset: FilterPreset?
+    private var observer: Any?
+    private var endObserver: NSObjectProtocol?
+
+    deinit {
+        if let observer { player.removeTimeObserver(observer) }
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+    }
+
+    func load(url: URL, preset: FilterPreset?) {
+        setPresetValue(preset)
+        let asset = AVURLAsset(url: url)
+        self.asset = asset
+        let item = AVPlayerItem(asset: asset)
+        let composition = AVMutableVideoComposition(asset: asset, applyingCIFiltersWithHandler: { [weak self] request in
+            guard let preset = self?.currentPreset() else {
+                request.finish(with: request.sourceImage, context: nil)
+                return
+            }
+            let source = request.sourceImage.clampedToExtent()
+            let adjustment = filterAdjustment(for: preset)
+            let filter = CIFilter(name: "CIColorControls")
+            filter?.setValue(source, forKey: kCIInputImageKey)
+            filter?.setValue(adjustment.brightness, forKey: kCIInputBrightnessKey)
+            filter?.setValue(adjustment.contrast, forKey: kCIInputContrastKey)
+            filter?.setValue(adjustment.saturation, forKey: kCIInputSaturationKey)
+            let output = (filter?.outputImage ?? source).cropped(to: request.sourceImage.extent)
+            request.finish(with: output, context: nil)
+        })
+        item.videoComposition = composition
+        player.replaceCurrentItem(with: item)
+        // A paused player with a composition can sit black until a frame
+        // is asked for - ask for the first one.
+        player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            self?.isPlaying = false
+            self?.player.seek(to: .zero)
+        }
+        Task { @MainActor in
+            let seconds = (try? await asset.load(.duration).seconds) ?? 0
+            duration = seconds.isFinite ? seconds : 0
+        }
+        refreshStill()
+        observer = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 30), queue: .main) { [weak self] time in
+            self?.currentTime = time.seconds
+        }
+    }
+
+    private func currentPreset() -> FilterPreset? {
+        lock.lock(); defer { lock.unlock() }
+        return preset
+    }
+
+    private func setPresetValue(_ value: FilterPreset?) {
+        lock.lock(); preset = value; lock.unlock()
+    }
+
+    /// A new look shows on the paused frame too - re-seeking redraws it.
+    func setPreset(_ value: FilterPreset?) {
+        setPresetValue(value)
+        refreshStill()
+        if !isPlaying {
+            // A seek to the very same time can skip the redraw; a tiny
+            // step forces the frame through the new look.
+            let nudged = CMTimeAdd(player.currentTime(), CMTime(value: 1, timescale: 600))
+            player.seek(to: nudged, toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+    }
+
+    func togglePlay() {
+        if isPlaying { pause() } else { player.play(); isPlaying = true }
+    }
+
+    func pause() {
+        player.pause()
+        isPlaying = false
+        refreshStill()
+    }
+
+    /// The frame at the playhead through the current look. A newer request
+    /// wins over one still in flight (scrubbing fires many).
+    private func refreshStill() {
+        guard let asset else { return }
+        stillGeneration += 1
+        let generation = stillGeneration
+        let time = CMTime(seconds: currentTime, preferredTimescale: 600)
+        let preset = currentPreset()
+        let context = ciContext
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            generator.maximumSize = CGSize(width: 1280, height: 1280)
+            guard let cg = try? generator.copyCGImage(at: time, actualTime: nil) else { return }
+            var image = UIImage(cgImage: cg)
+            if let preset {
+                let adjustment = filterAdjustment(for: preset)
+                let input = CIImage(cgImage: cg)
+                let filter = CIFilter(name: "CIColorControls")
+                filter?.setValue(input, forKey: kCIInputImageKey)
+                filter?.setValue(adjustment.brightness, forKey: kCIInputBrightnessKey)
+                filter?.setValue(adjustment.contrast, forKey: kCIInputContrastKey)
+                filter?.setValue(adjustment.saturation, forKey: kCIInputSaturationKey)
+                if let output = filter?.outputImage, let rendered = context.createCGImage(output, from: input.extent) {
+                    image = UIImage(cgImage: rendered)
+                }
+            }
+            DispatchQueue.main.async {
+                guard let self, generation == self.stillGeneration else { return }
+                self.stillFrame = image
+            }
+        }
+    }
+
+    func seek(to seconds: Double) {
+        if isPlaying { pause() }
+        currentTime = seconds
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        refreshStill()
     }
 }

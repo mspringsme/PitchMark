@@ -65,17 +65,37 @@ struct MomentSpeedEditorView: View {
     }
 
     var body: some View {
+        // Shared editor frame (MomentEditorChrome.swift, 2026-11-16).
         VStack(spacing: 0) {
+            MomentEditorTopBar(
+                title: "Speed", systemImage: "speedometer",
+                saveTitle: isExporting ? "Saving…" : "Save",
+                saveEnabled: !isExporting,
+                onCancel: { dismiss() },
+                onSave: { startExport() }
+            )
+
             PlayerContainerView(player: player)
                 .background(Color.black)
                 .frame(maxHeight: .infinity)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("\(formattedTime(currentSourceTime)) / \(formattedTime(totalDuration))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 12) {
+                EditorScrubBar(
+                    currentTime: currentSourceTime, duration: totalDuration, isPlaying: isPlayingComposite,
+                    playDisabled: isBuildingPreview,
+                    onTogglePlay: { togglePlayback() },
+                    onSeek: { time in
+                        if isPlayingComposite { togglePlayback() }
+                        seekSource(to: time)
+                    }
+                )
 
-                timelineTrack
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Speed along the clip - tap a point to change it")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    timelineTrack
+                }
 
                 if let previewErrorMessage {
                     Text(previewErrorMessage)
@@ -84,57 +104,21 @@ struct MomentSpeedEditorView: View {
                 }
 
                 selectedKeyframeRow
-            }
-            .padding(.horizontal)
-            .padding(.top, 8)
-
-            HStack {
-                Button {
-                    togglePlayback()
-                } label: {
-                    Image(systemName: isPlayingComposite ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 32))
-                }
-                .disabled(isBuildingPreview)
-
-                Spacer()
 
                 Button {
                     addKeyframeAtCurrentTime()
                 } label: {
-                    Label("Add Speed Point", systemImage: "plus.circle.fill")
+                    Label("Add Speed Point Here", systemImage: "plus.circle.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
+                .buttonStyle(.bordered)
+                .tint(Color.pitchMarkActiveGray)
                 .disabled(isPlayingComposite)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
+            .editorControlsPanel()
         }
-        .background(Color(.systemBackground).ignoresSafeArea())
-        .overlay(alignment: .topLeading) {
-            Button {
-                startExport()
-            } label: {
-                Text("Export")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.white, in: Capsule())
-            }
-            .padding(.top, 50)
-            .padding(.leading, 20)
-            .disabled(isExporting)
-        }
-        .overlay(alignment: .topTrailing) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.white, .black.opacity(0.5))
-            }
-            .padding(.top, 50)
-            .padding(.trailing, 20)
-        }
+        .background(Color.black.ignoresSafeArea())
         .overlay {
             if isExporting || isBuildingPreview {
                 ZStack {
@@ -196,9 +180,10 @@ struct MomentSpeedEditorView: View {
                     keyframeMarker(keyframe, trackWidth: width)
                 }
 
-                Rectangle()
-                    .fill(Color.white)
-                    .frame(width: 2, height: 36)
+                // Dark so it shows on the light panel (was white).
+                Capsule()
+                    .fill(Color.primary)
+                    .frame(width: 3, height: 40)
                     .position(x: timeToX(time: currentSourceTime, duration: totalDuration, trackWidth: width), y: 20)
             }
             .contentShape(Rectangle())

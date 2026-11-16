@@ -97,8 +97,14 @@ struct MomentDetailView: View {
     @State private var showTrimEditor = false
     @State private var trimErrorMessage: String? = nil
 
-    @State private var showOverlayEditor = false
-    @State private var overlayEditorAssets: [LibraryAsset] = []
+    /// The images ride in the request itself (2026-11-15): setting a
+    /// separate list and opening in the same step left the editor's first
+    /// open with an empty list - no icon strip until it was reopened.
+    private struct OverlayEditorRequest: Identifiable {
+        let id = UUID()
+        let assets: [LibraryAsset]
+    }
+    @State private var overlayEditorRequest: OverlayEditorRequest? = nil
 
     @State private var showMarkupEditor = false
 
@@ -138,6 +144,13 @@ struct MomentDetailView: View {
     @State private var showNoGameInfo = false
     @State private var isApplyingCaption = false
     @State private var showTagPlayers = false
+    /// Drawing the overlays back on top after another editor saved.
+    @State private var isRedrawingOverlays = false
+    /// Crop asks to take the game info off first (user's call, 2026-11-16).
+    @State private var showCropNeedsCaptionRemoved = false
+    /// The game info can't be lifted out of this video (GameCaptionApplier).
+    @State private var showCaptionBakedIn = false
+    @State private var redrawAgain = false
     /// Lets the preview expand to full screen from right here in the
     /// edit screen - with every editor a fullScreenCover of its own,
     /// the user is repeatedly bounced back to this screen to check an
@@ -229,15 +242,18 @@ struct MomentDetailView: View {
                 context: box.context,
                 initialOptions: moment.gameCaption,
                 canRemove: moment.gameCaption != nil,
-                onApply: { options in
+                initialLinked: moment.playerTags ?? [],
+                onApply: { options, links in
                     captionSheet = nil
+                    setGamePlayerLinks(links, context: box.context)
                     applyCaption(options, context: box.context)
                 },
-                onRemove: {
+                onRemove: { links in
                     captionSheet = nil
+                    setGamePlayerLinks(links, context: box.context)
                     applyCaption(nil, context: box.context)
                 },
-                onSkip: { captionSheet = nil }
+                onSkip: { _ in captionSheet = nil }
             )
         }
         .appConfirmationDialog(
@@ -250,9 +266,35 @@ struct MomentDetailView: View {
         )
         .overlay {
             if isApplyingCaption {
-                GameCaptionWorkingOverlay(text: "Adding game info…")
+                GameCaptionWorkingOverlay(text: "Updating game info…")
+            } else if isRedrawingOverlays {
+                GameCaptionWorkingOverlay(text: "Updating overlays…")
             }
         }
+        .appConfirmationDialog(
+            isPresented: $showCropNeedsCaptionRemoved,
+            title: "Remove Game Info First?",
+            message: "Cropping changes the frame the game info sits in. Remove it now, crop, then add it back from Game Info.",
+            primaryTitle: "Remove & Crop",
+            primaryAction: {
+                applyCaption(nil, context: moment.gameContext ?? MomentGameContext()) {
+                    // After the spinner is gone.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showCropEditor = true }
+                }
+            },
+            secondaryTitle: "Cancel"
+        )
+        .appConfirmationDialog(
+            isPresented: $showCaptionBakedIn,
+            title: "Can't Change the Game Info",
+            message: "This clip's game info and overlays were saved into the video by an earlier edit, so they can't be changed or lifted out on their own. Revert to Original removes every edit; then you can add them again.",
+            primaryTitle: "Revert to Original",
+            primaryRole: .destructive,
+            primaryAction: {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { showRevertConfirm = true }
+            },
+            secondaryTitle: "Not Now"
+        )
         .sheet(isPresented: $showTagPlayers) {
             MomentPlayerTagSheet(
                 initialTags: moment.playerTags ?? [],
@@ -338,7 +380,7 @@ struct MomentDetailView: View {
             }
         }
         .fullScreenCover(isPresented: $showTrimEditor) {
-            if let path = resolvedMomentVideoURL(for: momentId)?.path {
+            if let path = videoBelowOverlaysURL?.path {
                 MomentTrimEditor(videoPath: path) { editedPath in
                     showTrimEditor = false
                     if let editedPath {
@@ -348,103 +390,99 @@ struct MomentDetailView: View {
                 .ignoresSafeArea()
             }
         }
-        .fullScreenCover(isPresented: $showOverlayEditor) {
+        .fullScreenCover(item: $overlayEditorRequest) { request in
             if let url = resolvedMomentVideoURL(for: momentId) {
                 OverlayEditorView(
                     momentId: momentId,
                     videoURL: url,
-                    libraryAssets: overlayEditorAssets,
+                    libraryAssets: request.assets,
                     initialOverlays: moment.overlays ?? [],
                     onExported: { reloadPlayer(); refreshMoment() }
                 )
                     .environmentObject(authManager)
-                    .ignoresSafeArea()
             }
         }
         .fullScreenCover(isPresented: $showMarkupEditor) {
-            if let url = resolvedMomentVideoURL(for: momentId) {
+            if let url = videoBelowOverlaysURL {
                 MarkupEditorView(
                     momentId: momentId,
                     videoURL: url,
                     initialMarkups: moment.markupOverlays ?? [],
-                    onExported: { reloadPlayer(); refreshMoment() }
+                    onExported: { afterEdit() }
                 )
                     .environmentObject(authManager)
-                    .ignoresSafeArea()
             }
         }
         .fullScreenCover(isPresented: $showSpeedEditor) {
-            if let url = resolvedMomentVideoURL(for: momentId) {
+            if let url = videoBelowOverlaysURL {
                 MomentSpeedEditorView(
                     momentId: momentId,
                     videoURL: url,
                     initialKeyframes: moment.speedKeyframes ?? [],
-                    onExported: { reloadPlayer(); refreshMoment() }
+                    onExported: { afterEdit() }
                 )
                     .environmentObject(authManager)
-                    .ignoresSafeArea()
             }
         }
         .fullScreenCover(isPresented: $showZoomEditor) {
-            if let url = resolvedMomentVideoURL(for: momentId) {
+            if let url = videoBelowOverlaysURL {
                 MomentZoomEditorView(
                     momentId: momentId,
                     videoURL: url,
                     initialRegions: moment.zoomRegions ?? [],
-                    onExported: { reloadPlayer(); refreshMoment() }
+                    onExported: { afterEdit() }
                 )
                     .environmentObject(authManager)
-                    .ignoresSafeArea()
             }
         }
         .fullScreenCover(isPresented: $showCropEditor) {
-            if let url = resolvedMomentVideoURL(for: momentId) {
+            if let url = videoBelowOverlaysURL {
                 MomentCropEditorView(
                     momentId: momentId,
                     videoURL: url,
                     initialCropSettings: moment.cropSettings,
-                    onExported: { reloadPlayer(); refreshMoment() }
+                    onExported: { afterEdit() }
                 )
                     .environmentObject(authManager)
             }
         }
         .fullScreenCover(isPresented: $showFreezeEditor) {
-            if let url = resolvedMomentVideoURL(for: momentId) {
+            if let url = videoBelowOverlaysURL {
                 MomentFreezeEditorView(
                     momentId: momentId,
                     videoURL: url,
                     initialFreezeFrame: moment.freezeFrame,
-                    onExported: { reloadPlayer(); refreshMoment() }
+                    onExported: { afterEdit() }
                 )
                     .environmentObject(authManager)
             }
         }
         .fullScreenCover(isPresented: $showFilterEditor) {
-            if let url = resolvedMomentVideoURL(for: momentId) {
+            if let url = videoBelowOverlaysURL {
                 MomentFilterEditorView(
                     momentId: momentId,
                     videoURL: url,
                     initialFilterPreset: moment.filterPreset,
-                    onExported: { reloadPlayer(); refreshMoment() }
+                    onExported: { afterEdit() }
                 )
                     .environmentObject(authManager)
             }
         }
         .fullScreenCover(isPresented: $showSlideshowEditor) {
-            if let url = resolvedMomentVideoURL(for: momentId) {
+            if let url = videoBelowOverlaysURL {
                 MomentSlideshowEditorView(
                     momentId: momentId,
                     videoURL: url,
                     photoCount: photoCount,
                     initialSegments: moment.slideshowSegments ?? [],
                     initialTransitionsEnabled: moment.slideshowTransitionsEnabled ?? false,
-                    onExported: { reloadPlayer(); refreshMoment() }
+                    onExported: { afterEdit() }
                 )
                     .environmentObject(authManager)
             }
         }
         .fullScreenCover(isPresented: $showAudioEditor) {
-            if let url = resolvedMomentVideoURL(for: momentId) {
+            if let url = videoBelowOverlaysURL {
                 MomentAudioEditorView(
                     momentId: momentId,
                     videoURL: url,
@@ -452,13 +490,13 @@ struct MomentDetailView: View {
                     initialOriginalVolume: moment.originalAudioVolume ?? 1.0,
                     initialOriginalVolumeKeyframes: moment.originalVolumeKeyframes ?? [],
                     initialOriginalMuteRegions: moment.originalMuteRegions ?? [],
-                    onExported: { reloadPlayer(); refreshMoment() }
+                    onExported: { afterEdit() }
                 )
                     .environmentObject(authManager)
-                    .ignoresSafeArea()
             }
         }
         .onAppear {
+            OverlayLayerMigration.runIfNeeded(momentId: momentId)
             reloadPlayer()
             loadPhotoImages()
         }
@@ -504,23 +542,38 @@ struct MomentDetailView: View {
                 }
                 .accessibilityIdentifier("momentDetail.tagPlayers")
             }
+            // Toggles, off unless switched on (2026-11-16, user's call):
+            // the game's batter and pitcher, plus anyone tagged by hand.
             let tags = moment.playerTags ?? []
-            if tags.isEmpty {
-                Text("Tag the players in this Moment to find it on their stats.")
+            let candidates = playerCandidates
+            if candidates.isEmpty {
+                Text("Tag the players in this Moment to find it on their Moments.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
-                        ForEach(tags, id: \.self) { tag in
-                            Label(tag.name, systemImage: tag.pitcherId != nil && tag.hitterId == nil ? "baseball" : "person.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(Capsule().fill(Color.pitchMarkActiveGray.opacity(0.14)))
+                        ForEach(candidates, id: \.self) { tag in
+                            let isOn = tags.contains(tag)
+                            Button {
+                                saveTags(isOn ? tags.filter { $0 != tag } : tags + [tag])
+                            } label: {
+                                Label(tag.name, systemImage: isOn ? "checkmark.circle.fill" : "circle")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(isOn ? Color.white : Color.primary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Capsule().fill(isOn ? Color.pitchMarkActiveGray : Color(.secondarySystemBackground)))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(isOn ? .isSelected : [])
+                            .accessibilityIdentifier("momentDetail.player.\(tag.name)")
                         }
                     }
                 }
+                Text("On = this clip shows on that player's Moments.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(12)
@@ -530,12 +583,55 @@ struct MomentDetailView: View {
         )
     }
 
+    /// Who the Players toggles offer: the game's batter and pitcher, then
+    /// anyone else already tagged.
+    private var playerCandidates: [MomentPlayerTag] {
+        let game = moment.gameContext.map { GameCaption.playerTags(from: $0) } ?? []
+        let extra = (moment.playerTags ?? []).filter { !game.contains($0) }
+        return game + extra
+    }
+
+    /// The game's batter/pitcher as switched in the sheet; anyone tagged
+    /// by hand stays.
+    private func setGamePlayerLinks(_ links: [MomentPlayerTag], context: MomentGameContext) {
+        let gamePlayers = Set(GameCaption.playerTags(from: context))
+        let others = (moment.playerTags ?? []).filter { !gamePlayers.contains($0) }
+        saveTags(others + links)
+    }
+
     private func saveTags(_ tags: [MomentPlayerTag]) {
         moment.playerTags = tags
         let value: Any = tags.isEmpty ? FieldValue.delete() : tags.compactMap { try? Firestore.Encoder().encode($0) }
         authManager.updateMomentFields(momentId: momentId, fields: ["playerTags": value]) { error in
             if let error { actionMessage = "Couldn't save the players: \(error.localizedDescription)" }
             refreshMoment()
+        }
+    }
+
+    /// The video every editor but Overlays works on: without the overlays
+    /// (OverlayLayer.swift), so they're never baked in twice.
+    private var videoBelowOverlaysURL: URL? {
+        videoBelowOverlays(momentId: momentId)
+    }
+
+    /// After any editor but Overlays saved: draw the overlays back on top.
+    /// Freeze reports twice by design, so a second call waits its turn.
+    private func afterEdit() {
+        reloadPlayer()
+        refreshMoment()
+        guard !isRedrawingOverlays else {
+            redrawAgain = true
+            return
+        }
+        isRedrawingOverlays = true
+        OverlayLayer.afterOtherEdit(momentId: momentId, authManager: authManager) { error in
+            isRedrawingOverlays = false
+            if let error { actionMessage = "Couldn't redraw the overlays: \(error.localizedDescription)" }
+            reloadPlayer()
+            if redrawAgain {
+                redrawAgain = false
+                afterEdit()
+            }
         }
     }
 
@@ -555,20 +651,17 @@ struct MomentDetailView: View {
     }
 
     /// nil options removes the caption.
-    private func applyCaption(_ options: GameCaptionOptions?, context: MomentGameContext) {
+    private func applyCaption(_ options: GameCaptionOptions?, context: MomentGameContext, then: (() -> Void)? = nil) {
         isApplyingCaption = true
         actionMessage = nil
-        let needsTags = (moment.playerTags ?? []).isEmpty
         GameCaptionApplier.apply(momentId: momentId, context: context, options: options, authManager: authManager) { error in
             isApplyingCaption = false
-            if let error {
+            if GameCaptionApplier.isBakedIn(error) {
+                showCaptionBakedIn = true
+            } else if let error {
                 actionMessage = "Couldn't update the game info: \(error.localizedDescription)"
-            }
-            // A Moment given the open game's info is about its players too.
-            let tags = GameCaption.playerTags(from: context)
-            if needsTags, !tags.isEmpty {
-                let encoded = tags.compactMap { try? Firestore.Encoder().encode($0) }
-                authManager.updateMomentFields(momentId: momentId, fields: ["playerTags": encoded]) { _ in refreshMoment() }
+            } else {
+                then?()
             }
             reloadPlayer()
             refreshMoment()
@@ -727,7 +820,13 @@ struct MomentDetailView: View {
                 editActionButton("Trim", icon: "scissors") { startTrimEditor() }
                 editActionButton("Speed", icon: "speedometer", caption: speedApplied ? "On" : nil) { showSpeedEditor = true }
                 editActionButton("Zoom", icon: "plus.magnifyingglass", caption: zoomApplied ? "On" : nil) { showZoomEditor = true }
-                editActionButton("Crop", icon: "crop", caption: cropCaption) { showCropEditor = true }
+                editActionButton("Crop", icon: "crop", caption: cropCaption) {
+                    if moment.gameCaption != nil {
+                        showCropNeedsCaptionRemoved = true
+                    } else {
+                        showCropEditor = true
+                    }
+                }
                 editActionButton("Freeze Frame", icon: "pause.rectangle", caption: moment.freezeFrame != nil ? "On" : nil) {
                     player?.pause()
                     showFreezeEditor = true
@@ -742,8 +841,7 @@ struct MomentDetailView: View {
             LazyVGrid(columns: editActionColumns, spacing: 10) {
                 editActionButton("Overlays", icon: "textformat", caption: overlaysApplied ? "\(moment.overlays?.count ?? 0) added" : nil) {
                     authManager.loadLibraryAssets { assets in
-                        overlayEditorAssets = assets
-                        showOverlayEditor = true
+                        overlayEditorRequest = OverlayEditorRequest(assets: assets)
                     }
                 }
                 editActionButton("Markup", icon: "pencil.tip.crop.circle", caption: markupCaption) { showMarkupEditor = true }
@@ -957,7 +1055,7 @@ struct MomentDetailView: View {
     /// then zooming, then trying to trim.
     private func startTrimEditor() {
         trimErrorMessage = nil
-        guard let path = resolvedMomentVideoURL(for: momentId)?.path,
+        guard let path = videoBelowOverlaysURL?.path,
               UIVideoEditorController.canEditVideo(atPath: path) else {
             trimErrorMessage = "This video can't be trimmed on this device."
             return
@@ -984,7 +1082,7 @@ struct MomentDetailView: View {
             // Moment.swift's invalidateOtherFrozenBases doc comment.
             invalidateOtherFrozenBases(momentId: momentId, except: [])
             refreshFadeIfNeeded(momentId: momentId, authManager: authManager) { [self] in reloadPlayer() }
-            refreshMoment()
+            afterEdit()
         } catch {
             trimErrorMessage = "Couldn't save the trimmed video: \(error.localizedDescription)"
         }

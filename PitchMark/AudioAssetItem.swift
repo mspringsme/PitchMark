@@ -80,10 +80,17 @@ func removeLocalAudioAsset(assetId: String) {
 
 // MARK: - Bundled default audio assets (no Firestore, not deletable)
 
+/// The built-in sound groups, in the order the library lists them
+/// (2026-11-15). A manifest entry's `category` names one; any other name
+/// still works and is listed after these.
+enum BundledSoundGroup {
+    static let order = ["Hits & Impacts", "Crowd & Stadium", "Reactions", "Stingers", "Whooshes & Transitions", "Music"]
+}
+
 struct BundledAudioAsset: Identifiable {
     let id: String
     let name: String
-    /// "sfx" or "music" - drives AudioAssetLibraryView's grouped sections.
+    /// The group it is listed under (BundledSoundGroup), e.g. "Hits & Impacts".
     let category: String
     /// Filename (with extension) under the bundled Sounds/ resource folder.
     let resourceFileName: String
@@ -158,7 +165,7 @@ struct LibraryAudioAsset: Identifiable {
     /// nil for bundled assets - there's no AudioAssetItem/Firestore doc to edit.
     let backingAssetId: String?
     let fileURL: URL?
-    /// nil for user-created clips (not categorized); "sfx"/"music" for
+    /// nil for user-created clips (not categorized); a BundledSoundGroup name for
     /// bundled ones - drives AudioAssetLibraryView's grouped sections.
     let category: String?
 

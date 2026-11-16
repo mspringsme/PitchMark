@@ -106,6 +106,15 @@ struct MarkupEditorView: View {
     }
 
     var body: some View {
+        // Shared editor frame (MomentEditorChrome.swift, 2026-11-16).
+        VStack(spacing: 0) {
+        MomentEditorTopBar(
+            title: "Markup", systemImage: "pencil.tip.crop.circle",
+            saveTitle: isExporting ? "Saving…" : "Save",
+            saveEnabled: !isExporting && previewBaseURL != nil,
+            onCancel: { dismiss() },
+            onSave: { startExport() }
+        )
         GeometryReader { screenGeometry in
             VStack(spacing: 0) {
                 GeometryReader { geometry in
@@ -129,21 +138,8 @@ struct MarkupEditorView: View {
                 bottomArea
             }
         }
-        .background(Color(.systemBackground).ignoresSafeArea())
-        .overlay(alignment: .topLeading) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 28))
-                    .foregroundStyle(.white, .black.opacity(0.5))
-            }
-            .padding(.top, 50)
-            .padding(.leading, 20)
         }
-        // Same full-screen dim-plus-white-spinner overlay every other
-        // exporting state in this app uses
-        // ([[feedback-loading-spinner-convention]]).
+        .background(Color.black.ignoresSafeArea())
         .overlay {
             if isExporting || previewBaseURL == nil {
                 ZStack {
@@ -187,21 +183,10 @@ struct MarkupEditorView: View {
                 stylePanel
             }
 
-            Button {
-                startExport()
-            } label: {
-                // Static text - the full-screen overlay communicates
-                // "Preparing…"/"Exporting…", same convention every
-                // sibling editor's exporting state uses.
-                Text("Export")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(isExporting || previewBaseURL == nil)
         }
-        .padding()
-        .background(.bar)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.systemBackground))
     }
 
     /// Find the moment to markup first, then draw on it - same order
@@ -212,23 +197,30 @@ struct MarkupEditorView: View {
     /// buttons give the fine adjustment a slider alone can't once a
     /// clip runs more than a few seconds.
     private var scrubArea: some View {
-        VStack(spacing: 4) {
-            Text("\(formattedTime(timestamp)) / \(formattedTime(duration))")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Slider(
-                value: Binding(get: { timestamp }, set: { seek(to: $0) }),
-                in: 0...max(duration, 0.01)
+        VStack(spacing: 8) {
+            EditorScrubBar(
+                currentTime: timestamp, duration: duration, isPlaying: false,
+                showsPlayButton: false,
+                onTogglePlay: {},
+                onSeek: { seek(to: $0) }
             )
-            HStack(spacing: 20) {
+            HStack(spacing: 14) {
                 Button { stepFrame(by: -1) } label: {
-                    Image(systemName: "backward.frame.fill")
+                    Label("Back", systemImage: "backward.frame.fill")
+                        .frame(minWidth: 90, minHeight: 36)
                 }
+                Spacer()
+                Text("Frame")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
                 Button { stepFrame(by: 1) } label: {
-                    Image(systemName: "forward.frame.fill")
+                    Label("Next", systemImage: "forward.frame.fill")
+                        .frame(minWidth: 90, minHeight: 36)
                 }
             }
-            .font(.subheadline)
+            .buttonStyle(.bordered)
+            .tint(Color.pitchMarkActiveGray)
         }
         .disabled(isExporting || previewBaseURL == nil)
     }

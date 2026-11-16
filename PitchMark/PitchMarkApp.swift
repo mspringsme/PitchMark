@@ -39,6 +39,9 @@ struct RootView: View {
     /// `-UITestSignGrids`: Batter & Runner Grids on their own, in memory.
     private static let isUITestSignGrids = ProcessInfo.processInfo.arguments.contains("-UITestSignGrids")
 
+    /// `-UITestMomentEditors`: a Moment's details screen on a test video.
+    private static let isUITestMomentEditors = ProcessInfo.processInfo.arguments.contains("-UITestMomentEditors")
+
     /// `-UITestHomeActions`: Home's row of three and signed-in line alone.
     private static let isUITestHomeActions = ProcessInfo.processInfo.arguments.contains("-UITestHomeActions")
 
@@ -46,6 +49,8 @@ struct RootView: View {
         Group {
             if Self.isUITestSignGrids {
                 SignGridUITestHarness()
+            } else if Self.isUITestMomentEditors {
+                MomentEditorsUITestHarness()
             } else if Self.isUITestHomeActions {
                 HomeActionsUITestHarness()
             } else if Self.isUITestDemo {

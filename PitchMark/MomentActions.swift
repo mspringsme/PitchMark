@@ -117,6 +117,7 @@ enum MomentActions {
         if let faded = localMomentFadedVideoURL(for: id) { try? fm.removeItem(at: faded) }
         if let preFreeze = localMomentPreFreezeVideoURL(for: id) { try? fm.removeItem(at: preFreeze) }
         invalidateOtherFrozenBases(momentId: id, except: [])
+        invalidateMomentOverlayBase(momentId: id)
         var fields: [String: Any] = [:]
         for name in editFieldNames { fields[name] = FieldValue.delete() }
         authManager.updateMomentFields(momentId: id, fields: fields) { error in

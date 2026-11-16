@@ -65,3 +65,14 @@ Update this file as items ship.
    game is open, but uses the open game's state, not the clip's.
 10. **Bulk actions.** Select several clips to move, favorite or delete
     at once (selection is only for Mixtape and Compare today).
+
+## Parked (user's call, 2026-11-15)
+
+- **Find More: links to free asset libraries** (Pixabay, Unsplash,
+  Pexels, Mixkit) in the Asset Library, opened in an in-app Safari sheet,
+  plus Import from Files for images and audio (audio has no import
+  today). Keep the built-in clips. Mind per-site licenses (Freesound
+  varies by sound) and kid safety. Not building for now.
+- **Recording over music / video voiceover** was built and removed - not
+  what the user wanted. Apple Music audio can't be recorded or imported
+  (DRM). Ask what they picture before trying again.

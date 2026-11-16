@@ -89,56 +89,56 @@ struct MomentFreezeEditorView: View {
     }
 
     var body: some View {
-        NavigationView {
+        // Shared editor frame (MomentEditorChrome.swift, 2026-11-16).
             VStack(spacing: 0) {
+                MomentEditorTopBar(
+                    title: "Freeze Frame", systemImage: "pause.rectangle",
+                    saveTitle: isExporting ? "Saving…" : "Save",
+                    saveEnabled: !isExporting,
+                    onCancel: { dismiss() },
+                    onSave: { startExport() }
+                )
+
                 videoArea
                     .background(Color.black)
                     .frame(maxHeight: .infinity)
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Freeze point: \(formattedTime(timestamp)) / \(formattedTime(duration))")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            // Bound directly to `timestamp` - no separate
-                            // "scrub here, then commit" step. The video
-                            // this freezes IS wherever this slider (and
-                            // the frame-step buttons below) currently
-                            // sit; there used to be a "Set Freeze Point
-                            // Here" button decoupling the two, which made
-                            // it easy to scrub somewhere, forget to tap
-                            // it, and export a freeze at time zero
-                            // (whatever `timestamp` defaulted to) instead
-                            // - exactly the bug the user hit.
-                            Slider(value: Binding(
-                                get: { timestamp },
-                                set: { seek(to: $0) }
-                            ), in: 0...max(duration, 0.01))
-
-                            // The slider alone is too coarse to land on a
-                            // specific frame once the clip runs more than
-                            // a few seconds - one point of drag can skip
-                            // many frames. These step by exactly one
-                            // frame (from the track's own nominal frame
-                            // rate, not a hardcoded 1/30s) for the fine
-                            // adjustment the slider can't give.
-                            HStack(spacing: 16) {
+                        // Picks the freeze frame directly - no separate "set
+                        // here" step (that once froze at 0:00 by mistake).
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Freeze on this frame")
+                                .font(.subheadline.weight(.semibold))
+                            EditorScrubBar(
+                                currentTime: timestamp, duration: duration, isPlaying: false,
+                                showsPlayButton: false,
+                                onTogglePlay: {},
+                                onSeek: { seek(to: $0) }
+                            )
+                            // One exact frame at a time, for where a drag
+                            // is too coarse.
+                            HStack(spacing: 14) {
                                 Button {
                                     stepFrame(by: -1)
                                 } label: {
-                                    Image(systemName: "backward.frame.fill")
+                                    Label("Back", systemImage: "backward.frame.fill")
+                                        .frame(minWidth: 90, minHeight: 36)
                                 }
-                                Text("Frame \(currentFrameIndex) • \(String(format: "%.2fs", timestamp))")
-                                    .font(.caption.monospacedDigit())
+                                Spacer()
+                                Text("Frame \(currentFrameIndex)")
+                                    .font(.subheadline.monospacedDigit().weight(.semibold))
                                     .foregroundStyle(.secondary)
+                                Spacer()
                                 Button {
                                     stepFrame(by: 1)
                                 } label: {
-                                    Image(systemName: "forward.frame.fill")
+                                    Label("Next", systemImage: "forward.frame.fill")
+                                        .frame(minWidth: 90, minHeight: 36)
                                 }
                             }
                             .buttonStyle(.bordered)
+                            .tint(Color.pitchMarkActiveGray)
                         }
 
                         VStack(alignment: .leading, spacing: 6) {
@@ -187,30 +187,13 @@ struct MomentFreezeEditorView: View {
                             .disabled(isExporting)
                         }
 
-                        Button {
-                            startExport()
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Text(isExporting ? "Applying…" : "Apply Freeze Frame")
-                                    .font(.headline)
-                                Spacer()
-                            }
-                        }
-                        .disabled(isExporting)
                     }
-                    .padding()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
                 }
+                .background(Color(.systemBackground))
             }
-            .navigationTitle("Freeze Frame")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(isExporting)
-                }
-            }
-        }
+            .background(Color.black.ignoresSafeArea())
         .onAppear { setUpPlayer() }
         .onDisappear { tearDownPlayer() }
     }
@@ -246,6 +229,7 @@ struct MomentFreezeEditorView: View {
                         anchor: UnitPoint(x: zoomCenterX, y: zoomCenterY)
                     )
                     .clipped()
+                    .allowsHitTesting(false)
                     .position(x: videoRect.midX, y: videoRect.midY)
                 if calloutEnabled, naturalSize.width > 0 {
                     overlayTextCardPreview(

@@ -333,10 +333,12 @@ func autoBackupMomentVideoToPhotosIfEnabled(sourceURL: URL) {
     guard momentsAutoBackupToPhotosEnabled else { return }
     PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
         guard status == .authorized || status == .limited else { return }
-        findOrCreatePitchMarkPhotosAlbum { collection in
-            // Add-only access can't see or make albums, so `collection`
-            // is usually nil - save the video anyway. Requiring the album
-            // made backup silently do nothing (found 2026-11-15).
+        // The "PitchMark" album only with full library access already
+        // granted. Looking an album up needs full access, so with add-only
+        // it popped iPhone's whole-library prompt (worded for pitcher
+        // images) after every recording (2026-11-16). Add-only just saves.
+        let canUseAlbum = PHPhotoLibrary.authorizationStatus(for: .readWrite) == .authorized
+        withPitchMarkAlbum(if: canUseAlbum) { collection in
             PHPhotoLibrary.shared().performChanges({
                 guard let creationRequest = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: sourceURL) else {
                     return
@@ -358,6 +360,15 @@ func autoBackupMomentVideoToPhotosIfEnabled(sourceURL: URL) {
 /// "create if missing" convenience of its own - both steps need their own
 /// `performChanges`/fetch round trip, which is why this isn't folded
 /// directly into `autoBackupMomentVideoToPhotosIfEnabled` above.
+/// The album when `allowed`, else nil without touching the library.
+private func withPitchMarkAlbum(if allowed: Bool, completion: @escaping (PHAssetCollection?) -> Void) {
+    guard allowed else {
+        completion(nil)
+        return
+    }
+    findOrCreatePitchMarkPhotosAlbum(completion: completion)
+}
+
 /// A photo taken in PitchMark's camera, backed up as itself.
 func autoBackupMomentPhotoToPhotosIfEnabled(_ data: Data) {
     guard momentsAutoBackupToPhotosEnabled else { return }
@@ -479,7 +490,11 @@ func invalidateOtherFrozenBases(momentId: String, except: Set<MomentEditorBase>)
         case .audio:
             invalidateMomentAudioBase(momentId: momentId)
         case .overlay:
-            invalidateMomentOverlayBase(momentId: momentId)
+            // Left alone (2026-11-16): after another editor saves,
+            // OverlayLayer.afterOtherEdit replaces it with the new video. A missing
+            // copy then means the overlays are already part of the video,
+            // and the redraw is skipped instead of doubling them.
+            break
         case .zoom:
             invalidateMomentZoomBase(momentId: momentId)
         case .slideshow:
@@ -1060,14 +1075,17 @@ extension AuthManager {
         var moment = moment
         moment.id = ref.documentID
 
+        // Done once the write is queued on this phone, not when the server
+        // confirms it (2026-11-16): at a field that round trip took
+        // seconds, and the new clip didn't appear until it came back.
+        // Firestore keeps the queued write and sends it when it can.
         do {
             try ref.setData(from: moment) { error in
                 if let error {
-                    completion(.failure(error))
-                } else {
-                    completion(.success(moment))
+                    debugLog("❌ saveMoment reached the server with an error:", error.localizedDescription)
                 }
             }
+            completion(.success(moment))
         } catch {
             completion(.failure(error))
         }
@@ -1644,6 +1662,7 @@ func remapAllTimeBasedFields(momentId: String, authManager: AuthManager, transfo
 /// deleted (see AuthManager.deleteMoment).
 func removeAllLocalMomentFiles(momentId: String, photoCount: Int) {
     removeLocalMomentVideo(momentId: momentId)
+    invalidateMomentOverlayBase(momentId: momentId)
     if let edited = localMomentEditedVideoURL(for: momentId) {
         try? FileManager.default.removeItem(at: edited)
     }

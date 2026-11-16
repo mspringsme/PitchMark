@@ -1,28 +1,458 @@
 [
   {
-    "id": "sfx_arcade_start",
-    "name": "8-Bit Arcade Start",
-    "category": "sfx",
-    "filename": "sfx_arcade_start.m4a",
-    "duration": 0.95,
-    "author": "FartBiscuit1700",
+    "id": "sfx_wood_crack",
+    "name": "Wood Crack",
+    "category": "Hits & Impacts",
+    "filename": "sfx_wood_crack.m4a",
+    "duration": 0.31,
+    "author": "Kenney (kenney.nl)",
     "license": "Creative Commons 0",
-    "sourceURL": "https://freesound.org/people/FartBiscuit1700/sounds/368691/"
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
   },
   {
-    "id": "sfx_trombone_fail",
-    "name": "Sad Trombone Fail",
-    "category": "sfx",
-    "filename": "sfx_trombone_fail.m4a",
-    "duration": 5.3,
-    "author": "kirbydx",
+    "id": "sfx_wood_knock",
+    "name": "Wood Knock",
+    "category": "Hits & Impacts",
+    "filename": "sfx_wood_knock.m4a",
+    "duration": 0.33,
+    "author": "Kenney (kenney.nl)",
     "license": "Creative Commons 0",
-    "sourceURL": "https://freesound.org/people/kirbydx/sounds/175409/"
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_heavy_punch",
+    "name": "Heavy Punch",
+    "category": "Hits & Impacts",
+    "filename": "sfx_heavy_punch.m4a",
+    "duration": 0.65,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_punch",
+    "name": "Punch",
+    "category": "Hits & Impacts",
+    "filename": "sfx_punch.m4a",
+    "duration": 0.4,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_thud",
+    "name": "Thud",
+    "category": "Hits & Impacts",
+    "filename": "sfx_thud.m4a",
+    "duration": 0.5,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_metal_clang",
+    "name": "Metal Clang",
+    "category": "Hits & Impacts",
+    "filename": "sfx_metal_clang.m4a",
+    "duration": 0.16,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_bell_strike",
+    "name": "Bell Strike",
+    "category": "Hits & Impacts",
+    "filename": "sfx_bell_strike.m4a",
+    "duration": 1.48,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_plate_crash",
+    "name": "Plate Crash",
+    "category": "Hits & Impacts",
+    "filename": "sfx_plate_crash.m4a",
+    "duration": 0.35,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_glass_smash",
+    "name": "Glass Smash",
+    "category": "Hits & Impacts",
+    "filename": "sfx_glass_smash.m4a",
+    "duration": 0.24,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_tin_can",
+    "name": "Tin Can",
+    "category": "Hits & Impacts",
+    "filename": "sfx_tin_can.m4a",
+    "duration": 0.16,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/impact-sounds"
+  },
+  {
+    "id": "sfx_correct_ding",
+    "name": "Correct Ding",
+    "category": "Reactions",
+    "filename": "sfx_correct_ding.m4a",
+    "duration": 0.29,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/interface-sounds"
+  },
+  {
+    "id": "sfx_success",
+    "name": "Success",
+    "category": "Reactions",
+    "filename": "sfx_success.m4a",
+    "duration": 0.54,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/interface-sounds"
+  },
+  {
+    "id": "sfx_wrong_buzz",
+    "name": "Wrong Buzz",
+    "category": "Reactions",
+    "filename": "sfx_wrong_buzz.m4a",
+    "duration": 0.16,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/interface-sounds"
+  },
+  {
+    "id": "sfx_huh",
+    "name": "Huh?",
+    "category": "Reactions",
+    "filename": "sfx_huh.m4a",
+    "duration": 0.49,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/interface-sounds"
+  },
+  {
+    "id": "sfx_glass_ping",
+    "name": "Glass Ping",
+    "category": "Reactions",
+    "filename": "sfx_glass_ping.m4a",
+    "duration": 0.28,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/interface-sounds"
+  },
+  {
+    "id": "sfx_power_up",
+    "name": "Power Up",
+    "category": "Reactions",
+    "filename": "sfx_power_up.m4a",
+    "duration": 1.2,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_quick_power_up",
+    "name": "Quick Power Up",
+    "category": "Reactions",
+    "filename": "sfx_quick_power_up.m4a",
+    "duration": 0.44,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_fail_tones",
+    "name": "Fail Tones",
+    "category": "Reactions",
+    "filename": "sfx_fail_tones.m4a",
+    "duration": 1.02,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_rising_tone",
+    "name": "Rising Tone",
+    "category": "Reactions",
+    "filename": "sfx_rising_tone.m4a",
+    "duration": 0.55,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_falling_tone",
+    "name": "Falling Tone",
+    "category": "Reactions",
+    "filename": "sfx_falling_tone.m4a",
+    "duration": 0.52,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_pep",
+    "name": "Pep",
+    "category": "Reactions",
+    "filename": "sfx_pep.m4a",
+    "duration": 0.52,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_zap_up",
+    "name": "Zap Up",
+    "category": "Reactions",
+    "filename": "sfx_zap_up.m4a",
+    "duration": 1.2,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_zap_down",
+    "name": "Zap Down",
+    "category": "Reactions",
+    "filename": "sfx_zap_down.m4a",
+    "duration": 1.33,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_8bit_win",
+    "name": "8-Bit Win",
+    "category": "Stingers",
+    "filename": "sfx_8bit_win.m4a",
+    "duration": 1.76,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_8bit_stinger",
+    "name": "8-Bit Stinger",
+    "category": "Stingers",
+    "filename": "sfx_8bit_stinger.m4a",
+    "duration": 1.05,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_sax_stinger",
+    "name": "Sax Stinger",
+    "category": "Stingers",
+    "filename": "sfx_sax_stinger.m4a",
+    "duration": 1.74,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_sax_hit",
+    "name": "Sax Hit",
+    "category": "Stingers",
+    "filename": "sfx_sax_hit.m4a",
+    "duration": 1.12,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_steel_drum_1",
+    "name": "Steel Drum 1",
+    "category": "Stingers",
+    "filename": "sfx_steel_drum_1.m4a",
+    "duration": 1.55,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_steel_drum_2",
+    "name": "Steel Drum 2",
+    "category": "Stingers",
+    "filename": "sfx_steel_drum_2.m4a",
+    "duration": 1.39,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_steel_drum_3",
+    "name": "Steel Drum 3",
+    "category": "Stingers",
+    "filename": "sfx_steel_drum_3.m4a",
+    "duration": 1.38,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_pizzicato_1",
+    "name": "Pizzicato 1",
+    "category": "Stingers",
+    "filename": "sfx_pizzicato_1.m4a",
+    "duration": 1.32,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_pizzicato_2",
+    "name": "Pizzicato 2",
+    "category": "Stingers",
+    "filename": "sfx_pizzicato_2.m4a",
+    "duration": 1.15,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_pizzicato_3",
+    "name": "Pizzicato 3",
+    "category": "Stingers",
+    "filename": "sfx_pizzicato_3.m4a",
+    "duration": 1.0,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_orchestra_hit",
+    "name": "Orchestra Hit",
+    "category": "Stingers",
+    "filename": "sfx_orchestra_hit.m4a",
+    "duration": 1.16,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_orchestra_hit_2",
+    "name": "Orchestra Hit 2",
+    "category": "Stingers",
+    "filename": "sfx_orchestra_hit_2.m4a",
+    "duration": 0.96,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/music-jingles"
+  },
+  {
+    "id": "sfx_swoosh_in",
+    "name": "Swoosh In",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_swoosh_in.m4a",
+    "duration": 0.26,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/interface-sounds"
+  },
+  {
+    "id": "sfx_swoosh_out",
+    "name": "Swoosh Out",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_swoosh_out.m4a",
+    "duration": 0.26,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/interface-sounds"
+  },
+  {
+    "id": "sfx_record_scratch",
+    "name": "Record Scratch",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_record_scratch.m4a",
+    "duration": 0.14,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/interface-sounds"
+  },
+  {
+    "id": "sfx_laser",
+    "name": "Laser",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_laser.m4a",
+    "duration": 1.1,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_phaser_up",
+    "name": "Phaser Up",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_phaser_up.m4a",
+    "duration": 0.49,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_phaser_down",
+    "name": "Phaser Down",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_phaser_down.m4a",
+    "duration": 0.47,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_warp",
+    "name": "Warp",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_warp.m4a",
+    "duration": 0.47,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_space_debris",
+    "name": "Space Debris",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_space_debris.m4a",
+    "duration": 1.45,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_zap",
+    "name": "Zap",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_zap.m4a",
+    "duration": 1.23,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/digital-audio"
+  },
+  {
+    "id": "sfx_click",
+    "name": "Click",
+    "category": "Whooshes & Transitions",
+    "filename": "sfx_click.m4a",
+    "duration": 0.09,
+    "author": "Kenney (kenney.nl)",
+    "license": "Creative Commons 0",
+    "sourceURL": "https://kenney.nl/assets/ui-audio"
   },
   {
     "id": "sfx_crowd_cheer",
     "name": "Crowd Cheer",
-    "category": "sfx",
+    "category": "Crowd & Stadium",
     "filename": "sfx_crowd_cheer.m4a",
     "duration": 8.5,
     "author": "Gauraa",
@@ -31,19 +461,9 @@
     "attributionUncertain": true
   },
   {
-    "id": "sfx_cartoon_pop",
-    "name": "Cartoon Pop",
-    "category": "sfx",
-    "filename": "sfx_cartoon_pop.m4a",
-    "duration": 0.17,
-    "author": "unfa",
-    "license": "Creative Commons 0",
-    "sourceURL": "https://freesound.org/people/unfa/sounds/245646/"
-  },
-  {
     "id": "sfx_small_crowd",
     "name": "Small Crowd Cheer",
-    "category": "sfx",
+    "category": "Crowd & Stadium",
     "filename": "sfx_small_crowd.m4a",
     "duration": 6.7,
     "author": "moxobna",
@@ -51,19 +471,9 @@
     "sourceURL": "https://freesound.org/people/moxobna/sounds/32260/"
   },
   {
-    "id": "sfx_cricket_chirp",
-    "name": "Cricket Chirp",
-    "category": "sfx",
-    "filename": "sfx_cricket_chirp.m4a",
-    "duration": 1.25,
-    "author": "Sojan",
-    "license": "Creative Commons 0",
-    "sourceURL": "https://freesound.org/people/Sojan/sounds/400663/"
-  },
-  {
     "id": "sfx_airhorn",
     "name": "Airhorn",
-    "category": "sfx",
+    "category": "Crowd & Stadium",
     "filename": "sfx_airhorn.m4a",
     "duration": 1.61,
     "author": "jacksonacademyashmore",
@@ -73,7 +483,7 @@
   {
     "id": "sfx_crowd_applause",
     "name": "Crowd Applause",
-    "category": "sfx",
+    "category": "Crowd & Stadium",
     "filename": "sfx_crowd_applause.m4a",
     "duration": 2.89,
     "author": "Nox_Sound",
@@ -83,7 +493,7 @@
   {
     "id": "sfx_bat_swoosh",
     "name": "Bat Swoosh",
-    "category": "sfx",
+    "category": "Hits & Impacts",
     "filename": "sfx_bat_swoosh.m4a",
     "duration": 0.93,
     "author": "MrGungus",
@@ -91,23 +501,173 @@
     "sourceURL": "https://freesound.org/people/MrGungus/sounds/766542/"
   },
   {
-    "id": "music_upbeat_loop",
-    "name": "Upbeat Loop",
-    "category": "music",
-    "filename": "music_upbeat_loop.m4a",
-    "duration": 59.1,
-    "author": "Seth_Makes_Sounds",
-    "license": "Creative Commons 0",
-    "sourceURL": "https://freesound.org/people/Seth_Makes_Sounds/sounds/696111/"
+    "id": "music_adventure_meme",
+    "name": "Adventure Meme",
+    "category": "Music",
+    "filename": "music_adventure_meme.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
   },
   {
-    "id": "music_pickup_trucks_loop",
-    "name": "Pickup Trucks Commercial",
-    "category": "music",
-    "filename": "music_pickup_trucks_loop.m4a",
-    "duration": 58.83,
-    "author": "NearTheAtmosphere",
-    "license": "Creative Commons 0",
-    "sourceURL": "https://freesound.org/people/neartheatmoshphere/sounds/676484/"
+    "id": "music_ashton_manor",
+    "name": "Ashton Manor",
+    "category": "Music",
+    "filename": "music_ashton_manor.m4a",
+    "duration": 44.25,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/)",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_chipper",
+    "name": "Chipper",
+    "category": "Music",
+    "filename": "music_chipper.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_cloud_dancer",
+    "name": "Cloud Dancer",
+    "category": "Music",
+    "filename": "music_cloud_dancer.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_cowboy_sting",
+    "name": "Cowboy Sting",
+    "category": "Music",
+    "filename": "music_cowboy_sting.m4a",
+    "duration": 58.51,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/)",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_evil_march",
+    "name": "Evil March",
+    "category": "Music",
+    "filename": "music_evil_march.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_fanfare_for_space",
+    "name": "Fanfare for Space",
+    "category": "Music",
+    "filename": "music_fanfare_for_space.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_highlight_reel",
+    "name": "Highlight Reel",
+    "category": "Music",
+    "filename": "music_highlight_reel.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_magic_scout_farm",
+    "name": "Magic Scout - Farm",
+    "category": "Music",
+    "filename": "music_magic_scout_farm.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_maple_leaf_rag",
+    "name": "Maple Leaf Rag",
+    "category": "Music",
+    "filename": "music_maple_leaf_rag.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_medusa",
+    "name": "Medusa",
+    "category": "Music",
+    "filename": "music_medusa.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_neon_laser_horizon",
+    "name": "Neon Laser Horizon",
+    "category": "Music",
+    "filename": "music_neon_laser_horizon.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_prelude_and_action",
+    "name": "Prelude and Action",
+    "category": "Music",
+    "filename": "music_prelude_and_action.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_strength_of_the_titans",
+    "name": "Strength of the Titans",
+    "category": "Music",
+    "filename": "music_strength_of_the_titans.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_the_curtain_rises",
+    "name": "The Curtain Rises",
+    "category": "Music",
+    "filename": "music_the_curtain_rises.m4a",
+    "duration": 28.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/)",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_the_entertainer",
+    "name": "The Entertainer",
+    "category": "Music",
+    "filename": "music_the_entertainer.m4a",
+    "duration": 60.0,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/) - shortened to 60 seconds with a fade-out",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
+  },
+  {
+    "id": "music_the_ice_giants",
+    "name": "The Ice Giants",
+    "category": "Music",
+    "filename": "music_the_ice_giants.m4a",
+    "duration": 44.04,
+    "author": "Kevin MacLeod (incompetech.com)",
+    "license": "Creative Commons: By Attribution 4.0 License (creativecommons.org/licenses/by/4.0/)",
+    "sourceURL": "https://incompetech.com/music/royalty-free/music.html"
   }
 ]

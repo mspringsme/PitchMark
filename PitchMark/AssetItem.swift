@@ -126,12 +126,17 @@ struct BundledAsset: Identifiable {
     let name: String
     /// Asset-catalog image name.
     let imageName: String
+    /// The library section it's listed under (OverlayIconCategory).
+    var category: String? = nil
 }
 
-let bundledAssets: [BundledAsset] = [
-    BundledAsset(id: "bundled-circle", name: "Circle", imageName: "OverlayCircle"),
-    BundledAsset(id: "bundled-arrow", name: "Arrow", imageName: "OverlayArrow"),
-]
+/// The built-in icons (OverlayIcons.swift), 2026-11-15. The old Circle and
+/// Arrow placeholders are gone (user's call): a Moment that used one keeps
+/// it in its exported video, but re-exporting its overlays drops it.
+let bundledAssets: [BundledAsset] = overlayIcons.map { icon in
+    BundledAsset(id: OverlayIconImages.libraryId(for: icon), name: icon.name,
+                 imageName: icon.imageName, category: icon.category.rawValue)
+}
 
 // MARK: - Unified library presentation
 
@@ -145,15 +150,21 @@ struct LibraryAsset: Identifiable {
     let isDeletable: Bool
     /// nil for bundled assets - there's no AssetItem/Firestore doc to edit.
     let backingAssetId: String?
+    /// A built-in icon's section; nil for the user's own assets.
+    var category: String? = nil
+
+    /// Built-in icons are drawn white and can take any color per overlay.
+    var isTintable: Bool { OverlayIconImages.isIcon(assetId: id) }
 
     static func bundled(_ asset: BundledAsset) -> LibraryAsset {
         LibraryAsset(
             id: asset.id,
             name: asset.name,
-            image: UIImage(named: asset.imageName),
+            image: OverlayIconImages.image(named: asset.imageName),
             isRenamable: false,
             isDeletable: false,
-            backingAssetId: nil
+            backingAssetId: nil,
+            category: asset.category
         )
     }
 

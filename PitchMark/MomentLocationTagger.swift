@@ -18,8 +18,14 @@ final class MomentLocationTagger: NSObject, CLLocationManagerDelegate {
     static let shared = MomentLocationTagger()
 
     private let manager = CLLocationManager()
-    private var completion: ((String?) -> Void)?
+    /// Everyone waiting on the lookup in flight (2026-11-16): the city is
+    /// now fetched after a clip saves, so a burst of photos can ask at
+    /// once - one stored callback let each new ask drop the last.
+    private var completions: [(String?) -> Void] = []
     private var timeoutWorkItem: DispatchWorkItem?
+    /// A city found in the last few minutes is reused, not looked up again.
+    private var recent: (city: String, at: Date)?
+    private static let reuseSeconds: TimeInterval = 300
 
     private override init() {
         super.init()
@@ -27,13 +33,19 @@ final class MomentLocationTagger: NSObject, CLLocationManagerDelegate {
     }
 
     func fetchCityName(completion: @escaping (String?) -> Void) {
+        if let recent, Date().timeIntervalSince(recent.at) < Self.reuseSeconds {
+            completion(recent.city)
+            return
+        }
         switch manager.authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
-            self.completion = completion
+            completions.append(completion)
+            guard completions.count == 1 else { return }   // already looking
             armTimeout()
             manager.requestLocation()
         case .notDetermined:
-            self.completion = completion
+            completions.append(completion)
+            guard completions.count == 1 else { return }
             armTimeout()
             manager.requestWhenInUseAuthorization()
         default:
@@ -53,13 +65,14 @@ final class MomentLocationTagger: NSObject, CLLocationManagerDelegate {
     private func finish(with city: String?) {
         timeoutWorkItem?.cancel()
         timeoutWorkItem = nil
-        let callback = completion
-        completion = nil
-        callback?(city)
+        if let city { recent = (city, Date()) }
+        let callbacks = completions
+        completions = []
+        callbacks.forEach { $0(city) }
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        guard completion != nil else { return }
+        guard !completions.isEmpty else { return }
         switch manager.authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
             manager.requestLocation()
