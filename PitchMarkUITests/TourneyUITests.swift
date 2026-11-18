@@ -126,6 +126,23 @@ final class TourneyUITests: XCTestCase {
         XCTAssertEqual(started.label, "New game: Hawks · ours t-Lightning · opp t-Hawks")
     }
 
+    func testASharedTourneysGameOpensItsCardWithTrackBelow() {
+        launch(["-UITestTourneysOpen", "-UITestTourneysRead"])
+        let row = app.buttons["tourneyRead.game.Hawks"]
+        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["tourney.startGame.Hawks"].exists, "no Track on a shared tourney's rows")
+        row.tap()
+        XCTAssertTrue(app.staticTexts["Field 7"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Apple Maps"].firstMatch.exists, "directions on the card")
+        // Track sits last, under the directions - scroll the card to it.
+        let track = app.buttons["tourneyGameCard.track"]
+        scrollTo(track)
+        track.tap()
+        let started = app.staticTexts["harness.startedGame"]
+        XCTAssertTrue(started.waitForExistence(timeout: 5))
+        XCTAssertEqual(started.label, "New game: Hawks")
+    }
+
     func testUniformPlusAndGeneralInfoItems() {
         launch(["-UITestTourneysOpen", "-UITestTourneysDetail"])
         XCTAssertTrue(app.buttons["tourney.addScheduledGame"].waitForExistence(timeout: 8))

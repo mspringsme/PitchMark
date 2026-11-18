@@ -902,7 +902,11 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   Tournament Food (family, food, green check), Hotels, Links, Notes. Costs
   and Tourney Tips were removed (user's call); an old single game-day
   Uniform loads as Day 1's.
-- **A tourney game's + (Start Game) runs Home's Games-row + flow**: Home
+- **Track (was a bare +, which read as "add") runs Home's Games-row +
+  flow.** On your own tourney it's a small Track button on each game row.
+  On a shared tourney (families) rows have no Track: tapping a game opens
+  `TourneyGameCardSheet` - when, arrive, field, directions - with Track
+  This Game last (user's call, 2026-11-17). Mechanics: Home
   passes `onStartGame` (environment `tourneyStartGame`), closes the sheet,
   and its onDismiss calls `openInlineNewGame(opponentName:date:ourTeamId:
   opponentTeamId:)` - the same card, filled in. No Home (UI tests) = no

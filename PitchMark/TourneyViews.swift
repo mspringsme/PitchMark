@@ -81,15 +81,17 @@ struct TourneyStartGameButton: View {
 
     var body: some View {
         if let startGame {
+            // "Track", not a bare + (which read as "add"): this opens Home's
+            // new-game card to track the game.
             Button {
                 startGame(game)
             } label: {
-                Label("Start Game", systemImage: "plus.circle.fill")
-                    .labelStyle(.iconOnly)
-                    .font(.title3)
+                Text("Track")
+                    .font(.caption.weight(.semibold))
             }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Start this game")
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .accessibilityLabel("Track this game")
             .accessibilityIdentifier("tourney.startGame.\(game.opponent)")
         }
     }
@@ -1233,6 +1235,72 @@ struct TourneyGameEditorSheet: View {
     }
 }
 
+/// One game on a shared tourney, read-only: when, where, how to get
+/// there, and - below, for the parents and assistants who track - Track
+/// This Game.
+struct TourneyGameCardSheet: View {
+    let game: TourneyGame
+    let venue: TourneyPlace
+    let meetSpots: [TourneyMeetSpot]
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.tourneyStartGame) private var startGame
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    row("When", game.time.formatted(.dateTime.weekday(.wide).month(.abbreviated).day().hour().minute()))
+                    if let arrive = game.arriveAt {
+                        row("Arrive", arrive.formatted(date: .omitted, time: .shortened))
+                    }
+                    if !game.fieldLabel.isEmpty { row("Field", game.fieldLabel) }
+                    if !game.opponent.trimmingCharacters(in: .whitespaces).isEmpty { row("Opponent", game.opponent) }
+                    row("Stage", game.stage.title)
+                    if !game.result.trimmingCharacters(in: .whitespaces).isEmpty { row("Result", game.result) }
+                }
+                if !venue.isEmpty {
+                    Section("Directions to \(venue.name.isEmpty ? "the venue" : venue.name)") {
+                        TourneyDirectionsRow(place: venue)
+                    }
+                }
+                ForEach(meetSpots) { spot in
+                    Section("Directions to \(spot.title.isEmpty ? "the meet spot" : spot.title)") {
+                        TourneyDirectionsRow(place: spot.meetPlace)
+                    }
+                }
+                if let startGame {
+                    Section {
+                        Button {
+                            startGame(game)
+                        } label: {
+                            Label("Track This Game", systemImage: "figure.baseball")
+                        }
+                        .accessibilityIdentifier("tourneyGameCard.track")
+                    } footer: {
+                        Text("For tracking pitches in PitchMark. Opens a new game on Home with the opponent and time filled in.")
+                    }
+                }
+            }
+            .navigationTitle(game.summary.isEmpty ? "Game" : game.summary)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            Text(value).multilineTextAlignment(.trailing)
+        }
+        .font(.subheadline)
+    }
+}
+
 // MARK: - Shared pieces
 
 struct TourneyOptionalDateRow: View {
@@ -1352,6 +1420,7 @@ struct TourneyReadView: View {
     }
 
     @State private var viewingSpot: TourneyMeetSpot? = nil
+    @State private var viewingGame: TourneyGame? = nil
     @State private var newItem = ""
     @State private var shareTextItems: [Any]? = nil
 
@@ -1373,11 +1442,22 @@ struct TourneyReadView: View {
             let games = TourneyGame.sorted(t.games)
             if !games.isEmpty {
                 Section("Games") {
+                    // No Track on the row here: on a shared tourney most
+                    // readers are families. Tapping opens the game's card,
+                    // with Directions first and Track This Game below.
                     ForEach(games) { game in
-                        HStack(spacing: 10) {
-                            TourneyGameRow(game: game, showStage: Set(games.map(\.stage)).count > 1)
-                            TourneyStartGameButton(game: game)
+                        Button {
+                            viewingGame = game
+                        } label: {
+                            HStack(spacing: 8) {
+                                TourneyGameRow(game: game, showStage: Set(games.map(\.stage)).count > 1)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("tourneyRead.game.\(game.opponent)")
                     }
                 }
             }
@@ -1524,6 +1604,9 @@ struct TourneyReadView: View {
         }
         .sheet(item: $viewingSpot) { spot in
             TourneyMeetSpotViewer(spot: spot)
+        }
+        .sheet(item: $viewingGame) { game in
+            TourneyGameCardSheet(game: game, venue: t.venue, meetSpots: t.meetSpots)
         }
     }
 

@@ -1808,14 +1808,19 @@ struct SettingsView: View {
                     Text("Players")
                         .font(.headline)
                         .foregroundStyle(.primary)
+                        .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(isExpanded ? 0 : -90))
                 }
+                // Never squeezed: on a narrow phone the title wrapped one
+                // letter per line ("Pl/ay/er/s"). The controls give way instead.
+                .fixedSize()
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .layoutPriority(1)
 
             // Sits right against the title (no spacer between them); the
             // spacer goes after it, pushing filter and + to the trailing edge.
