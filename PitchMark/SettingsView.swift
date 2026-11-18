@@ -599,6 +599,10 @@ struct SettingsView: View {
     @State private var createGameError: String? = nil
     @State private var showArchivedGames = false
     @State private var showGamesCalendar = false
+    @State private var showTourneys = false
+    /// A tourney game whose Start Game was tapped: opens the new-game card
+    /// once Tourney Info has closed.
+    @State private var pendingTourneyGame: TourneyGame? = nil
     // Scan Opponent Lineup (LineupScanHome.swift / LineupScanSheet.swift).
     @State private var lineupScan: LineupScanContext? = nil
     @State private var showLineupScan = false
@@ -1405,6 +1409,8 @@ struct SettingsView: View {
         secondarySystemImage: String? = nil,
         secondaryLabel: String = "",
         secondaryAction: (() -> Void)? = nil,
+        trailingFirst: Bool = false,
+        accessory: AnyView? = nil,
         trailingAction: @escaping () -> Void
     ) -> some View {
         let isExpanded = expandedHomeOverviewSection == section
@@ -1429,6 +1435,18 @@ struct SettingsView: View {
 
             Spacer()
 
+            // Games puts + first (trailingFirst), then the calendar, then
+            // its accessory (Tourney Info); other sections keep the
+            // secondary button before the trailing one.
+            if trailingFirst {
+                Button(action: trailingAction) {
+                    Image(systemName: trailingSystemImage)
+                        .font(trailingFont)
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 10)
+            }
+
             if let secondarySystemImage, let secondaryAction {
                 Button(action: secondaryAction) {
                     Image(systemName: secondarySystemImage)
@@ -1436,14 +1454,20 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(secondaryLabel)
-                .padding(.trailing, 10)
+                .padding(.trailing, (trailingFirst && accessory == nil) ? 0 : 10)
             }
 
-            Button(action: trailingAction) {
-                Image(systemName: trailingSystemImage)
-                    .font(trailingFont)
+            if let accessory {
+                accessory
             }
-            .buttonStyle(.plain)
+
+            if !trailingFirst {
+                Button(action: trailingAction) {
+                    Image(systemName: trailingSystemImage)
+                        .font(trailingFont)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal)
     }
@@ -2249,8 +2273,29 @@ struct SettingsView: View {
                 secondarySystemImage: "calendar",
                 secondaryLabel: "Games Calendar",
                 secondaryAction: { showGamesCalendar = true },
+                trailingFirst: true,
+                accessory: AnyView(TourneyInfoButton { showTourneys = true }),
                 trailingAction: { toggleInlineNewGame() }
             )
+            .sheet(isPresented: $showTourneys, onDismiss: {
+                guard let game = pendingTourneyGame else { return }
+                pendingTourneyGame = nil
+                let seed = game.newGameSeed(myTeamIds: Set(activeTeamEntries.compactMap { $0.team.id }))
+                openInlineNewGame(opponentName: seed.opponentName, date: seed.date,
+                                  ourTeamId: seed.ourTeamId, opponentTeamId: seed.opponentTeamId)
+            }) {
+                AnyView(
+                    TourneysView(onStartGame: { game in
+                        pendingTourneyGame = game
+                        showTourneys = false
+                    }, teamContext: TourneyTeamContext(
+                        teams: activeTeamEntries.map { $0.team },
+                        createTeam: createTeamFromNewGame
+                    ))
+                    .environmentObject(authManager)
+                    .fixedAppDynamicType()
+                )
+            }
             .sheet(isPresented: $showLineupScan, onDismiss: { lineupScan = nil }) {
                 lineupScanSheetContent
             }
@@ -2302,21 +2347,7 @@ struct SettingsView: View {
                             myTeams: activeTeamEntries.map { $0.team },
                             ourTeamId: $inlineNewGameTeamId,
                             opponentTeamId: $inlineNewGameOpponentTeamId,
-                            onCreateTeam: { name, designation, completion in
-                                authManager.createTeam(name: name, designation: designation) { result in
-                                    switch result {
-                                    case .success(let team):
-                                        // Put it in the picker's pool right
-                                        // away, otherwise the card would
-                                        // select an id the menu can't name.
-                                        refreshMyTeams()
-                                        completion(team)
-                                    case .failure(let error):
-                                        debugLog("❌ createTeam from AddGameCard failed:", error.localizedDescription)
-                                        completion(nil)
-                                    }
-                                }
-                            },
+                            onCreateTeam: createTeamFromNewGame,
                             onCancel: { closeInlineNewGame() },
                             onSave: { createInlineGame() },
                             lineupSummary: pendingNewGameLineup.flatMap { $0.teamId == inlineNewGameOpponentTeamId ? $0.summary : nil },
@@ -2466,18 +2497,43 @@ struct SettingsView: View {
             closeInlineNewGame()
             return
         }
-        inlineNewGameName = ""
-        inlineNewGameDate = Date()
+        openInlineNewGame()
+    }
+
+    /// Home's new-game card, blank (the Games row's +) or filled in from a
+    /// tourney game's Start Game.
+    private func openInlineNewGame(opponentName: String = "", date: Date = Date(),
+                                   ourTeamId: String? = nil, opponentTeamId: String? = nil) {
+        inlineNewGameName = opponentName
+        inlineNewGameDate = date
         inlineNewGameTrackingMode = .coach
         // Pre-select when there's only one team to choose - a coach with a
         // single team shouldn't have to pick it every game.
-        inlineNewGameTeamId = myTeams.count == 1 ? myTeams.first?.team.id : nil
-        inlineNewGameOpponentTeamId = nil
+        inlineNewGameTeamId = ourTeamId ?? (myTeams.count == 1 ? myTeams.first?.team.id : nil)
+        inlineNewGameOpponentTeamId = opponentTeamId
         pendingNewGameLineup = nil
         createGameError = nil
         withAnimation(.easeInOut(duration: 0.2)) {
             expandedHomeOverviewSection = .games
             showInlineNewGame = true
+        }
+    }
+
+    /// "New Team…" in a new-game team picker (Home's card and a Tourney
+    /// Info game).
+    private func createTeamFromNewGame(name: String, designation: TeamDesignation,
+                                       completion: @escaping (Team?) -> Void) {
+        authManager.createTeam(name: name, designation: designation) { result in
+            switch result {
+            case .success(let team):
+                // Put it in the picker's pool right away, otherwise the
+                // card would select an id the menu can't name.
+                refreshMyTeams()
+                completion(team)
+            case .failure(let error):
+                debugLog("❌ createTeam from AddGameCard failed:", error.localizedDescription)
+                completion(nil)
+            }
         }
     }
 

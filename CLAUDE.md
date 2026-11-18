@@ -885,6 +885,60 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   (`isHighlightReelsFolder`) and old folder names keep "Highlight Reel";
   `MomentFolder.displayName` shows "Mixtapes".
 
+## Round Robin / Tourney Info (2026-11-16, reworked 2026-11-17)
+
+- **Home's Games row is +, calendar, then Tourney Info** (`TourneyInfoButton`:
+  calendar + mappin + trophy in a rounded rectangle; `collapsibleSectionHeader`'s
+  `trailingFirst`/`accessory`). It opens `TourneysView` (TourneyViews.swift),
+  titled "Round Robin / Tourney Info", with two tabs: **Our Tourneys** (own
+  pages + Shared with Me) and **Scouting** (`TourneyProspect`, the staff's
+  list of tourneys they might enter - per account, not team-shared).
+- Page order: Tourney, Games (`TourneyGame`, Scheduled or Bracket, added
+  as brackets are set; optional arrive-at; the field shows as "Field 7"
+  via `fieldLabel`), Game Day (field/complex, notes, meet spots - meet
+  time, first game and parking were removed), Uniforms (by day number, one blank row
+  always, + adds a day), General Info (metal cleats toggle + plain items,
+  no bullets or common-items list), Gate Fee (toggle, notes, cash only),
+  Tournament Food (family, food, green check), Hotels, Links, Notes. Costs
+  and Tourney Tips were removed (user's call); an old single game-day
+  Uniform loads as Day 1's.
+- **A tourney game's + (Start Game) runs Home's Games-row + flow**: Home
+  passes `onStartGame` (environment `tourneyStartGame`), closes the sheet,
+  and its onDismiss calls `openInlineNewGame(opponentName:date:ourTeamId:
+  opponentTeamId:)` - the same card, filled in. No Home (UI tests) = no
+  button. Teams are picked in the tourney game with **`GameTeamPickers`**
+  (PitchTrackerView.swift), the pickers + New Team form lifted out of
+  `AddGameCard` - one component for both, don't fork it. Home hands in
+  its teams and `createTeamFromNewGame` (`TourneyTeamContext`). A team id
+  reaches the card only if it's one of this user's teams
+  (`TourneyGame.newGameSeed`) - a shared tourney carries the owner's ids.
+- **The coach's General Info items are shared; a follower's own items are
+  theirs only** (`myItems` on `users/{uid}/followedTourneys/{shareId}`,
+  never on the shared copy).
+- Saved at `users/{uid}/tourneys`, `followedTourneys`, `tourneyProspects`
+  (users/** catch-all), archived never deleted. Model + rules: Tourney.swift.
+- **Sharing in the app:** `TourneyStore.save` also writes the read-only copy
+  `sharedTourneys/{shareId}` while `shareId` is set (own rule: get by anyone
+  signed in, never list, owner-only writes, id 32-64 hex). Recipients open
+  `https://pitchmark-fb9f8.web.app/tourney/{id}` (AASA path + `tourney.html`
+  fallback) or paste it in Add a Shared Tourney; it shows live in
+  `TourneyReadView`. Stop Sharing deletes the copy; sharing again is a new
+  link. Rules and hosting deployed 2026-11-17 (rules tests:
+  `rules-tests/tests/sharedTourneys.test.mjs`). Pasting a link works on
+  any build with the feature; tapping one opens the app only once iOS
+  re-reads the AASA file (install/update).
+- **Directions are plain https links** (`TourneyMapApp`) - no
+  `LSApplicationQueriesSchemes`.
+- **A meet spot saves only its map region and marks**, never the image
+  (TourneyMeetSpot.swift). `TourneySnapshotter` caches the satellite image in
+  Caches/TourneyMeetSpots for no-signal fields. Marks are 0...1 of the 4:5
+  image, drawn by one `TourneyMarkLayer` for editor and export, placed with
+  `.position()` inside a full-size frame (alignment guides put them in the
+  corner).
+- `-UITestTourneys` (+ `-UITestTourneysOpen`, `-UITestTourneysDetail`,
+  `-UITestTourneysSpot`, `-UITestTourneysRead`, `-UITestTourneysScouting`)
+  opens the screens in memory with sample data.
+
 ## Known open items
 
 - **HBP cannot be saved on its own.** Save Result is gated on one of

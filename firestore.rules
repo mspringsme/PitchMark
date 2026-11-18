@@ -859,6 +859,26 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────
+    // SHARED TOURNEYS: /sharedTourneys/{shareId} (2026-11-17)
+    // A read-only copy of a coach's Round Robin / Tourney Info page that
+    // anyone signed in can open from its link. The id is 32+ random hex
+    // characters and the collection can't be listed, so a copy can only be
+    // found through its link. Only the owner writes it; ownerUid can't
+    // change hands.
+    // ─────────────────────────────────────────────
+    match /sharedTourneys/{shareId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && shareId.matches('^[0-9a-f]{32,64}$')
+        && request.resource.data.ownerUid == uid();
+      allow update: if signedIn()
+        && resource.data.ownerUid == uid()
+        && request.resource.data.ownerUid == uid();
+      allow delete: if signedIn() && resource.data.ownerUid == uid();
+    }
+
+    // ─────────────────────────────────────────────
     // USERS PRIVATE TREE (default-deny for others)
     // ─────────────────────────────────────────────
     match /users/{userId}/{docPath=**} {

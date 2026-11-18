@@ -71,6 +71,21 @@ one lineup batter `#1`. UI tests find controls by accessibility identifier:
 (value `on`/`off`), `score.home` / `score.away` (value = runs),
 `runners.actions`, `runnerPicker.add`.
 
+**`-UITestTourneys`** opens Home's Games row and Round Robin / Tourney Info
+alone, in memory, with a sample tourney (three games, teams Lightning /
+Hawks / Storm) and a scouting entry. Add `-UITestTourneysOpen` to start with
+the list open, then `-UITestTourneysDetail` (the sample's page),
+`-UITestTourneysScouting`, `-UITestTourneysRead` (the shared read-only
+page), `-UITestTourneysSpot` (meet spot editor) or `-UITestTourneysGame` (a
+game's editor). Start Game shows what it would hand Home in
+`harness.startedGame`. Ids: `home.tourneyInfo`, `tourney.new`,
+`tourney.row.{name}`, `tourney.name`, `tourney.game.{opponent}`,
+`tourney.startGame.{opponent}`, `tourney.addScheduledGame` /
+`addBracketGame`, `tourneyGame.{opponent,field,save}`,
+`optionalDate.{title}`, `tourney.addUniformDay`, `tourney.uniform.{i}`,
+`tourney.newItem`, `tourney.metalCleats`, `prospect.{name,distance}`,
+`prospect.row.{name}`. Rules: `rules-tests/tests/sharedTourneys.test.mjs`.
+
 **`-UITestSignGrids`** opens Batting Bases & Fielding grids alone (list + editor,
 in memory, nothing written): `signGrid.new`, `signGrid.name`,
 `signGrid.{rows,columns,grids}.{minus,plus,value}`, `signGrid.currentGrid`,

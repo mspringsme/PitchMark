@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PitchMark Tourney</title>
+    <!-- A shared Round Robin / Tourney Info link (/tourney/{shareId}).
+         With PitchMark installed, iOS opens the app directly (universal
+         link); this page is the fallback: it tries the app's own scheme,
+         then offers the App Store. The id never leaves this page. -->
+    <script>
+        (function () {
+            var id = (location.pathname.split("/")[2] || "").toLowerCase();
+            if (!/^[0-9a-f]{32,64}$/.test(id)) { return; }
+            var deepLink = "pitchmark://tourney/" + id;
+            window.addEventListener("DOMContentLoaded", function () {
+                var open = document.getElementById("open-app");
+                if (open) { open.setAttribute("href", deepLink); open.style.display = "inline-block"; }
+            });
+            window.location.replace(deepLink);
+        }());
+    </script>
+    <style>
+        :root { color-scheme: light; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: linear-gradient(180deg, #f5f7fb 0%, #eef2f8 100%);
+            color: #1c1c1e;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        }
+        .card {
+            width: min(100% - 32px, 460px);
+            box-sizing: border-box;
+            background: #fff;
+            border-radius: 22px;
+            padding: 32px 28px;
+            box-shadow: 0 18px 40px rgba(17, 24, 39, 0.12);
+            text-align: center;
+        }
+        h1 { font-size: 1.4rem; margin: 0 0 10px; }
+        p { color: #4b5563; line-height: 1.45; margin: 0 0 18px; }
+        a.button {
+            display: inline-block;
+            margin: 6px;
+            padding: 12px 20px;
+            border-radius: 12px;
+            background: #1c1c1e;
+            color: #fff;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        a.secondary { background: #e5e7eb; color: #1c1c1e; }
+        #open-app { display: none; }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <h1>A coach shared a tourney with you</h1>
+        <p>Open this link on an iPhone with PitchMark to see the dates, game day plan, meet spot map, uniforms, gate fee, food and hotels.</p>
+        <a id="open-app" class="button" href="#">Open in PitchMark</a>
+        <a class="button secondary" href="https://apps.apple.com/app/id6791446420">Get PitchMark</a>
+    </main>
+</body>
+</html>

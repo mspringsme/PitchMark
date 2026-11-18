@@ -10,7 +10,8 @@
           "/signin/live",
           "/signin/live/*",
           "/stripe/success",
-          "/stripe/cancel"
+          "/stripe/cancel",
+          "/tourney/*"
         ]
       },
       {

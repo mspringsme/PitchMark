@@ -15786,30 +15786,12 @@ struct AddGameCard: View {
     var lineupSummary: String? = nil
     var onScanLineup: (() -> Void)? = nil
 
-    /// Which side's "New Team…" is currently expanded, if either. One at a
-    /// time: the inline form is tall, and two open at once would push Save
-    /// off the bottom of the card.
-    private enum NewTeamTarget { case ours, opponent }
-    @State private var newTeamTarget: NewTeamTarget? = nil
-    @State private var newTeamName: String = ""
-    @State private var newTeamDesignation = TeamDesignationDraft()
-    @State private var isCreatingTeam = false
-    @State private var createTeamError: String? = nil
-
-    private func team(_ id: String?) -> Team? {
-        guard let id else { return nil }
-        return myTeams.first(where: { $0.id == id })
-    }
-
-    /// A team can't be both sides of the same game.
-    private func candidates(excluding excludedId: String?) -> [Team] {
-        myTeams.filter { $0.id != excludedId || excludedId == nil }
-    }
+    /// True while "New Team…" is open (or creating) - Save waits for it.
+    @State private var isAddingTeam = false
 
     private var canSave: Bool {
         !opponentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && newTeamTarget == nil
-            && !isCreatingTeam
+            && !isAddingTeam
     }
 
     var body: some View {
@@ -15826,36 +15808,16 @@ struct AddGameCard: View {
                 .buttonStyle(.plain)
             }
 
-            teamPickerRow(
-                title: "Our team",
-                selectedId: ourTeamId,
-                options: candidates(excluding: opponentTeamId),
-                onSelect: { ourTeamId = $0 },
-                onClear: { ourTeamId = nil },
-                onAddNew: { beginNewTeam(.ours) }
+            GameTeamPickers(
+                myTeams: myTeams,
+                ourTeamId: $ourTeamId,
+                opponentTeamId: $opponentTeamId,
+                opponentName: $opponentName,
+                isAddingTeam: $isAddingTeam,
+                onCreateTeam: onCreateTeam
             )
 
-            teamPickerRow(
-                title: "Opponent",
-                selectedId: opponentTeamId,
-                options: candidates(excluding: ourTeamId),
-                onSelect: { id in
-                    opponentTeamId = id
-                    // Keep Game.opponent in step with the chosen team.
-                    opponentName = team(id)?.name ?? opponentName
-                },
-                onClear: {
-                    opponentTeamId = nil
-                    opponentName = ""
-                },
-                onAddNew: { beginNewTeam(.opponent) }
-            )
-
-            if newTeamTarget != nil {
-                newTeamInlineForm
-            }
-
-            if opponentTeamId != nil, newTeamTarget == nil, let onScanLineup {
+            if opponentTeamId != nil, !isAddingTeam, let onScanLineup {
                 VStack(alignment: .leading, spacing: 4) {
                     Button(action: onScanLineup) {
                         Label(lineupSummary == nil ? "Scan Opponent Lineup" : "Scan Again", systemImage: "text.viewfinder")
@@ -15893,17 +15855,86 @@ struct AddGameCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(radius: 10)
     }
+}
+
+/// The Our team / Opponent pickers with their inline "New Team…" form,
+/// lifted out of AddGameCard (2026-11-17) so a Tourney Info game picks
+/// teams exactly the way a new game does. `isAddingTeam` is true while
+/// the New Team form is open - callers hold Save until it closes.
+struct GameTeamPickers: View {
+    var myTeams: [Team]
+    @Binding var ourTeamId: String?
+    @Binding var opponentTeamId: String?
+    @Binding var opponentName: String
+    @Binding var isAddingTeam: Bool
+    var onCreateTeam: (String, TeamDesignation, @escaping (Team?) -> Void) -> Void
+
+    /// Which side's "New Team…" is currently expanded, if either. One at a
+    /// time: the inline form is tall, and two open at once would push Save
+    /// off the bottom of the card.
+    private enum NewTeamTarget { case ours, opponent }
+    @State private var newTeamTarget: NewTeamTarget? = nil
+    @State private var newTeamName: String = ""
+    @State private var newTeamDesignation = TeamDesignationDraft()
+    @State private var isCreatingTeam = false
+    @State private var createTeamError: String? = nil
+
+    private func team(_ id: String?) -> Team? {
+        guard let id else { return nil }
+        return myTeams.first(where: { $0.id == id })
+    }
+
+    /// A team can't be both sides of the same game.
+    private func candidates(excluding excludedId: String?) -> [Team] {
+        myTeams.filter { $0.id != excludedId || excludedId == nil }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            teamPickerRow(
+                title: "Our team",
+                selectedId: ourTeamId,
+                options: candidates(excluding: opponentTeamId),
+                onSelect: { ourTeamId = $0 },
+                onClear: { ourTeamId = nil },
+                onAddNew: { beginNewTeam(.ours) }
+            )
+
+            teamPickerRow(
+                title: "Opponent",
+                selectedId: opponentTeamId,
+                options: candidates(excluding: ourTeamId),
+                onSelect: { id in
+                    opponentTeamId = id
+                    // Keep Game.opponent in step with the chosen team.
+                    opponentName = team(id)?.name ?? opponentName
+                },
+                onClear: {
+                    opponentTeamId = nil
+                    opponentName = ""
+                },
+                onAddNew: { beginNewTeam(.opponent) }
+            )
+
+            if newTeamTarget != nil {
+                newTeamInlineForm
+            }
+
+        }
+    }
 
     private func beginNewTeam(_ target: NewTeamTarget) {
         newTeamName = ""
         newTeamDesignation.reset()
         createTeamError = nil
+        isAddingTeam = true
         withAnimation(.easeInOut(duration: 0.2)) {
             newTeamTarget = target
         }
     }
 
     private func cancelNewTeam() {
+        isAddingTeam = false
         withAnimation(.easeInOut(duration: 0.2)) {
             newTeamTarget = nil
         }

@@ -6,6 +6,10 @@
       "appAssociation": "NONE",
       "rewrites": [
         {
+          "source": "/tourney/**",
+          "destination": "/tourney.html"
+        },
+        {
           "source": "/stripe/success",
           "destination": "/stripe-success.html"
         },

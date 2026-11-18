@@ -45,6 +45,10 @@ struct RootView: View {
     /// `-UITestHomeActions`: Home's row of three and signed-in line alone.
     private static let isUITestHomeActions = ProcessInfo.processInfo.arguments.contains("-UITestHomeActions")
 
+    /// `-UITestTourneys`: the Games row's Tourney Info button and screens,
+    /// in memory (add `-UITestTourneysOpen` to start with the list open).
+    private static let isUITestTourneys = ProcessInfo.processInfo.arguments.contains("-UITestTourneys")
+
     var body: some View {
         Group {
             if Self.isUITestSignGrids {
@@ -53,6 +57,8 @@ struct RootView: View {
                 MomentEditorsUITestHarness()
             } else if Self.isUITestHomeActions {
                 HomeActionsUITestHarness()
+            } else if Self.isUITestTourneys {
+                TourneyUITestHarness()
             } else if Self.isUITestDemo {
                 PitchTrackerView(isDemoMode: true, onRequireSignIn: {})
                     .id("uitest-demo")
@@ -161,6 +167,10 @@ struct RootView: View {
                     UserDefaults.standard.removeObject(forKey: "pendingPitcherInviteToken")
                     joinPitcherByInviteToken(token)
                 }
+                if let shareId = UserDefaults.standard.string(forKey: "pendingTourneyShareId"), !shareId.isEmpty {
+                    UserDefaults.standard.removeObject(forKey: "pendingTourneyShareId")
+                    handleTourneyLink(shareId)
+                }
             } else {
                 showDisplayCover = false
                 showDisplayOnboarding = false
@@ -182,6 +192,10 @@ struct RootView: View {
     }
 
     private func handleInviteLink(_ url: URL) {
+        if let shareId = TourneyShareLink.shareId(from: url.absoluteString) {
+            handleTourneyLink(shareId)
+            return
+        }
         if let token = pitcherInviteToken(from: url), !token.isEmpty {
             if authManager.isSignedIn {
                 joinPitcherByInviteToken(token)
@@ -196,6 +210,26 @@ struct RootView: View {
             joinLiveGameByInviteToken(token)
         } else {
             UserDefaults.standard.set(token, forKey: "pendingInviteToken")
+        }
+    }
+
+    /// A shared Round Robin / Tourney Info link: save it to this user's
+    /// Shared with Me list (after sign-in, if signed out) and say where it is.
+    private func handleTourneyLink(_ shareId: String) {
+        guard authManager.isSignedIn, let uid = authManager.user?.uid else {
+            UserDefaults.standard.set(shareId, forKey: "pendingTourneyShareId")
+            return
+        }
+        Task { @MainActor in
+            do {
+                let name = try await TourneyStore.followShared(shareId: shareId, uid: uid)
+                rootAlert = RootAlert(
+                    title: "Tourney Saved",
+                    message: "\(name.isEmpty ? "The tourney" : name) is in Home → Games → Round Robin / Tourney Info, under Shared with Me."
+                )
+            } catch {
+                rootAlert = RootAlert(title: "Couldn't Open Tourney", message: error.localizedDescription)
+            }
         }
     }
 
