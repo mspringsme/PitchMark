@@ -133,7 +133,7 @@ struct CallSheetView: View {
             CallSheetEmptyMessage(
                 systemImage: "key",
                 title: "No pitching keys",
-                detail: "Make one under Armband Keys on Home."
+                detail: "Make one in Team Supplies on Home."
             )
         }
     }
@@ -163,7 +163,7 @@ struct CallSheetView: View {
             CallSheetEmptyMessage(
                 systemImage: "rectangle.grid.3x2",
                 title: "No Batting Bases & Fielding cards",
-                detail: "Make one under Armband Keys on Home."
+                detail: "Make one in Team Supplies on Home."
             )
         }
     }

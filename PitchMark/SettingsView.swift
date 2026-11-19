@@ -653,6 +653,8 @@ struct SettingsView: View {
 
     @State private var templatePendingShare: PitchTemplate? = nil
     @State private var showShareTemplateSheet = false
+    /// Team Supplies is pushed (it holds the armband keys).
+    @State private var showTeamSupplies = false
     @State private var shareTargetEmail: String = ""
     @State private var shareTemplateError: String = ""
     @State private var isSharingTemplate = false
@@ -3580,6 +3582,133 @@ struct SettingsView: View {
         }
     }
 
+    /// Team Supplies (2026-11-18): the coach's armband keys - Pitching and
+    /// Batting Bases & Fielding, moved off Home - above the store. Their
+    /// editor, share, Call and game-open prompts are attached here, the
+    /// root of the pushed screen, because Home's root isn't on screen
+    /// while this is pushed (and a dialog on a list row would only take
+    /// taps inside the row - see CLAUDE.md's Dialogs section). `AnyView`
+    /// for Home's type depth.
+    private var teamSuppliesScreen: AnyView {
+        AnyView(
+        StorefrontView(armbandKeys: AnyView(Group {
+            templatesOverviewSection
+            SignGridsHomeSection(
+                isExpanded: Binding(
+                    get: { expandedHomeOverviewSection == .signGrids },
+                    set: { expandedHomeOverviewSection = $0 ? .signGrids : nil }
+                ),
+                pitchKeys: visibleTemplates,
+                gameOpen: activeGameId != nil
+            )
+        }))
+        .sheet(item: $editorTemplate) { template in
+            TemplateEditorView(
+                template: template,
+                allPitches: allPitches,
+                onSave: { updatedTemplate in
+                    handleSavedTemplate(updatedTemplate)
+                }
+            )
+            .fixedAppDynamicType()
+        }
+        .appConfirmationDialog(
+            isPresented: $showPurchasedTemplateEditAlert,
+            title: "Edit Purchased Template?",
+            message: "This grid key has already been used in a store purchase. Changes you make now will only affect future use and future orders. Existing purchased orders will not change.",
+            primaryTitle: "Continue Editing",
+            primaryAction: {
+                editorTemplate = purchasedTemplateEditTarget
+                purchasedTemplateEditTarget = nil
+            },
+            secondaryTitle: "Cancel",
+            secondaryAction: {
+                purchasedTemplateEditTarget = nil
+            }
+        )
+        .sheet(isPresented: $showShareTemplateSheet) {
+            VStack(spacing: 16) {
+                Text("Share Template")
+                    .font(.headline)
+
+                if let template = templatePendingShare {
+                    Text(template.name)
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+
+                TextField("Recipient Email", text: $shareTargetEmail)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.emailAddress)
+                    .textFieldStyle(.roundedBorder)
+
+                if !shareTemplateError.isEmpty {
+                    Text(shareTemplateError)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+
+                HStack {
+                    Button("Cancel") {
+                        showShareTemplateSheet = false
+                    }
+                    Spacer()
+                    Button(isSharingTemplate ? "Sharing..." : "Share") {
+                        guard let template = templatePendingShare else { return }
+
+                        isSharingTemplate = true
+                        shareTemplateError = ""
+
+                        authManager.shareTemplateByEmail(template, email: shareTargetEmail) { err in
+                            DispatchQueue.main.async {
+                                isSharingTemplate = false
+                                if let err {
+                                    shareTemplateError = err.localizedDescription
+                                } else {
+                                    showShareTemplateSheet = false
+                                }
+                            }
+                        }
+                    }
+                    .disabled(shareTargetEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSharingTemplate)
+                }
+            }
+            .padding()
+            .presentationDetents([.medium])
+            .fixedAppDynamicType()
+        }
+        .fullScreenCover(item: $pitchCallTemplate) { template in
+            CallSheetHost(
+                pitchKeys: visibleTemplates,
+                initialTab: .pitching,
+                initialKeyId: template.id,
+                gameOpen: activeGameId != nil
+            ) { pitchCallTemplate = nil }
+            .environmentObject(authManager)
+            .fixedAppDynamicType()
+        }
+        .appConfirmationDialog(
+            isPresented: $showPitchCallGameOpen,
+            title: "A Game Is Open",
+            message: "\(openGameDescription) is open. Call pitches from the game screen to record them with the game. Codes Only shows the codes here and records nothing.",
+            primaryTitle: "Go to Game",
+            primaryAction: {
+                pendingPitchCallTemplate = nil
+                onSwitchToArea?(.games)
+            },
+            secondaryTitle: "Cancel",
+            secondaryAction: { pendingPitchCallTemplate = nil },
+            alternateTitle: "Codes Only",
+            alternateAction: {
+                let template = pendingPitchCallTemplate
+                pendingPitchCallTemplate = nil
+                pitchCallTemplate = template
+            }
+        )
+        )
+    }
+
     private var accountDeletionIsBlocking: Bool {
         isDeletingAccount
     }
@@ -3670,41 +3799,14 @@ struct SettingsView: View {
                             playersOverviewSection
                         }
 
-                        // Pitching and Batting keys are both worn on the
-                        // armband (2026-11-10).
-                        Divider()
-                            .padding(.horizontal)
-                        Text("Armband Keys")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal)
-                            .padding(.bottom, -8)
-                            .accessibilityAddTraits(.isHeader)
-                            .accessibilityIdentifier("home.armbandKeys")
-
-                        sectionCard {
-                            templatesOverviewSection
-                        }
-
-                        sectionCard {
-                            SignGridsHomeSection(
-                                isExpanded: Binding(
-                                    get: { expandedHomeOverviewSection == .signGrids },
-                                    set: { expandedHomeOverviewSection = $0 ? .signGrids : nil }
-                                ),
-                                pitchKeys: visibleTemplates,
-                                gameOpen: activeGameId != nil
-                            )
-                        }
-
-
                         Color.clear.frame(height: 8)
                     }
                     .padding(.top, 4)
                 }
                 .safeAreaInset(edge: .bottom) {
-                    HomeBottomBar(email: authManager.user?.email) {
-                        Storefront
+                    HomeBottomBar(email: authManager.user?.email,
+                                  isSuppliesActive: $showTeamSupplies) {
+                        teamSuppliesScreen
                     } onJoin: {
                         startJoinFlow()
                     } onAccount: {
@@ -3876,7 +3978,9 @@ struct SettingsView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .createCodeGridKeyRequested)) { note in
                 // Sent by the tracker when it is blurred for want of a
-                // usable key.
+                // usable key. The keys live in Team Supplies (2026-11-18):
+                // open it with Pitching expanded.
+                showTeamSupplies = true
                 withAnimation(.easeInOut(duration: 0.2)) {
                     expandedHomeOverviewSection = .templates
                 }
@@ -3884,12 +3988,16 @@ struct SettingsView: View {
                 // reveal the archived list, where Unhide is, instead of
                 // opening a blank editor they didn't ask for.
                 if (note.userInfo?["createNew"] as? Bool) ?? true {
-                    editorTemplate = PitchTemplate(
-                        id: UUID(),
-                        name: "",
-                        pitches: [],
-                        codeAssignments: []
-                    )
+                    // The editor sheet is on Team Supplies' root, so wait
+                    // for the push to land before presenting it.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        editorTemplate = PitchTemplate(
+                            id: UUID(),
+                            name: "",
+                            pitches: [],
+                            codeAssignments: []
+                        )
+                    }
                 } else {
                     showHiddenTemplates = true
                 }
@@ -3904,58 +4012,6 @@ struct SettingsView: View {
                 authManager.loadPitchers { loaded in
                     pitchers = loaded
                 }
-            }
-            .sheet(isPresented: $showShareTemplateSheet) {
-                VStack(spacing: 16) {
-                    Text("Share Template")
-                        .font(.headline)
-
-                    if let template = templatePendingShare {
-                        Text(template.name)
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-
-                    TextField("Recipient Email", text: $shareTargetEmail)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.emailAddress)
-                        .textFieldStyle(.roundedBorder)
-
-                    if !shareTemplateError.isEmpty {
-                        Text(shareTemplateError)
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-
-                    HStack {
-                        Button("Cancel") {
-                            showShareTemplateSheet = false
-                        }
-                        Spacer()
-                        Button(isSharingTemplate ? "Sharing..." : "Share") {
-                            guard let template = templatePendingShare else { return }
-
-                            isSharingTemplate = true
-                            shareTemplateError = ""
-
-                            authManager.shareTemplateByEmail(template, email: shareTargetEmail) { err in
-                                DispatchQueue.main.async {
-                                    isSharingTemplate = false
-                                    if let err {
-                                        shareTemplateError = err.localizedDescription
-                                    } else {
-                                        showShareTemplateSheet = false
-                                    }
-                                }
-                            }
-                        }
-                        .disabled(shareTargetEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSharingTemplate)
-                    }
-                }
-                .padding()
-                .presentationDetents([.medium])
-                .fixedAppDynamicType()
             }
             .sheet(isPresented: $showPitcherShareSheet) {
                 pitcherShareSheetView
@@ -4018,30 +4074,6 @@ struct SettingsView: View {
             // (2026-11-10). The X that used to sit there (go to the Game
             // tab, gated on "Select Game First") is gone too - the bottom
             // tab bar controls flow between Home/Game/Moments.
-            .sheet(item: $editorTemplate) { template in
-                TemplateEditorView(
-                    template: template,
-                    allPitches: allPitches,
-                    onSave: { updatedTemplate in
-                        handleSavedTemplate(updatedTemplate)
-                    }
-                )
-                .fixedAppDynamicType()
-            }
-            .appConfirmationDialog(
-                isPresented: $showPurchasedTemplateEditAlert,
-                title: "Edit Purchased Template?",
-                message: "This grid key has already been used in a store purchase. Changes you make now will only affect future use and future orders. Existing purchased orders will not change.",
-                primaryTitle: "Continue Editing",
-                primaryAction: {
-                    editorTemplate = purchasedTemplateEditTarget
-                    purchasedTemplateEditTarget = nil
-                },
-                secondaryTitle: "Cancel",
-                secondaryAction: {
-                    purchasedTemplateEditTarget = nil
-                }
-            )
             .sheet(isPresented: $showAddPitcher) {
                 addPitcherSheetView
                     .fixedAppDynamicType()
@@ -4058,34 +4090,6 @@ struct SettingsView: View {
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
-            .fullScreenCover(item: $pitchCallTemplate) { template in
-                CallSheetHost(
-                    pitchKeys: visibleTemplates,
-                    initialTab: .pitching,
-                    initialKeyId: template.id,
-                    gameOpen: activeGameId != nil
-                ) { pitchCallTemplate = nil }
-                .environmentObject(authManager)
-                .fixedAppDynamicType()
-            }
-            .appConfirmationDialog(
-                isPresented: $showPitchCallGameOpen,
-                title: "A Game Is Open",
-                message: "\(openGameDescription) is open. Call pitches from the game screen to record them with the game. Codes Only shows the codes here and records nothing.",
-                primaryTitle: "Go to Game",
-                primaryAction: {
-                    pendingPitchCallTemplate = nil
-                    onSwitchToArea?(.games)
-                },
-                secondaryTitle: "Cancel",
-                secondaryAction: { pendingPitchCallTemplate = nil },
-                alternateTitle: "Codes Only",
-                alternateAction: {
-                    let template = pendingPitchCallTemplate
-                    pendingPitchCallTemplate = nil
-                    pitchCallTemplate = template
-                }
-            )
             .sheet(item: $homeNoTeamEditTarget) { target in
                 HomeNoTeamPlayerEditSheet(
                     target: target,

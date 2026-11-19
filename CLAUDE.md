@@ -741,9 +741,16 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   is the old top-bar button's flow (`startJoinFlow`, Pro only); Account
   opens the account sheet. Home has no toolbar items now. The header is
   the PitchMark logo, centered (`SettingsView.logoImageName`), not text.
-- **"Armband Keys"** (under a divider) heads **Pitching** (was Code Grid
-  Keys; the tracker's button says "Open Pitching Keys") and **Batting
-  Bases & Fielding** (was Batter & Runner Grids, also in the store).
+- **Armband keys live in Team Supplies (2026-11-18), not on Home**
+  (user's call: mostly coaches use them). "Your Armband Keys" - **Pitching**
+  (was Code Grid Keys; the tracker's button says "Open Pitching Keys") and
+  **Batting Bases & Fielding** - sits above the store's products
+  (`StorefrontView(armbandKeys:)`, built in `SettingsView.teamSuppliesScreen`).
+  The Pitching key editor, share, Call and game-open prompts hang off
+  that pushed screen's root, not Home's (Home isn't on screen while it's
+  pushed). The tracker's Create a Key / Open Pitching Keys pushes Team
+  Supplies (`showTeamSupplies`, the bottom bar's `isSuppliesActive`) and
+  opens the editor after the push lands.
 - The bottom of Home is plain text, "Signed in as {email}"
   (`HomeSignedInFooter`), read from `authManager.user` so it follows
   sign-in and sign-out. It is not a button.

@@ -23,6 +23,14 @@ struct StorefrontView: View {
     @State private var isDisplayAppInstalled = false
     @State private var didCopyDisplayLink = false
 
+    /// The coach's armband keys (Pitching, Batting Bases & Fielding),
+    /// handed in by Home - each child view is its own row. Nil = store only.
+    private let armbandKeys: AnyView?
+
+    init(armbandKeys: AnyView? = nil) {
+        self.armbandKeys = armbandKeys
+    }
+
     private let displayAppSearchURL = URL(string: "https://apps.apple.com/us/search?term=Pitchmark%20Display")!
     private let displayAppURL = URL(string: "pitchmarkdisplay://")!
 
@@ -58,6 +66,20 @@ struct StorefrontView: View {
                 StorefrontHeaderView()
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 12, trailing: 16))
                     .listRowBackground(Color.clear)
+
+                if let armbandKeys {
+                    // Built and printed free; the sections below order
+                    // them printed and shipped.
+                    Section(header: Text("Your Armband Keys")
+                        .accessibilityIdentifier("supplies.armbandKeys")) {
+                        armbandKeys
+                            .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 12, trailing: 0))
+                            // A row holding several default-style buttons
+                            // fires them all on any tap; borderless keeps
+                            // each one its own target.
+                            .buttonStyle(.borderless)
+                    }
+                }
 
                 Section(header: Text("Pitcher Grid Key Inserts")) {
                     Text("Armband grid key inserts; Master pitch call sheet")
@@ -261,13 +283,9 @@ struct StorefrontView: View {
             .listSectionSpacing(.compact)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("PitchMark Store")
-                        .font(.headline.weight(.semibold))
-                        .padding(.top, -20)
-                }
-            }
+            // No title bar on the store's first screen - the header card
+            // names it. Pushed product pages still get theirs (Back).
+            .toolbar(.hidden, for: .navigationBar)
 
             .navigationDestination(for: StorefrontRoute.self) { route in
                 switch route {
@@ -400,9 +418,9 @@ private struct StorefrontHeaderView: View {
                 StorefrontProductGraphic()
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("PitchMark Store")
+                    Text("Team Supplies")
                         .font(.title2.weight(.bold))
-                    Text("Physical play-calling tools, printed and shipped.")
+                    Text("Build your armband keys free. Order them printed and shipped.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

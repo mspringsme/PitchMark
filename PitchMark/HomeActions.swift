@@ -1,18 +1,22 @@
 import SwiftUI
 
-/// Home's row of three (2026-11-10): Team Supplies (the store), Join a
+/// Home's row of three (2026-11-10): Team Supplies (the armband keys and
+/// the store, 2026-11-18), Join a
 /// Game and Account, each with the softball/baseball art. It replaced the
 /// "store" capsule, the top bar's Join button and the account button at
 /// the bottom of Home. A top-level struct on purpose - see CLAUDE.md on
 /// Home's generic type depth.
 struct HomeActionRow<Supplies: View>: View {
+    /// Bound so Home can open Team Supplies itself (the tracker's
+    /// "Create a Key" / "Open Pitching Keys" land there).
+    @Binding var isSuppliesActive: Bool
     @ViewBuilder let supplies: () -> Supplies
     let onJoin: () -> Void
     let onAccount: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            NavigationLink {
+            NavigationLink(isActive: $isSuppliesActive) {
                 supplies()
             } label: {
                 HomeActionTile(title: "Team Supplies")
@@ -78,13 +82,15 @@ enum HomeSignedInLine {
 /// signed-in line, pinned under the scrolling cards.
 struct HomeBottomBar<Supplies: View>: View {
     let email: String?
+    @Binding var isSuppliesActive: Bool
     @ViewBuilder let supplies: () -> Supplies
     let onJoin: () -> Void
     let onAccount: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            HomeActionRow(supplies: supplies, onJoin: onJoin, onAccount: onAccount)
+            HomeActionRow(isSuppliesActive: $isSuppliesActive, supplies: supplies,
+                          onJoin: onJoin, onAccount: onAccount)
                 .padding(.top, 10)
             HomeSignedInFooter(email: email)
         }
@@ -98,6 +104,7 @@ struct HomeBottomBar<Supplies: View>: View {
 struct HomeActionsUITestHarness: View {
     @State private var opened = ""
     @State private var email: String? = "coach@example.com"
+    @State private var suppliesOpen = false
 
     var body: some View {
         NavigationView {
@@ -120,7 +127,7 @@ struct HomeActionsUITestHarness: View {
             }
             .accessibilityIdentifier("harness.scroll")
             .safeAreaInset(edge: .bottom) {
-                HomeBottomBar(email: email) {
+                HomeBottomBar(email: email, isSuppliesActive: $suppliesOpen) {
                     Text("Store")
                         .accessibilityIdentifier("harness.store")
                 } onJoin: {

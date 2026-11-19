@@ -1,18 +1,16 @@
 import XCTest
 
 /// The real Home, reached through Skip for Now (demo mode, nothing
-/// written): the logo centered at the top, then "Armband Keys" above
-/// Pitching and Batting Bases & Fielding (approved 2026-11-10).
+/// written): the logo centered at the top. The armband keys - Pitching
+/// and Batting Bases & Fielding - live in Team Supplies, above the store's
+/// products, not on Home (approved 2026-11-18; was "Armband Keys" on Home,
+/// 2026-11-10).
 final class HomeLayoutUITests: XCTestCase {
 
-    func testLogoIsCenteredAndArmbandKeysHeadsPitchingAndBatting() {
+    func testLogoIsCenteredAndTheArmbandKeysAreInTeamSupplies() {
         continueAfterFailure = false
         let app = XCUIApplication()
-        app.launch()
-        let skip = app.buttons["Skip for Now"]
-        if skip.waitForExistence(timeout: 10) { skip.tap() }
-        let homeTab = app.buttons["Home"]
-        if homeTab.waitForExistence(timeout: 10) { homeTab.tap() }
+        openDemoHome(app)
 
         let logo = app.descendants(matching: .any)["home.logo"]
         XCTAssertTrue(logo.waitForExistence(timeout: 10))
@@ -22,16 +20,52 @@ final class HomeLayoutUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Code Grid Keys"].exists)
         XCTAssertFalse(app.staticTexts["Batter & Runner Grids"].exists)
 
-        let armband = app.staticTexts["home.armbandKeys"]
         let pitching = app.staticTexts["home.section.pitching"]
         let batting = app.staticTexts["home.section.batting"]
-        for _ in 0..<3 where !batting.isHittable { app.swipeUp() }
-        XCTAssertEqual(armband.label, "Armband Keys")
+        for _ in 0..<3 { app.swipeUp() }
+        XCTAssertFalse(app.staticTexts["home.armbandKeys"].exists, "no Armband Keys on Home")
+        XCTAssertFalse(pitching.exists, "Pitching keys aren't on Home")
+        XCTAssertFalse(batting.exists, "Batting keys aren't on Home")
+
+        openTeamSupplies(app)
+        let header = app.staticTexts["supplies.armbandKeys"]
+        let product = app.staticTexts["Pitching Key"]
+        XCTAssertTrue(header.waitForExistence(timeout: 5))
+        XCTAssertTrue(product.waitForExistence(timeout: 5))
+        XCTAssertEqual(header.label, "Your Armband Keys")
         XCTAssertEqual(pitching.label, "Pitching")
         XCTAssertEqual(batting.label, "Batting Bases & Fielding")
-        XCTAssertLessThan(armband.frame.maxY, pitching.frame.minY, "Armband Keys heads the two")
+        XCTAssertLessThan(header.frame.maxY, pitching.frame.minY, "Your Armband Keys heads the two")
         XCTAssertLessThan(pitching.frame.maxY, batting.frame.minY)
-        XCTAssertLessThan(pitching.frame.minY - armband.frame.maxY, 80, "directly above Pitching")
+        XCTAssertLessThan(batting.frame.maxY, product.frame.minY, "the keys come before the store")
+    }
+
+    /// A key's Call in Team Supplies opens the Call Sheet on that key
+    /// (approved 2026-11-18).
+    func testCallOnAKeyInTeamSuppliesOpensTheCallSheet() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        openDemoHome(app)
+        openTeamSupplies(app)
+
+        let pitching = app.staticTexts["home.section.pitching"]
+        XCTAssertTrue(pitching.waitForExistence(timeout: 5))
+        pitching.tap()
+        let key = app.buttons["Demo Grid Key"]
+        XCTAssertTrue(key.waitForExistence(timeout: 8), "the demo key is listed")
+        key.tap()
+        let call = app.buttons["pitchKey.call"]
+        XCTAssertTrue(call.waitForExistence(timeout: 5))
+        call.tap()
+
+        XCTAssertTrue(app.staticTexts["Call Sheet"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["Demo Grid Key"].exists, "on the key that was tapped")
+    }
+
+    private func openTeamSupplies(_ app: XCUIApplication) {
+        let supplies = app.buttons["home.action.supplies"]
+        XCTAssertTrue(supplies.waitForExistence(timeout: 10))
+        supplies.tap()
     }
 
     func testTheStoreSellsWaterproofCallingCards() {
@@ -64,13 +98,15 @@ final class HomeLayoutUITests: XCTestCase {
         if homeTab.waitForExistence(timeout: 10) { homeTab.tap() }
     }
 
-    /// A pitching key's size is picked in its editor (approved 2026-11-10).
+    /// A pitching key's size is picked in its editor (approved 2026-11-10),
+    /// opened from Team Supplies (2026-11-18).
     func testTheKeyEditorPicksTheKeysPrintSize() {
         continueAfterFailure = false
         let app = XCUIApplication()
         openDemoHome(app)
+        openTeamSupplies(app)
         let newKey = app.buttons["New code grid key"]
-        for _ in 0..<4 where !newKey.isHittable { app.swipeUp() }
+        XCTAssertTrue(newKey.waitForExistence(timeout: 5))
         newKey.tap()
 
         let width = app.buttons["gridKey.printWidth"]
