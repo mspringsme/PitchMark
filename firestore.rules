@@ -442,6 +442,105 @@ service cloud.firestore {
                .hasOnly(["name", "jerseyNumber", "positions", "battingSide"]);
       }
 
+      // TEAM SPONSOR SLOTS (2026-11-19): a local business the team sold a
+      // season sponsorship to, shown as "Sponsored by {name}". Only the
+      // server creates one, after payment (stripeWebhook). Whoever can see
+      // the team reads them; anyone signed in can open an active one by id,
+      // so a shared tourney page can show it. The coach who paid may fix the
+      // name, link and logo - never the dates, the team or who paid.
+      match /sponsors/{slotId} {
+        function canSeeTeam() {
+          return isTeamCreator()
+            || exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()))
+            || isRoomPartnerOf(teamId);
+        }
+
+        allow get: if signedIn() && (canSeeTeam() || resource.data.endsAt > request.time);
+        allow list: if signedIn() && canSeeTeam();
+        allow create, delete: if false;
+        allow update: if signedIn()
+          && isTeamCreator()
+          && resource.data.purchasedByUid == uid()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "link", "logo"])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 1
+          && request.resource.data.name.size() <= 60
+          && request.resource.data.link is string
+          && request.resource.data.link.size() <= 200
+          && (request.resource.data.link == "" || request.resource.data.link.matches('^https://.+'))
+          && request.resource.data.logo is string
+          && request.resource.data.logo.size() <= 100000;
+      }
+
+      // TEAM TRADING CARD SETS (2026-11-19): an organizer - the coach or any
+      // team member - gathers every family's card, then buys one set per
+      // family. A family writes only entries it owns (entries/{entryId},
+      // ownerUid - one per player, so siblings each get a card), with
+      // consent, while the set is open; the organizer locks it, after which
+      // no entry changes. Only the server marks a set ordered.
+      match /cardSets/{setId} {
+        function onTeam() {
+          return isTeamCreator()
+            || exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()));
+        }
+        function cardSet() {
+          return get(/databases/$(database)/documents/teams/$(teamId)/cardSets/$(setId)).data;
+        }
+        function validSetName(data) {
+          return data.name is string && data.name.size() >= 1 && data.name.size() <= 60;
+        }
+
+        allow get, list: if signedIn() && onTeam();
+        allow create: if signedIn() && onTeam()
+          && request.resource.data.keys().hasOnly(["organizerUid", "status", "name", "createdAt"])
+          && request.resource.data.organizerUid == uid()
+          && request.resource.data.status == "open"
+          && validSetName(request.resource.data);
+        // The organizer renames, locks or reopens - never hands the set over,
+        // never marks it ordered, never touches an ordered set.
+        allow update: if signedIn() && onTeam()
+          && resource.data.organizerUid == uid()
+          && resource.data.status in ["open", "locked"]
+          && request.resource.data.status in ["open", "locked"]
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "name", "lockedAt"])
+          && validSetName(request.resource.data);
+        allow delete: if false;
+
+        match /entries/{entryId} {
+          function artPath(side) {
+            return '^cardArt/' + teamId + '/' + setId + '/' + uid() + '/' + entryId + '-' + side + '[.](png|jpg)$';
+          }
+          function validEntry(data) {
+            return entryId.matches('^[A-Za-z0-9_-]{1,64}$')
+              && data.keys().hasOnly([
+                   "ownerUid", "playerName", "jerseyNumber", "templateId",
+                   "frontPath", "backPath", "consent", "consentedAt", "updatedAt"])
+              && data.ownerUid == uid()
+              && data.consent == true
+              && data.consentedAt is timestamp
+              && data.playerName is string
+              && data.playerName.size() >= 1
+              && data.playerName.size() <= 60
+              && data.frontPath is string
+              && data.frontPath.matches(artPath('front'))
+              && data.backPath is string
+              && data.backPath.matches(artPath('back'));
+          }
+
+          allow get, list: if signedIn() && onTeam();
+          allow create: if signedIn() && onTeam()
+            && cardSet().status == "open"
+            && validEntry(request.resource.data);
+          allow update: if signedIn() && onTeam()
+            && cardSet().status == "open"
+            && resource.data.ownerUid == uid()
+            && validEntry(request.resource.data);
+          allow delete: if signedIn() && onTeam()
+            && cardSet().status == "open"
+            && (resource.data.ownerUid == uid() || cardSet().organizerUid == uid());
+        }
+      }
+
       // The partner's claim to a roster of the room's game - the opponent
       // (read + add/edit) or the game's own team (read only): the live
       // room they're in. Re-checked on every use (isOpponentPartnerOf), so it lapses

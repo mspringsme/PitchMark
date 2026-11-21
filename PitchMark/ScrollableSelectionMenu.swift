@@ -61,7 +61,7 @@ struct ScrollableSelectionMenuButton<Item: Identifiable, Label: View>: View {
         } label: {
             label()
         }
-        .sheet(isPresented: $isPresented) {
+        .appSheet(isPresented: $isPresented, chrome: .handle) {
             ScrollableSelectionSheet(
                 title: title,
                 items: items,

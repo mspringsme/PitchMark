@@ -135,14 +135,14 @@ struct MomentFolderDetailView: View {
             }
         }
         .onAppear(perform: refreshBuckets)
-        .sheet(isPresented: $showHighlightReelEditor, onDismiss: {
+        .appSheet(isPresented: $showHighlightReelEditor, onDismiss: {
             isSelectingForReel = false
             selectedMomentIdsForReel = []
-        }) {
+        }, chrome: .handle) {
             HighlightReelEditorView(initialMoments: momentsSelectedForReel, onCreated: onMomentsNeedRefresh)
                 .environmentObject(authManager)
         }
-        .sheet(isPresented: $showCreateBucket) {
+        .appSheet(isPresented: $showCreateBucket, chrome: .handle) {
             MomentNamePromptSheet(title: "New Bucket") { name in
                 guard let folderId = folder.id else { return }
                 authManager.createMomentBucket(folderId: folderId, name: name) { result in
@@ -155,7 +155,7 @@ struct MomentFolderDetailView: View {
                 }
             }
         }
-        .sheet(item: $bucketPendingRename) { bucket in
+        .appSheet(item: $bucketPendingRename, chrome: .handle) { bucket in
             MomentNamePromptSheet(title: "Rename Bucket", initialName: bucket.name) { name in
                 guard let folderId = folder.id, let bucketId = bucket.id else { return }
                 authManager.renameMomentBucket(folderId: folderId, bucketId: bucketId, name: name) { error in

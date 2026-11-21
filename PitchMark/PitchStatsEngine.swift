@@ -85,7 +85,7 @@ enum PitchStatsCalculator {
         let locationAnalyticsEligibleEvents = events.filter { $0.supportsLocationAnalytics }
         let hitSpotPitches = locationAnalyticsEligibleEvents.filter { isLocationMatch($0) }.count
 
-        let pitchBreakdown = Dictionary(grouping: events, by: { $0.pitch.isEmpty ? "-" : $0.pitch })
+        let pitchBreakdown = Dictionary(grouping: events.filter { $0.pitch != PitchEvent.unknownPitch }, by: { $0.pitch.isEmpty ? "-" : $0.pitch })
             .map { (name: $0.key, count: $0.value.count) }
             .sorted { lhs, rhs in
                 if lhs.count == rhs.count { return lhs.name < rhs.name }
@@ -137,7 +137,7 @@ enum HeatmapSelection {
     }
 
     private static func eligible(_ events: [PitchEvent]) -> [PitchEvent] {
-        events.filter { $0.supportsLocationAnalytics && !pitchName($0).isEmpty }
+        events.filter { $0.supportsLocationAnalytics && $0.hasKnownPitchType }
     }
 
     static func pitchTypes(_ events: [PitchEvent]) -> [String] {

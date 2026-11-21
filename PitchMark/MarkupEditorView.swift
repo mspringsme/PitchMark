@@ -154,7 +154,7 @@ struct MarkupEditorView: View {
             }
         }
         .onAppear(perform: setUpPlayer)
-        .sheet(isPresented: $showTextEntrySheet) {
+        .appSheet(isPresented: $showTextEntrySheet, chrome: .handle) {
             MomentNamePromptSheet(
                 title: textMarkupPendingEditID == nil ? "Add Text" : "Edit Text",
                 initialName: textMarkupPendingEditID.flatMap { id in markups.first(where: { $0.id == id })?.text } ?? ""

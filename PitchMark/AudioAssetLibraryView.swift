@@ -78,7 +78,7 @@ struct AudioAssetLibraryView: View {
         }
         .onAppear { refreshAssets() }
         .onDisappear { previewPlayer?.stop() }
-        .sheet(isPresented: $showRecorder) {
+        .appSheet(isPresented: $showRecorder) {
             AudioRecorderView(
                 onSave: {
                     showRecorder = false
@@ -88,7 +88,7 @@ struct AudioAssetLibraryView: View {
             )
             .environmentObject(authManager)
         }
-        .sheet(isPresented: $showMixCreator) {
+        .appSheet(isPresented: $showMixCreator, chrome: .handle) {
             AudioMixCreatorView(onSaved: { refreshAssets() })
                 .environmentObject(authManager)
         }

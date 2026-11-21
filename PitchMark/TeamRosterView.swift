@@ -141,6 +141,10 @@ struct TeamRosterView: View {
                     .accessibilityIdentifier("team.battingStats")
                 }
 
+                TeamSponsorSection(team: selection.team, isTeamOwner: isTeamOwner)
+
+                TeamTradingCardsSection(team: selection.team, players: activePlayers)
+
                 Section("Roster") {
                     if activePlayers.isEmpty {
                         Text(isTeamOwner ? "No players yet - add your first one below." : "No players on this roster yet.")
@@ -318,18 +322,18 @@ struct TeamRosterView: View {
             primaryAction: { leaveTeam() },
             secondaryTitle: "Cancel"
         )
-        .sheet(isPresented: $isRenamingTeam) {
+        .appSheet(isPresented: $isRenamingTeam) {
             renameTeamSheet
         }
-        .sheet(item: $editingPlayer) { player in
+        .appSheet(item: $editingPlayer) { player in
             editPlayerSheet(player)
         }
-        .sheet(isPresented: $showFieldingStats) {
+        .appSheet(isPresented: $showFieldingStats, chrome: .handle) {
             TeamFieldingStatsView(team: selection.team, players: players, games: myGames)
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
         }
-        .sheet(isPresented: $showBattingStats) {
+        .appSheet(isPresented: $showBattingStats, chrome: .handle) {
             TeamBattingStatsView(team: selection.team, players: players, games: myGames)
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
@@ -341,7 +345,7 @@ struct TeamRosterView: View {
     /// view that already has one up.
     private func statsSheets<Content: View>(_ content: Content) -> some View {
         content
-        .sheet(item: $statsPitcher) { pitcher in
+        .appSheet(item: $statsPitcher, chrome: .handle) { pitcher in
             PitcherStatsSheetView(
                 pitcher: pitcher,
                 combinedPitcherIds: statsPitcherIds,
@@ -351,7 +355,7 @@ struct TeamRosterView: View {
             .environmentObject(authManager)
             .fixedAppDynamicType()
         }
-        .sheet(item: $statsHitter) { hitter in
+        .appSheet(item: $statsHitter, chrome: .handle) { hitter in
             HitterStatsView(
                 hitter: hitter,
                 combinedHitterIds: statsHitterIds,

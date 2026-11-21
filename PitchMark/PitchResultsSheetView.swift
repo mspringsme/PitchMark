@@ -2021,28 +2021,17 @@ struct PitchResultSheetView: View {
 
     /// Every pitch resolves to exactly one primary outcome; Save needs one.
     private var canSave: Bool {
-        (
-            // Every pitch resolves to exactly one of these primary
-            // outcomes, so require one before the result can be saved.
-            // "Out" and "Safe" (1B/2B/3B/HR) each cover a ball in play
-            // that fielders converted into a full result on their own,
-            // not a supplementary tag. Other supplementary tags (K,
-            // Walk, Wild Pitch, Passed Ball, Error, batted-ball
-            // location, descriptors) refine a result but can no longer
-            // stand in as the whole result.
-            isStrikeSwinging ||
-            isStrikeLooking ||
-            isFoulSelected ||
-            isBall ||
-            isHitTagSelected ||
-            selectedOutcome == "Out" ||
-            (
-                (selectedOutcome.map { ["1B", "2B", "3B", "HR"].contains($0) } ?? false)
-                // A batter placed on the diamond must finish the
-                // "how" question (e.g. 1B to 2nd needs Error/Throw).
-                && (batterReachedBase == nil || currentBatterPlay != nil)
-            )
-        ) && runnerConflict == nil
+        PitchResultSaveGate.canSave(
+            strikeSwinging: isStrikeSwinging,
+            strikeLooking: isStrikeLooking,
+            foul: isFoulSelected,
+            ball: isBall,
+            hitTag: isHitTagSelected,
+            hitBatter: isHitBatter,
+            outcome: selectedOutcome,
+            batterPlayUnfinished: batterReachedBase != nil && currentBatterPlay == nil,
+            hasRunnerConflict: runnerConflict != nil
+        )
     }
 
     var body: some View {
@@ -2251,7 +2240,7 @@ struct PitchResultSheetView: View {
             } message: {
                 Text("Select a result location on the strike zone before saving.")
             }
-            .sheet(item: $savedPlayReviewDraft) { draft in
+            .appSheet(item: $savedPlayReviewDraft, chrome: .none) { draft in
                 SavedPlayReviewSheetView(
                     title: draft.title,
                     summaryLines: draft.summaryLines,
@@ -2267,7 +2256,7 @@ struct PitchResultSheetView: View {
                 .interactiveDismissDisabled(true)
                 .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showMissingBatterPrompt) {
+            .appSheet(isPresented: $showMissingBatterPrompt) {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("No batter selected")
                         .font(.headline)
@@ -2780,5 +2769,35 @@ private struct FieldOverlayView: View {
             .contentShape(Rectangle())
             .clipped()
         }
+    }
+}
+
+
+/// When the result sheet's Save is allowed - a plain rule so it can be
+/// tested. Every pitch resolves to exactly one primary outcome: a strike
+/// (swinging / looking / foul), a ball, a hit, a hit batter, an Out, or a
+/// safe result (1B/2B/3B/HR) - a batter placed on the diamond must finish
+/// the "how" question first. Supplementary tags (K, Walk, WP, PB, Error,
+/// batted-ball location, descriptors) refine a result but can't stand in as
+/// the whole result. Hit by pitch saves on its own (2026-11-20; it couldn't
+/// before - a known open item - and Track Game, which now uses this sheet,
+/// had to be able to record one).
+enum PitchResultSaveGate {
+    static func canSave(
+        strikeSwinging: Bool,
+        strikeLooking: Bool,
+        foul: Bool,
+        ball: Bool,
+        hitTag: Bool,
+        hitBatter: Bool,
+        outcome: String?,
+        batterPlayUnfinished: Bool,
+        hasRunnerConflict: Bool
+    ) -> Bool {
+        let safe = outcome.map { ["1B", "2B", "3B", "HR"].contains($0) } ?? false
+        let primary = strikeSwinging || strikeLooking || foul || ball || hitTag || hitBatter
+            || outcome == "Out"
+            || (safe && !batterPlayUnfinished)
+        return primary && !hasRunnerConflict
     }
 }

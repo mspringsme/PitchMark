@@ -164,7 +164,7 @@ struct HighlightReelEditorView: View {
                 }
             }
         }
-        .sheet(item: $momentPendingEdit, onDismiss: refreshOrderedMoments) { moment in
+        .appSheet(item: $momentPendingEdit, onDismiss: refreshOrderedMoments, chrome: .handle) { moment in
             MomentDetailView(moment: moment, allMoments: orderedMoments)
                 .environmentObject(authManager)
         }

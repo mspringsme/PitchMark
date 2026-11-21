@@ -46,7 +46,7 @@ struct LineupPlayerSheets: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(item: $editTarget) { target in
+            .appSheet(item: $editTarget, chrome: .handle) { target in
                 PlayerDetailsSheet(
                     player: target.player,
                     teamId: target.teamId,
@@ -63,7 +63,7 @@ struct LineupPlayerSheets: ViewModifier {
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
-            .sheet(item: $statsTarget) { target in
+            .appSheet(item: $statsTarget, chrome: .handle) { target in
                 // HitterStatsView only reads the id (to load events) and the
                 // name (for its header), so no fetch is needed to build one.
                 HitterStatsView(

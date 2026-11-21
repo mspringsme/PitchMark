@@ -449,7 +449,7 @@ struct TourneyMeetSpotEditor: View {
                 }
             }
             .task { await loadBase() }
-            .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
+            .appSheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } }), chrome: .none) {
                 ShareSheet(items: shareItems ?? [])
             }
         }
@@ -749,7 +749,7 @@ struct TourneyMeetSpotViewer: View {
             .task {
                 do { base = try await TourneySnapshotter.image(for: spot) } catch { loadError = true }
             }
-            .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
+            .appSheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } }), chrome: .none) {
                 ShareSheet(items: shareItems ?? [])
             }
         }

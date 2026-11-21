@@ -846,7 +846,7 @@ struct PlayerPickerButton<Label: View>: View {
         } label: {
             label()
         }
-        .sheet(isPresented: $isPresented) {
+        .appSheet(isPresented: $isPresented, chrome: .handle) {
             PlayerPickerSheet(
                 title: title,
                 rows: rows,

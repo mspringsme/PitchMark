@@ -195,7 +195,7 @@ struct TourneysView: View {
         .task(id: authManager.user?.uid) {
             store.start(uid: authManager.user?.uid)
         }
-        .sheet(isPresented: $showAddShared) {
+        .appSheet(isPresented: $showAddShared, chrome: .handle) {
             AddSharedTourneySheet(store: store) { shareId in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { route = .shared(shareId) }
             }
@@ -544,12 +544,12 @@ struct TourneyDetailView: View {
             scheduleSave()
         }
         .onDisappear { flushSave() }
-        .sheet(item: $placeSearch) { target in
+        .appSheet(item: $placeSearch, chrome: .handle) { target in
             TourneyPlaceSearchSheet(initialQuery: initialQuery(for: target)) { place in
                 apply(place, to: target)
             }
         }
-        .sheet(item: $areaPickerFor) { target in
+        .appSheet(item: $areaPickerFor, chrome: .handle) { target in
             TourneyMeetAreaPicker(start: target.existing?.meetPlace ?? draft?.venue ?? TourneyPlace()) { region in
                 var spot = target.existing ?? TourneyMeetSpot(
                     title: (draft?.meetSpots.isEmpty ?? true) ? "Day 1 warmups" : "",
@@ -563,7 +563,7 @@ struct TourneyDetailView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { editingSpot = spot }
             }
         }
-        .sheet(item: $editingSpot) { spot in
+        .appSheet(item: $editingSpot, chrome: .handle) { spot in
             TourneyMeetSpotEditor(spot: spot, onChangeArea: {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                     let saved = draft?.meetSpots.first { $0.id == spot.id } ?? spot
@@ -578,7 +578,7 @@ struct TourneyDetailView: View {
                 }
             }
         }
-        .sheet(item: $editingGame) { game in
+        .appSheet(item: $editingGame, chrome: .handle) { game in
             TourneyGameEditorSheet(game: game, isNew: !(draft?.games.contains { $0.id == game.id } ?? false)) { saved in
                 guard draft != nil else { return }
                 if let i = draft!.games.firstIndex(where: { $0.id == saved.id }) {
@@ -590,10 +590,10 @@ struct TourneyDetailView: View {
                 draft?.games.removeAll { $0.id == id }
             }
         }
-        .sheet(isPresented: $showTextShare) {
+        .appSheet(isPresented: $showTextShare, chrome: .handle) {
             if let draft { TourneyShareView(tourney: draft) }
         }
-        .sheet(isPresented: $showPreview) {
+        .appSheet(isPresented: $showPreview, chrome: .handle) {
             if let draft {
                 NavigationStack {
                     TourneyReadView(tourney: draft)
@@ -606,7 +606,7 @@ struct TourneyDetailView: View {
                 .tint(.primary)
             }
         }
-        .sheet(isPresented: Binding(get: { appShareItems != nil }, set: { if !$0 { appShareItems = nil } })) {
+        .appSheet(isPresented: Binding(get: { appShareItems != nil }, set: { if !$0 { appShareItems = nil } }), chrome: .none) {
             ShareSheet(items: appShareItems ?? [])
         }
         .appConfirmationDialog(
@@ -1602,10 +1602,10 @@ struct TourneyReadView: View {
                 Section("Notes") { Text(t.notes).font(.subheadline) }
             }
         }
-        .sheet(item: $viewingSpot) { spot in
+        .appSheet(item: $viewingSpot, chrome: .handle) { spot in
             TourneyMeetSpotViewer(spot: spot)
         }
-        .sheet(item: $viewingGame) { game in
+        .appSheet(item: $viewingGame, chrome: .handle) { game in
             TourneyGameCardSheet(game: game, venue: t.venue, meetSpots: t.meetSpots)
         }
     }
@@ -1958,7 +1958,7 @@ struct TourneyShareView: View {
                     .disabled(preparing)
                 }
             }
-            .sheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } })) {
+            .appSheet(isPresented: Binding(get: { shareItems != nil }, set: { if !$0 { shareItems = nil } }), chrome: .none) {
                 ShareSheet(items: shareItems ?? [])
             }
         }
@@ -2052,7 +2052,7 @@ struct TourneyUITestHarness: View {
             }
             .padding(.top)
         }
-        .sheet(isPresented: $showTourneys) {
+        .appSheet(isPresented: $showTourneys, chrome: .handle) {
             let sample = Self.sample
             let args = ProcessInfo.processInfo.arguments
             if args.contains("-UITestTourneysSpot") {

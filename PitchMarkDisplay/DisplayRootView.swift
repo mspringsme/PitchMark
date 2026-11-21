@@ -62,7 +62,7 @@ struct DisplayRootView: View {
             .easeInOut(duration: 0.2),
             value: authManager.accountDeletionAcknowledgementID
         )
-        .sheet(isPresented: $showAccount) {
+        .appSheet(isPresented: $showAccount, chrome: .handle) {
             DisplayAccountSheet()
                 .environmentObject(authManager)
                 .dynamicTypeSize(.medium)
@@ -151,7 +151,7 @@ private struct DisplayAccountSheet: View {
                 }
             }
         }
-        .sheet(isPresented: $showDeleteAccount) {
+        .appSheet(isPresented: $showDeleteAccount, chrome: .none) {
             NavigationStack {
                 ZStack {
                     Form {

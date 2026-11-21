@@ -507,7 +507,7 @@ struct SignGridCallingCardSheet: View {
                 alternateTitle: SignGridCallingCardPrint.Format.pocket.title,
                 alternateAction: { share(.pocket) }
             )
-            .sheet(item: $shareURL) { share in
+            .appSheet(item: $shareURL, chrome: .none) { share in
                 ShareSheet(items: [share.url])
                     .fixedAppDynamicType()
             }

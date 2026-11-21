@@ -218,7 +218,7 @@ struct MomentAudioEditorView: View {
                     .onTapGesture { self.exportErrorMessage = nil }
             }
         }
-        .sheet(isPresented: $showAssetPicker) {
+        .appSheet(isPresented: $showAssetPicker, chrome: .handle) {
             AudioAssetLibraryView(onPick: { asset in
                 addOverlay(for: asset)
             })

@@ -142,6 +142,11 @@ final class TrackerUIState: ObservableObject {
     @Published var isCalledPitchViewVisible: Bool = false
     @Published var shouldBlurBackground: Bool = false
     @Published var isGame: Bool = false
+    /// The practice session open in the tracker, if any (Practice.swift).
+    @Published var practiceSession: PracticeSession? = nil
+    @Published var practicePitchCount: Int = 0
+    /// The session just ended - its review opens.
+    @Published var practiceReview: PracticeSession? = nil
     @Published var selectedOutcome: String? = nil
     @Published var selectedDescriptor: String? = nil
     @Published var isError: Bool = false

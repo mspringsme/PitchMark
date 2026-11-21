@@ -20,6 +20,8 @@ enum MomentQuickAction {
     case duplicateOriginal
     case move
     case delete
+    /// The ♥ on a tile.
+    case toggleFavorite
 }
 
 private struct MomentQuickActionKey: EnvironmentKey {

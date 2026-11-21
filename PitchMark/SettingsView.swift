@@ -45,7 +45,7 @@ private struct SettingsGameSummarySheetView: View {
     private var outcomeBreakdown: [(name: String, count: Int)] { stats.outcomeBreakdown }
 
     private var heatmapsByPitch: [(pitch: String, events: [PitchEvent])] {
-        Dictionary(grouping: events.filter(\.supportsLocationAnalytics), by: { $0.pitch.isEmpty ? "-" : $0.pitch })
+        Dictionary(grouping: events.filter { $0.supportsLocationAnalytics && $0.hasKnownPitchType }, by: { $0.pitch.isEmpty ? "-" : $0.pitch })
             .map { key, value in
                 (pitch: key, events: value.sorted { $0.timestamp < $1.timestamp })
             }
@@ -458,7 +458,7 @@ private struct SettingsGameSummarySheetView: View {
                     .disabled(totalPitches == 0)
                 }
             }
-            .sheet(isPresented: $showShareSheet) {
+            .appSheet(isPresented: $showShareSheet, chrome: .none) {
                 ShareSheet(items: [shareText])
                     .fixedAppDynamicType()
             }
@@ -591,6 +591,8 @@ struct SettingsView: View {
     // inside a tab - the presentation nesting behind several rounds of
     // "tapped the new game and nothing happened" bugs.
     @State private var showInlineNewGame = false
+    @State private var showPracticeSetup = false
+    @State private var pendingPracticeDelete: PracticeSession? = nil
     @State private var inlineNewGameName: String = ""
     @State private var inlineNewGameDate: Date = Date()
     @State private var inlineNewGameTrackingMode: TrackingMode = .coach
@@ -928,6 +930,18 @@ struct SettingsView: View {
     private func presentCameraFromJoin() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             showQRScanner = true
+        }
+    }
+
+    /// Opens a practice session in the tracker - the same hop as a game.
+    private func launchPractice(_ session: PracticeSession) {
+        onSwitchToArea?(.games)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            NotificationCenter.default.post(
+                name: .gameOrSessionChosen,
+                object: nil,
+                userInfo: ["type": "practice", "session": session]
+            )
         }
     }
 
@@ -1446,6 +1460,7 @@ struct SettingsView: View {
                         .font(trailingFont)
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("home.\(title.lowercased()).add")
                 .padding(.trailing, 10)
             }
 
@@ -1469,6 +1484,7 @@ struct SettingsView: View {
                         .font(trailingFont)
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("home.\(title.lowercased()).add")
             }
         }
         .padding(.horizontal)
@@ -2284,13 +2300,13 @@ struct SettingsView: View {
                 accessory: AnyView(TourneyInfoButton { showTourneys = true }),
                 trailingAction: { toggleInlineNewGame() }
             )
-            .sheet(isPresented: $showTourneys, onDismiss: {
+            .appSheet(isPresented: $showTourneys, onDismiss: {
                 guard let game = pendingTourneyGame else { return }
                 pendingTourneyGame = nil
                 let seed = game.newGameSeed(myTeamIds: Set(activeTeamEntries.compactMap { $0.team.id }))
                 openInlineNewGame(opponentName: seed.opponentName, date: seed.date,
                                   ourTeamId: seed.ourTeamId, opponentTeamId: seed.opponentTeamId)
-            }) {
+            }, chrome: .handle) {
                 AnyView(
                     TourneysView(onStartGame: { game in
                         pendingTourneyGame = game
@@ -2303,10 +2319,10 @@ struct SettingsView: View {
                     .fixedAppDynamicType()
                 )
             }
-            .sheet(isPresented: $showLineupScan, onDismiss: { lineupScan = nil }) {
+            .appSheet(isPresented: $showLineupScan, onDismiss: { lineupScan = nil }) {
                 lineupScanSheetContent
             }
-            .sheet(isPresented: $showGamesCalendar) {
+            .appSheet(isPresented: $showGamesCalendar, chrome: .handle) {
                 AnyView(
                     GamesCalendarView(
                         games: games,
@@ -2358,7 +2374,11 @@ struct SettingsView: View {
                             onCancel: { closeInlineNewGame() },
                             onSave: { createInlineGame() },
                             lineupSummary: pendingNewGameLineup.flatMap { $0.teamId == inlineNewGameOpponentTeamId ? $0.summary : nil },
-                            onScanLineup: { beginNewGameLineupScan() }
+                            onScanLineup: { beginNewGameLineupScan() },
+                            onStartPractice: {
+                                closeInlineNewGame()
+                                showPracticeSetup = true
+                            }
                         )
                     }
 
@@ -2388,6 +2408,17 @@ struct SettingsView: View {
                             launchGame(item.game)
                         }
                     }
+
+                    HomePracticeList(onDelete: { pendingPracticeDelete = $0 })
+                        .modifier(PracticeSetupPresenter(
+                            isPresented: $showPracticeSetup,
+                            rows: PlayerDirectory.rows(rosterEntries: rosterEntries, pitchers: sortedPitchers, players: myPlayers),
+                            teams: activeTeamEntries.map { $0.team },
+                            archivedPitcherIds: hiddenPitcherIds,
+                            templates: templates
+                        ) { session in
+                            launchPractice(session)
+                        })
 
                     if joinedLiveSessions.isEmpty, activeGames.isEmpty, !showInlineNewGame {
                         Text("No games yet. Tap + to create one.")
@@ -3357,6 +3388,7 @@ struct SettingsView: View {
                 .padding(.horizontal)
                 .contentShape(Rectangle())
             }
+            .accessibilityIdentifier("account.more")
 
         }
         .padding()
@@ -3602,7 +3634,7 @@ struct SettingsView: View {
                 gameOpen: activeGameId != nil
             )
         }))
-        .sheet(item: $editorTemplate) { template in
+        .appSheet(item: $editorTemplate, chrome: .handle) { template in
             TemplateEditorView(
                 template: template,
                 allPitches: allPitches,
@@ -3626,7 +3658,7 @@ struct SettingsView: View {
                 purchasedTemplateEditTarget = nil
             }
         )
-        .sheet(isPresented: $showShareTemplateSheet) {
+        .appSheet(isPresented: $showShareTemplateSheet) {
             VStack(spacing: 16) {
                 Text("Share Template")
                     .font(.headline)
@@ -3799,6 +3831,9 @@ struct SettingsView: View {
                             playersOverviewSection
                         }
 
+                        // Fills the space under the collapsed sections.
+                        HomeSlideshowView()
+
                         Color.clear.frame(height: 8)
                     }
                     .padding(.top, 4)
@@ -3818,11 +3853,11 @@ struct SettingsView: View {
                     lineupScanBusyOverlay
                 }
             }
-            .sheet(isPresented: $showInviteJoinSheet) {
+            .appSheet(isPresented: $showInviteJoinSheet) {
                 inviteJoinSheetView
                     .fixedAppDynamicType()
             }
-            .sheet(item: $selectedTeamEntry, onDismiss: { refreshMyTeams() }) { entry in
+            .appSheet(item: $selectedTeamEntry, onDismiss: { refreshMyTeams() }, chrome: .handle) { entry in
                 TeamRosterView(
                     selection: entry,
                     isInOpenGame: openGameTeamIds.contains(entry.team.id ?? ""),
@@ -3858,6 +3893,7 @@ struct SettingsView: View {
                 Text("This device doesn’t have a camera available.")
             }
             .homeLiveLeaveDialog(pending: $pendingLiveLeave) { leave in confirmLiveLeave(leave) }
+            .practiceDeleteDialog(pending: $pendingPracticeDelete) { PracticeStore.shared.delete($0) }
             .archiveGameDialog(game: $pendingArchiveGame, title: matchupTitle) { game, keepInStats in
                 guard let id = game.id, !id.isEmpty else { return }
                 authManager.archiveGame(gameId: id, keepInStats: keepInStats)
@@ -3901,7 +3937,7 @@ struct SettingsView: View {
                 },
                 secondaryTitle: "Cancel"
             )
-            .sheet(isPresented: $showAccountActionsSheet, onDismiss: {
+            .appSheet(isPresented: $showAccountActionsSheet, onDismiss: {
                 showSignOutConfirmation = false
             }) {
                 accountActionsSheetView
@@ -3911,7 +3947,7 @@ struct SettingsView: View {
                 LearnPitchMarkView()
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showSoundCreditsSheet) {
+            .appSheet(isPresented: $showSoundCreditsSheet, chrome: .handle) {
                 NavigationView {
                     SoundCreditsView()
                         .toolbar {
@@ -3922,19 +3958,19 @@ struct SettingsView: View {
                 }
                 .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showChangeEmailSheet) {
+            .appSheet(isPresented: $showChangeEmailSheet) {
                 changeEmailSheetView
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showMoreAccountActionsSheet) {
+            .appSheet(isPresented: $showMoreAccountActionsSheet) {
                 moreAccountActionsSheetView
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showDeleteAccountSheet) {
+            .appSheet(isPresented: $showDeleteAccountSheet) {
                 deleteAccountSheetView
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showProPaywall) {
+            .appSheet(isPresented: $showProPaywall, chrome: .handle) {
                 ProPaywallView(
                     title: "PitchMark Pro",
                     message: "Invite links and participant connections require PitchMark Pro.",
@@ -4013,11 +4049,11 @@ struct SettingsView: View {
                     pitchers = loaded
                 }
             }
-            .sheet(isPresented: $showPitcherShareSheet) {
+            .appSheet(isPresented: $showPitcherShareSheet) {
                 pitcherShareSheetView
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showPitcherShareActivity) {
+            .appSheet(isPresented: $showPitcherShareActivity, chrome: .none) {
                 ShareSheet(items: pitcherShareSheetItems)
                     .fixedAppDynamicType()
             }
@@ -4074,14 +4110,14 @@ struct SettingsView: View {
             // (2026-11-10). The X that used to sit there (go to the Game
             // tab, gated on "Select Game First") is gone too - the bottom
             // tab bar controls flow between Home/Game/Moments.
-            .sheet(isPresented: $showAddPitcher) {
+            .appSheet(isPresented: $showAddPitcher) {
                 addPitcherSheetView
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showHomeAddPlayer) {
+            .appSheet(isPresented: $showHomeAddPlayer) {
                 homeAddPlayerSheet
             }
-            .sheet(item: $homePlayerEditTarget) { target in
+            .appSheet(item: $homePlayerEditTarget, chrome: .handle) { target in
                 HomePlayerEditSheet(
                     target: target,
                     onClose: { homePlayerEditTarget = nil },
@@ -4090,7 +4126,7 @@ struct SettingsView: View {
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
-            .sheet(item: $homeNoTeamEditTarget) { target in
+            .appSheet(item: $homeNoTeamEditTarget, chrome: .handle) { target in
                 HomeNoTeamPlayerEditSheet(
                     target: target,
                     teams: teamsForNewPlayer,
@@ -4100,14 +4136,14 @@ struct SettingsView: View {
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showPitcherPhotoPicker) {
+            .appSheet(isPresented: $showPitcherPhotoPicker, chrome: .none) {
                 PitcherImagePicker { image in
                     showPitcherPhotoPicker = false
                     handlePickedPitcherPortrait(image)
                 }
                 .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showPitcherPortraitEditor) {
+            .appSheet(isPresented: $showPitcherPortraitEditor) {
                 if let sourceImage = pitcherPortraitSourceImage, let target = pitcherPortraitTarget {
                     PitcherPortraitCropEditor(
                         sourceImage: sourceImage,
@@ -4129,7 +4165,7 @@ struct SettingsView: View {
             } message: {
                 Text(pitcherImageErrorMessage)
             }
-            .sheet(item: $statsPitcher) { pitcher in
+            .appSheet(item: $statsPitcher, chrome: .handle) { pitcher in
                 PitcherStatsSheetView(
                     pitcher: pitcher,
                     combinedPitcherIds: statsPitcherIds,
@@ -4139,7 +4175,7 @@ struct SettingsView: View {
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
-            .sheet(item: $statsHitter) { hitter in
+            .appSheet(item: $statsHitter, chrome: .handle) { hitter in
                 HitterStatsView(
                     hitter: hitter,
                     combinedHitterIds: statsHitterIds,
@@ -4149,7 +4185,7 @@ struct SettingsView: View {
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showLinkProfiles) {
+            .appSheet(isPresented: $showLinkProfiles, chrome: .handle) {
                 LinkProfilesView(
                     onChanged: {
                         refreshMyTeams()
@@ -4161,7 +4197,7 @@ struct SettingsView: View {
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showPlayersFilterSheet) {
+            .appSheet(isPresented: $showPlayersFilterSheet) {
                 playersFilterSheetView
                     .fixedAppDynamicType()
             }
@@ -4801,7 +4837,7 @@ struct PitcherStatsSheetView: View {
             }
         }
 
-        let grouped = Dictionary(grouping: filteredEvents, by: { $0.pitch })
+        let grouped = Dictionary(grouping: filteredEvents.filter(\.hasKnownPitchType), by: { $0.pitch })
         var rows: [(String, Int, Int)] = []
         for (pitch, events) in grouped {
             let total = events.count
@@ -5285,11 +5321,11 @@ struct PitcherStatsSheetView: View {
                     Button("Close") { dismiss() }
                 }
             }
-            .sheet(item: $summaryDetail) { _ in
+            .appSheet(item: $summaryDetail) { _ in
                 summaryDetailContent
                     .fixedAppDynamicType()
             }
-            .sheet(isPresented: $showGameSummarySheet) {
+            .appSheet(isPresented: $showGameSummarySheet, chrome: .handle) {
                 if let game = selectedSingleGameForSummary {
                     SettingsGameSummarySheetView(
                         pitcherName: activePitcher.name,

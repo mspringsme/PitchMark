@@ -97,7 +97,7 @@ struct RootView: View {
                 .environmentObject(authManager)
                 .fixedAppDynamicType()
         }
-        .sheet(isPresented: $showProPaywall) {
+        .appSheet(isPresented: $showProPaywall, chrome: .handle) {
             ProPaywallView(
                 title: "PitchMark Pro",
                 message: "PitchMark Pro unlocks the main app features and gives you access to the separate Pitchmark Display companion app. You can install Display from the App Store after purchase.",
@@ -105,7 +105,7 @@ struct RootView: View {
             )
             .fixedAppDynamicType()
         }
-        .sheet(isPresented: $showDisplayOnboarding) {
+        .appSheet(isPresented: $showDisplayOnboarding, chrome: .handle) {
             DisplayOnboardingView(
                 displayAppSearchURL: displayAppSearchURL,
                 openDisplayApp: {

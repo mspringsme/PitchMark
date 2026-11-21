@@ -1,6 +1,112 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Sheets (2026-11-20)
+
+/// How a sheet is made easy to close. Every sheet in the app goes through
+/// `appSheet` (a source-reading test refuses a plain `.sheet(`):
+/// - `.closeButton` (default): a visible drag handle, a top margin, and a
+///   44 pt ✕ at the top right - for sheets with no navigation bar.
+/// - `.handle`: drag handle + top margin only - for sheets whose content
+///   has its own navigation bar (its Cancel/Close stays the button), or
+///   that manage closing themselves (the Pro paywall).
+/// - `.none`: untouched - Apple's own share sheet and pickers (they have
+///   their own Cancel), and sheets that must not be swiped away
+///   (`interactiveDismissDisabled`, e.g. the review sheet, whose Save is
+///   placed at an exact screen height - a margin would move it).
+enum AppSheetChromeStyle {
+    case closeButton
+    case handle
+    case none
+}
+
+enum AppSheetChromeMetrics {
+    /// Space above the content, under the drag handle.
+    static let topMargin: CGFloat = 14
+    /// The close button's tap area. 48, not Apple's 44 minimum: iOS draws
+    /// partial-height sheets slightly scaled down (measured 0.96 on an
+    /// iPhone 17), which took a 44 pt button to 42 on screen.
+    static let closeTapSize: CGFloat = 48
+}
+
+struct AppSheetChrome: ViewModifier {
+    let style: AppSheetChromeStyle
+    @Environment(\.dismiss) private var dismiss
+
+    func body(content: Content) -> some View {
+        switch style {
+        case .none:
+            content
+        case .handle:
+            content
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    Color.clear.frame(height: AppSheetChromeMetrics.topMargin)
+                }
+                .presentationDragIndicator(.visible)
+        case .closeButton:
+            // The ✕ floats in the top-right corner instead of taking a row:
+            // many sheets are a fixed height (fraction detents), and a row
+            // pushed their content up past the top edge.
+            content
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    Color.clear.frame(height: AppSheetChromeMetrics.topMargin)
+                }
+                .overlay(alignment: .topTrailing) {
+                    AppSheetCloseButton { dismiss() }
+                        .padding(.top, 2)
+                        .padding(.trailing, 6)
+                }
+                .presentationDragIndicator(.visible)
+        }
+    }
+}
+
+/// The ✕ every bare sheet gets: a 30 pt circle in a 48 pt tap area.
+struct AppSheetCloseButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color(.tertiarySystemFill)))
+                .frame(width: AppSheetChromeMetrics.closeTapSize, height: AppSheetChromeMetrics.closeTapSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close")
+        .accessibilityIdentifier("sheet.close")
+    }
+}
+
+extension View {
+    /// `.sheet(isPresented:)` with the app's close chrome.
+    func appSheet<SheetContent: View>(
+        isPresented: Binding<Bool>,
+        onDismiss: (() -> Void)? = nil,
+        chrome: AppSheetChromeStyle = .closeButton,
+        @ViewBuilder content: @escaping () -> SheetContent
+    ) -> some View {
+        sheet(isPresented: isPresented, onDismiss: onDismiss) {
+            content().modifier(AppSheetChrome(style: chrome))
+        }
+    }
+
+    /// `.sheet(item:)` with the app's close chrome.
+    func appSheet<Item: Identifiable, SheetContent: View>(
+        item: Binding<Item?>,
+        onDismiss: (() -> Void)? = nil,
+        chrome: AppSheetChromeStyle = .closeButton,
+        @ViewBuilder content: @escaping (Item) -> SheetContent
+    ) -> some View {
+        sheet(item: item, onDismiss: onDismiss) { item in
+            content(item).modifier(AppSheetChrome(style: chrome))
+        }
+    }
+}
+
 extension View {
     func fixedAppDynamicType() -> some View {
         dynamicTypeSize(.medium)

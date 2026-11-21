@@ -1,0 +1,11 @@
+rules_version = '2';
+// Only lets the Storage emulator start: it loads rules from inside this
+// folder. Every test replaces these with the real ../storage.rules
+// (initializeTestEnvironment), so nothing here is ever tested.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

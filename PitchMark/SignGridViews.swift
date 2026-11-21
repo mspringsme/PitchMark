@@ -141,13 +141,13 @@ struct SignGridEditorView: View {
                 }
             }
         }
-        .sheet(isPresented: $showQuickFill) {
+        .appSheet(isPresented: $showQuickFill, chrome: .handle) {
             SignGridQuickFillSheet(myCalls: myCalls) { label in
                 cellText.wrappedValue = label
                 showQuickFill = false
             }
         }
-        .sheet(isPresented: $showRandomize) {
+        .appSheet(isPresented: $showRandomize, chrome: .handle) {
             SignGridRandomizeSheet(myCalls: myCalls.calls, picks: $randomPicks,
                                    emptyCells: draft.emptyCallCells.count) { labels in
                 draft.randomFill(with: labels)
@@ -880,7 +880,7 @@ struct SignGridListView: View {
                 }
             }
         }
-        .sheet(item: $editing) { grid in
+        .appSheet(item: $editing, chrome: .none) { grid in
             SignGridEditorView(
                 grid: grid,
                 myCalls: myCalls,
@@ -893,11 +893,11 @@ struct SignGridListView: View {
             .interactiveDismissDisabled()
             .fixedAppDynamicType()
         }
-        .sheet(item: $pdf) { pdf in
+        .appSheet(item: $pdf, chrome: .none) { pdf in
             ShareSheet(items: [pdf.url])
                 .fixedAppDynamicType()
         }
-        .sheet(item: $callingCardGrid) { grid in
+        .appSheet(item: $callingCardGrid, chrome: .handle) { grid in
             SignGridCallingCardSheet(grid: grid) { callingCardGrid = nil }
                 .fixedAppDynamicType()
         }

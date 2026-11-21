@@ -1,0 +1,65 @@
+rules_version = '2';
+
+// Cloud Storage. Moments stay on the device; the only files here are print
+// orders (Season Books, trading card family packs - bookUploads/), team
+// trading card art (cardArt/) and the server's frozen copies (cardOrders/).
+// Deploying needs Storage allowed to read Firestore (cardArt rules use
+// firestore.get - the console asks once).
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // SEASON BOOK UPLOADS (2026-11-19): bookUploads/{uid}/{orderKey}/{file}.
+    // Only the family that made the book can upload, read or remove it; no
+    // one else can read or list it. The book itself is one print-ready PDF
+    // (interior.pdf, up to 300 MB - a 200-page book of full photos); any
+    // other file is a JPEG or PNG of up to 25 MB.
+    match /bookUploads/{uid}/{orderKey}/{fileName} {
+      function isOwner() {
+        return request.auth != null && request.auth.uid == uid;
+      }
+
+      allow read, delete: if isOwner();
+      allow create, update: if isOwner()
+        && orderKey.matches('^[A-Za-z0-9._-]{8,80}$')
+        && (
+          (fileName == 'interior.pdf'
+            && request.resource.contentType == 'application/pdf'
+            && request.resource.size <= 300 * 1024 * 1024)
+          || (fileName.matches('^[A-Za-z0-9._-]{1,80}[.](jpg|jpeg|png)$')
+            && request.resource.contentType.matches('image/(jpeg|png)')
+            && request.resource.size <= 25 * 1024 * 1024)
+        );
+    }
+
+    // TEAM TRADING CARD ART (2026-11-19): cardArt/{teamId}/{setId}/{uid}/
+    // {entryId}-front|back. Each family uploads only into its own folder -
+    // two sides per card, any number of cards (siblings) - JPEG or PNG, 10 MB, only while the team's set is open; the team (coach
+    // and members) can see every card in its set. Locked sets are frozen.
+    // Reads Firestore for the team and set (cross-service rules).
+    match /cardArt/{teamId}/{setId}/{uid}/{fileName} {
+      function onTeam() {
+        return request.auth != null && (
+          firestore.get(/databases/(default)/documents/teams/$(teamId)).data.createdByUid == request.auth.uid
+          || firestore.exists(/databases/(default)/documents/teams/$(teamId)/members/$(request.auth.uid)));
+      }
+      function setOpen() {
+        return firestore.get(/databases/(default)/documents/teams/$(teamId)/cardSets/$(setId)).data.status == 'open';
+      }
+
+      allow read: if onTeam();
+      allow create, update: if onTeam()
+        && request.auth.uid == uid
+        && setOpen()
+        && fileName.matches('^[A-Za-z0-9_-]{1,64}-(front|back)[.](png|jpg)$')
+        && request.resource.contentType.matches('image/(jpeg|png)')
+        && request.resource.size <= 10 * 1024 * 1024;
+      allow delete: if onTeam() && request.auth.uid == uid && setOpen();
+    }
+
+    // cardOrders/ (the art frozen for a paid team order) and everything
+    // else: server only.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

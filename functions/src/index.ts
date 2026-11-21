@@ -11,7 +11,28 @@ import {
 import Stripe from "stripe";
 import { appleRootCertificates } from "./appleRootCertificates";
 import { printSizeFromMetadata, resolveGridKeyPrintSize } from "./gridKeyPrintSize";
-import { allowedItemKinds, retailCatalog } from "./retailCatalog";
+import { allowedItemKinds, digitalProductIds, requiredItemKindByProduct, retailCatalog } from "./retailCatalog";
+import { getStorage } from "firebase-admin/storage";
+import {
+    gelatoOrderPayload,
+    planPrintSubmission,
+    resolveSeasonBookRequest,
+    seasonBookProduct,
+    type SeasonBookRequest
+} from "./seasonBook";
+import {
+    frozenArtPath,
+    isEntryArtPath,
+    planTeamSetOrder,
+    resolveFamilyPackRequest
+} from "./tradingCards";
+import {
+    planSlotActivation,
+    sponsorSlotDocument,
+    sponsorSlotProduct,
+    validateSponsorSnapshot,
+    type SponsorSnapshot
+} from "./sponsorSlot";
 
 initializeApp();
 const db = getFirestore();
@@ -720,6 +741,102 @@ export const createRetailCheckoutSession = onCall({ region: "us-central1" }, asy
         throw new HttpsError("invalid-argument", "Unknown retailProductId.");
     }
 
+    // A season book or sponsor slot is only ever ordered as itself, and no
+    // other product may borrow their item kinds.
+    const requiredItemKind = requiredItemKindByProduct[retailProductId] ?? null;
+    const claimsSpecialKind = Object.values(requiredItemKindByProduct).includes(itemKind);
+    if ((requiredItemKind && itemKind !== requiredItemKind) || (!requiredItemKind && claimsSpecialKind)) {
+        throw new HttpsError("invalid-argument", "itemKind doesn't match the product.");
+    }
+
+    let seasonBook: SeasonBookRequest | null = null;
+    if (itemKind === seasonBookProduct.itemKind) {
+        const resolved = resolveSeasonBookRequest(request.auth.uid, data.pageCount, data.uploadPath);
+        if (!resolved.ok) {
+            throw new HttpsError("invalid-argument", resolved.message);
+        }
+        const [uploaded] = await getStorage().bucket().file(resolved.value.uploadPath).exists();
+        if (!uploaded) {
+            throw new HttpsError("failed-precondition", "The book hasn't finished uploading. Try again.");
+        }
+        seasonBook = resolved.value;
+    }
+
+    let sponsor: SponsorSnapshot | null = null;
+    if (itemKind === sponsorSlotProduct.itemKind) {
+        const validated = validateSponsorSnapshot(templateSnapshotJson);
+        if (!validated.ok) {
+            throw new HttpsError("invalid-argument", validated.message);
+        }
+        const teamSnap = await db.collection("teams").doc(validated.value.teamId).get();
+        if (!teamSnap.exists || teamSnap.get("createdByUid") !== request.auth.uid) {
+            throw new HttpsError("permission-denied", "Only the team's coach can buy its sponsor slot.");
+        }
+        sponsor = validated.value;
+    }
+    let familyPack: { quantity: number; frontPath: string; backPath: string; priceCents: number } | null = null;
+    if (itemKind === "cardFamilyPack") {
+        const resolved = resolveFamilyPackRequest(request.auth.uid, retailProductId, data.frontPath, data.backPath);
+        if (!resolved.ok) {
+            throw new HttpsError("invalid-argument", resolved.message);
+        }
+        const bucket = getStorage().bucket();
+        const [[front], [back]] = await Promise.all([
+            bucket.file(resolved.value.frontPath).exists(),
+            bucket.file(resolved.value.backPath).exists()
+        ]);
+        if (!front || !back) {
+            throw new HttpsError("failed-precondition", "The card hasn't finished uploading. Try again.");
+        }
+        familyPack = resolved.value;
+    }
+
+    let teamSet: { teamId: string; setId: string; setCount: number; players: string[]; priceCents: number; folder: string } | null = null;
+    if (itemKind === "cardTeamSet") {
+        if (!idempotencyKey) {
+            throw new HttpsError("invalid-argument", "Update PitchMark to order a team set.");
+        }
+        const teamIdRaw = typeof data.teamId === "string" ? data.teamId : "";
+        const setIdRaw = typeof data.setId === "string" ? data.setId : "";
+        const setRef = teamIdRaw && setIdRaw
+            ? db.collection("teams").doc(teamIdRaw).collection("cardSets").doc(setIdRaw)
+            : null;
+        const [setSnap, entriesSnap] = setRef
+            ? await Promise.all([setRef.get(), setRef.collection("entries").get()])
+            : [null, null];
+        const entries = (entriesSnap?.docs ?? []).map((doc) => ({ ...doc.data(), id: doc.id }));
+        const planned = planTeamSetOrder({
+            uid: request.auth.uid,
+            teamId: data.teamId,
+            setId: data.setId,
+            setCount: data.setCount,
+            set: setSnap?.exists ? (setSnap.data() ?? {}) : null,
+            entries
+        });
+        if (!planned.ok) {
+            throw new HttpsError("failed-precondition", planned.message);
+        }
+        // What prints is the art as it stood when the set was locked: copy
+        // each entry's two sides into this order's own folder.
+        const bucket = getStorage().bucket();
+        const byId = new Map(entries.map((entry) => [entry.id, entry as Record<string, unknown>]));
+        await Promise.all(planned.value.players.flatMap((entryId) => {
+            const entry = byId.get(entryId) ?? {};
+            const ownerUid = typeof entry.ownerUid === "string" ? entry.ownerUid : "";
+            return (["front", "back"] as const).map(async (side) => {
+                const source = entry[`${side}Path`];
+                if (!isEntryArtPath(planned.value.teamId, planned.value.setId, ownerUid, entryId, source)) {
+                    throw new HttpsError("failed-precondition", "A card in this set is missing its art. Ask that family to submit again.");
+                }
+                await bucket.file(source).copy(bucket.file(frozenArtPath(idempotencyKey, entryId, side, source)));
+            });
+        }));
+        teamSet = { ...planned.value, folder: `cardOrders/${idempotencyKey}` };
+    }
+
+    const isDigital = digitalProductIds.has(retailProductId);
+    const unitAmountCents = seasonBook?.priceCents ?? familyPack?.priceCents ?? teamSet?.priceCents ?? catalogItem.unitAmountCents;
+
     const printSizeResolution = resolveGridKeyPrintSize(
         retailProductId,
         data.printWidthInches,
@@ -765,6 +882,23 @@ export const createRetailCheckoutSession = onCall({ region: "us-central1" }, asy
         templateName: sanitizeMetadataValue(templateName, 120),
         storeTemplateName: sanitizeMetadataValue(storeTemplateName, 120),
         checkoutRequestKey: sanitizeMetadataValue(idempotencyKey, 80),
+        ...(seasonBook ? {
+            pageCount: String(seasonBook.pageCount),
+            uploadPath: sanitizeMetadataValue(seasonBook.uploadPath, 400)
+        } : {}),
+        ...(sponsor ? { sponsorTeamId: sponsor.teamId } : {}),
+        ...(familyPack ? {
+            quantity: String(familyPack.quantity),
+            cardFrontPath: sanitizeMetadataValue(familyPack.frontPath, 400),
+            cardBackPath: sanitizeMetadataValue(familyPack.backPath, 400)
+        } : {}),
+        ...(teamSet ? {
+            cardTeamId: teamSet.teamId,
+            cardSetId: teamSet.setId,
+            setCount: String(teamSet.setCount),
+            playerCount: String(teamSet.players.length),
+            cardOrderFolder: sanitizeMetadataValue(teamSet.folder, 200)
+        } : {}),
         ...(printSize ? {
             printWidthInches: String(printSize.widthInches),
             printHeightInches: String(printSize.heightInches)
@@ -775,10 +909,10 @@ export const createRetailCheckoutSession = onCall({ region: "us-central1" }, asy
         quantity: 1,
         price_data: {
             currency: shippingCurrency,
-            unit_amount: catalogItem.unitAmountCents,
+            unit_amount: unitAmountCents,
             product_data: {
                 name: catalogItem.label,
-                description: "PitchMark physical product"
+                description: isDigital ? "PitchMark team sponsor slot" : "PitchMark physical product"
             }
         }
     } : {
@@ -802,8 +936,10 @@ export const createRetailCheckoutSession = onCall({ region: "us-central1" }, asy
             },
             allow_promotion_codes: true,
             phone_number_collection: {
-                enabled: true
+                enabled: !isDigital
             },
+            // A sponsor slot ships nothing, so it asks for no address.
+            ...(isDigital ? {} : {
             shipping_address_collection: {
                 allowed_countries: allowedShippingCountries as Stripe.Checkout.SessionCreateParams.ShippingAddressCollection.AllowedCountry[]
             },
@@ -837,6 +973,7 @@ export const createRetailCheckoutSession = onCall({ region: "us-central1" }, asy
                     }
                 }
             ]
+            })
         }, (idempotencyKey && !stripeTestMode) ? {
             idempotencyKey: `checkout_${request.auth.uid}_${idempotencyKey}_${checkoutConfigVersion}`
         } : undefined);
@@ -884,6 +1021,8 @@ export const createRetailCheckoutSession = onCall({ region: "us-central1" }, asy
                 templateSnapshotJson,
                 printWidthInches: printSize?.widthInches ?? null,
                 printHeightInches: printSize?.heightInches ?? null,
+                pageCount: seasonBook?.pageCount ?? null,
+                uploadPath: seasonBook?.uploadPath ?? null,
                 checkoutConfigVersion,
                 stripeTestMode,
                 createdAt: FieldValue.serverTimestamp()
@@ -998,6 +1137,16 @@ async function persistRetailOrder(
             storeTemplateName: metadata.storeTemplateName ?? "",
             printWidthInches: printSize?.widthInches ?? null,
             printHeightInches: printSize?.heightInches ?? null,
+            pageCount: metadata.pageCount ? Number(metadata.pageCount) : null,
+            uploadPath: metadata.uploadPath ?? "",
+            quantity: metadata.quantity ? Number(metadata.quantity) : null,
+            cardFrontPath: metadata.cardFrontPath ?? "",
+            cardBackPath: metadata.cardBackPath ?? "",
+            cardTeamId: metadata.cardTeamId ?? "",
+            cardSetId: metadata.cardSetId ?? "",
+            setCount: metadata.setCount ? Number(metadata.setCount) : null,
+            playerCount: metadata.playerCount ? Number(metadata.playerCount) : null,
+            cardOrderFolder: metadata.cardOrderFolder ?? "",
             orderedTemplateSnapshotJson: templateSnapshotJson,
             fulfillmentStatus: typeof existing.fulfillmentStatus === "string" && existing.fulfillmentStatus
                 ? existing.fulfillmentStatus
@@ -1010,6 +1159,154 @@ async function persistRetailOrder(
             stripeCreatedAtMs: session.created ? session.created * 1000 : null
         }, { merge: true });
     });
+
+    await fulfillDigitalAndPrintOrders(orderRef);
+}
+
+// After an order is saved: activate a paid sponsor slot, or send a paid
+// season book to the printer. Each decides inside a transaction on the order,
+// so Stripe's retries and its paired completed/async events can't do either
+// twice (planSlotActivation / planPrintSubmission).
+async function fulfillDigitalAndPrintOrders(orderRef: FirebaseFirestore.DocumentReference): Promise<void> {
+    const order = (await orderRef.get()).data() ?? {};
+    if (order.itemKind === sponsorSlotProduct.itemKind) {
+        await activateSponsorSlot(orderRef);
+    } else if (order.itemKind === seasonBookProduct.itemKind) {
+        await submitSeasonBook(orderRef);
+    } else if (order.itemKind === "cardFamilyPack" || order.itemKind === "cardTeamSet") {
+        await claimCardOrderForPrinting(orderRef);
+    }
+}
+
+// Trading cards have no print partner wired in yet (QPMN's API is
+// unverified): a paid order is claimed once as awaiting_manual, the same
+// print-once guard as the books, and a team set is marked ordered so its
+// families see it went in.
+async function claimCardOrderForPrinting(orderRef: FirebaseFirestore.DocumentReference): Promise<void> {
+    await db.runTransaction(async (tx) => {
+        const order = (await tx.get(orderRef)).data() ?? {};
+        if (planPrintSubmission(order) !== "submit") {
+            return;
+        }
+        let setRef: FirebaseFirestore.DocumentReference | null = null;
+        if (order.itemKind === "cardTeamSet" && typeof order.cardTeamId === "string" && typeof order.cardSetId === "string"
+            && order.cardTeamId && order.cardSetId) {
+            setRef = db.collection("teams").doc(order.cardTeamId).collection("cardSets").doc(order.cardSetId);
+            await tx.get(setRef);
+        }
+        tx.set(orderRef, {
+            printSubmission: { state: "awaiting_manual", claimedAt: FieldValue.serverTimestamp() }
+        }, { merge: true });
+        if (setRef) {
+            tx.set(setRef, { status: "ordered", orderId: orderRef.id, orderedAt: FieldValue.serverTimestamp() }, { merge: true });
+        }
+    });
+}
+
+async function activateSponsorSlot(orderRef: FirebaseFirestore.DocumentReference): Promise<void> {
+    await db.runTransaction(async (tx) => {
+        const order = (await tx.get(orderRef)).data() ?? {};
+        const validated = validateSponsorSnapshot(order.orderedTemplateSnapshotJson);
+        if (!validated.ok) {
+            logger.error("Sponsor order has no valid sponsor details", { orderId: orderRef.id, message: validated.message });
+            tx.set(orderRef, { fulfillmentStatus: "needs_attention" }, { merge: true });
+            return;
+        }
+        const slotRef = db.collection("teams").doc(validated.value.teamId).collection("sponsors").doc(orderRef.id);
+        const slotSnap = await tx.get(slotRef);
+        const plan = planSlotActivation({
+            itemKind: order.itemKind,
+            paymentStatus: order.paymentStatus,
+            fulfillmentState: order.fulfillmentState,
+            slotExists: slotSnap.exists
+        });
+        if (plan !== "activate") {
+            return;
+        }
+        tx.create(slotRef, sponsorSlotDocument(validated.value, {
+            purchasedByUid: typeof order.firebaseUid === "string" ? order.firebaseUid : "",
+            orderId: orderRef.id,
+            startsAt: new Date()
+        }));
+        tx.set(orderRef, { fulfillmentStatus: "fulfilled", sponsorSlotPath: slotRef.path }, { merge: true });
+    });
+}
+
+async function submitSeasonBook(orderRef: FirebaseFirestore.DocumentReference): Promise<void> {
+    const apiKey = optionalEnv("GELATO_API_KEY");
+    const productUid = optionalEnv("GELATO_BOOK_PRODUCT_UID");
+    const orderUrl = optionalEnv("GELATO_ORDER_URL") || "https://order.gelatoapis.com/v4/orders";
+    const configured = Boolean(apiKey && productUid);
+
+    // Claimed before any call to the printer: a second delivery sees the
+    // claim and skips. Without the partner configured the order waits for a
+    // person (awaiting_manual) instead of being lost.
+    const order = await db.runTransaction(async (tx) => {
+        const current = (await tx.get(orderRef)).data() ?? {};
+        if (planPrintSubmission(current) !== "submit") {
+            return null;
+        }
+        tx.set(orderRef, {
+            printSubmission: {
+                state: configured ? "submitting" : "awaiting_manual",
+                claimedAt: FieldValue.serverTimestamp()
+            }
+        }, { merge: true });
+        return current;
+    });
+    if (!order || !configured) {
+        return;
+    }
+
+    try {
+        const [fileUrl] = await getStorage().bucket().file(String(order.uploadPath ?? "")).getSignedUrl({
+            action: "read",
+            expires: Date.now() + 7 * 86_400_000
+        });
+        const body = gelatoOrderPayload({
+            orderId: orderRef.id,
+            productUid,
+            fileUrl,
+            pageCount: Number(order.pageCount),
+            shipping: {
+                name: String(order.shippingName ?? ""),
+                email: String(order.customerEmail ?? ""),
+                phone: String(order.customerPhone ?? ""),
+                address: (order.shippingAddress as Record<string, string | null> | null) ?? null
+            }
+        });
+        const response = await fetch(orderUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-API-KEY": apiKey },
+            body: JSON.stringify(body)
+        });
+        const text = await response.text();
+        if (!response.ok) {
+            throw new Error(`print partner ${response.status}: ${text.slice(0, 300)}`);
+        }
+        let partnerOrderId = "";
+        try {
+            partnerOrderId = String((JSON.parse(text) as Record<string, unknown>).id ?? "");
+        } catch {
+            partnerOrderId = "";
+        }
+        await orderRef.set({
+            printSubmission: { state: "submitted", partnerOrderId, submittedAt: FieldValue.serverTimestamp() },
+            fulfillmentStatus: "in_production"
+        }, { merge: true });
+    } catch (error) {
+        // Never retried automatically: a person checks the partner first, so
+        // a request that did reach them isn't printed twice.
+        logger.error("Season book print submission failed", { orderId: orderRef.id, error });
+        await orderRef.set({
+            printSubmission: {
+                state: "failed",
+                error: error instanceof Error ? error.message.slice(0, 500) : "unknown",
+                failedAt: FieldValue.serverTimestamp()
+            },
+            fulfillmentStatus: "needs_attention"
+        }, { merge: true });
+    }
 }
 
 export const stripeWebhook = onRequest({ region: "us-central1" }, async (req, res) => {

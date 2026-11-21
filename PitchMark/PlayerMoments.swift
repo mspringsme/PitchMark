@@ -55,6 +55,12 @@ final class PlayerMomentsIndex: ObservableObject {
         }
     }
 
+    /// A Favorite changed somewhere - show it now, before any reload.
+    func setFavorite(momentId: String, _ on: Bool) {
+        guard let i = moments.firstIndex(where: { $0.id == momentId }) else { return }
+        moments[i].isFavorite = on
+    }
+
     func moments(hitterIds: [String], pitcherIds: [String]) -> [Moment] {
         let hitters = Set(hitterIds)
         let pitchers = Set(pitcherIds)
@@ -90,7 +96,7 @@ struct PlayerMomentsButton: View {
             .tint(Color.pitchMarkActiveGray)
             .accessibilityLabel("\(count) Moment\(count == 1 ? "" : "s") of \(name)")
             .accessibilityIdentifier("player.moments.\(name)")
-            .sheet(isPresented: $showSheet) {
+            .appSheet(isPresented: $showSheet, chrome: .handle) {
                 PlayerMomentsSheet(name: name, hitterIds: hitterIds, pitcherIds: pitcherIds) { showSheet = false }
                     .environmentObject(authManager)
             }

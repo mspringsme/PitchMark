@@ -16,7 +16,30 @@ export const retailCatalog: Record<string, RetailCatalogItem> = {
     // 14 cards at the size chosen in the app (user's price, 2026-11-08).
     sign_grid_custom: { priceId: "", label: "Batter & Runner Grid", unitAmountCents: 2000 },
     // 4 waterproof pocket calling cards cut from one 8.5 x 11 sheet (user's price, 2026-11-10).
-    calling_card_waterproof: { priceId: "", label: "Waterproof Calling Cards (4)", unitAmountCents: 800 }
+    calling_card_waterproof: { priceId: "", label: "Waterproof Calling Cards (4)", unitAmountCents: 800 },
+    // Printed hardcover of a family's Moments (2026-11-19). The amount here is
+    // the 30-page base; checkout prices each book by its page count
+    // (seasonBookPriceCents), never from the app.
+    season_book_hardcover: { priceId: "", label: "Season Book (Hardcover)", unitAmountCents: 4900 },
+    // One season (183 days) of a team sponsor slot (2026-11-19). Digital: no shipping.
+    team_sponsor_season: { priceId: "", label: "Team Sponsor (One Season)", unitAmountCents: 2500 },
+    // Trading cards (2026-11-19, user's prices). A team set's amount is per
+    // family set; checkout multiplies it by the sets ordered (planTeamSetOrder).
+    card_family_12: { priceId: "", label: "Trading Cards - Family Pack (12)", unitAmountCents: 1499 },
+    card_family_24: { priceId: "", label: "Trading Cards - Family Pack (24)", unitAmountCents: 1999 },
+    card_team_set: { priceId: "", label: "Trading Cards - Team Set", unitAmountCents: 1299 }
 };
 
-export const allowedItemKinds = new Set(["gridKey", "printableSheet", "signGrid", ""]);
+/** Products that ship nothing - checkout collects no shipping address. */
+export const digitalProductIds = new Set(["team_sponsor_season"]);
+
+/** Which item kind each new product must be ordered as. */
+export const requiredItemKindByProduct: Record<string, string> = {
+    season_book_hardcover: "seasonBook",
+    team_sponsor_season: "sponsorSlot",
+    card_family_12: "cardFamilyPack",
+    card_family_24: "cardFamilyPack",
+    card_team_set: "cardTeamSet"
+};
+
+export const allowedItemKinds = new Set(["gridKey", "printableSheet", "signGrid", "seasonBook", "sponsorSlot", "cardFamilyPack", "cardTeamSet", ""]);

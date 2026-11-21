@@ -63,10 +63,6 @@ struct StorefrontView: View {
     var body: some View {
         NavigationStack(path: $navigationPath) {
             List {
-                StorefrontHeaderView()
-                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 12, trailing: 16))
-                    .listRowBackground(Color.clear)
-
                 if let armbandKeys {
                     // Built and printed free; the sections below order
                     // them printed and shipped.
@@ -80,6 +76,10 @@ struct StorefrontView: View {
                             .buttonStyle(.borderless)
                     }
                 }
+
+                StorefrontHeaderView()
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 12, trailing: 16))
+                    .listRowBackground(Color.clear)
 
                 Section(header: Text("Pitcher Grid Key Inserts")) {
                     Text("Armband grid key inserts; Master pitch call sheet")
@@ -144,6 +144,62 @@ struct StorefrontView: View {
                             .padding(.vertical, 4)
                         }
                     }
+                }
+
+                Section(header: Text("Keepsakes")) {
+                    NavigationLink {
+                        SeasonBooksView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(.gray.opacity(0.15))
+                                .frame(width: 56, height: 56)
+                                .overlay(
+                                    Image(systemName: "book.closed")
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
+                                )
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Season Book")
+                                    .font(.headline)
+                                Text("Hardcover of your Moments, \(SeasonBookProduct.minPages) pages and up")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("from \((Decimal(SeasonBookProduct.baseCents) / 100).formatted(.currency(code: "USD")))")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .accessibilityIdentifier("store.seasonBook")
+
+                    NavigationLink {
+                        TradingCardsLibraryView()
+                    } label: {
+                        HStack(spacing: 12) {
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(.gray.opacity(0.15))
+                                .frame(width: 56, height: 56)
+                                .overlay(
+                                    Image(systemName: "person.crop.rectangle.stack")
+                                        .font(.title3)
+                                        .foregroundStyle(.secondary)
+                                )
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Trading Cards")
+                                    .font(.headline)
+                                Text("Your player's card, front and back - family packs and team sets")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text("from \((Decimal(TradingCardProduct.teamSetPriceCents) / 100).formatted(.currency(code: "USD")))")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .accessibilityIdentifier("store.tradingCards")
                 }
 
                 Section(header: Text("Batting Bases & Fielding")) {
@@ -318,7 +374,7 @@ struct StorefrontView: View {
                 refreshDisplayAppInstallState()
             }
         }
-        .sheet(isPresented: $showDisplaySetupSheet) {
+        .appSheet(isPresented: $showDisplaySetupSheet, chrome: .handle) {
             DisplayAppSetupSheet(
                 appStoreURL: displayAppSearchURL,
                 isInstalledOnThisDevice: isDisplayAppInstalled,
@@ -768,13 +824,13 @@ private struct TemplateDetailView: View {
         .background(Color(.systemGray6))
         .navigationTitle(template.name)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showShareSheet) {
+        .appSheet(isPresented: $showShareSheet, chrome: .none) {
             if let url = pdfURL {
                 ShareSheet(items: [url])
                     .fixedAppDynamicType()
             }
         }
-        .sheet(isPresented: $showTemplatePicker) {
+        .appSheet(isPresented: $showTemplatePicker, chrome: .handle) {
             NavigationView {
                 List(availablePitchTemplates) { pt in
                         Button(pt.name) { selectedTemplate = pt; generatePreviewImage(for: pt, storeTemplate: template); showTemplatePicker = false }
@@ -926,7 +982,7 @@ private struct SignGridStoreDetailView: View {
         .task(id: authManager.user?.uid) {
             store.start(uid: authManager.user?.uid)
         }
-        .sheet(isPresented: $showShareSheet) {
+        .appSheet(isPresented: $showShareSheet, chrome: .none) {
             if let url = pdfURL {
                 ShareSheet(items: [url])
                     .fixedAppDynamicType()
@@ -1405,13 +1461,13 @@ private struct PrintableSheetDetailView: View {
         .background(Color(.systemGray6))
         .navigationTitle(template.name)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showShareSheet) {
+        .appSheet(isPresented: $showShareSheet, chrome: .none) {
             if let url = pdfURL {
                 ShareSheet(items: [url])
                     .fixedAppDynamicType()
             }
         }
-        .sheet(isPresented: $showTemplatePicker) {
+        .appSheet(isPresented: $showTemplatePicker, chrome: .handle) {
             NavigationView {
                 List(availablePitchTemplates) { pt in
                     Button(pt.name) {
@@ -1857,7 +1913,7 @@ private struct CallingCardStoreDetailView: View {
         .task(id: authManager.user?.uid) {
             store.start(uid: authManager.user?.uid)
         }
-        .sheet(isPresented: $showShareSheet) {
+        .appSheet(isPresented: $showShareSheet, chrome: .none) {
             if let url = pdfURL {
                 ShareSheet(items: [url])
                     .fixedAppDynamicType()

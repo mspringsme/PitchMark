@@ -1018,6 +1018,7 @@ struct PitchCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(trackingMode == .scout ? 0.16 : 0.3), radius: trackingMode == .scout ? 4 : 6, x: 0, y: trackingMode == .scout ? 2 : 3)
         .onLongPressGesture(minimumDuration: 0.45) { onLongPress() }
+        .accessibilityIdentifier("pitchCard.\(trackingMode.rawValue)")
     }
     
     @ViewBuilder
@@ -2026,7 +2027,7 @@ struct PitchEventDetailPopover: View {
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .sheet(item: $fieldPositionsTarget) { target in
+        .appSheet(item: $fieldPositionsTarget, chrome: .handle) { target in
             // The team's current cells, so a change made since opening
             // shows; falls back to the snapshot taken on tap.
             let cells = lineupGroups.first(where: { $0.id == target.id })?.cells
@@ -3145,7 +3146,7 @@ struct PitchResultSheet: View {
         .onAppear {
             applyInitialEditTargetIfNeeded()
         }
-        .sheet(isPresented: $showFilterSheet) {
+        .appSheet(isPresented: $showFilterSheet) {
             filterSheetView
         }
         .appConfirmationDialog(
@@ -3159,7 +3160,7 @@ struct PitchResultSheet: View {
             },
             secondaryTitle: "Cancel"
         )
-        .sheet(isPresented: $showPitcherPicker) {
+        .appSheet(isPresented: $showPitcherPicker, chrome: .handle) {
             NavigationView {
                 List(pitchers) { pitcher in
                     Button(pitcher.name) {
@@ -3180,7 +3181,7 @@ struct PitchResultSheet: View {
             .presentationDetents([.medium])
             .fixedAppDynamicType()
         }
-        .sheet(isPresented: $showBatterPicker) {
+        .appSheet(isPresented: $showBatterPicker, chrome: .handle) {
             NavigationView {
                 List(availableJerseyNumbers, id: \.self) { jersey in
                     Button("#\(jersey)") {
@@ -3201,7 +3202,7 @@ struct PitchResultSheet: View {
             .presentationDetents([.medium])
             .fixedAppDynamicType()
         }
-        .sheet(isPresented: $showEditPitchSheet) {
+        .appSheet(isPresented: $showEditPitchSheet, chrome: .handle) {
             if let target = editTargetEvent {
                 PitchResultSheetView(
                     isPresented: $showEditPitchSheet,
@@ -4105,6 +4106,16 @@ extension PitchEvent {
     var isHomeRunInferred: Bool {
         let text = [outcome, descriptor].compactMap { $0?.lowercased() }.joined(separator: " ")
         return text.contains("hr") || text.contains("home run") || text.contains("homerun")
+    }
+
+    /// Track Game's "Unknown" chip (2026-11-20): a pitch whose type the
+    /// tracker couldn't tell. It counts as a pitch everywhere, but never in a
+    /// by-pitch-type breakdown.
+    static let unknownPitch = "Unknown"
+
+    var hasKnownPitchType: Bool {
+        let name = pitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !name.isEmpty && name != Self.unknownPitch
     }
 
     var supportsLocationAnalytics: Bool {

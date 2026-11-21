@@ -1286,7 +1286,7 @@ struct TemplateEditorView: View {
                         .padding(.horizontal)
                         Spacer()
                     }
-                    .sheet(isPresented: $showProPaywall) {
+                    .appSheet(isPresented: $showProPaywall, chrome: .handle) {
                         ProPaywallView(
                             title: "PitchMark Pro",
                             message: "Add more than two pitches to grid keys with PitchMark Pro.",
@@ -1549,7 +1549,7 @@ struct CodeAssignmentPanel: View {
                         )
                     }
                     .disabled(selectedPitch.isEmpty)
-                    .sheet(isPresented: $showLocationPicker) {
+                    .appSheet(isPresented: $showLocationPicker, chrome: .handle) {
                         StrikeZoneLocationPicker(
                             selectedPitch: selectedPitch,
                             pitchCodeAssignments: pitchCodeAssignments
@@ -1885,7 +1885,7 @@ struct CodeAssignmentPanelWithPrint: View {
             }
         }
         .padding()
-        .sheet(isPresented: $showShare) {
+        .appSheet(isPresented: $showShare, chrome: .none) {
             if let pngImage {
                 ShareSheet(items: [pngImage])
                     .fixedAppDynamicType()

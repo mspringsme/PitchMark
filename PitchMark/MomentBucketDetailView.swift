@@ -74,10 +74,10 @@ struct MomentBucketDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showHighlightReelEditor, onDismiss: {
+        .appSheet(isPresented: $showHighlightReelEditor, onDismiss: {
             isSelectingForReel = false
             selectedMomentIdsForReel = []
-        }) {
+        }, chrome: .handle) {
             HighlightReelEditorView(initialMoments: momentsSelectedForReel, onCreated: onMomentsNeedRefresh)
                 .environmentObject(authManager)
         }

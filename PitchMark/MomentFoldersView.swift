@@ -118,7 +118,7 @@ struct MomentFoldersView: View {
         // than fighting it for one. The segmented control itself already
         // shows which tab is active.
         .onAppear(perform: refreshFolders)
-        .sheet(isPresented: $showCreateFolder) {
+        .appSheet(isPresented: $showCreateFolder, chrome: .handle) {
             MomentNamePromptSheet(title: "New Folder") { name in
                 authManager.createMomentFolder(name: name) { result in
                     switch result {
@@ -130,7 +130,7 @@ struct MomentFoldersView: View {
                 }
             }
         }
-        .sheet(item: $folderPendingRename) { folder in
+        .appSheet(item: $folderPendingRename, chrome: .handle) { folder in
             MomentNamePromptSheet(title: "Rename Folder", initialName: folder.name) { name in
                 guard let id = folder.id else { return }
                 authManager.renameMomentFolder(folderId: id, name: name) { error in

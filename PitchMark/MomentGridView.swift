@@ -205,6 +205,7 @@ private struct MomentGridCell: View {
     var isSelecting: Bool
     var isSelected: Bool
 
+    @Environment(\.momentQuickAction) private var quickAction
     @State private var thumbnail: UIImage? = nil
 
     /// True when this Moment's Firestore metadata synced here but its
@@ -246,7 +247,15 @@ private struct MomentGridCell: View {
                     }
                     .clipped()
 
-                if moment.isFavorite == true {
+                if !isSelecting, let quickAction {
+                    // Always shown, so favoriting is one tap (user's call).
+                    let on = moment.isFavorite == true
+                    PhotoCornerToggle(systemImage: on ? "heart.fill" : "heart",
+                                      tint: on ? .red : .white,
+                                      label: on ? "Unfavorite" : "Favorite") {
+                        quickAction(moment, .toggleFavorite)
+                    }
+                } else if moment.isFavorite == true {
                     Image(systemName: "heart.fill")
                         .font(.caption2)
                         .foregroundStyle(.red)
@@ -332,8 +341,30 @@ struct MomentQuickActionMenu: View {
         if let id = moment.id, momentHasEdits(id) {
             Button { perform(moment, .duplicateOriginal) } label: { Label("Duplicate Original", systemImage: "film") }
         }
+        if let id = moment.id {
+            HomeSlideshowMomentMenu(momentId: id, photoCount: moment.photoCount ?? 0)
+        }
         Divider()
         Button(role: .destructive) { perform(moment, .delete) } label: { Label("Delete", systemImage: "trash") }
+    }
+}
+
+/// A whole Moment's Home slideshow choice (library long press). Favorite
+/// is the ♥ on the tile itself.
+struct HomeSlideshowMomentMenu: View {
+    let momentId: String
+    let photoCount: Int
+    @ObservedObject private var store = HomeSlideshowPrefsStore.shared
+
+    var body: some View {
+        let isHidden = store.prefs.isMomentHidden(momentId: momentId, photoCount: photoCount)
+        Button {
+            store.ensureStarted()
+            store.setMomentHidden(momentId: momentId, photoCount: photoCount, !isHidden)
+        } label: {
+            Label(isHidden ? "Show on Home" : "Hide from Home",
+                  systemImage: isHidden ? "eye" : "eye.slash")
+        }
     }
 }
 

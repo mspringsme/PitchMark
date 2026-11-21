@@ -757,3 +757,132 @@ own-team claim refused.
 
 Why: the parent's gear sheet showed our batters as "Not on roster" in the
 opponent's column - their links pointed at a roster the parent couldn't read.
+
+### 2026-11-19 - Season Books and Team Sponsors (rules list approved)
+
+Rules (`rules-tests/tests/seasonBooksAndSponsors.test.mjs`, Firestore **and
+Storage** - the rules tests now start both emulators; Storage on port 9199,
+started with `rules-tests/storage.placeholder.rules`, every test loads the
+real `../storage.rules`):
+book layouts owner-only; `bookUploads/{uid}/{orderKey}` owner-only (JPEG/PNG
+up to 25 MB, the book's `interior.pdf` up to 300 MB - **changed after
+approval, pending the user's OK**: 25 MB can't hold a print-ready book), no
+one else reads, lists or deletes, nothing else in the bucket opens; orders
+are server-only (no create, no price/payment/print change); sponsor slots:
+team-visible read + list, anyone signed in opens an *active* slot by id,
+only the server creates/deletes/re-dates, the coach who paid edits name,
+link (https or empty, 200) and logo (100,000) only.
+
+Server (`functions/test/seasonBook.test.js`, `sponsorSlot.test.js`): page
+count 30-200 in pairs, price from the page count only, upload path must be
+the caller's; **a webhook retry or the async event after `completed` never
+prints twice** (mutation-checked: dropping the `printSubmission` guard
+fails exactly that test); unpaid/failed never reaches the printer; sponsor
+details validated, extra fields never reach the slot, one season, activated
+once and only when paid.
+
+Unit (`SeasonBookTests`, `SponsorSlotTests`): price/limits match the
+server; printed page count even and >= 30; every PDF page is exactly the
+product size (20 cm square + 1/8 in bleed); a photo missing from the phone
+stops the order; suggestions put ♥ first and leave out hidden stills; the
+layout survives a save/load; **no `SponsorBadge` on a protected surface**
+- the badge refuses one, and a test reads `PitchMark/` and
+`PitchMarkDisplay/` source so a badge can't be placed in a protected file
+or name a protected surface (mutation-checked both ways); label always
+"Sponsored by"; an expired or not-started slot never shows; logo shrunk to
+fit.
+
+Not built yet, so not tested: the book's stats page; the shared tourney
+page and season book showing a sponsor (only the roster shows one today).
+Manual: a real order end to end (needs the Gelato account, product uid and
+the Storage bucket's signing permission), print quality from a sample.
+
+### 2026-11-19 - Trading cards (R1-R7, S1-S4, U1-U3 approved)
+
+Rules (`rules-tests/tests/tradingCards.test.mjs`, Firestore + Storage):
+R1 the coach or a team member starts a set as its organizer, open, no extra
+fields, organizer never changes; R2 coach + members read sets and entries,
+outsiders nothing; R3 a family writes/withdraws only entries it owns
+(`ownerUid`; several allowed - siblings, revised 2026-11-20) while open,
+the organizer can remove any; R4 consent `true` + timestamp, allow-listed
+fields (no birthdate/school), art paths only from the family's own folder;
+R5 only the organizer locks/reopens, nothing changes after lock, only the
+server marks ordered, an ordered set is final, no deletes; R6 `cardArt/`
+uploads only by that family, JPEG/PNG, 10 MB, only while open (Storage reads
+the set from Firestore), the team reads every card, outsiders none,
+`cardOrders/` server-only; R7 `users/{uid}/cardDesigns` owner-only.
+
+Server (`functions/test/tradingCards.test.js`): S1 team price = sets x $12.99,
+from the server's own entry count; organizer only, locked only, 2-40 players
+with consent and both sides, 1-60 sets; S2 family packs 12 ($14.99) / 24
+($19.99), sides the caller's own from one order; S3 frozen art copied to
+`cardOrders/{orderKey}/` only from each entry's own art; **S4 never prints
+twice** (mutation-checked: dropping the `printSubmission` guard fails it and
+the book test).
+
+Unit (`TradingCardTests`): U1 every side 825 x 1125 px (2.5 x 3.5 in + bleed
+at 300 dpi) on every template, team order pages by jersey number, front then
+back, each set the same, PDF pages 2.75 x 3.75 in; U2 the longest name,
+"#9999", a long team and positions fit every template's boxes (measured),
+never below the floor, unfit text gets "…", and no two text boxes overlap (added after the first real render showed Diamond's name running into its number); U3 back stats are the stats
+screen's own `formatRate` / counts; saved designs have no birthdate, school
+or hometown.
+
+Manual: a printed sample (colors, cut, card stock), a real two-family team
+set, the look of each template on a real photo.
+
+### 2026-11-20 - Sheets, Track Game, Practice (T1-T11, R8 approved)
+
+Sheets: `SheetChromeTests` (T1 - no plain `.sheet(` in PitchMark/ or
+PitchMarkDisplay/; the ✕'s tap area >= 44), `SheetCloseUITests` (T2 - on
+demo Home the Account (42%) and More (24%) sheets close with a ✕ that's
+on screen and at least 44 pt *as drawn*; the Call Sheet, which has its own
+nav bar, gets no extra ✕). Partial-height sheets draw at ~0.96 scale, so
+the ✕ is 48 pt. Identifiers: `sheet.close`, `account.more`.
+
+Track Game: `TrackGameTests` (T3 no code step in Track Game, still in Call
+Pitches; T4 HBP alone saves and is a ball; T6 Unknown stays out of
+by-pitch stats but counts as a pitch, a tracked pitch never counts toward
+hitting the spot) and `TrackGameUITests` (T5 - Key menu → Track Game, chip,
+one zone tap opens the result sheet with no `tracker.codePanel`, save, the
+gear sheet's card shows "(Result): Ball Up" and no "(Coach):"; Call Pitches
+still shows the code panel).
+
+Practice: `PracticeTests` (T7 save path is only
+`users/{uid}/practiceSessions/{id}/pitchEvents`, a practice pitch has no
+game/batter; T8 pitcher + a pitch required; T9 only checked pitches are
+chips; T10 review numbers), `rules-tests/tests/practice.test.mjs` (R8
+owner-only), `PracticeUITests` (T11 - demo Home: + → Practice → Demo
+Pitcher → keep one pitch → Start; practice screen with that chip only and
+no at-bat view; call, where it went, Ball, save → "1 pitch"; End → review;
+listed under Home's Practice; no game created). Identifiers:
+`home.games.add`, `newGame.practice`, `newGame.practiceNext`,
+`practice.pitcher.{name}`, `practice.pitch.{pitch}`, `practice.start`,
+`practice.title`, `practice.count`, `practice.went`,
+`practice.outcome.{Swinging|Looking|Foul|Ball}`, `practice.save`,
+`practice.end`, `practiceReview.total`, `home.practice.{pitcher}`.
+
+Practice revised the same day (user's calls - no batter, no key):
+`PracticeTests` now covers a pitch = target + where it went with no result,
+every pitch type offered and no codes, the 5 x 5 spot grid (all 17 spots
+distinct), distance and miss direction, and the accuracy summary (on
+target, within one, zone, misses, by target - per pitch and overall).
+`PracticeUITests` throws **Screw**, which isn't on the demo key: every spot
+tappable, prompt shows the target, no code panel or result buttons, Undo
+Last takes a pitch back, the review shows 2 thrown / 50% on target.
+Identifiers: `practice.player`, `practice.prompt`, `practice.undo`,
+`practiceReview.onTarget` (replacing `practice.went`, `practice.outcome.*`,
+`practice.save`).
+
+Practice log, suggestion, archive/delete (P1-P5 approved 2026-11-20):
+`PracticeLogTests` (P1 latest 5 newest first with the miss, most common
+miss; P2 suggestion rules - minimums, weakest pitch, tie, 60% pattern,
+hardest spot, strong session; P3 archive/restore keeps pitches, archivedAt
+round trip; P4 delete removes session + pitches, pitches before the session),
+`practice.test.mjs` (owner archives/deletes, others can't),
+`PracticeUITests.testRunningLogAndArchiveDelete` (P5 - 5 Screws, log reads
+"5 thrown · 20% on target", suggestion names the Screw and its high misses;
+Home: Archive → Show Archived → Restore → Delete… → confirm). Identifiers:
+`practiceLog`, `practiceLog.session`, `practiceLog.pitch.{pitch}`,
+`practiceLog.suggestion`, `practiceLog.latest`,
+`home.practice.menu.{pitcher}`, `home.practice.showArchived`.

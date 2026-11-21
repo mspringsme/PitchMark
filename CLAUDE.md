@@ -489,6 +489,21 @@ attached to a button row renders full-screen but only accepts taps inside that
 row — every other tap falls through to whatever is underneath. The Sign Out
 dialog had exactly this bug: confirming it opened the Delete Account sheet.
 
+## Sheets (2026-11-20)
+
+**Every sheet is `.appSheet(...)`, never `.sheet(`** (SupportExtensions.swift;
+`SheetChromeTests` reads the source and fails on a plain `.sheet(`). Same
+arguments as `.sheet`, plus `chrome:` -
+- default `.closeButton`: drag handle, 14 pt top margin and a ✕ floating
+  top-right (48 pt tap area - iOS draws partial-height sheets ~0.96 scale,
+  which took 44 to 42). It's an overlay, not a row: a row pushed fixed-height
+  sheets' content past the top edge.
+- `.handle`: content with its own navigation bar (its Cancel/Done is the
+  button) and the Pro paywall.
+- `.none`: Apple's share sheet / pickers, and any `interactiveDismissDisabled`
+  sheet - the review sheet's Save is placed at an exact screen height.
+Full-screen covers aren't sheets and keep their own top bars.
+
 ## SwiftUI gotchas hit in this codebase
 
 - **`Menu` loses scroll position.** Its contents are a transient `UIMenu`,
@@ -744,7 +759,8 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
 - **Armband keys live in Team Supplies (2026-11-18), not on Home**
   (user's call: mostly coaches use them). "Your Armband Keys" - **Pitching**
   (was Code Grid Keys; the tracker's button says "Open Pitching Keys") and
-  **Batting Bases & Fielding** - sits above the store's products
+  **Batting Bases & Fielding** - is the top of the screen, above the
+  Team Supplies card and the products
   (`StorefrontView(armbandKeys:)`, built in `SettingsView.teamSuppliesScreen`).
   The Pitching key editor, share, Call and game-open prompts hang off
   that pushed screen's root, not Home's (Home isn't on screen while it's
@@ -754,6 +770,52 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
 - The bottom of Home is plain text, "Signed in as {email}"
   (`HomeSignedInFooter`), read from `authManager.user` so it follows
   sign-in and sign-out. It is not a button.
+
+## Home slideshow (2026-11-18)
+
+- **Under Home's three cards is a slideshow** (`HomeSlideshowView`,
+  HomeSlideshow.swift): the coach's Moments (up to 3 attached photos
+  each, else a frame of the clip; newest first, 24 max, only what's on
+  this device) mixed with stills shipped in the app, one after every 3.
+  Order is `HomeSlideshowPlaylist.build`. Swipe, or it advances every 5s
+  while Home is on screen; tapping a Moment's still plays the clip.
+- **Shipped stills are found by name:** imagesets `home-slide-01`,
+  `-02`, ... in `Assets 2.xcassets/Home Slideshow/`, read in order up to
+  the first missing number. Adding one needs no code.
+- It reads `PlayerMomentsIndex.shared`, which Home already refreshes;
+  it's its own struct so Home's type doesn't grow.
+- **Every still has exactly one ♥ (`HomeFavorites`, user's call):** a
+  clip's frame and a photo Moment's picture (photo 1) use the Moment's own
+  Favorite (`isFavorite`, the library's ♥ and Favorites chip); every other
+  photo - a still saved from a video, say - has its own
+  (`HomeSlideshowPrefs.favoritePhotos`). With any ♥ still on this phone,
+  Home plays only those (newest Moment first, hidden ones out); otherwise
+  the newest Moments (3 photos each). The ♥ is an always-visible toggle
+  (`PhotoCornerToggle`) on library tiles (Moment), slideshow stills, the
+  Manage screen and each photo in a Moment's Photos row. Save a Still has
+  a Favorite switch (on by default). ♥ and hidden exclude each other.
+- **Hidden** stills are slide ids (`HomeSlide.id` / `init(id:)`) on the
+  account, `users/{uid}/meta/homeSlideshow` (meta rule, no rules change):
+  `HomeSlideshowPrefs` + `HomeSlideshowPrefsStore`. Hide from a long
+  press on a slideshow still, a library tile (whole Moment) or a Moment's
+  photo, or the eye on Manage (the slideshow's corner button).
+- **Save a Still** (`MomentStillGrabberView`, MomentStillGrabber.swift):
+  the clip screen's Photos menu ("Still from This Video") and ⋯ menu.
+  Exact-frame pick like Freeze Frame, from the clip as it plays (edits and
+  overlays included), appended to the Moment's photos. Not offered on a
+  photo Moment (`.photoCreation`): its video is one picture held still,
+  so every frame duplicated the photo.
+- **Edit Photo** (`MomentPhotoEditorView`, MomentPhotoEditor.swift): long
+  press a Moment's photo, or Edit in the full-screen viewer. Crop
+  (aspects, drag + pinch), rotate, the clip Filters' presets. The first
+  edit keeps `-photo-N-original.jpg` and the settings in
+  `-photo-N-edit.json`; every edit renders again from the original, and
+  Reset + Save puts the original back. Math in `PhotoEdit`.
+- **Remove Photo** (same long press): photos are numbered files, so the
+  later ones - with their original and edit files - move down one
+  (`MomentPhotoRemoval`, `localMomentPhotoFileURLs`), and Combine Photos
+  + Video's order and Home's hidden ids are renumbered the same way.
+  Never remove a photo without those.
 
 ## Home Players edit and list (2026-11-14)
 
@@ -950,10 +1012,130 @@ dialog had exactly this bug: confirming it opened the Delete Account sheet.
   `-UITestTourneysSpot`, `-UITestTourneysRead`, `-UITestTourneysScouting`)
   opens the screens in memory with sample data.
 
+## Season Books and Team Sponsors (2026-11-19)
+
+Revenue that keeps families free (founding vision, Section 13 - the doc
+link is in memory). Both are store items through the existing Stripe
+Checkout; the server twins are `functions/src/seasonBook.ts` and
+`sponsorSlot.ts` - keep limits and prices identical to the Swift.
+
+- **Season Book** (`SeasonBook.swift` / `SeasonBookViews.swift`, Team
+  Supplies → Keepsakes): a hardcover of the family's Moments, ♥ first,
+  hidden stills never (`SeasonBookSuggestion`, built on
+  `HomeSlideshowPlaylist`). The layout is saved at `users/{uid}/seasonBooks`;
+  **photos leave the phone only for an order**: one `interior.pdf` (20 cm
+  square + 1/8 in bleed, 30-200 pages in pairs, blanks pad the end) goes to
+  `bookUploads/{uid}/{orderKey}/` in Cloud Storage, then checkout. The
+  server prices it from the page count, never the app.
+- **Printing happens once.** The webhook claims the order
+  (`printSubmission`) in a transaction *before* calling the print partner
+  (Gelato, `GELATO_API_KEY` / `GELATO_BOOK_PRODUCT_UID` /
+  `GELATO_ORDER_URL`); a failed call is marked `failed` and never retried
+  automatically. Without the partner configured, paid orders wait as
+  `awaiting_manual`. Don't loosen `planPrintSubmission`.
+- **Team Sponsors** (`SponsorSlot.swift`, the team roster's Team Sponsors
+  section): the team sells the sponsorship itself; the coach buys a
+  $25 / 183-day slot (digital - checkout asks no address). Only the
+  webhook creates `teams/{teamId}/sponsors/{orderId}`; the paying coach
+  may edit name, link, logo (base64 in the doc, no Storage).
+- **Every sponsor is drawn by `SponsorBadge`**, which refuses any surface
+  not in `SponsorPlacement.allowed` (roster, tourney pages, shared tourney,
+  season book). Clips, editors, the slideshow, the tracker and Display are
+  protected; `SponsorSlotTests` reads the source and fails if a badge
+  appears in a protected file or names a protected surface. A new
+  protected screen goes in `protectedSourceFiles`.
+- Not built yet: the book's stats page and cover; sponsors on tourney
+  pages / shared pages / in the book; deleting uploads after shipping (set
+  a bucket lifecycle rule meanwhile).
+- **Deploy order:** functions + Firestore rules + `storage.rules`
+  (firebase.json now has a `storage` entry), then the app.
+
+## Trading cards (2026-11-19)
+
+- **A family's player card, front and back** (`TradingCard.swift` rules +
+  rendering, `TradingCardViews.swift` screens). Made from a roster row
+  (team roster → Team Trading Cards → Make a Trading Card); five original
+  templates (`TradingCardTemplate` - never copy a card company's look).
+  Sides render at 825 x 1125 px (2.5 x 3.5 in + 1/8 in bleed, 300 dpi);
+  every text box goes through `TradingCardText.fit` (shrink, then "…") -
+  a new template or field must pass the U2 fit test. Back stats are
+  `TradingCardStats.lines` - the stats screens' own numbers, career ("All").
+  No birthdate, school or hometown fields: these are kids.
+- **Family Pack** 12 ($14.99) / 24 ($19.99): the two sides upload to
+  `bookUploads/{uid}/{key}/card-front|back.png` (the book upload rule), then
+  checkout. **Team Set** ($12.99 per family set): organizer = whoever
+  starts it (coach or any member, user's call), each family adds its entry
+  with consent (`teams/{t}/cardSets/{s}/entries/{uid}`, art in
+  `cardArt/...`), the organizer locks, then pays for every set (user's
+  call: organizer pays all) - shipped to the organizer. Checkout copies the
+  locked art to `cardOrders/{key}/` (what prints). One entry per *card*
+  (entry id = the design id, `ownerUid` = the family), so siblings each
+  get a card (2026-11-20, user's call); art is
+  `cardArt/{t}/{s}/{ownerUid}/{entryId}-front|back.png`.
+- No print partner wired yet (QPMN has an API, unverified): paid card
+  orders claim `printSubmission: awaiting_manual` once (same guard as the
+  books) and a team set becomes `ordered`. No sponsors on cards (user's call).
+- Storage rules for `cardArt/` read Firestore (`firestore.get`): the first
+  deploy asks to let Storage read Firestore.
+
+## Track Game uses the Call Pitches screen (2026-11-20)
+
+- **One screen for both modes** (user's call, for continuity): the same
+  chips, zone and result sheet. The difference is `PitchEntryFlow`
+  (PitchEntryFlow.swift): in Track Game a zone tap IS where the pitch went
+  - no code panel, nothing announced to the Display or the room's pending
+  call - and the result sheet opens at once (`handleSetCalledPitch`).
+  The old Track Game screen (`scoutTrackingArea` and ~480 lines of scout
+  state) is gone.
+- `persistPitchEvent` stamps `trackingMode` with the current mode (the
+  result sheet left the default, Call Pitches) and clears `calledPitch` on
+  a Track Game pitch, so it never counts toward hitting the spot.
+- **Unknown chip** (Track Game only, replaces Catcher there):
+  `PitchEvent.unknownPitch`. It counts as a pitch everywhere but every
+  by-pitch-type breakdown filters it out (`hasKnownPitchType`).
+- **HBP saves on its own** (`PitchResultSaveGate`, PitchResultsSheetView
+  .swift) - was a known open item, and Track Game needed it.
+
+## Practice sessions (2026-11-20)
+
+- **New Game card → Practice** (Home): skips teams/opponent/date, then
+  `PracticeSetupView` - the player from the shared player list
+  (`PlayerPickerButton`, opens on Pitchers; anyone may practice) and every
+  pitch type (`allPitches`), unchecked. Only the checked ones are chips.
+- **No key, no batter (user's calls):** practice is never linked to a key -
+  the zone gets no template, codes or encrypted mode, so no spot greys out
+  and any pitch can be thrown anywhere (a key without the pitch used to
+  make the whole zone untappable). A pitch is two taps - the target, then
+  where it went - and saves on the second (`onResultLocationPicked` →
+  `savePracticePitch`); no composer, no Swinging/Looking/Foul/Ball. Undo
+  Last takes back the latest (`PracticeStore.removeLast`).
+- **What's measured is accuracy against the target** (`PracticeGrid`: every
+  spot on a 5 x 5 grid, strike zone the middle 3 x 3; `PracticeSummary`):
+  thrown, on target, within one spot, in the zone, miss direction
+  (high/low/in/out), accuracy by target - per pitch and for the session.
+- **Tracker in practice** (`ui.practiceSession`): `trackerScrollOrPractice`
+  swaps the scrolling game screen for a non-scrolling one - header (prompt,
+  Undo Last, End), chips, zone without matchup label/Reset/Undo. End opens
+  the review; the tracker leaves practice when the review closes.
+- **Stored apart from games:** `users/{uid}/practiceSessions/{id}` (label
+  "Practice") and its own `pitchEvents`. `persistPitchEvent` refuses while
+  a session is open. Signed out (demo/UI tests) it's in memory.
+- **Running log under the zone** (`PracticeLiveLog`, reads
+  `PracticeStore.liveEvents`): session line, each pitch with its most common
+  miss, "Practice more" (`PracticeSuggestion`: 5 of a pitch / 3 at a spot
+  before judging, weakest pitch - tie → thrown more, a miss pattern only at
+  60%+ of its misses, hardest spot, or "strong session" at 60%+ everywhere),
+  and the latest 5 (`PracticeLog.recent`). The review shows the suggestion too.
+- Reviewed on Home (`HomePracticeList`) → `PracticeReviewView`. Each row's
+  ⋯: **Archive** (`archivedAt`, Show Archived → Restore, pitches kept) and
+  **Delete…** - a real delete (user's call; practice isn't game/career
+  history): every pitch, then the session (`PracticeRules.deletePaths`). Its
+  confirmation is `practiceDeleteDialog` at Home's root, not on the list.
+- Not done: practice from the tracker's own game picker, a link from the
+  pitcher's stats, history across sessions.
+
 ## Known open items
 
-- **HBP cannot be saved on its own.** Save Result is gated on one of
-  Swinging/Looking/Foul/Ball/Hit being selected, and HBP is none of those.
 - **Cancelling the pitch composer leaves the previewed count on the main
   screen.** Pre-existing, not caused by the count rework.
 - **`atBatPulse` re-renders the whole tracker every 0.8s** when no batter is

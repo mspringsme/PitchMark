@@ -367,14 +367,14 @@ struct MomentsLibraryView: View {
                 mediaItemsPendingImportChoice = []
             }
         }
-        .sheet(isPresented: $showAssetLibrary) {
+        .appSheet(isPresented: $showAssetLibrary, chrome: .handle) {
             AssetLibraryHubView()
                 .environmentObject(authManager)
         }
-        .sheet(isPresented: $showMomentsSettings) {
+        .appSheet(isPresented: $showMomentsSettings, chrome: .handle) {
             MomentsSettingsView(tagLocation: $tagLocation, autoBackupToPhotos: $autoBackupToPhotos)
         }
-        .sheet(isPresented: $showCameraPicker) {
+        .appSheet(isPresented: $showCameraPicker, chrome: .none) {
             // Shutter photos always become their own individual
             // `.photoCreation` Moments (saveCapturedPhotosAsIndividualMoments
             // below), never attached to the recorded video directly -
@@ -405,10 +405,10 @@ struct MomentsLibraryView: View {
             }
             .ignoresSafeArea()
         }
-        .sheet(item: $selectedMomentForDetail, onDismiss: { refreshMoments() }) { moment in
+        .appSheet(item: $selectedMomentForDetail, onDismiss: { refreshMoments() }, chrome: .handle) { moment in
             MomentDetailView(moment: moment, allMoments: moments, currentGameContext: currentGameContext)
         }
-        .sheet(item: $captionPrompt) { prompt in
+        .appSheet(item: $captionPrompt, chrome: .none) { prompt in
             GameCaptionSheet(
                 context: prompt.context,
                 initialOptions: nil,
@@ -430,18 +430,18 @@ struct MomentsLibraryView: View {
                 GameCaptionWorkingOverlay(text: "Updating game info…")
             }
         }
-        .sheet(item: $momentShareRequest) { request in
+        .appSheet(item: $momentShareRequest, chrome: .none) { request in
             ShareSheet(items: request.items)
                 .presentationDetents([.medium, .large])
         }
-        .sheet(item: $momentPendingMove) { moment in
+        .appSheet(item: $momentPendingMove, chrome: .handle) { moment in
             MoveMomentToFolderView(moment: moment, onMoved: refreshMoments)
                 .environmentObject(authManager)
         }
-        .sheet(isPresented: $showHighlightReelEditor, onDismiss: {
+        .appSheet(isPresented: $showHighlightReelEditor, onDismiss: {
             isSelectingForReel = false
             selectedMomentIdsForReel = []
-        }) {
+        }, chrome: .handle) {
             HighlightReelEditorView(initialMoments: momentsSelectedForReel, onCreated: refreshMoments)
                 .environmentObject(authManager)
         }
@@ -649,6 +649,14 @@ struct MomentsLibraryView: View {
 
     /// A tile's long-press menu (MomentQuickActionMenu).
     private func performQuickAction(_ action: MomentQuickAction, on moment: Moment) {
+        // Works for a Moment from another device too - it's only a flag.
+        if action == .toggleFavorite {
+            guard let id = moment.id else { return }
+            let on = !(moment.isFavorite ?? false)
+            if let i = moments.firstIndex(where: { $0.id == id }) { moments[i].isFavorite = on }
+            MomentFavorite.set(momentId: id, on, authManager: authManager)
+            return
+        }
         guard let id = moment.id, momentVideoExistsLocally(for: id) else {
             momentPendingOtherDeviceNotice = moment
             showOtherDeviceNotice = true
@@ -668,6 +676,8 @@ struct MomentsLibraryView: View {
         case .delete:
             momentPendingDelete = moment
             showDeleteDialog = true
+        case .toggleFavorite:
+            break
         }
     }
 

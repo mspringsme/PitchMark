@@ -1028,6 +1028,27 @@ func localMomentPhotoURL(momentId: String, index: Int) -> URL? {
     return directory.appendingPathComponent("\(momentId)-photo-\(index).jpg")
 }
 
+/// The photo as it was before Edit Photo first changed it (2026-11-18,
+/// MomentPhotoEditor.swift) - kept so edits can be redone or reverted.
+func localMomentPhotoOriginalURL(momentId: String, index: Int) -> URL? {
+    guard !momentId.isEmpty, let directory = momentsDirectory() else { return nil }
+    return directory.appendingPathComponent("\(momentId)-photo-\(index)-original.jpg")
+}
+
+/// Edit Photo's last settings for the photo (JSON `PhotoEdit`).
+func localMomentPhotoEditURL(momentId: String, index: Int) -> URL? {
+    guard !momentId.isEmpty, let directory = momentsDirectory() else { return nil }
+    return directory.appendingPathComponent("\(momentId)-photo-\(index)-edit.json")
+}
+
+/// Every file belonging to one photo: the photo, its pre-edit original
+/// and its edit settings. Moved together when photos are renumbered.
+func localMomentPhotoFileURLs(momentId: String, index: Int) -> [URL] {
+    [localMomentPhotoURL(momentId: momentId, index: index),
+     localMomentPhotoOriginalURL(momentId: momentId, index: index),
+     localMomentPhotoEditURL(momentId: momentId, index: index)].compactMap { $0 }
+}
+
 /// Camera captures (and some Photos-library assets) can carry an HDR gain
 /// map. Displaying that as-is produces a real, ~0.8s brightness
 /// "breathing" pulse on the thumbnail as iOS's HDR-to-SDR tone-mapping
@@ -1676,8 +1697,8 @@ func removeAllLocalMomentFiles(momentId: String, photoCount: Int) {
         try? FileManager.default.removeItem(at: faded)
     }
     for index in 0..<max(photoCount, 0) {
-        if let photoURL = localMomentPhotoURL(momentId: momentId, index: index) {
-            try? FileManager.default.removeItem(at: photoURL)
+        for url in localMomentPhotoFileURLs(momentId: momentId, index: index) {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 }

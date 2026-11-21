@@ -15,6 +15,7 @@ import SwiftUI
 import AVKit
 import PhotosUI
 import FirebaseFirestore
+import FirebaseAuth
 
 private struct FullScreenPhoto: Identifiable {
     let id: Int
@@ -115,6 +116,14 @@ struct MomentDetailView: View {
     @State private var showZoomEditor = false
     @State private var showCropEditor = false
     @State private var showFreezeEditor = false
+    /// Save a Still (MomentStillGrabber.swift).
+    @State private var showStillGrabber = false
+    /// Remove Photo's confirm (the photo's number).
+    @State private var photoPendingRemoval: Int? = nil
+    /// Edit Photo (MomentPhotoEditor.swift) - the photo's number.
+    @State private var photoEditingIndex: Int? = nil
+    @State private var showRemovePhotoConfirm = false
+    @ObservedObject private var homeSlideshow = HomeSlideshowPrefsStore.shared
     @State private var showFilterEditor = false
 
     @State private var showSlideshowEditor = false
@@ -237,7 +246,7 @@ struct MomentDetailView: View {
                 }
             }
         }
-        .sheet(item: $captionSheet) { box in
+        .appSheet(item: $captionSheet, chrome: .handle) { box in
             GameCaptionSheet(
                 context: box.context,
                 initialOptions: moment.gameCaption,
@@ -295,7 +304,7 @@ struct MomentDetailView: View {
             },
             secondaryTitle: "Not Now"
         )
-        .sheet(isPresented: $showTagPlayers) {
+        .appSheet(isPresented: $showTagPlayers, chrome: .handle) {
             MomentPlayerTagSheet(
                 initialTags: moment.playerTags ?? [],
                 onSave: { tags in
@@ -306,10 +315,22 @@ struct MomentDetailView: View {
             )
             .environmentObject(authManager)
         }
-        .sheet(isPresented: $showMoveSheet) {
+        .appSheet(isPresented: $showMoveSheet, chrome: .handle) {
             MoveMomentToFolderView(moment: moment, onMoved: refreshMoment)
                 .environmentObject(authManager)
         }
+        .appConfirmationDialog(
+            isPresented: $showRemovePhotoConfirm,
+            title: "Remove This Photo?",
+            message: "It's removed from this Moment, Combine Photos + Video and Home's slideshow. Photos you added from your library stay in your library.",
+            primaryTitle: "Remove",
+            primaryRole: .destructive,
+            primaryAction: {
+                if let index = photoPendingRemoval { removePhoto(index) }
+                photoPendingRemoval = nil
+            },
+            secondaryTitle: "Cancel"
+        )
         .appConfirmationDialog(
             isPresented: $showDeleteConfirm,
             title: "Delete \(moment.displayTitle)?",
@@ -330,7 +351,7 @@ struct MomentDetailView: View {
             primaryAction: { revertThisMoment() },
             secondaryTitle: "Cancel"
         )
-        .sheet(item: $shareRequest) { request in
+        .appSheet(item: $shareRequest, chrome: .none) { request in
             ShareSheet(items: request.items)
                 .presentationDetents([.medium, .large])
         }
@@ -342,19 +363,48 @@ struct MomentDetailView: View {
             primaryAction: {},
             secondaryTitle: "Cancel"
         )
-        .sheet(item: $fullScreenPhoto) { photo in
+        .appSheet(item: $fullScreenPhoto) { photo in
             Image(uiImage: photo.image)
                 .resizable()
                 .scaledToFit()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.black)
                 .ignoresSafeArea()
+                .overlay(alignment: .bottom) {
+                    Button {
+                        let index = photo.id
+                        fullScreenPhoto = nil
+                        // After the sheet is gone - one presentation at a time.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { photoEditingIndex = index }
+                    } label: {
+                        Label("Edit Photo", systemImage: "crop")
+                            .font(.body.weight(.semibold))
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 10)
+                            .foregroundStyle(.white)
+                            .background(Capsule().fill(Color.white.opacity(0.2)))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 30)
+                }
+        }
+        .fullScreenCover(isPresented: Binding(
+            get: { photoEditingIndex != nil },
+            set: { if !$0 { photoEditingIndex = nil } }
+        )) {
+            if let index = photoEditingIndex {
+                MomentPhotoEditorView(momentId: momentId, index: index) {
+                    loadPhotoImages()
+                    PlayerMomentsIndex.shared.refresh(authManager, force: true)
+                }
+            }
         }
         .photosPicker(isPresented: $showSystemPhotoPicker, selection: $photoSelections, matching: .images)
         .onChange(of: photoSelections) { _, items in
             guard !items.isEmpty else { return }
             addPhotos(items)
         }
-        .sheet(isPresented: $showMomentGalleryPicker) {
+        .appSheet(isPresented: $showMomentGalleryPicker, chrome: .handle) {
             MomentPhotoGalleryPickerView(moments: allMoments, excludingMomentId: moment.id) { datas in
                 addMomentGalleryPhotos(datas)
             }
@@ -446,6 +496,13 @@ struct MomentDetailView: View {
                     .environmentObject(authManager)
             }
         }
+        .fullScreenCover(isPresented: $showStillGrabber) {
+            if let url = resolvedMomentPlaybackURL(for: momentId) {
+                MomentStillGrabberView(videoURL: url) { data, favorite in
+                    saveStill(data, favorite: favorite)
+                }
+            }
+        }
         .fullScreenCover(isPresented: $showFreezeEditor) {
             if let url = videoBelowOverlaysURL {
                 MomentFreezeEditorView(
@@ -513,6 +570,9 @@ struct MomentDetailView: View {
         Menu {
             Button { showMoveSheet = true } label: { Label("Move to Folder…", systemImage: "folder") }
             Button { duplicateThisMoment(fromOriginal: false) } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+            if canSaveStill {
+                Button { showStillGrabber = true } label: { Label("Save a Still…", systemImage: "camera.viewfinder") }
+            }
             if momentHasEdits(momentId) {
                 Button { duplicateThisMoment(fromOriginal: true) } label: { Label("Duplicate Original", systemImage: "film") }
                 Button { showRevertConfirm = true } label: { Label("Revert to Original", systemImage: "arrow.uturn.backward") }
@@ -977,6 +1037,13 @@ struct MomentDetailView: View {
                 } label: {
                     Label("From Moments Library", systemImage: "rectangle.stack")
                 }
+                if canSaveStill {
+                    Button {
+                        showStillGrabber = true
+                    } label: {
+                        Label("Still from This Video", systemImage: "camera.viewfinder")
+                    }
+                }
             } label: {
                 Label("Photos", systemImage: "plus.circle.fill")
                     .font(.subheadline.weight(.semibold))
@@ -1026,9 +1093,103 @@ struct MomentDetailView: View {
                     .scaledToFill()
                     .frame(width: 90, height: 90)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(alignment: .topTrailing) {
+                        if homeSlideshow.prefs.isHidden(HomeSlide.momentPhoto(momentId: momentId, index: index).id) {
+                            Image(systemName: "eye.slash.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.white)
+                                .padding(4)
+                                .background(Circle().fill(Color.black.opacity(0.5)))
+                                .padding(3)
+                                .accessibilityLabel("Hidden from Home")
+                        }
+                    }
             }
             .buttonStyle(.plain)
+            .overlay(alignment: .topLeading) { photoHeart(index: index) }
+            .contextMenu { homeSlideshowMenu(index: index) }
         }
+    }
+
+    /// The photo's ♥ - what plays on Home (`HomeFavorites`): its own, or
+    /// for a photo Moment's picture, the Moment's Favorite at the top.
+    private func photoHeart(index: Int) -> some View {
+        let slide = HomeSlide.momentPhoto(momentId: momentId, index: index)
+        var current = moment
+        current.isFavorite = isFavorite
+        let on = HomeFavorites.isFavorite(slide, moments: [current], prefs: homeSlideshow.prefs)
+        return PhotoCornerToggle(systemImage: on ? "heart.fill" : "heart",
+                                 tint: on ? .red : .white,
+                                 label: on ? "Unfavorite Photo" : "Favorite Photo") {
+            if HomeFavorites.usesMomentFavorite(slide, moment: moment) {
+                toggleFavorite()
+            } else {
+                homeSlideshow.ensureStarted()
+                homeSlideshow.setFavoritePhoto(slide, !on)
+            }
+        }
+    }
+
+    /// Long press on a photo: Edit, Hide from Home, Remove. (Favorite is
+    /// the Moment's own ♥ at the top - what Home plays.)
+    @ViewBuilder
+    private func homeSlideshowMenu(index: Int) -> some View {
+        let slide = HomeSlide.momentPhoto(momentId: momentId, index: index)
+        let isHidden = homeSlideshow.prefs.isHidden(slide.id)
+        Button {
+            photoEditingIndex = index
+        } label: {
+            Label("Edit Photo", systemImage: "crop")
+        }
+        Button {
+            homeSlideshow.start(uid: authManager.user?.uid)
+            homeSlideshow.setHidden(slide, !isHidden)
+        } label: {
+            Label(isHidden ? "Show on Home" : "Hide from Home",
+                  systemImage: isHidden ? "eye" : "eye.slash")
+        }
+        Divider()
+        Button(role: .destructive) {
+            photoPendingRemoval = index
+            showRemovePhotoConfirm = true
+        } label: {
+            Label("Remove Photo", systemImage: "trash")
+        }
+    }
+
+    /// A photo Moment's video is one still picture held for a few
+    /// seconds - a still from it would only copy that picture.
+    private var canSaveStill: Bool {
+        moment.momentKind != .photoCreation && momentVideoExistsLocally(for: momentId)
+    }
+
+    private func removePhoto(_ index: Int) {
+        guard index >= 0, index < photoCount else { return }
+        guard MomentPhotoRemoval.removeFiles(momentId: momentId, index: index, photoCount: photoCount) else { return }
+        photoCount -= 1
+        loadPhotoImages()
+        authManager.updateMomentFields(momentId: momentId, fields: ["photoCount": photoCount]) { _ in }
+        if let saved = moment.slideshowSegments, !saved.isEmpty {
+            let remapped = MomentPhotoRemoval.segments(saved, removing: index)
+            moment.slideshowSegments = remapped
+            authManager.updateMomentSlideshowSegments(momentId: momentId, segments: remapped) { _ in }
+        }
+        homeSlideshow.ensureStarted()
+        homeSlideshow.photoRemoved(momentId: momentId, index: index)
+        PlayerMomentsIndex.shared.refresh(authManager, force: true)
+    }
+
+    /// A still picked in Save a Still: appended to this Moment's photos,
+    /// with its own ♥ if asked.
+    private func saveStill(_ data: Data, favorite: Bool) {
+        let newIndex = photoCount
+        addMomentGalleryPhotos([data])
+        if favorite {
+            homeSlideshow.ensureStarted()
+            homeSlideshow.setFavoritePhoto(.momentPhoto(momentId: momentId, index: newIndex), true)
+        }
+        // Home's slideshow reads photoCount from the shared index.
+        PlayerMomentsIndex.shared.refresh(authManager, force: true)
     }
 
     private func loadPhotoImages() {
@@ -1205,6 +1366,7 @@ struct MomentDetailView: View {
 
     private func toggleFavorite() {
         isFavorite.toggle()
+        PlayerMomentsIndex.shared.setFavorite(momentId: momentId, isFavorite)
         authManager.updateMomentFields(momentId: momentId, fields: ["isFavorite": isFavorite]) { _ in }
     }
 

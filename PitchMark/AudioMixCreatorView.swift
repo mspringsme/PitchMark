@@ -128,7 +128,7 @@ struct AudioMixCreatorView: View {
                 }
             }
         }
-        .sheet(isPresented: $showAddClipPicker) {
+        .appSheet(isPresented: $showAddClipPicker) {
             AudioAssetLibraryView { asset in
                 addClip(asset)
                 showAddClipPicker = false
