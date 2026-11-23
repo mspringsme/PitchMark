@@ -11,7 +11,8 @@
           "/signin/live/*",
           "/stripe/success",
           "/stripe/cancel",
-          "/tourney/*"
+          "/tourney/*",
+          "/team/*"
         ]
       },
       {

@@ -513,10 +513,14 @@ struct TourneyGame: Identifiable, Equatable {
     /// Start Game uses them only if they're on that team too.
     var ourTeamId: String? = nil
     var opponentTeamId: String? = nil
+    /// Called off (2026-11-22): stays on the schedule marked Canceled, so
+    /// families following the team see it.
+    var canceled: Bool = false
 
     var firestoreData: [String: Any] {
         var data: [String: Any] = ["id": id, "stage": stage.rawValue, "time": Timestamp(date: time),
-                                   "field": field, "opponent": opponent, "result": result]
+                                   "field": field, "opponent": opponent, "result": result,
+                                   "canceled": canceled]
         data["arriveAt"] = arriveAt.map { Timestamp(date: $0) } ?? NSNull()
         data["ourTeamId"] = ourTeamId ?? NSNull()
         data["opponentTeamId"] = opponentTeamId ?? NSNull()
@@ -568,6 +572,7 @@ struct TourneyGame: Identifiable, Equatable {
         field = data.string("field")
         opponent = data.string("opponent")
         result = data.string("result")
+        canceled = data["canceled"] as? Bool ?? false
     }
 
     /// "vs Hawks · Field 7", leaving out what's blank.
@@ -648,6 +653,13 @@ struct Tourney: Identifiable, Equatable {
     var archivedAt: Date? = nil
     /// Set while shared in the app: the id of its `sharedTourneys` copy.
     var shareId: String? = nil
+    /// The team this tourney belongs to (2026-11-22). Set = it lives at
+    /// `teams/{teamId}/tourneys`, edited by the coach and their Schedulers
+    /// and seen live by every member. Nil = the coach's own.
+    var teamId: String? = nil
+    /// Who made the shared link's copy - its owner can't change, and on a
+    /// team tourney a Scheduler keeps it current under that owner.
+    var shareOwnerUid: String? = nil
 
     /// Days the tourney runs, start day first (at most 14).
     func days(calendar: Calendar = .current) -> [Date] {
@@ -754,6 +766,8 @@ struct Tourney: Identifiable, Equatable {
         ]
         data["archivedAt"] = archivedAt.map { Timestamp(date: $0) } ?? NSNull()
         data["shareId"] = shareId ?? NSNull()
+        data["teamId"] = teamId ?? NSNull()
+        data["shareOwnerUid"] = shareOwnerUid ?? NSNull()
         return data
     }
 
@@ -763,7 +777,8 @@ struct Tourney: Identifiable, Equatable {
         var data = firestoreData
         data.removeValue(forKey: "archivedAt")
         data.removeValue(forKey: "shareId")
-        data["ownerUid"] = ownerUid
+        data.removeValue(forKey: "shareOwnerUid")
+        data["ownerUid"] = shareOwnerUid ?? ownerUid
         return data
     }
 
@@ -793,6 +808,8 @@ struct Tourney: Identifiable, Equatable {
         notes = data.string("notes")
         archivedAt = data.date("archivedAt")
         shareId = (data["shareId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        teamId = (data["teamId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        shareOwnerUid = (data["shareOwnerUid"] as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -1089,6 +1106,21 @@ extension String {
 @MainActor
 final class TourneyStore: ObservableObject {
     @Published private(set) var tourneys: [Tourney] = []
+    /// Tourneys of the teams this user is on (2026-11-22), live from
+    /// `teams/{teamId}/tourneys`.
+    @Published private(set) var teamTourneys: [Tourney] = []
+    @Published private(set) var teams: [TeamAccess] = []
+
+    /// A team this user is on, and whether they edit its schedule (the
+    /// creator or a Scheduler) or only see it (a Family).
+    struct TeamAccess: Identifiable, Equatable {
+        var id: String
+        var name: String
+        var canEdit: Bool
+    }
+
+    private var teamListeners: [String: ListenerRegistration] = [:]
+    private var teamTourneysByTeam: [String: [Tourney]] = [:]
     @Published private(set) var followed: [FollowedTourney] = []
     @Published private(set) var prospects: [TourneyProspect] = []
     @Published private(set) var errorMessage: String? = nil
@@ -1112,14 +1144,69 @@ final class TourneyStore: ObservableObject {
         self.inMemory = inMemory
     }
 
-    deinit { listeners.forEach { $0.remove() } }
+    deinit {
+        listeners.forEach { $0.remove() }
+        teamListeners.values.forEach { $0.remove() }
+    }
 
-    var active: [Tourney] { tourneys.filter { !$0.isArchived } }
-    var archived: [Tourney] { tourneys.filter(\.isArchived) }
+    /// Own and team tourneys together - one list for the coach.
+    private var allTourneys: [Tourney] {
+        let teamIds = Set(teamTourneys.map(\.id))
+        return tourneys.filter { !teamIds.contains($0.id) } + teamTourneys
+    }
+    var active: [Tourney] { allTourneys.filter { !$0.isArchived } }
+    var archived: [Tourney] { allTourneys.filter(\.isArchived) }
+
+    /// Own tourneys always; a team's only for its creator and Schedulers.
+    func canEdit(_ tourney: Tourney) -> Bool {
+        guard let teamId = tourney.teamId else { return true }
+        return teams.first { $0.id == teamId }?.canEdit ?? false
+    }
+
+    func teamName(_ teamId: String?) -> String? {
+        guard let teamId else { return nil }
+        return teams.first { $0.id == teamId }?.name
+    }
+
+    /// The teams a tourney can be put on: ones this user schedules for.
+    var editableTeams: [TeamAccess] { teams.filter(\.canEdit) }
+
+    /// Listens to each team's tourneys; stops listening to teams left.
+    func startTeams(_ access: [TeamAccess]) {
+        teams = access.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        guard !inMemory else { return }
+        let wanted = Set(access.map(\.id))
+        for (id, listener) in teamListeners where !wanted.contains(id) {
+            listener.remove()
+            teamListeners[id] = nil
+            teamTourneysByTeam[id] = nil
+        }
+        for team in access where teamListeners[team.id] == nil {
+            teamListeners[team.id] = Self.teamCollection(team.id).addSnapshotListener { [weak self] snapshot, error in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if let error { return self.report("team tourneys listener", error, "Couldn't load a team's tourneys.") }
+                    self.teamTourneysByTeam[team.id] = (snapshot?.documents ?? []).map {
+                        Tourney(id: $0.documentID, firestoreData: $0.data())
+                    }
+                    self.publishTeamTourneys()
+                }
+            }
+        }
+        publishTeamTourneys()
+    }
+
+    private func publishTeamTourneys() {
+        teamTourneys = teamTourneysByTeam.values.flatMap { $0 }
+    }
+
+    private static func teamCollection(_ teamId: String) -> CollectionReference {
+        Firestore.firestore().collection("teams").document(teamId).collection("tourneys")
+    }
     var activeProspects: [TourneyProspect] { TourneyProspect.sortedForList(prospects.filter { !$0.isArchived }) }
     var archivedProspects: [TourneyProspect] { prospects.filter(\.isArchived) }
 
-    func tourney(id: String) -> Tourney? { tourneys.first { $0.id == id } }
+    func tourney(id: String) -> Tourney? { allTourneys.first { $0.id == id } }
     func prospect(id: String) -> TourneyProspect? { prospects.first { $0.id == id } }
 
     func start(uid: String?) {
@@ -1179,8 +1266,13 @@ final class TourneyStore: ObservableObject {
     // MARK: Own tourneys
 
     /// Saves the tourney, and its shared copy when it's shared - so people
-    /// following it see each change.
+    /// following it see each change. A team tourney is saved with its team;
+    /// an own tourney given a team moves there (2026-11-22).
     func save(_ tourney: Tourney) {
+        if let teamId = tourney.teamId {
+            saveTeamTourney(tourney, teamId: teamId)
+            return
+        }
         if let index = tourneys.firstIndex(where: { $0.id == tourney.id }) {
             tourneys[index] = tourney
         } else {
@@ -1193,7 +1285,39 @@ final class TourneyStore: ObservableObject {
             guard let error else { return }
             Task { @MainActor in self?.report("tourney save", error, "Couldn't save the tourney.") }
         }
-        if let shareId = tourney.shareId {
+        saveSharedCopy(tourney, uid: uid)
+    }
+
+    private func saveTeamTourney(_ tourney: Tourney, teamId: String) {
+        let wasOwn = tourneys.contains { $0.id == tourney.id }
+        tourneys.removeAll { $0.id == tourney.id }
+        var list = teamTourneysByTeam[teamId] ?? []
+        if let index = list.firstIndex(where: { $0.id == tourney.id }) {
+            list[index] = tourney
+        } else {
+            list.append(tourney)
+        }
+        teamTourneysByTeam[teamId] = list
+        publishTeamTourneys()
+        guard !inMemory, let uid else { return }
+        var data = tourney.firestoreData
+        data["updatedAt"] = FieldValue.serverTimestamp()
+        Self.teamCollection(teamId).document(tourney.id).setData(data) { [weak self] error in
+            Task { @MainActor in
+                if let error {
+                    self?.report("team tourney save", error, "Couldn't save the tourney to the team.")
+                    return
+                }
+                // Moved from this coach's own list: drop the old copy only
+                // once the team has it.
+                if wasOwn { self?.userCollection("tourneys")?.document(tourney.id).delete() }
+            }
+        }
+        saveSharedCopy(tourney, uid: uid)
+    }
+
+    private func saveSharedCopy(_ tourney: Tourney, uid: String) {
+        if let shareId = tourney.shareId, !inMemory {
             var shared = tourney.sharedData(ownerUid: uid)
             shared["updatedAt"] = FieldValue.serverTimestamp()
             Self.sharedDoc(shareId).setData(shared) { [weak self] error in
@@ -1213,7 +1337,10 @@ final class TourneyStore: ObservableObject {
     @discardableResult
     func startSharing(_ tourney: Tourney) -> URL {
         var updated = tourney
-        if updated.shareId == nil { updated.shareId = TourneyShareLink.newShareId() }
+        if updated.shareId == nil {
+            updated.shareId = TourneyShareLink.newShareId()
+            updated.shareOwnerUid = uid
+        }
         save(updated)
         return TourneyShareLink.url(for: updated.shareId!)
     }
@@ -1224,6 +1351,7 @@ final class TourneyStore: ObservableObject {
         guard let shareId = tourney.shareId else { return }
         var updated = tourney
         updated.shareId = nil
+        updated.shareOwnerUid = nil
         save(updated)
         guard !inMemory else { return }
         Self.sharedDoc(shareId).delete { error in

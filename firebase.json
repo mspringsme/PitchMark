@@ -10,6 +10,10 @@
           "destination": "/tourney.html"
         },
         {
+          "source": "/team/**",
+          "destination": "/team.html"
+        },
+        {
           "source": "/stripe/success",
           "destination": "/stripe-success.html"
         },

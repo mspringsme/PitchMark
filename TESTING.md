@@ -70,6 +70,11 @@ one lineup batter `#1`. UI tests find controls by accessibility identifier:
 `runners.bag.{1,2,3}` (value = runner label or `empty`), `count.{B,S,O}.{i}`
 (value `on`/`off`), `score.home` / `score.away` (value = runs),
 `runners.actions`, `runnerPicker.add`.
+Add **`-UITestTwoSides`** to give the demo game two teams (Lightning vs.
+Hawks) so the pitching side can be switched: buttons "Our team pitching" /
+"Opponent pitching", the half-inning card `halfInning.card` / `.keep` /
+`.reset`. Runner events show as `runnerCard` in the Cards tab. **`-UITestRoster`**
+opens a team roster alone (Team Trading Cards, Team Sponsors).
 
 **`-UITestTourneys`** opens Home's Games row and Round Robin / Tourney Info
 alone, in memory, with a sample tourney (three games, teams Lightning /

@@ -220,6 +220,17 @@ struct PitchTrackerView: View {
     /// Hawks 15U A". Until the side teams have loaded (or for a participant
     /// who isn't on either team), falls back to the stored opponent text as
     /// it always read: "vs. Hawks".
+    /// The open game's two teams for the cards' headers (CardHeader).
+    private var cardMatchupNames: CardMatchupNames? {
+        guard isGame, let gid = selectedGameId, let game = games.first(where: { $0.id == gid }) else { return nil }
+        return CardMatchupNames(
+            homeTeamId: game.teamId,
+            homeName: activeHomeTeamName,
+            awayTeamId: game.awayTeamId,
+            awayName: activeAwayTeamName.isEmpty ? game.opponent : activeAwayTeamName
+        )
+    }
+
     private var zoneMatchupTitle: String {
         func side(_ name: String, _ teamClass: String) -> String {
             teamClass.isEmpty ? name : "\(name) \(teamClass)"
@@ -375,6 +386,9 @@ struct PitchTrackerView: View {
     private var shouldBlurBackground: Bool { get { ui.shouldBlurBackground } nonmutating set { ui.shouldBlurBackground = newValue } }
     private var isGame: Bool { get { ui.isGame } nonmutating set { ui.isGame = newValue } }
     private var practiceSession: PracticeSession? { get { ui.practiceSession } nonmutating set { ui.practiceSession = newValue } }
+    private var noKey: Bool { get { ui.noKey } nonmutating set { ui.noKey = newValue } }
+    /// No key in use right now: No Key, or Track Game (TrackerKeyRules.keyIsOff).
+    private var keyIsOff: Bool { TrackerKeyRules.keyIsOff(noKey: ui.noKey, mode: currentTrackingMode) }
     private var selectedOutcome: String? { get { ui.selectedOutcome } nonmutating set { ui.selectedOutcome = newValue } }
     private var selectedDescriptor: String? { get { ui.selectedDescriptor } nonmutating set { ui.selectedDescriptor = newValue } }
     @State private var pitchResultBannerPhase: PitchResultBannerPhase = .code
@@ -805,20 +819,34 @@ struct PitchTrackerView: View {
         showConfirmSheet = (newCall != nil)
         isRecordingResult = (newCall != nil)
         if newCall != nil {
-            calledPitchComposerDetent = (newCall?.pitch == "Catcher") ? .large : .fraction(0.28)
+            // Catcher's estimate is a short panel under the main zone and
+            // chips (2026-11-21), not a full screen of its own.
+            calledPitchComposerDetent = (newCall?.pitch == "Catcher") ? .fraction(0.32) : .fraction(0.28)
         }
         lastCallInitiatedAt = newCall == nil ? nil : Date()
 
         // Track Game: the tap was where the pitch went - straight to the
         // result sheet, nothing announced (PitchEntryFlow).
-        if let newCall, PitchEntryFlow.stepAfterZoneTap(mode: currentTrackingMode) == .recordResult {
+        if var newCall, PitchEntryFlow.stepAfterZoneTap(mode: currentTrackingMode) == .recordResult {
+            // No chip (or a Catcher pick carried over) = Unknown, never a
+            // hidden Catcher call.
+            newCall = PitchCall(pitch: PitchEntryFlow.trackedPitch(chip: newCall.pitch),
+                                location: PitchEntryFlow.bareLocation(newCall.location),
+                                isStrike: newCall.isStrike, codes: [])
+            calledPitch = newCall
             let label = "\(newCall.isStrike ? "Strike" : "Ball") \(newCall.location)"
             activeCalledPitchId = UUID().uuidString
             pendingResultLabel = label
             actualLocationRecorded = label
             resultVisualState = label
             pitchResultBannerPhase = .chooseAny
-            expandCalledPitchComposerToLarge()
+            // Then the short estimate panel under the zone (pitch type and
+            // called spot); Skip / Done open the result.
+            calledPitchComposerDetent = .fraction(0.32)
+            catcherEstimate = nil
+            catcherEstimateDraftPitch = newCall.pitch
+            catcherEstimateDraftLocation = nil
+            catcherEstimateDismissed = false
             return
         }
 
@@ -1497,7 +1525,26 @@ struct PitchTrackerView: View {
         showGameEntryErrorAlert = true
     }
 
+    /// The open game's saved base-running events, for the cards
+    /// (GameTimeline). Every runner event is saved to the owner's game too
+    /// (RunnerEventStore.savePaths), so this one listener sees them all.
+    private func startListeningToGameRunnerEvents() {
+        ui.gameRunnerEventsListener?.remove()
+        ui.gameRunnerEventsListener = nil
+        ui.gameRunnerEvents = []
+        guard isGame, let gid = selectedGameId, let owner = effectiveGameOwnerUserId, !owner.isEmpty else { return }
+        ui.gameRunnerEventsListener = Firestore.firestore()
+            .collection("users").document(owner)
+            .collection("games").document(gid)
+            .collection(RunnerEventStore.collection)
+            .addSnapshotListener { [ui] snapshot, _ in
+                let events = (snapshot?.documents ?? []).compactMap { RunnerEventStore.decode($0.data()) }
+                DispatchQueue.main.async { ui.gameRunnerEvents = events }
+            }
+    }
+
     private func startListeningToGamePitchEvents() {
+        startListeningToGameRunnerEvents()
         // remove old listener
         gamePitchEventsListener?.remove()
         gamePitchEventsListener = nil
@@ -2101,6 +2148,8 @@ struct PitchTrackerView: View {
         catcherEstimate = nil
         catcherEstimateDraftPitch = "Catcher"
         catcherEstimateDraftLocation = nil
+        // Track Game starts every pitch with no chip picked.
+        selectedPitch = PitchEntryFlow.chipAfterSave(current: selectedPitch, mode: currentTrackingMode)
         clearDisplayCodeIfNeeded()
     }
 
@@ -2558,6 +2607,12 @@ struct PitchTrackerView: View {
     }
 
     private func loadAwayPitcherIds(awayTeamId: String?, completion: (() -> Void)? = nil) {
+        // `-UITestKeyMemory`: the demo's Hawks pitcher (no Firestore roster).
+        if isDemoMode, Self.demoKeyMemory {
+            awayPitcherIds = ["demo-away-pitcher"]
+            completion?()
+            return
+        }
         guard let awayTeamId, !awayTeamId.isEmpty else {
             awayPitcherIds = []
             completion?()
@@ -2571,6 +2626,39 @@ struct PitchTrackerView: View {
 
     /// Tapping Away for a game with no opponent roster yet opens setup
     /// instead of silently switching to an empty picker.
+    /// The scorer tapped the other side's pitcher: the team at bat changes.
+    /// The team leaving the plate keeps its half-inning (count, outs,
+    /// runners), the board starts fresh for the new team, and if that team
+    /// was mid-half-inning last time a card asks Keep or Reset
+    /// (HalfInningMemory, user's call: always ask).
+    private func switchPitchingSide(to newSide: GameSide) {
+        guard newSide != activeSide else { return }
+        if isGame, let gid = selectedGameId {
+            let leaving: HalfInningMemory.Side = activeSide == .home ? .away : .home
+            let coming: HalfInningMemory.Side = newSide == .home ? .away : .home
+            HalfInningMemory.save(HalfInningState(balls: balls, strikes: strikes, outs: outs, bases: bases),
+                                  gameId: gid, batting: leaving)
+            applyHalfInning(.fresh)
+            if case .ask(let saved) = HalfInningMemory.plan(saved: HalfInningMemory.load(gameId: gid, batting: coming)) {
+                ui.halfInningPrompt = HalfInningPrompt(teamName: sideLabel(for: newSide == .home ? .away : .home),
+                                                       state: saved)
+            } else {
+                ui.halfInningPrompt = nil
+            }
+        }
+        activeSide = newSide
+    }
+
+    /// Puts a half-inning on the board through the normal writers (count,
+    /// outs and runners), so a live room syncs it.
+    private func applyHalfInning(_ state: HalfInningState) {
+        updateCount(AtBatCount(balls: state.balls, strikes: state.strikes))
+        var next = gameProgress
+        next.outs = state.outs
+        next.bases = state.bases
+        commitGameProgress(next)
+    }
+
     private func handleSelectAwaySide() {
         let game = selectedGameId.flatMap { gid in games.first(where: { $0.id == gid }) }
         guard let awayTeamId = game?.awayTeamId, !awayTeamId.isEmpty else {
@@ -2591,7 +2679,7 @@ struct PitchTrackerView: View {
             refreshOpponentTeamCandidates()
             showSetOpponentSheet = true
         } else {
-            activeSide = .away
+            switchPitchingSide(to: .away)
         }
     }
 
@@ -2637,7 +2725,7 @@ struct PitchTrackerView: View {
                 self.chooseBattersSelection = Set(self.awayRoster.compactMap { $0.hitterId != nil ? $0.id : nil })
                 self.showChooseBattersStep = true
             } else if self.teamSetupShouldFlipSide {
-                self.activeSide = .away
+                self.switchPitchingSide(to: .away)
             }
         }
     }
@@ -2680,7 +2768,7 @@ struct PitchTrackerView: View {
         showChooseBattersStep = false
         showSetOpponentSheet = false
         if teamSetupShouldFlipSide {
-            activeSide = .away
+            switchPitchingSide(to: .away)
         }
     }
 
@@ -3010,7 +3098,7 @@ struct PitchTrackerView: View {
             showSetMyTeamSheet = true
             return
         }
-        activeSide = .home
+        switchPitchingSide(to: .home)
     }
 
     /// Symmetric to refreshOpponentTeamCandidates' exclusion, mirrored.
@@ -3033,7 +3121,7 @@ struct PitchTrackerView: View {
         activeHomeTeamSeason = Self.seasonText(for: team)
         refreshHomeRoster(teamId: teamId)
         if teamSetupShouldFlipSide {
-            activeSide = .home
+            switchPitchingSide(to: .home)
         }
         showSetMyTeamSheet = false
     }
@@ -3563,7 +3651,11 @@ struct PitchTrackerView: View {
             return nil
         }()
 
-        if let templateId,
+        // No Key stays No Key: this runs again whenever templates or
+        // pitchers finish loading, and used to put the game's last key back
+        // right after a pitcher change reset it.
+        if !(isGame && noKey),
+           let templateId,
            !hiddenTemplateIdSet.contains(templateId),
            let template = templates.first(where: { $0.id.uuidString == templateId }) {
             applyTemplate(template)
@@ -3834,6 +3926,13 @@ struct PitchTrackerView: View {
 
     // MARK: - Template Apply Helper
     private func applyTemplate(_ template: PitchTemplate, source: TemplateSelectionSource = .user) {
+        // An automatic restore (.live) keeps the coach's No Key; a key the
+        // coach picks, or a partner following the coach's key, ends it.
+        if TrackerKeyRules.applyingKeyEndsNoKey(pickedByUser: source == .user, isGame: isGame,
+                                                 isOwner: isOwnerForActiveGame) {
+            noKey = false
+        }
+        if source == .user { rememberKeyChoice(.key(template.id.uuidString)) }
         selectedTemplate = template
         lastAppliedTemplateId = template.id
         let fallbackList = availablePitches(for: template)
@@ -3861,16 +3960,69 @@ struct PitchTrackerView: View {
         }
     }
 
+    /// `-UITestKeyMemory`: the demo game runs the per-pitcher key memory
+    /// (it's off in the demo otherwise), with an opposing pitcher.
+    static var demoKeyMemory: Bool { ProcessInfo.processInfo.arguments.contains("-UITestKeyMemory") }
+
+    /// Saves the current pitcher's key choice for this game.
+    private func rememberKeyChoice(_ choice: TrackerKeyRules.KeyChoice) {
+        guard isGame, isOwnerForActiveGame, let gid = selectedGameId, let pid = selectedPitcherId else { return }
+        TrackerSelectionMemory.update(gameId: gid) { $0.setKeyChoice(choice.stored, for: pid) }
+    }
+
     private func applySelectedPitcher(_ pitcher: Pitcher, allowTemplateOverride: Bool = true) {
         if !isDemoMode && isGame && !pitcher.isActiveOwner(currentUid: authManager.user?.uid) {
             return
         }
+        let previousPitcherId = selectedPitcherId
         selectedPitcherId = pitcher.id
         persistSelectedPitcherId(pitcher.id)
 
         if isGame {
             syncLivePitcherSelectionIfOwner()
         }
+
+        // In a game a new pitcher never inherits the last pitcher's key.
+        // Each pitcher's choice (No Key or a key) is remembered for the
+        // game, so a side switch puts it back without asking; only a
+        // pitcher with no choice yet gets No Key and the pop-up
+        // (TrackerKeys.swift, 2026-11-22).
+        if !isDemoMode || Self.demoKeyMemory, isOwnerForActiveGame, isGame, let gid = selectedGameId,
+           let newPid = pitcher.id {
+            let sameSide = previousPitcherId.map {
+                SideScope.pitcher($0, belongsTo: activeSide, awayPitcherIds: awayPitcherIds)
+            } ?? false
+            if let replaced = TrackerKeyRules.replacedPitcher(previousPitcherId: previousPitcherId,
+                                                              newPitcherId: newPid, sameSide: sameSide) {
+                TrackerSelectionMemory.update(gameId: gid) { $0.setKeyChoice(nil, for: replaced) }
+            }
+            let remembered = TrackerKeyRules.KeyChoice(
+                stored: TrackerSelectionMemory.load(gameId: gid).keyChoice(for: newPid))
+            let rememberedKey: PitchTemplate? = {
+                guard case .key(let id)? = remembered else { return nil }
+                return templates.first(where: { $0.id.uuidString == id })
+            }()
+            switch TrackerKeyRules.planForPitcher(previousPitcherId: previousPitcherId, newPitcherId: newPid,
+                                                  remembered: remembered, rememberedKeyExists: rememberedKey != nil) {
+            case .restore(.noKey):
+                noKey = true
+                return
+            case .restore(.key):
+                if let rememberedKey { applyTemplate(rememberedKey) }
+                return
+            case .ask:
+                noKey = true
+                let own = pitcher.templateId.flatMap { tid in templates.first(where: { $0.id.uuidString == tid }) }
+                if TrackerKeyRules.showsKeyReminder(mode: currentTrackingMode) {
+                    ui.keyReminder = TrackerKeyRules.reminder(pitcherName: pitcher.name,
+                                                              ownKey: own.map { ($0.id.uuidString, $0.name) })
+                }
+                return
+            case .keep:
+                break
+            }
+        }
+        if isGame && noKey { return }
 
         guard allowTemplateOverride else { return }
         guard !(isGame && !isOwnerForActiveGame) else { return }
@@ -4095,6 +4247,9 @@ struct PitchTrackerView: View {
 
         isGame = true
         sessionManager.switchMode(to: .game)
+        // Every pitcher starts on No Key (TrackerKeys.swift). A live partner
+        // follows the coach's key instead.
+        noKey = TrackerKeyRules.gameStartsOnNoKey(isOwner: isDemoMode || ownerUid == authManager.user?.uid)
 
         // ✅ Persist "active game" so relaunch restores correctly
         let defaults = UserDefaults.standard
@@ -5405,7 +5560,9 @@ struct PitchTrackerView: View {
                 initialJerseyFilter: selectedJerseyNumberDisplay ?? selectedBatterJersey,
                 initialSelectedEventID: cardsEditTargetEventID,
                 shouldAutoOpenEditOutcome: false,
-                onGearTapOverride: nil
+                onGearTapOverride: nil,
+                // Clear of the sheet's ✕.
+                topControlsTrailingInset: 44
             )
                 .ignoresSafeArea()
                 .presentationDetents([.large])
@@ -5563,7 +5720,7 @@ struct PitchTrackerView: View {
     /// Pre-existing tab bar, kept for non-game modes (practice/scout), where
     /// the compact game-score header above doesn't apply.
     private var legacyOverlayTabsRow: some View {
-        let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
+        let showCards = (selectedTemplate != nil) || (isGame && (keyIsOff || activeLiveId != nil || !isOwnerForActiveGame))
         let latestEditableEvent = filteredEvents.first(where: { $0.id != nil })
         return HStack(spacing: 6) {
             if showCards {
@@ -5672,7 +5829,7 @@ struct PitchTrackerView: View {
     /// floats as an overlay on top of `overlayContent` in `cardsAndOverlay` —
     /// so this view is just the card list now, no floating buttons of its own.
     private var cardsOverlayContent: some View {
-        let showCards = (selectedTemplate != nil) || (isGame && (activeLiveId != nil || !isOwnerForActiveGame))
+        let showCards = (selectedTemplate != nil) || (isGame && (keyIsOff || activeLiveId != nil || !isOwnerForActiveGame))
         if showCards {
             pitchResultSheetBody(
                 controlButtonsOffsetY: -30,
@@ -5698,7 +5855,8 @@ struct PitchTrackerView: View {
         showTopControls: Bool = true,
         initialSelectedEventID: String? = nil,
         shouldAutoOpenEditOutcome: Bool = false,
-        onGearTapOverride: (() -> Void)? = nil
+        onGearTapOverride: (() -> Void)? = nil,
+        topControlsTrailingInset: CGFloat = 0
     ) -> some View {
         PitchResultSheet(
             allEvents: filteredEvents,
@@ -5708,6 +5866,9 @@ struct PitchTrackerView: View {
             isParticipant: (isGame && !isOwnerForActiveGame),
             selectedPlayerName: selectedPitcherName,
             gameOwnerUserId: effectiveGameOwnerUserId,
+            matchup: cardMatchupNames,
+            runnerEvents: isGame ? ui.gameRunnerEvents + ui.sessionRunnerEvents : [],
+            topControlsTrailingInset: topControlsTrailingInset,
             liveGameId: activeLiveId,
             sharedDeletedEventIDs: sharedDeletedEventIDs,
             onDeleteEventIDs: { ids in
@@ -5944,7 +6105,7 @@ struct PitchTrackerView: View {
 
     private var isContentSectionInert: Bool {
         let isActiveLiveParticipant = (activeLiveId != nil && isGame && !isOwnerForActiveGame)
-        return selectedTemplate == nil && !isActiveLiveParticipant
+        return selectedTemplate == nil && !keyIsOff && !isActiveLiveParticipant
     }
 
     private var contentSectionDimmed: some View {
@@ -6083,6 +6244,9 @@ struct PitchTrackerView: View {
         if let call = calledPitch {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 8) {
+                    // No Key still shows the called pitch and "Tap Location",
+                    // like a Catcher call - just no code. Hiding the card left
+                    // only the blurred result sheet (2026-11-21).
                     if PitchEntryFlow.showsCodePanel(currentTrackingMode), practiceSession == nil {
                     CalledPitchView(
                         pitchResultBannerPhase: $pitchResultBannerPhase,
@@ -6092,10 +6256,11 @@ struct PitchTrackerView: View {
                         autoPitchOnlyEnabled: $ui.autoPitchOnlyEnabled,
                         liveId: activeLiveId,
                         call: call,
-                        pitchCodeAssignments: pitchCodeAssignments,
+                        pitchCodeAssignments: noKey ? [] : pitchCodeAssignments,
                             batterSide: batterSide,
-                            template: selectedTemplate,
-                            isEncryptedMode: selectedTemplate.map { useEncrypted(for: $0) } ?? false,
+                            template: noKey ? nil : selectedTemplate,
+                            isEncryptedMode: noKey ? false : (selectedTemplate.map { useEncrypted(for: $0) } ?? false),
+                            noCode: noKey,
                             onDeferDisplayCode: { colorName, code in
                                 deferredDisplayCode = (colorName: colorName, code: code)
                                 ensureAutoLiveSessionIfNeeded()
@@ -6106,7 +6271,7 @@ struct PitchTrackerView: View {
                     .accessibilityIdentifier("tracker.codePanel")
                     }
 
-                    if showCatcherEstimatePrompt, let call = catcherRealCall {
+                    if showCatcherEstimatePrompt, let call = estimateCall {
                         catcherEstimateSheetView(for: call)
                     } else {
                         gatedPitchResultSheetView
@@ -6135,26 +6300,59 @@ struct PitchTrackerView: View {
         return (loc.isEmpty || loc == "Catcher") ? nil : calledPitch
     }
 
-    private var showCatcherEstimatePrompt: Bool {
-        catcherRealCall != nil && !catcherEstimateDismissed
+    /// The call the estimate panel is about: a Catcher call with its real
+    /// spot, or any Track Game pitch (PitchEntryFlow.showsEstimate).
+    private var estimateCall: PitchCall? {
+        if let catcherRealCall { return catcherRealCall }
+        guard practiceSession == nil, currentTrackingMode == .scout, isRecordingResult,
+              let calledPitch, PitchEntryFlow.showsEstimate(mode: currentTrackingMode, callPitch: calledPitch.pitch)
+        else { return nil }
+        return calledPitch
     }
 
+    private var showCatcherEstimatePrompt: Bool {
+        estimateCall != nil && !catcherEstimateDismissed
+    }
+
+    /// What a zone tap during the estimate must leave as the result: Track
+    /// Game's where-it-went, or nothing yet for a Catcher call.
+    private var resultLabelDuringEstimate: String? {
+        guard currentTrackingMode == .scout, let calledPitch else { return nil }
+        return "\(calledPitch.isStrike ? "Strike" : "Ball") \(calledPitch.location)"
+    }
+
+    /// Catcher's estimate (2026-11-21): a short panel - the main chips and
+    /// zone above it pick the estimate (`pitchChip`, `onResultLocationPicked`).
     private func catcherEstimateSheetView(for call: PitchCall) -> some View {
-        CatcherEstimateView(
+        CatcherEstimatePanel(
             resultCall: call,
-            batterSide: batterSide,
-            pitchOptions: ["Catcher"] + (selectedTemplate?.pitches ?? []),
-            draftPitch: $ui.catcherEstimateDraftPitch,
-            draftLocation: $ui.catcherEstimateDraftLocation,
-            onReset: {
-                catcherEstimateDraftPitch = "Catcher"
-                catcherEstimateDraftLocation = nil
-            },
+            draftPitch: ui.catcherEstimateDraftPitch,
+            draftLocation: ui.catcherEstimateDraftLocation,
+            canFinish: PitchEntryFlow.estimateCanFinish(mode: currentTrackingMode,
+                                                        draftLocation: ui.catcherEstimateDraftLocation),
+            // Reset starts the pitch over, like the zone's Reset: clears the
+            // call and closes the panel (user's call, 2026-11-21).
+            onReset: { resetPitchSelection() },
             onSkip: {
                 catcherEstimate = nil
                 catcherEstimateDismissed = true
+                expandCalledPitchComposerToLarge()
             },
             onDone: {
+                if currentTrackingMode == .scout, let tracked = calledPitch {
+                    // Track Game: the guessed type is the pitch's type; a
+                    // guessed called spot rides as the estimate.
+                    calledPitch = PitchCall(pitch: catcherEstimateDraftPitch, location: tracked.location,
+                                            isStrike: tracked.isStrike, codes: [])
+                    catcherEstimate = catcherEstimateDraftLocation.map { spot in
+                        PitchCall(pitch: catcherEstimateDraftPitch, location: spot,
+                                  isStrike: spot.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Strike "),
+                                  codes: [])
+                    }
+                    catcherEstimateDismissed = true
+                    expandCalledPitchComposerToLarge()
+                    return
+                }
                 guard let location = catcherEstimateDraftLocation else { return }
                 let isStrike = location.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("Strike ")
                 catcherEstimate = PitchCall(
@@ -6164,6 +6362,7 @@ struct PitchTrackerView: View {
                     codes: []
                 )
                 catcherEstimateDismissed = true
+                expandCalledPitchComposerToLarge()
             }
         )
         .padding(.horizontal, 12)
@@ -6241,7 +6440,10 @@ struct PitchTrackerView: View {
             // With no keys to choose from, the Key item used to be present
             // but disabled - the control the coach reaches for when the
             // tracker is blurred, doing nothing. Offer the fix instead.
-            if visibleTemplates.isEmpty {
+            // Track Game uses no key (TrackerKeyRules.keyIsOff).
+            if currentTrackingMode == .scout {
+                EmptyView()
+            } else if visibleTemplates.isEmpty {
                 Button {
                     requestCodeGridKeys(createNew: !allCodeGridKeysAreArchived)
                 } label: {
@@ -6334,8 +6536,9 @@ struct PitchTrackerView: View {
     }
 
     private var topBarMenuLabel: some View {
-        let currentLabel = selectedTemplate?.name ?? "Select a template"
-        let keyPrefix = currentTrackingMode == .scout ? "Pitch Key: " : "Key: "
+        let isTracking = currentTrackingMode == .scout
+        let currentLabel = isTracking ? "Track Game" : (noKey ? "No Key" : (selectedTemplate?.name ?? "Select a template"))
+        let keyPrefix = isTracking ? "" : "Key: "
         let widestLabel = ([currentLabel] + visibleTemplates.map { $0.name }).max(by: { $0.count < $1.count }) ?? currentLabel
 
         return ZStack {
@@ -6361,7 +6564,7 @@ struct PitchTrackerView: View {
                 name: currentLabel,
                 versionLabel: currentTemplateVersionLabel,
                 showVersion: currentTrackingMode != .scout,
-                needsKey: needsKeyForThisGame
+                needsKey: !isTracking && needsKeyForThisGame
             )
         }
         .frame(maxWidth: 124, alignment: .leading)
@@ -7489,6 +7692,9 @@ struct PitchTrackerView: View {
             set: { newValue in
                 if newValue == .scout, isParticipantCallInProgress { return }
                 currentTrackingMode = newValue
+                // Into Track Game: no chip picked (a Catcher pick would
+                // otherwise ride along hidden).
+                if newValue == .scout { selectedPitch = "" }
             }
         )
     }
@@ -7657,6 +7863,8 @@ struct PitchTrackerView: View {
         if let session = practiceSession {
             return PracticeRules.chipOptions(session: session)
         }
+        // No Key: every pitch type (TrackerKeys.swift).
+        if keyIsOff { return allPitches }
         let ordered = orderedPitchesForTemplate
         guard !ordered.isEmpty else { return [] }
         if isGame && !isOwnerForActiveGame {
@@ -7736,10 +7944,25 @@ struct PitchTrackerView: View {
     @ViewBuilder
     private func pitchChip(_ pitch: String) -> some View {
         let isNoneChip = pitch.isEmpty
-        let isSelectedChip = isNoneChip ? selectedPitch.isEmpty : selectedPitch == pitch
+        let isSelectedChip = showCatcherEstimatePrompt
+            ? (isNoneChip ? catcherEstimateDraftPitch == "Catcher" : catcherEstimateDraftPitch == pitch)
+            : (isNoneChip ? selectedPitch.isEmpty : selectedPitch == pitch)
         let chipColor = isNoneChip ? Color.black : colorForPitch(pitch)
 
         Button {
+            if showCatcherEstimatePrompt {
+                // Estimate open: the chip is the estimated pitch; tapping
+                // it again takes it back.
+                let none = currentTrackingMode == .scout ? PitchEvent.unknownPitch : "Catcher"
+                let tapped = isNoneChip ? "Catcher" : pitch
+                catcherEstimateDraftPitch = catcherEstimateDraftPitch == tapped ? none : tapped
+                return
+            }
+            if !isNoneChip, selectedPitch == pitch {
+                // Tap the selected chip again to deselect it.
+                selectedPitch = PitchEntryFlow.chipAfterTap(current: selectedPitch, tapped: pitch)
+                return
+            }
             if isNoneChip {
                 // Selecting Catcher opens nothing. The coach's next zone tap
                 // (where the pitch landed) creates the Catcher call with its
@@ -7774,6 +7997,8 @@ struct PitchTrackerView: View {
                 )
         }
         .buttonStyle(.plain)
+        // The picked chip reads as selected (VoiceOver, UI tests).
+        .accessibilityAddTraits(isSelectedChip ? .isSelected : [])
     }
 
     private func syncSelectedPitchWithVisibleOptions() {
@@ -8449,7 +8674,7 @@ struct PitchTrackerView: View {
                 gameIsActive: gameIsActive,
                 selectedPitch: selectedPitch,
                 // Practice isn't linked to any key: no codes, no greyed spots.
-                pitchCodeAssignments: practiceSession == nil ? pitchCodeAssignments : [],
+                pitchCodeAssignments: (practiceSession == nil && !keyIsOff) ? pitchCodeAssignments : [],
                 isRecordingResult: isRecordingResult,
                 setIsRecordingResult: { isRecordingResult = $0 },
                 setActualLocation: { actualLocationRecorded = $0 },
@@ -8461,6 +8686,16 @@ struct PitchTrackerView: View {
                 showResultConfirmation: $ui.showResultConfirmation,
                 showConfirmSheet: confirmSheetBinding,
                 onResultLocationPicked: { pickedLabel in
+                    // Catcher's estimate open: this tap is the estimated
+                    // called spot, not a new result - put the result back.
+                    if showCatcherEstimatePrompt {
+                        catcherEstimateDraftLocation = pickedLabel
+                        let result = resultLabelDuringEstimate
+                        pendingResultLabel = result
+                        actualLocationRecorded = result
+                        resultVisualState = result
+                        return
+                    }
                     // Practice: the second tap is where it went - save now.
                     if practiceSession != nil {
                         savePracticePitch(actualLabel: pickedLabel)
@@ -8489,14 +8724,14 @@ struct PitchTrackerView: View {
                     beginCatcherCoachCall()
                 },
                 isEncryptedMode: {
-                    if practiceSession != nil { return false }
+                    if practiceSession != nil || keyIsOff { return false }
                     if let t = selectedTemplate {
                         return useEncrypted(for: t)
                     }
                     return false
                 }(),
                 colorRefreshToken: colorRefreshToken,
-                template: practiceSession == nil ? selectedTemplate : nil,
+                template: (practiceSession == nil && !keyIsOff) ? selectedTemplate : nil,
                 canInitiateCall: canInitiateCall,
                 forceOutlineButtons: isDemoMode
             )
@@ -8854,6 +9089,9 @@ struct PitchTrackerView: View {
         if currentTrackingMode == .scout {
             eventToPersist.calledPitch = nil
         }
+        if keyIsOff {
+            eventToPersist.templateId = nil
+        }
         if isGame && sessionManager.currentMode == .game {
             GameProgress.stampBasePlay(on: &eventToPersist, bases: bases)
             let defense = currentDefense
@@ -9168,7 +9406,7 @@ struct PitchTrackerView: View {
     private func recordRunnerEvent(_ kind: RunnerEventKind, from: Int, substitute: BaseRunner? = nil) {
         guard isGame, sessionManager.currentMode == .game else { return }
         var next = gameProgress
-        guard let event = next.recordRunnerEvent(
+        guard var event = next.recordRunnerEvent(
             kind,
             from: from,
             substitute: substitute,
@@ -9181,6 +9419,11 @@ struct PitchTrackerView: View {
                 inning: inning
             )
         ) else { return }
+        // The board when it happened - for the cards and game summaries.
+        event.outsBefore = outs
+        event.balls = balls
+        event.strikes = strikes
+        event.batterJersey = jerseyCells.first(where: { $0.id == selectedBatterId })?.jerseyNumber
         commitGameProgress(next)
         if !isDemoMode {
             RunnerEventStore.save(event, liveId: activeLiveId, ownerUid: effectiveGameOwnerUserId, gameId: selectedGameId)
@@ -9522,6 +9765,12 @@ struct PitchTrackerView: View {
             // to reach it. A ScrollView whose content already fits behaves exactly
             // like a plain stack, so this is a no-op on devices that already fit.
             padPortraitContainer(trackerScrollOrPractice)
+                // Coming up to bat mid-half-inning: Keep or Reset - a card
+                // over the bottom of the screen, above the tab bar.
+                .overlay(alignment: .bottom) {
+                    HalfInningPromptCard(ui: ui)
+                        .padding(.bottom, 96)
+                }
         }
         .frame(maxHeight: .infinity, alignment: .top)
         // Attached at the root, where its full-screen overlay can actually
@@ -10353,6 +10602,30 @@ struct PitchTrackerView: View {
         selectedGameId = game.id
         opponentName = game.opponent
         activeGameOwnerUserId = Self.demoUserId
+        // `-UITestTwoSides`: the demo game has an opponent team, so UI tests
+        // can switch the pitching side (HalfInningMemory).
+        if ProcessInfo.processInfo.arguments.contains("-UITestTwoSides"),
+           let index = games.firstIndex(where: { $0.id == game.id }) {
+            games[index].teamId = "demo-home"
+            games[index].awayTeamId = "demo-away"
+            activeHomeTeamName = "Lightning"
+            activeAwayTeamName = "Hawks"
+        }
+        // `-UITestKeyMemory`: a Hawks pitcher on the other side, and a fresh
+        // memory for the demo game (UserDefaults outlives a test run).
+        if Self.demoKeyMemory {
+            let hawks = Pitcher(id: "demo-away-pitcher", name: "Hawks Pitcher", templateId: nil,
+                                ownerUid: Self.demoUserId, sharedWith: [], claimedByUid: nil, createdAt: Date())
+            pitchers.append(hawks)
+            awayPitcherIds = [hawks.id ?? ""]
+            if let gid = game.id {
+                TrackerSelectionMemory.update(gameId: gid) { memory in
+                    memory = TrackerSelectionMemory()
+                    memory.setPitcher(pitcher.id, for: .home)
+                    memory.setPitcher(hawks.id, for: .away)
+                }
+            }
+        }
         ownerTemplateName = template.name
         isGame = true
         currentTrackingMode = .coach
@@ -11782,7 +12055,7 @@ struct PitchTrackerView: View {
                 // "Add From Team" forever.
                 persistHitterLinks()
             }
-            .appSheet(isPresented: $ui.showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }) {
+            .appSheet(isPresented: $ui.showSetOpponentSheet, onDismiss: { showChooseBattersStep = false }, chrome: .handle) {
                 // Defaulted to the system's full-size sheet before, which
                 // looked odd for a sheet this sparse - medium fits its
                 // content, with large still reachable by dragging up for
@@ -11791,12 +12064,12 @@ struct PitchTrackerView: View {
                     .fixedAppDynamicType()
                     .presentationDetents([.medium, .large])
             }
-            .appSheet(isPresented: $ui.showSetMyTeamSheet) {
+            .appSheet(isPresented: $ui.showSetMyTeamSheet, chrome: .handle) {
                 setMyTeamSheetView
                     .fixedAppDynamicType()
                     .presentationDetents([.medium, .large])
             }
-            .appSheet(isPresented: $ui.showQuickAddPlayerSheet) {
+            .appSheet(isPresented: $ui.showQuickAddPlayerSheet, chrome: .handle) {
                 // Same reasoning as setOpponentSheetView above - the old
                 // 2-field version looked lost filling the whole screen;
                 // medium/large now that Position and Batting Side add more
@@ -11813,14 +12086,31 @@ struct PitchTrackerView: View {
                 ScrollableSelectionSheet(
                     title: "Select Template",
                     items: visibleTemplates,
-                    topActions: [],
+                    topActions: [SelectionSheetAction(title: "No Key", systemImage: "key.slash") {
+                        ui.noKey = true
+                        ui.noKeyChosenCount += 1
+                    }],
                     itemTitle: { $0.name },
-                    isSelected: { $0.id == selectedTemplate?.id },
+                    isSelected: { !ui.noKey && $0.id == selectedTemplate?.id },
                     onSelect: { template in
                         applyTemplate(template)
                     }
                 )
                 .fixedAppDynamicType()
+            }
+            .modifier(KeyReminderPresenter(ui: ui))
+            .onChange(of: ui.noKeyChosenCount) { _, _ in
+                rememberKeyChoice(.noKey)
+            }
+            .onChange(of: ui.requestedHalfInning) { _, state in
+                guard let state else { return }
+                ui.requestedHalfInning = nil
+                applyHalfInning(state)
+            }
+            .onChange(of: ui.requestedKeyId) { _, id in
+                guard let id else { return }
+                ui.requestedKeyId = nil
+                if let template = templates.first(where: { $0.id.uuidString == id }) { applyTemplate(template) }
             }
             .appConfirmationDialog(
                 isPresented: $ui.showCallingPitchesPrompt,
@@ -11870,7 +12160,7 @@ struct PitchTrackerView: View {
             .eraseToAnyView()
 
         let v9b = v9
-            .appSheet(isPresented: $ui.showGameSummarySheet) {
+            .appSheet(isPresented: $ui.showGameSummarySheet, chrome: .handle) {
                 gameSummarySheetView
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
@@ -12025,7 +12315,7 @@ struct PitchTrackerView: View {
             }
             .appSheet(isPresented: $ui.showAtBatHeatmapSheet, onDismiss: {
                 executePendingHeatmapCallIfNeeded()
-            }) {
+            }, chrome: .handle) {
                 atBatBatterHeatmapSheetView
                     .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
@@ -14049,6 +14339,9 @@ struct CalledPitchView: View {
     let batterSide: BatterSide
     let template: PitchTemplate?
     let isEncryptedMode: Bool
+    /// No Key: nothing to signal - show the pitch and "Tap Location", like
+    /// a Catcher call.
+    var noCode: Bool = false
     let onDeferDisplayCode: ((String, String) -> Void)?
     
     /// Call length is 4 (Advanced: C1C2|C3C4) or 3 (Normal: C1C2|Cloc). Pitch is always the leading
@@ -14173,7 +14466,7 @@ struct CalledPitchView: View {
         let callColor: Color = isStrike ? .green : .red
         let isCatcherCall = call.pitch.trimmingCharacters(in: .whitespacesAndNewlines) == "Catcher"
         let bannerShowsTapResult: Bool =
-            isCatcherCall ||
+            isCatcherCall || noCode ||
             (tappedCode != nil) ||
             autoPitchOnlyEnabled
         let bannerText: String = {
@@ -14278,7 +14571,7 @@ struct CalledPitchView: View {
                     
                 } else {
                     if !isEncryptedMode {
-                        Text("No assigned calls for this pitch/location")
+                        Text(noCode ? "No key – tap where the pitch went" : "No assigned calls for this pitch/location")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.top, 2)

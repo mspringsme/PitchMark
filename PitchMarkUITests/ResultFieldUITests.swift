@@ -50,7 +50,7 @@ final class ResultFieldUITests: XCTestCase {
             sleep(1)
             app.scrollViews.firstMatch.swipeDown(velocity: .fast)
         }
-        tapWhenHittable(app.buttons["4 Seam"])
+        app.buttons["4 Seam"].pickChip()
         tapWhenHittable(app.buttons["Ball Up"])
         sleep(1)
         tapWhenHittable(app.buttons["Ball Up"].firstMatch)

@@ -268,12 +268,21 @@ final class TeamSponsorStore: ObservableObject {
 // MARK: - Roster section
 
 /// The team roster's sponsor section: the running sponsors for everyone who
-/// can see the team, and Add a Sponsor for its coach.
+/// can see the team, and Add a Sponsor for its coach. Its purchase sheet is
+/// on the roster's root (`RosterExtrasSheets`) - see RosterExtrasPresentation
+/// for why a sheet can't sit on a List section.
 struct TeamSponsorSection: View {
     let team: Team
     let isTeamOwner: Bool
-    @StateObject private var store = TeamSponsorStore()
-    @State private var showPurchase = false
+    let presentation: RosterExtrasPresentation
+    @ObservedObject private var store: TeamSponsorStore
+
+    init(team: Team, isTeamOwner: Bool, presentation: RosterExtrasPresentation) {
+        self.team = team
+        self.isTeamOwner = isTeamOwner
+        self.presentation = presentation
+        self._store = ObservedObject(wrappedValue: presentation.sponsorStore)
+    }
 
     var body: some View {
         Section {
@@ -282,7 +291,7 @@ struct TeamSponsorSection: View {
             }
             if isTeamOwner {
                 Button {
-                    showPurchase = true
+                    presentation.showSponsorPurchase = true
                 } label: {
                     Label("Add a Team Sponsor", systemImage: "megaphone")
                 }
@@ -298,13 +307,6 @@ struct TeamSponsorSection: View {
             if isTeamOwner {
                 Text("Sell a season sponsorship to a local business the way you'd sell a banner, then show it here, on your tourney pages and in season books. Sponsors see nothing about your players or families.")
             }
-        }
-        .onAppear { store.start(teamId: team.id) }
-        .appSheet(isPresented: $showPurchase, chrome: .handle) {
-            NavigationStack {
-                SponsorSlotPurchaseView(team: team)
-            }
-            .fixedAppDynamicType()
         }
     }
 }

@@ -19,6 +19,14 @@ service cloud.firestore {
       return !(data.keys().hasAny(['expiresAt'])) || (data.expiresAt > request.time);
     }
 
+    // Who may edit a team's schedule (2026-11-22): the team's creator, or
+    // a member invited as a Scheduler (role "assistant").
+    function isTeamPublisherOf(teamId) {
+      let member = /databases/$(database)/documents/teams/$(teamId)/members/$(uid());
+      return get(/databases/$(database)/documents/teams/$(teamId)).data.createdByUid == uid()
+        || (exists(member) && get(member).data.roles.hasAny(['assistant']));
+    }
+
     function sharedWithMe(data) {
       return (
         data.keys().hasAny(['sharedWith']) && data.sharedWith.hasAny([uid()])
@@ -387,6 +395,23 @@ service cloud.firestore {
           && data.roles.hasOnly(get(path).data.roles);
       }
 
+      // A family code (2026-11-22): one reusable invite for every family,
+      // Family role only - never burned, so it isn't single-use.
+      function joinedWithFamilyCode(data) {
+        let path = /databases/$(database)/documents/teamInviteTokens/$(data.inviteToken);
+        return data.inviteToken is string
+          && exists(path)
+          && get(path).data.teamId == teamId
+          && get(path).data.get("multiUse", false) == true
+          && notExpired(get(path).data)
+          && get(path).data.roles.hasOnly(['parent'])
+          && data.roles.hasOnly(['parent']);
+      }
+
+      function isTeamMember() {
+        return exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()));
+      }
+
       allow get: if signedIn() && (
         resource.data.createdByUid == uid()
         || exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()))
@@ -409,21 +434,34 @@ service cloud.firestore {
         // single-team access to this subcollection - it does NOT authorize
         // a collectionGroup("members") query across every team at once.
         // That needs the separate recursive-wildcard rule below
-        // (MEMBERS COLLECTION GROUP). Direct, single-team listing isn't
-        // used by anything yet, so deny it here explicitly.
-        allow list: if false;
+        // (MEMBERS COLLECTION GROUP). Direct, single-team listing is the
+        // creator's Team Members list (2026-11-22) - nobody else's.
+        allow list: if signedIn() && isTeamCreator();
 
-        // Only yourself, and only as the team's creator or with a team
-        // invite you have just redeemed, with no role the invite didn't
-        // grant. Knowing a team's id is not enough.
+        // Only yourself, and only as the team's creator, with a team invite
+        // you have just redeemed, or with the team's family code - with no
+        // role the invite didn't grant. Knowing a team's id is not enough.
         allow create: if signedIn() && memberUid == uid() && request.resource.data.uid == uid()
-          && (isTeamCreator() || redeemedTeamInvite(request.resource.data));
+          && (isTeamCreator()
+              || redeemedTeamInvite(request.resource.data)
+              || joinedWithFamilyCode(request.resource.data));
         allow update: if signedIn() && isTeamCreator();
         // A member can remove their own membership (Leave Team) without
         // needing the creator to do it for them; the creator can still
         // remove anyone's. Split from `update` on purpose - role changes
         // stay creator-only, only self-removal is opened up.
         allow delete: if signedIn() && (isTeamCreator() || memberUid == uid());
+      }
+
+      // TEAM TOURNEYS (2026-11-22): a tourney set to this team, so the
+      // coach and their Schedulers edit one copy and every member sees it
+      // live. Archived, never deleted.
+      match /tourneys/{tourneyId} {
+        allow get, list: if signedIn() && (isTeamCreator() || isTeamMember());
+        allow create, update: if signedIn()
+          && isTeamPublisherOf(teamId)
+          && request.resource.data.teamId == teamId;
+        allow delete: if false;
       }
 
       match /players/{playerId} {
@@ -593,15 +631,23 @@ service cloud.firestore {
       allow update: if signedIn()
         && resource != null
         && !(resource.data.keys().hasAny(['redeemedByUid']))
+        && resource.data.get('multiUse', false) == false
         && notExpired(resource.data)
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['redeemedByUid', 'redeemedAt'])
         && request.resource.data.redeemedByUid == uid();
 
+      // Only the team's creator invites (2026-11-22 - before this anyone
+      // could mint a token for any team and join it), only as Scheduler or
+      // Family, and a reusable code is Family only.
       allow create: if signedIn()
         && request.resource.data.createdByUid == uid()
         && request.resource.data.teamId is string
-        && request.resource.data.expiresAt is timestamp;
+        && request.resource.data.expiresAt is timestamp
+        && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdByUid == uid()
+        && request.resource.data.roles.hasOnly(['assistant', 'parent'])
+        && (request.resource.data.get('multiUse', false) == false
+            || request.resource.data.roles.hasOnly(['parent']));
 
       allow update, delete: if signedIn()
         && resource != null
@@ -971,10 +1017,19 @@ service cloud.firestore {
       allow create: if signedIn()
         && shareId.matches('^[0-9a-f]{32,64}$')
         && request.resource.data.ownerUid == uid();
-      allow update: if signedIn()
-        && resource.data.ownerUid == uid()
-        && request.resource.data.ownerUid == uid();
-      allow delete: if signedIn() && resource.data.ownerUid == uid();
+      allow update: if signedIn() && (
+        (resource.data.ownerUid == uid() && request.resource.data.ownerUid == uid())
+        // A team tourney's copy: any of the team's publishers keeps it
+        // current; owner and team can't change (2026-11-22).
+        || (resource.data.get('teamId', null) is string
+            && request.resource.data.ownerUid == resource.data.ownerUid
+            && request.resource.data.get('teamId', null) == resource.data.teamId
+            && isTeamPublisherOf(resource.data.teamId))
+      );
+      allow delete: if signedIn() && (
+        resource.data.ownerUid == uid()
+        || (resource.data.get('teamId', null) is string && isTeamPublisherOf(resource.data.teamId))
+      );
     }
 
     // ─────────────────────────────────────────────

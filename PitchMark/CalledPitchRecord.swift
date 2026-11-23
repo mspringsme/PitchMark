@@ -931,6 +931,8 @@ struct PitchCardView: View {
     let footerTextName: String
     let footerTextDate: String
     let gameTitle: String?
+    /// The whole header line when the caller worked it out (CardHeader).
+    var headerTitle: String? = nil
     let pitchNumber: Int?
     let outcomeSummary: [String]?
     let jerseyNumber: String?
@@ -957,6 +959,7 @@ struct PitchCardView: View {
         atBatCountText: String? = nil,
         trackingMode: TrackingMode = .coach,
         gameTitle: String? = nil,
+        headerTitle: String? = nil,
         hideHeader: Bool = false,
         onLongPress: @escaping (() -> Void) = {}
     ) {
@@ -976,6 +979,7 @@ struct PitchCardView: View {
         self.atBatCountText = atBatCountText
         self.trackingMode = trackingMode
         self.gameTitle = gameTitle
+        self.headerTitle = headerTitle
         self.hideHeader = hideHeader
         self.onLongPress = onLongPress
     }
@@ -985,7 +989,7 @@ struct PitchCardView: View {
             if hideHeader == false {
                 // 🧠 Header at top-left
                 HStack(spacing: 4) {
-                    Text({
+                    Text(headerTitle ?? {
                         if let game = gameTitle, !game.isEmpty {
                             return "\(footerTextName) vs. \(game)"
                         } else {
@@ -1332,6 +1336,73 @@ enum PitchAssetMapper {
 }
 
 // Used in PitchResultSheet
+/// A base-running event's card in the game's card list: what happened and
+/// the board when it did (RunnerEvent.cardText).
+struct RunnerEventCard: View {
+    let event: RunnerEvent
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "figure.run")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.kindValue?.title ?? "Runner")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+                Text(event.cardText)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            Spacer(minLength: 0)
+            if let inning = event.inning {
+                Text("Inn. \(inning)").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(.secondarySystemBackground)))
+        .padding(.horizontal, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("runnerCard")
+    }
+}
+
+/// The two teams of the open game, so a card can say who was at bat
+/// (2026-11-21). `homeTeamId` is the game's `teamId` (ours), `awayTeamId`
+/// its `awayTeamId`.
+struct CardMatchupNames: Equatable {
+    var homeTeamId: String?
+    var homeName: String
+    var awayTeamId: String?
+    var awayName: String
+}
+
+/// A card's header: the card's own pitcher vs. the team at bat for that
+/// pitch, and the batter's number when known - "Cassie vs. Hawks #7".
+/// The batting team is whoever wasn't fielding (`fieldingTeamId`); a pitch
+/// saved before that was recorded falls back to the game's opponent. It
+/// used to always show the game's opponent, which read backwards whenever
+/// the other team's pitcher was throwing.
+enum CardHeader {
+    static func title(pitcherName: String, event: PitchEvent, matchup: CardMatchupNames?, fallbackOpponent: String?) -> String {
+        var batting: String? = fallbackOpponent
+        if let matchup, let fielding = event.fieldingTeamId, !fielding.isEmpty {
+            if fielding == matchup.homeTeamId, !matchup.awayName.isEmpty {
+                batting = matchup.awayName
+            } else if fielding == matchup.awayTeamId, !matchup.homeName.isEmpty {
+                batting = matchup.homeName
+            }
+        }
+        guard let batting, !batting.isEmpty else { return pitcherName }
+        var title = "\(pitcherName) vs. \(batting)"
+        if let jersey = event.opponentJersey?.trimmingCharacters(in: .whitespacesAndNewlines), !jersey.isEmpty {
+            title += " #\(jersey)"
+        }
+        return title
+    }
+}
+
 struct PitchResultCard: View {
     let event: PitchEvent
     let allEvents: [PitchEvent] // ✅ Add this
@@ -1339,6 +1410,7 @@ struct PitchResultCard: View {
     let templateName: String
     let isParticipant: Bool
     let selectedPlayerName: String
+    var matchup: CardMatchupNames? = nil
     
     @Binding var isSelecting: Bool
     @Binding var isSelected: Bool
@@ -1351,8 +1423,10 @@ struct PitchResultCard: View {
         selectedPlayerName: String,
         isSelecting: Binding<Bool> = .constant(false),
         isSelected: Binding<Bool> = .constant(false),
-        isParticipant: Bool = false
+        isParticipant: Bool = false,
+        matchup: CardMatchupNames? = nil
     ) {
+        self.matchup = matchup
         self.event = event
         self.allEvents = allEvents
         self.games = games
@@ -1525,6 +1599,8 @@ struct PitchResultCard: View {
                 atBatCountText: event.atBatCount,
                 trackingMode: event.trackingMode ?? .coach,
                 gameTitle: derivedGameTitle(from: event),
+                headerTitle: CardHeader.title(pitcherName: selectedPlayerName, event: event,
+                                              matchup: matchup, fallbackOpponent: derivedGameTitle(from: event)),
                 hideHeader: isParticipant,
                 onLongPress: { }
             )
@@ -2758,6 +2834,14 @@ struct PitchResultSheet: View {
     let isParticipant: Bool
     let selectedPlayerName: String
     var gameOwnerUserId: String? = nil
+    /// Who's playing, for each card's "pitcher vs. team at bat" header.
+    var matchup: CardMatchupNames? = nil
+    /// The game's base-running events between pitches, shown as their own
+    /// cards in time order (GameTimeline, 2026-11-21).
+    var runnerEvents: [RunnerEvent] = []
+    /// Extra room at the end of the top controls row - in a sheet, the
+    /// floating ✕ sits there (it covered the filter button, 2026-11-21).
+    var topControlsTrailingInset: CGFloat = 0
     var liveGameId: String? = nil
     var sharedDeletedEventIDs: Set<String> = []
     var onDeleteEventIDs: ((Set<String>) -> Void)? = nil
@@ -2928,6 +3012,23 @@ struct PitchResultSheet: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+
+    /// Runner events under the same pitcher and batter filters as the
+    /// pitches (a batter filter matches the runner's or the batter's number).
+    private var filteredRunnerEvents: [RunnerEvent] {
+        guard sessionManager.currentMode == .game else { return [] }
+        let pitcher = pitcherFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let jersey = jerseyFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return runnerEvents.filter { event in
+            if !pitcher.isEmpty, event.pitcherId != pitcher { return false }
+            if !jersey.isEmpty {
+                let runner = event.runner.label.lowercased().replacingOccurrences(of: "#", with: "")
+                let batter = (event.batterJersey ?? "").lowercased()
+                return runner == jersey || batter == jersey
+            }
+            return true
+        }
     }
 
     private var filteredEvents: [PitchEvent] {
@@ -3103,6 +3204,7 @@ struct PitchResultSheet: View {
                         }
                     }
                     .padding(.horizontal, 20)
+                    .padding(.trailing, topControlsTrailingInset)
                     .background {
                         if isSelecting {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -3116,7 +3218,12 @@ struct PitchResultSheet: View {
 
                 ScrollView(.vertical) {
                     VStack(spacing: 12) {
-                        ForEach(filteredEvents, id: \.identity) { event in
+                        ForEach(GameTimeline.merged(pitches: filteredEvents, runners: filteredRunnerEvents)) { item in
+                            switch item {
+                            case .runner(let runnerEvent):
+                                RunnerEventCard(event: runnerEvent)
+                                    .transition(.move(edge: .top).combined(with: .opacity))
+                            case .pitch(let event):
                             EventRowView(
                                 event: event,
                                 allEvents: allEvents,
@@ -3133,9 +3240,11 @@ struct PitchResultSheet: View {
                                 localBatterJerseyOverrides: localBatterJerseyOverrides,
                                 sharedBatterJerseyOverrides: sharedBatterJerseyOverrides,
                                 isParticipant: isParticipant,
-                                selectedPlayerName: selectedPlayerName
+                                selectedPlayerName: selectedPlayerName,
+                                matchup: matchup
                             )
                             .transition(.move(edge: .top).combined(with: .opacity))
+                            }
                         }
                     }
                 }
@@ -3146,7 +3255,7 @@ struct PitchResultSheet: View {
         .onAppear {
             applyInitialEditTargetIfNeeded()
         }
-        .appSheet(isPresented: $showFilterSheet) {
+        .appSheet(isPresented: $showFilterSheet, chrome: .handle) {
             filterSheetView
         }
         .appConfirmationDialog(
@@ -3650,6 +3759,7 @@ struct PitchResultSheet: View {
         let sharedBatterJerseyOverrides: [String: String]
         let isParticipant: Bool   // <-- add this
         let selectedPlayerName: String
+        var matchup: CardMatchupNames? = nil
 
         var body: some View {
             // Compute ids and effective template id outside of ViewBuilder statements that produce views
@@ -3719,7 +3829,8 @@ struct PitchResultSheet: View {
                 selectedPlayerName: pitcherNameForEvent,
                 isSelecting: $isSelecting,
                 isSelected: isSelectedBinding,
-                isParticipant: isParticipant
+                isParticipant: isParticipant,
+                matchup: matchup
             )
         }
     }

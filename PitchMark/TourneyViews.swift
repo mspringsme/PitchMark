@@ -122,18 +122,30 @@ struct TourneysView: View {
     @State private var pendingArchiveProspect: TourneyProspect? = nil
     @State private var showArchiveDialog = false
     @State private var showAddShared = false
+    /// Teams this user joined as a Scheduler or Family (2026-11-22).
+    @State private var joinedTeams: [JoinedTeam] = []
+    @State private var showJoinTeam = false
+    @State private var pendingLeave: JoinedTeam? = nil
+    @State private var showLeaveDialog = false
     private let onStartGame: ((TourneyGame) -> Void)?
+
+    struct JoinedTeam: Identifiable, Equatable {
+        var id: String
+        var name: String
+        var role: String
+    }
     private let teamContext: TourneyTeamContext?
 
     init(inMemory: Bool = false, seed: [Tourney] = [], seedProspects: [TourneyProspect] = [],
          openId: String? = nil, tab: Tab = .ours, onStartGame: ((TourneyGame) -> Void)? = nil,
-         teamContext: TourneyTeamContext? = nil) {
+         teamContext: TourneyTeamContext? = nil, seedTeams: [TourneyStore.TeamAccess] = []) {
         self.onStartGame = onStartGame
         self.teamContext = teamContext
         _route = State(initialValue: openId.map(TourneyRoute.own))
         _tab = State(initialValue: tab)
         _store = StateObject(wrappedValue: {
             let store = TourneyStore(inMemory: inMemory)
+            if !seedTeams.isEmpty { store.startTeams(seedTeams) }
             seed.forEach { store.save($0) }
             seedProspects.forEach { store.save($0) }
             return store
@@ -178,7 +190,12 @@ struct TourneysView: View {
             .navigationDestination(item: $route) { route in
                 switch route {
                 case .own(let id):
-                    TourneyDetailView(store: store, tourneyId: id)
+                    // A Family sees a team tourney read-only, live.
+                    if let t = store.tourney(id: id), !store.canEdit(t) {
+                        TeamTourneyReadView(store: store, tourneyId: id)
+                    } else {
+                        TourneyDetailView(store: store, tourneyId: id)
+                    }
                 case .shared(let id):
                     SharedTourneyView(store: store, shareId: id)
                 case .prospect(let id):
@@ -194,7 +211,26 @@ struct TourneysView: View {
         .environment(\.tourneyTeams, teamContext)
         .task(id: authManager.user?.uid) {
             store.start(uid: authManager.user?.uid)
+            loadTeams()
         }
+        .appSheet(isPresented: $showJoinTeam, chrome: .handle) {
+            JoinTeamSheet { loadTeams() }
+        }
+        .appConfirmationDialog(
+            isPresented: $showLeaveDialog,
+            title: "Leave \(pendingLeave?.name ?? "the team")?",
+            message: "You stop seeing the team's schedule. The coach can invite you again.",
+            primaryTitle: "Leave Team",
+            primaryAction: {
+                guard let team = pendingLeave else { return }
+                authManager.leaveTeam(teamId: team.id) { _ in
+                    DispatchQueue.main.async { loadTeams() }
+                }
+                pendingLeave = nil
+            },
+            secondaryTitle: "Cancel",
+            secondaryAction: { pendingLeave = nil }
+        )
         .appSheet(isPresented: $showAddShared, chrome: .handle) {
             AddSharedTourneySheet(store: store) { shareId in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { route = .shared(shareId) }
@@ -240,18 +276,47 @@ struct TourneysView: View {
         } else {
             Section {
                 ForEach(sorted) { t in
-                    tourneyRow(t)
-                        .swipeActions(edge: .trailing) {
-                            Button {
-                                pendingArchive = t
-                                showArchiveDialog = true
-                            } label: {
-                                Label("Archive", systemImage: "archivebox")
+                    if store.canEdit(t) {
+                        tourneyRow(t)
+                            .swipeActions(edge: .trailing) {
+                                Button {
+                                    pendingArchive = t
+                                    showArchiveDialog = true
+                                } label: {
+                                    Label("Archive", systemImage: "archivebox")
+                                }
+                                .tint(.gray)
                             }
-                            .tint(.gray)
-                        }
+                    } else {
+                        tourneyRow(t)
+                    }
                 }
             }
+        }
+
+        Section {
+            ForEach(joinedTeams) { team in
+                rowLabel(icon: "person.3.fill", iconColor: .secondary, title: team.name, lines: [team.role])
+                    .accessibilityIdentifier("tourney.joinedTeam.\(team.name)")
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            pendingLeave = team
+                            showLeaveDialog = true
+                        } label: {
+                            Label("Leave", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                    }
+            }
+            Button {
+                showJoinTeam = true
+            } label: {
+                Label("Join a Team", systemImage: "person.badge.plus")
+            }
+            .accessibilityIdentifier("tourney.joinTeam")
+        } header: {
+            Text("Your Teams")
+        } footer: {
+            Text("Join with the link or code from your coach. Your team's tourneys show up above and stay up to date. Swipe a team to leave it.")
         }
 
         Section {
@@ -312,6 +377,7 @@ struct TourneysView: View {
                 iconColor: t.isPast(now: Date()) ? .secondary : .orange,
                 title: t.displayName,
                 lines: [t.dateRangeText(), t.venue.name.isEmpty ? t.venue.address : t.venue.name]
+                    + (store.teamName(t.teamId).map { ["Team: \($0)"] } ?? [])
                     + (t.shareId != nil ? ["Shared in PitchMark"] : [])
             )
         }
@@ -415,10 +481,110 @@ struct TourneysView: View {
         route = .own(t.id)
     }
 
+    /// Every team this user is on: which tourneys they see and edit, and
+    /// the joined ones listed under Your Teams.
+    private func loadTeams() {
+        guard let uid = authManager.user?.uid else { return }
+        authManager.loadMyTeams(includeJoined: true) { entries, _ in
+            let access: [TourneyStore.TeamAccess] = entries.compactMap { entry in
+                guard let id = entry.team.id else { return nil }
+                return .init(id: id, name: entry.team.nameWithClass,
+                             canEdit: TeamAccessRules.schedules(team: entry.team, membership: entry.membership, uid: uid))
+            }
+            store.startTeams(access)
+            joinedTeams = entries
+                .filter { !TeamAccessRules.coaches(team: $0.team, membership: $0.membership, uid: uid) }
+                .compactMap { entry in
+                    entry.team.id.map { JoinedTeam(id: $0, name: entry.team.nameWithClass, role: entry.membership.roleTitle) }
+                }
+        }
+    }
+
     private func createProspect() {
         let p = TourneyProspect()
         store.save(p)
         route = .prospect(p.id)
+    }
+}
+
+// MARK: - Team tourneys and joining a team (2026-11-22)
+
+/// A team tourney for a Family: read-only, live from the store (a pushed
+/// view keeps the value it was pushed with, so it reads the store itself).
+struct TeamTourneyReadView: View {
+    @ObservedObject var store: TourneyStore
+    let tourneyId: String
+
+    var body: some View {
+        Group {
+            if let tourney = store.tourney(id: tourneyId) {
+                TourneyReadView(tourney: tourney)
+                    .navigationTitle(tourney.displayName)
+            } else {
+                ContentUnavailableView("No Longer on the Team", systemImage: "person.3",
+                                       description: Text("The coach took this tourney off the team, or you left the team."))
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Paste a team invite link or code; joins the team.
+struct JoinTeamSheet: View {
+    let onJoined: () -> Void
+
+    @EnvironmentObject private var authManager: AuthManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @State private var isJoining = false
+    @State private var errorText: String? = nil
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Link or code", text: $text)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("joinTeam.code")
+                } footer: {
+                    Text("Your coach sends a team link or a code. Families see the schedule; Schedulers can also edit it.")
+                }
+                if let errorText {
+                    Text(errorText).font(.footnote).foregroundStyle(.red)
+                }
+            }
+            .navigationTitle("Join a Team")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Join") { join() }
+                        .fontWeight(.semibold)
+                        .disabled(isJoining || TeamAccessRules.inviteToken(from: text) == nil)
+                        .accessibilityIdentifier("joinTeam.join")
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func join() {
+        guard let token = TeamAccessRules.inviteToken(from: text) else { return }
+        isJoining = true
+        errorText = nil
+        authManager.redeemTeamInviteToken(token) { result in
+            DispatchQueue.main.async {
+                isJoining = false
+                switch result {
+                case .success:
+                    onJoined()
+                    dismiss()
+                case .failure(let error):
+                    errorText = error.localizedDescription
+                }
+            }
+        }
     }
 }
 
@@ -501,6 +667,9 @@ struct TourneyDetailView: View {
     @State private var showStopSharing = false
     @State private var newChecklistText = ""
     @State private var editingGame: TourneyGame? = nil
+    /// "Share with a Team…" picked, waiting on the confirmation.
+    @State private var pendingTeam: TourneyStore.TeamAccess? = nil
+    @State private var showMoveToTeam = false
 
     enum PlaceSearchTarget: Identifiable {
         case venue
@@ -539,6 +708,23 @@ struct TourneyDetailView: View {
             // First load only - after that the draft is the source.
             if draft == nil { draft = store.tourney(id: tourneyId) }
         }
+        .onChange(of: store.teamTourneys) { _, _ in
+            if draft == nil { draft = store.tourney(id: tourneyId) }
+        }
+        .appConfirmationDialog(
+            isPresented: $showMoveToTeam,
+            title: "Put this tourney on \(pendingTeam?.name ?? "the team")?",
+            message: "Your Schedulers can edit it and everyone on the team sees it, kept up to date. It stays with the team.",
+            primaryTitle: "Put on Team",
+            primaryAction: {
+                guard let team = pendingTeam, draft != nil else { return }
+                draft!.teamId = team.id
+                flushSave()
+                pendingTeam = nil
+            },
+            secondaryTitle: "Cancel",
+            secondaryAction: { pendingTeam = nil }
+        )
         .onChange(of: draft) { old, new in
             guard old != nil, new != nil, old != new else { return }
             scheduleSave()
@@ -701,6 +887,7 @@ struct TourneyDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            teamSection
             overviewSection
             gamesSection
             gameDaySection
@@ -716,6 +903,37 @@ struct TourneyDetailView: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// Which team the tourney is on (2026-11-22). On one: the team's
+    /// Schedulers edit it and every member sees it. Not yet: put it on one
+    /// you schedule for.
+    @ViewBuilder
+    private var teamSection: some View {
+        if let teamId = t.wrappedValue.teamId {
+            Section {
+                Label("Team: \(store.teamName(teamId) ?? "your team")", systemImage: "person.3.fill")
+                    .accessibilityIdentifier("tourney.team")
+            } footer: {
+                Text("Your Schedulers can edit this tourney, and everyone on the team sees it - changes reach them on their own.")
+            }
+        } else if !store.editableTeams.isEmpty {
+            Section {
+                Menu {
+                    ForEach(store.editableTeams) { team in
+                        Button(team.name) {
+                            pendingTeam = team
+                            showMoveToTeam = true
+                        }
+                    }
+                } label: {
+                    Label("Share with a Team…", systemImage: "person.3")
+                }
+                .accessibilityIdentifier("tourney.putOnTeam")
+            } footer: {
+                Text("Every member of the team sees it, and your Schedulers can edit it - no link to send each time.")
+            }
+        }
     }
 
     private var overviewSection: some View {
@@ -1122,7 +1340,14 @@ struct TourneyGameRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(game.summary.isEmpty ? "Game" : game.summary)
                     .font(.subheadline)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(game.canceled ? .secondary : .primary)
+                    .strikethrough(game.canceled)
+                if game.canceled {
+                    Text("Canceled")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("tourney.game.canceled")
+                }
                 if let arrive = game.arriveAt {
                     Text("Arrive \(arrive.formatted(date: .omitted, time: .shortened))")
                         .font(.caption)
@@ -1194,6 +1419,10 @@ struct TourneyGameEditorSheet: View {
                         .accessibilityIdentifier("tourneyGame.field")
                 }
                 TextField("Result (e.g. W 7-3)", text: $game.result)
+                // Stays on the schedule marked Canceled - families see it
+                // (2026-11-22).
+                Toggle("Canceled", isOn: $game.canceled)
+                    .accessibilityIdentifier("tourneyGame.canceled")
                 if let startGame {
                     Section {
                         Button {
@@ -1249,6 +1478,13 @@ struct TourneyGameCardSheet: View {
     var body: some View {
         NavigationStack {
             List {
+                if game.canceled {
+                    Section {
+                        Label("This game is canceled", systemImage: "xmark.octagon.fill")
+                            .foregroundStyle(.red)
+                            .font(.headline)
+                    }
+                }
                 Section {
                     row("When", game.time.formatted(.dateTime.weekday(.wide).month(.abbreviated).day().hour().minute()))
                     if let arrive = game.arriveAt {
@@ -2070,6 +2306,10 @@ struct TourneyUITestHarness: View {
                         startedGame = "New game: \(game.opponent)"
                         showTourneys = false
                     }
+            } else if args.contains("-UITestTourneysFamily") {
+                // A family on the Reds: the Reds' tourney, read-only.
+                TourneysView(inMemory: true, seed: [{ var t = sample; t.teamId = "t-Reds"; return t }()],
+                             seedTeams: [.init(id: "t-Reds", name: "Reds 16U B", canEdit: false)])
             } else {
                 TourneysView(inMemory: true, seed: [sample], seedProspects: [Self.sampleProspect],
                              openId: args.contains("-UITestTourneysDetail") ? sample.id : nil,
@@ -2083,7 +2323,10 @@ struct TourneyUITestHarness: View {
                                  var team = Team(name: name, createdByUid: "uitest")
                                  team.id = "t-\(name)"
                                  done(team)
-                             })
+                             },
+                             // `-UITestTourneysTeams`: the coach schedules for the Reds.
+                             seedTeams: args.contains("-UITestTourneysTeams")
+                                 ? [.init(id: "t-Reds", name: "Reds 16U B", canEdit: true)] : [])
             }
         }
     }

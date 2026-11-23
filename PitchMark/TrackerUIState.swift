@@ -142,6 +142,24 @@ final class TrackerUIState: ObservableObject {
     @Published var isCalledPitchViewVisible: Bool = false
     @Published var shouldBlurBackground: Bool = false
     @Published var isGame: Bool = false
+    /// "No Key" for the current pitcher (TrackerKeys.swift): every pitch
+    /// type as chips, no codes, no greyed spots.
+    @Published var noKey: Bool = false
+    /// The reminder after a pitcher change reset the key to No Key.
+    @Published var keyReminder: TrackerKeyRules.Reminder? = nil
+    /// The reminder's "Use {key}" - handled by the tracker.
+    @Published var requestedKeyId: String? = nil
+    /// Bumped when the coach chooses No Key (the pop-up's Keep No Key, or
+    /// the Key menu) - the tracker remembers it for the pitcher.
+    @Published var noKeyChosenCount: Int = 0
+    /// Coming up to bat mid-half-inning: Keep or Reset (HalfInningMemory).
+    @Published var halfInningPrompt: HalfInningPrompt? = nil
+    /// The card's Keep - handled by the tracker.
+    @Published var requestedHalfInning: HalfInningState? = nil
+    /// The open game's saved base-running events (GameTimeline) and their
+    /// listener.
+    @Published var gameRunnerEvents: [RunnerEvent] = []
+    var gameRunnerEventsListener: ListenerRegistration? = nil
     /// The practice session open in the tracker, if any (Practice.swift).
     @Published var practiceSession: PracticeSession? = nil
     @Published var practicePitchCount: Int = 0

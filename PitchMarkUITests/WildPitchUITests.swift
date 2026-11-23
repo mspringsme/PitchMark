@@ -51,7 +51,7 @@ final class WildPitchUITests: XCTestCase {
         app.scrollViews.firstMatch.swipeDown(velocity: .fast)
 
         // Call a pitch, then tap where it ended up: the result sheet opens.
-        tapWhenHittable(app.buttons["4 Seam"])
+        app.buttons["4 Seam"].pickChip()
         tapWhenHittable(app.buttons["Ball Up"])
         sleep(1)
         tapWhenHittable(app.buttons["Ball Up"].firstMatch)

@@ -89,6 +89,15 @@ final class MomentShareTests: XCTestCase {
         XCTAssertEqual(files, [photo1])
         XCTAssertTrue(MomentShare.sourceFiles(momentId: "m1", photoCount: 3) { _ in false }.isEmpty)
     }
+
+    /// 2026-11-21: a shared Moment carries a way to find the app.
+    func testASharedMomentEndsWithTheGetPitchMarkLink() {
+        let clip = URL(fileURLWithPath: "/tmp/clip.mov")
+        let items = MomentShareRequest(files: [clip]).items
+        XCTAssertEqual(items.first as? URL, clip)
+        XCTAssertEqual(items.last as? String, "Get PitchMark: https://apps.apple.com/app/id6791446420")
+        XCTAssertEqual(items.count, 2, "just the clip and the line - no extra picture")
+    }
 }
 
 // 2026-11-02 bug: batters added from the roster showed "Not on roster"

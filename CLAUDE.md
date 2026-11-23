@@ -1134,6 +1134,121 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
 - Not done: practice from the tracker's own game picker, a link from the
   pitcher's stats, history across sessions.
 
+## Game screen round (2026-11-21)
+
+- **Every pitcher starts on No Key** (user's call): at game start and on
+  every pitching change (`TrackerKeyRules`, TrackerKeys.swift), with a
+  reminder offering the pitcher's own key (`KeyReminderPresenter`). No Key
+  = every pitch type as chips (Unknown last in Track Game), no code panel,
+  no greyed spots, `templateId` nil on the saved pitch.
+- **The catcher's estimate is a panel, not a sheet** (`CatcherEstimatePanel`):
+  the main zone and chips pick the estimate while it's open; Reset / Skip /
+  Done are equal width.
+- **Switching the pitching side keeps each batting team's half-inning**
+  (`HalfInningMemory`, device-local per game + side). The board starts
+  fresh for the new team; if that team was mid-half-inning, a card (not a
+  sheet, `HalfInningPromptCard`) asks Keep or Reset (user's call: always
+  ask). Every user side switch goes through `switchPitchingSide(to:)`;
+  Keep goes back through `updateCount` + `commitGameProgress`.
+- **No Key survives automatic key restores** (`TrackerKeyRules.applyingKeyEndsNoKey`):
+  `applyStoredSelections` reruns whenever templates/pitchers load and used
+  to put the game's last key back right after "Keep No Key". Only a key
+  the coach picks ends No Key; a live partner follows the coach's key and
+  doesn't start on No Key.
+- **Track Game always asks for an estimate** (`PitchEntryFlow.showsEstimate`):
+  zone tap = where it went, then the short panel (pitch type + called
+  spot), Skip/Done open the result. Done sets the pitch's type; a spot
+  rides as `catcherEstimate`. A tap with no chip is **Unknown, never
+  Catcher** (`trackedPitch`) - a Catcher pick carried into Track Game made
+  a hidden Catcher call whose estimate filled the screen over the zone and
+  whose next zone tap cleared the result (the "nothing recorded" bug).
+  Spots lose their Strike/Ball word (`bareLocation`). Track Game clears
+  the chip after each pitch and on entry; tapping the picked chip
+  deselects it in both modes (UI tests use `pickChip()`). Chips carry the
+  `.isSelected` trait.
+- **Track Game uses no key** (`TrackerKeyRules.keyIsOff`, user's call):
+  the Key menu has no key picker and reads "Track Game", chips are every
+  pitch type + Unknown, nothing greyed, no `templateId` saved, no key
+  reminder. Read `keyIsOff`, not `noKey`, for "is a key in use"; `noKey`
+  is the coach's Call Pitches choice and survives the trip.
+- The estimate panel's **Reset starts the pitch over** (`resetPitchSelection`,
+  same as the zone's Reset) and closes the panel.
+- The full cards sheet's top row leaves room for the ✕
+  (`topControlsTrailingInset`).
+- **No Key in Call Pitches still shows the called-pitch card** (`CalledPitchView`
+  `noCode`): pitch name, "Tap Location", "No key – tap where the pitch
+  went", no code. Hiding it left only the blurred result sheet.
+- An App Store link in a share becomes iMessage's preview card, drawn
+  from the App Store listing's first screenshot - not from the app.
+- **Card header is "pitcher vs. batting team #jersey"** (`CardHeader`): the
+  batting team is the side not in `fieldingTeamId`.
+- **Base-running events are cards** between the pitches (`GameTimeline`,
+  `RunnerEventCard`), loaded from the owner's game
+  (`startListeningToGameRunnerEvents`). New events carry the board:
+  `outsBefore`, `balls`, `strikes`, `batterJersey`. Not yet in the
+  per-batter popover's Pitch cards strip.
+- **Shared Moments end with "Get PitchMark: <App Store link>"**
+  (`MomentShareRequest.items`), no extra picture (user's call). The user
+  plans a `pitchmark.app/get` page with its own preview before the next
+  ship. The "Video Not on This Phone" dialog
+  covers reinstalls as well as other devices.
+- Sheets whose content has its own navigation bar get `chrome: .handle` -
+  the ✕ landed on top of their Cancel ("Set My Team").
+- UI-test flags: `-UITestTwoSides` (demo game with Lightning vs. Hawks),
+  `-UITestRoster`.
+
+## Team schedule and members (2026-11-22)
+
+- **Teams have members** (`teams/{id}/members/{uid}`): the creator, a
+  **Scheduler** (role `assistant`, invited with a single-use 7-day link)
+  and **Families** (role `parent`, one reusable family code per team, 180
+  days, `Team.familyInviteToken`; Reset deletes the old token). Team
+  Members is on the roster (`TeamMembers.swift`, creator only: invite,
+  list, Remove). Members join from a link (`/team/{code}`, `team.html`
+  fallback, AASA path) or Tourney Info → Join a Team; they leave from
+  Tourney Info's Your Teams.
+- **`loadMyTeams` is coach-only** (creator or Coach role,
+  `TeamAccessRules.coaches`). 17 places read it - rosters, pickers, the
+  Players list, Merge Duplicates - and a family's Home must not fill with
+  the coach's roster. `loadMyTeams(includeJoined: true)` is only for the
+  schedule.
+- **A tourney can be put on a team** (`Tourney.teamId`): it moves to
+  `teams/{teamId}/tourneys/{id}` and leaves the coach's own list; the
+  creator and Schedulers edit it, every member sees it live
+  (`TourneyStore.startTeams`, `TeamTourneyReadView` for Families). It stays
+  on the team (no un-teaming - nobody can delete a team tourney). Two
+  Schedulers editing at once: last save wins, like any tourney.
+- **A tourney game can be Canceled** (`TourneyGame.canceled`): it stays on
+  the schedule, struck through, and the game card says so.
+- A team tourney's link copy keeps its first sharer as `ownerUid`
+  (`Tourney.shareOwnerUid`); any Scheduler may update it (rules).
+- **Rules fixed**: before this, anyone signed in could create a team
+  invite token for any team and redeem it themselves (any role). Only the
+  team's creator makes invites now, Scheduler/Family only. Rules tests:
+  `rules-tests/tests/teamSchedule.test.mjs`.
+- No push alerts; single Home games aren't on the team schedule yet.
+- Deployed 2026-11-23: Firestore rules, functions, hosting. **There are
+  two AASA files** - `public/apple-app-site-association` and
+  `public/.well-known/apple-app-site-association` (iOS reads this one
+  first). The .well-known copy had gone stale without `/tourney/*`, so
+  tourney links never opened the app. Keep them identical.
+- **Cloud Storage isn't set up on the project** - `storage.rules` can't
+  deploy until someone clicks Get Started in the Firebase console; Season
+  Book and trading card uploads fail until then.
+
+## Each pitcher's key, remembered (2026-11-22)
+
+- `TrackerSelectionMemory.keyChoices` (per game, this phone): "nokey" or
+  "key:<id>" per pitcher. A side switch clears the pitcher and puts the
+  other side's back with no "previous" - that used to count as a pitching
+  change and bring the No Key pop-up back every half inning. Now
+  `TrackerKeyRules.planForPitcher` restores a remembered choice silently
+  and asks only a pitcher with none; a same-side replacement forgets the
+  replaced pitcher (`replacedPitcher`). Choices are saved from the pop-up
+  and the Key menu (`ui.noKeyChosenCount`, `applyTemplate(.user)`).
+- `-UITestKeyMemory` turns the memory on in the demo, with a Hawks
+  pitcher on the other side.
+
 ## Known open items
 
 - **Cancelling the pitch composer leaves the previewed count on the main

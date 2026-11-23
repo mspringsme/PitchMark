@@ -12,10 +12,19 @@ import Foundation
 
 struct MomentShareRequest: Identifiable {
     let id = UUID()
-    let items: [URL]
+    /// The clip and photo copies.
+    let files: [URL]
+
+    /// What the share sheet gets: the files, then a line so whoever
+    /// receives it can find the app (2026-11-21). Plain text, not a deep
+    /// link - the receiver may not have PitchMark yet.
+    var items: [Any] { files + [MomentShare.getPitchMarkLine] }
 }
 
 enum MomentShare {
+    static let appStoreURL = "https://apps.apple.com/app/id6791446420"
+    static let getPitchMarkLine = "Get PitchMark: \(appStoreURL)"
+
     /// A file name from a Moment's title: path separators and other
     /// characters a file name can't hold become spaces; empty falls back
     /// to "Moment".
@@ -77,6 +86,6 @@ enum MomentShare {
                 return source
             }
         }
-        return MomentShareRequest(items: copies)
+        return MomentShareRequest(files: copies)
     }
 }

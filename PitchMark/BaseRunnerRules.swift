@@ -564,8 +564,25 @@ struct RunnerEvent: Codable, Hashable {
     var hitterId: String? = nil
     var createdByUid: String? = nil
     var inning: Int? = nil
+    /// The board when it happened, for the cards and game summaries
+    /// (2026-11-21). Optional: events saved before have none.
+    var outsBefore: Int? = nil
+    var balls: Int? = nil
+    var strikes: Int? = nil
+    /// Who was at the plate ("7").
+    var batterJersey: String? = nil
 
     var kindValue: RunnerEventKind? { RunnerEventKind(rawValue: kind) }
+
+    /// The runner card's line: what happened, then the board - "#7 steals
+    /// home · 2-1 · 1 out · #3 batting".
+    var cardText: String {
+        var parts = [summary]
+        if let balls, let strikes { parts.append("\(balls)-\(strikes)") }
+        if let outsBefore { parts.append("\(outsBefore) out\(outsBefore == 1 ? "" : "s")") }
+        if let batterJersey, !batterJersey.isEmpty { parts.append("#\(batterJersey) batting") }
+        return parts.joined(separator: " · ")
+    }
 
     var summary: String {
         guard let kindValue else { return "Runner" }
@@ -579,5 +596,43 @@ struct RunnerEvent: Codable, Hashable {
         case .advanced:
             return to == Base.scored ? "\(runner.label) scores" : "\(runner.label) to \(Base.name(to))"
         }
+    }
+}
+
+
+// MARK: - Game timeline (2026-11-21)
+
+/// One thing that happened in a game: a pitch (with its own play), or a
+/// base-running event between pitches.
+enum GameTimelineItem: Identifiable {
+    case pitch(PitchEvent)
+    case runner(RunnerEvent)
+
+    var id: String {
+        switch self {
+        case .pitch(let event): return "p-" + event.identity
+        case .runner(let event): return "r-" + event.id
+        }
+    }
+
+    var timestamp: Date {
+        switch self {
+        case .pitch(let event): return event.timestamp
+        case .runner(let event): return event.timestamp
+        }
+    }
+}
+
+/// Every pitch and every base-running event of a game in one time-ordered
+/// list - what the cards show and what game summaries read, so a steal, a
+/// pick-off or a pinch runner between pitches is never left out.
+enum GameTimeline {
+    /// Newest first (the cards' order). A runner event seen twice (local
+    /// copy + saved copy) appears once.
+    static func merged(pitches: [PitchEvent], runners: [RunnerEvent]) -> [GameTimelineItem] {
+        var seen = Set<String>()
+        let uniqueRunners = runners.filter { seen.insert($0.id).inserted }
+        let items = pitches.map(GameTimelineItem.pitch) + uniqueRunners.map(GameTimelineItem.runner)
+        return items.sorted { $0.timestamp > $1.timestamp }
     }
 }

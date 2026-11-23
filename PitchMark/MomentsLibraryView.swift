@@ -463,8 +463,8 @@ struct MomentsLibraryView: View {
         // MomentDetailView's editing chrome.
         .appConfirmationDialog(
             isPresented: $showOtherDeviceNotice,
-            title: "On Another Device",
-            message: "\(momentPendingOtherDeviceNotice?.displayTitle ?? "This Moment") was recorded on another device signed into this account. Its video lives only on that device, so it can't be played, edited, moved, or deleted from here. Open PitchMark on the device it was recorded on to work with it.",
+            title: "Video Not on This Phone",
+            message: "\(momentPendingOtherDeviceNotice?.displayTitle ?? "This Moment") 's video isn't on this phone. Videos are kept only on the phone that recorded them - this one may have been made on another device signed into this account, or on this phone before PitchMark was reinstalled (a reinstall removes the videos). If it's on another device, open PitchMark there to work with it. Clips backed up to Photos are still in your Photos library.",
             primaryTitle: "OK",
             primaryAction: { momentPendingOtherDeviceNotice = nil },
             secondaryTitle: "Cancel",

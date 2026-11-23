@@ -10,6 +10,7 @@
 import SwiftUI
 import UIKit
 import PhotosUI
+import Combine
 import FirebaseAuth
 
 private func priceText(_ cents: Int) -> String {
@@ -32,23 +33,113 @@ private struct WorkingOverlay: View {
 
 // MARK: - Roster section
 
-struct TeamTradingCardsSection: View {
+/// What the roster's Team Sponsors and Team Trading Cards sections want
+/// opened. Their sheets live on the roster's root (`RosterExtrasSheets`),
+/// NOT on the sections: a modifier on a `Section` inside a `List` is applied
+/// to each of its rows, so one flag drove several copies of the same sheet -
+/// one presented and another dismissed it at once ("Make a Trading Card"
+/// showed the player list, then closed it, 2026-11-21).
+@MainActor
+final class RosterExtrasPresentation: ObservableObject {
+    let setStore = TeamCardSetStore()
+    let designStore = TradingCardDesignStore()
+    let sponsorStore = TeamSponsorStore()
+
+    @Published var showPlayerPicker = false
+    @Published var editing: TradingCardDesign? = nil
+    @Published var openSet: TeamCardSet? = nil
+    @Published var showSponsorPurchase = false
+    @Published var errorMessage: String? = nil
+    @Published var showError = false
+
+    /// The design for a picked player, opened after the picker has gone
+    /// (CLAUDE.md sheet hazard #1 - never dismiss one sheet and present
+    /// another in the same transaction).
+    var pendingDesign: TradingCardDesign? = nil
+
+    func start(teamId: String?, uid: String?) {
+        setStore.start(teamId: teamId)
+        designStore.start(uid: uid)
+        sponsorStore.start(teamId: teamId)
+    }
+}
+
+/// Every sheet and dialog the two roster sections open, at the roster's root.
+struct RosterExtrasSheets: ViewModifier {
+    @ObservedObject var presentation: RosterExtrasPresentation
     let team: Team
     let players: [TeamPlayer]
-    @EnvironmentObject var authManager: AuthManager
-    @StateObject private var setStore = TeamCardSetStore()
-    @StateObject private var designStore = TradingCardDesignStore()
-    @State private var showPlayerPicker = false
-    @State private var editing: TradingCardDesign? = nil
-    @State private var openSet: TeamCardSet? = nil
-    @State private var errorMessage: String? = nil
-    @State private var showError = false
+
+    func body(content: Content) -> some View {
+        content
+            .appSheet(isPresented: $presentation.showPlayerPicker, onDismiss: {
+                if let design = presentation.pendingDesign {
+                    presentation.pendingDesign = nil
+                    presentation.editing = design
+                }
+            }, chrome: .handle) {
+                NavigationStack {
+                    List(players, id: \.id) { player in
+                        Button(player.name) {
+                            let existing = presentation.designStore.designs.first {
+                                $0.teamPlayerId == player.id && $0.teamId == team.id
+                            }
+                            presentation.pendingDesign = existing ?? TradingCardDesign.forPlayer(player, team: team)
+                            presentation.showPlayerPicker = false
+                        }
+                        .accessibilityIdentifier("cardPlayer.\(player.name)")
+                    }
+                    .navigationTitle("Whose card?")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { presentation.showPlayerPicker = false }
+                        }
+                    }
+                }
+                .fixedAppDynamicType()
+            }
+            .appSheet(item: $presentation.editing, chrome: .handle) { design in
+                NavigationStack { TradingCardDesignerView(design: design) }
+                    .fixedAppDynamicType()
+            }
+            .appSheet(item: $presentation.openSet, chrome: .handle) { set in
+                NavigationStack {
+                    TeamCardSetView(team: team, setId: set.id, store: presentation.setStore, players: players)
+                }
+                .fixedAppDynamicType()
+            }
+            .appSheet(isPresented: $presentation.showSponsorPurchase, chrome: .handle) {
+                NavigationStack { SponsorSlotPurchaseView(team: team) }
+                    .fixedAppDynamicType()
+            }
+            .appConfirmationDialog(
+                isPresented: $presentation.showError,
+                title: "Something went wrong",
+                message: presentation.errorMessage ?? "",
+                primaryTitle: "OK",
+                primaryAction: {},
+                secondaryTitle: "Close"
+            )
+    }
+}
+
+struct TeamTradingCardsSection: View {
+    let team: Team
+    @ObservedObject var presentation: RosterExtrasPresentation
+    @ObservedObject private var setStore: TeamCardSetStore
+
+    init(team: Team, presentation: RosterExtrasPresentation) {
+        self.team = team
+        self.presentation = presentation
+        self._setStore = ObservedObject(wrappedValue: presentation.setStore)
+    }
 
     var body: some View {
         Section {
             ForEach(setStore.sets) { set in
                 Button {
-                    openSet = set
+                    presentation.openSet = set
                 } label: {
                     HStack {
                         Label(set.name, systemImage: "rectangle.stack")
@@ -58,7 +149,7 @@ struct TeamTradingCardsSection: View {
                 }
             }
             Button {
-                showPlayerPicker = true
+                presentation.showPlayerPicker = true
             } label: {
                 Label("Make a Trading Card", systemImage: "person.crop.rectangle")
             }
@@ -76,42 +167,6 @@ struct TeamTradingCardsSection: View {
         } footer: {
             Text("Each family makes their player's card. A team set gives every family one card of every player - one order, shipped to the organizer to hand out.")
         }
-        .onAppear {
-            setStore.start(teamId: team.id)
-            designStore.start(uid: authManager.user?.uid)
-        }
-        .appSheet(isPresented: $showPlayerPicker, chrome: .handle) {
-            NavigationStack {
-                List(players, id: \.id) { player in
-                    Button(player.name) {
-                        showPlayerPicker = false
-                        let existing = designStore.designs.first { $0.teamPlayerId == player.id && $0.teamId == team.id }
-                        let design = existing ?? TradingCardDesign.forPlayer(player, team: team)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { editing = design }
-                    }
-                }
-                .navigationTitle("Whose card?")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showPlayerPicker = false } } }
-            }
-            .fixedAppDynamicType()
-        }
-        .appSheet(item: $editing, chrome: .handle) { design in
-            NavigationStack { TradingCardDesignerView(design: design) }
-                .fixedAppDynamicType()
-        }
-        .appSheet(item: $openSet, chrome: .handle) { set in
-            NavigationStack { TeamCardSetView(team: team, setId: set.id, store: setStore, players: players) }
-                .fixedAppDynamicType()
-        }
-        .appConfirmationDialog(
-            isPresented: $showError,
-            title: "Something went wrong",
-            message: errorMessage ?? "",
-            primaryTitle: "OK",
-            primaryAction: {},
-            secondaryTitle: "Close"
-        )
     }
 
     private func statusText(_ status: TeamCardSet.Status) -> String {
@@ -129,8 +184,8 @@ struct TeamTradingCardsSection: View {
             do {
                 try await TradingCardOrders.startSet(teamId: teamId, name: "\(team.name) \(year) Cards")
             } catch {
-                errorMessage = error.localizedDescription
-                showError = true
+                presentation.errorMessage = error.localizedDescription
+                presentation.showError = true
             }
         }
     }

@@ -38,6 +38,8 @@ struct RootView: View {
     private static let isUITestDemo = ProcessInfo.processInfo.arguments.contains("-UITestDemo")
     /// `-UITestSignGrids`: Batter & Runner Grids on their own, in memory.
     private static let isUITestSignGrids = ProcessInfo.processInfo.arguments.contains("-UITestSignGrids")
+    /// `-UITestRoster`: a team roster alone, in memory (RosterUITestHarness).
+    private static let isUITestRoster = ProcessInfo.processInfo.arguments.contains("-UITestRoster")
 
     /// `-UITestMomentEditors`: a Moment's details screen on a test video.
     private static let isUITestMomentEditors = ProcessInfo.processInfo.arguments.contains("-UITestMomentEditors")
@@ -53,6 +55,8 @@ struct RootView: View {
         Group {
             if Self.isUITestSignGrids {
                 SignGridUITestHarness()
+            } else if Self.isUITestRoster {
+                RosterUITestHarness()
             } else if Self.isUITestMomentEditors {
                 MomentEditorsUITestHarness()
             } else if Self.isUITestHomeActions {
@@ -171,6 +175,10 @@ struct RootView: View {
                     UserDefaults.standard.removeObject(forKey: "pendingTourneyShareId")
                     handleTourneyLink(shareId)
                 }
+                if let token = UserDefaults.standard.string(forKey: "pendingTeamInviteToken"), !token.isEmpty {
+                    UserDefaults.standard.removeObject(forKey: "pendingTeamInviteToken")
+                    handleTeamInviteLink(token)
+                }
             } else {
                 showDisplayCover = false
                 showDisplayOnboarding = false
@@ -194,6 +202,11 @@ struct RootView: View {
     private func handleInviteLink(_ url: URL) {
         if let shareId = TourneyShareLink.shareId(from: url.absoluteString) {
             handleTourneyLink(shareId)
+            return
+        }
+        // pitchmark-fb9f8.web.app/team/{token} (2026-11-22).
+        if let token = TeamAccessRules.inviteToken(fromURL: url) {
+            handleTeamInviteLink(token)
             return
         }
         if let token = pitcherInviteToken(from: url), !token.isEmpty {
@@ -229,6 +242,27 @@ struct RootView: View {
                 )
             } catch {
                 rootAlert = RootAlert(title: "Couldn't Open Tourney", message: error.localizedDescription)
+            }
+        }
+    }
+
+    /// A team invite link: join the team (after sign-in, if signed out).
+    private func handleTeamInviteLink(_ token: String) {
+        guard authManager.isSignedIn else {
+            UserDefaults.standard.set(token, forKey: "pendingTeamInviteToken")
+            return
+        }
+        authManager.redeemTeamInviteToken(token) { result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success(let team):
+                    rootAlert = RootAlert(
+                        title: "You're on \(team.name)",
+                        message: "The team's schedule is in Home → Games → Round Robin / Tourney Info."
+                    )
+                case .failure(let error):
+                    rootAlert = RootAlert(title: "Couldn't Join Team", message: error.localizedDescription)
+                }
             }
         }
     }

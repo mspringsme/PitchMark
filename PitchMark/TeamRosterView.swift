@@ -99,6 +99,10 @@ struct TeamRosterView: View {
     @State private var openGameLockMessage: String? = nil
     @State private var showFieldingStats = false
     @State private var showBattingStats = false
+    /// The Team Sponsors / Team Trading Cards sections' sheets, at the root.
+    @StateObject private var rosterExtras = RosterExtrasPresentation()
+    /// Team Members (2026-11-22): sheets at the root, rows in the List.
+    @StateObject private var teamMembers = TeamMembersModel()
 
     /// Management rights (add/edit/delete) are gated on actually being the
     /// team's creator - matching exactly what firestore.rules enforces
@@ -141,9 +145,13 @@ struct TeamRosterView: View {
                     .accessibilityIdentifier("team.battingStats")
                 }
 
-                TeamSponsorSection(team: selection.team, isTeamOwner: isTeamOwner)
+                TeamSponsorSection(team: selection.team, isTeamOwner: isTeamOwner, presentation: rosterExtras)
 
-                TeamTradingCardsSection(team: selection.team, players: activePlayers)
+                TeamTradingCardsSection(team: selection.team, presentation: rosterExtras)
+
+                if isTeamOwner {
+                    TeamMembersSection(model: teamMembers)
+                }
 
                 Section("Roster") {
                     if activePlayers.isEmpty {
@@ -322,7 +330,13 @@ struct TeamRosterView: View {
             primaryAction: { leaveTeam() },
             secondaryTitle: "Cancel"
         )
-        .appSheet(isPresented: $isRenamingTeam) {
+        .modifier(RosterExtrasSheets(presentation: rosterExtras, team: selection.team, players: activePlayers))
+        .onAppear { rosterExtras.start(teamId: selection.team.id, uid: authManager.user?.uid) }
+        .modifier(TeamMembersSheets(model: teamMembers))
+        .onAppear {
+            if isTeamOwner { teamMembers.start(team: selection.team, authManager: authManager) }
+        }
+        .appSheet(isPresented: $isRenamingTeam, chrome: .handle) {
             renameTeamSheet
         }
         .appSheet(item: $editingPlayer) { player in

@@ -38,8 +38,12 @@ final class TrackGameUITests: XCTestCase {
 
         let chip = app.buttons["4 Seam"]
         XCTAssertTrue(chip.waitForExistence(timeout: 5))
-        chip.tap()
+        chip.pickChip()
         app.buttons["Ball Up"].firstMatch.tap()
+        // Track Game asks for an estimate first (2026-11-21).
+        let skip = app.buttons["Skip"]
+        XCTAssertTrue(skip.waitForExistence(timeout: 8), "the estimate panel")
+        skip.tap()
 
         let save = app.buttons["result.save"]
         XCTAssertTrue(save.waitForExistence(timeout: 8), "the result sheet opened after one tap")
@@ -72,7 +76,7 @@ final class TrackGameUITests: XCTestCase {
     func testCallPitchesStillShowsTheCodePanel() {
         let chip = app.buttons["4 Seam"]
         XCTAssertTrue(chip.waitForExistence(timeout: 15))
-        chip.tap()
+        chip.pickChip()
         app.buttons["Ball Up"].firstMatch.tap()
         XCTAssertTrue(app.descendants(matching: .any)["tracker.codePanel"].waitForExistence(timeout: 8),
                       "Call Pitches still shows the code to signal")

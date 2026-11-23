@@ -46,6 +46,9 @@ struct Team: Identifiable, Codable {
     var startYear: Int? = nil
     var ageGroup: TeamAgeGroup? = nil
     var division: TeamDivision? = nil
+    /// The team's reusable family invite (2026-11-22) - one code for every
+    /// family; Reset makes a new one and the old stops working.
+    var familyInviteToken: String? = nil
 
     /// All-or-nothing on purpose: a half-filled stamp ("16U" with no season)
     /// is worse than none, since the whole point is telling two same-named
@@ -133,6 +136,17 @@ struct TeamMembership: Identifiable, Codable {
     /// The team invite this membership was joined with; the rules require
     /// it unless you created the team.
     var inviteToken: String? = nil
+    /// Who joined, for the coach's Team Members list (their name or email).
+    var name: String? = nil
+
+    /// What the members list calls their role.
+    var roleTitle: String { TeamMembership.roleTitle(roles) }
+
+    static func roleTitle(_ roles: [TeamRole]) -> String {
+        if roles.contains(.coach) { return "Coach" }
+        if roles.contains(.assistant) { return "Scheduler" }
+        return "Family"
+    }
 }
 
 /// A team's roster entry. Separate from `Pitcher` on purpose: a player who
@@ -223,7 +237,13 @@ extension AuthManager {
         }
     }
 
-    func loadMyTeams(completion: @escaping ([(team: Team, membership: TeamMembership)], Error?) -> Void) {
+    /// The teams this user coaches - created, or a Coach member. A team
+    /// joined as a Scheduler or Family isn't one of "my teams": every
+    /// roster, picker and player list reads this, and a family's Home must
+    /// not fill with the coach's roster (2026-11-22). `includeJoined`
+    /// returns those too (the schedule, Tourney Info).
+    func loadMyTeams(includeJoined: Bool = false,
+                     completion: @escaping ([(team: Team, membership: TeamMembership)], Error?) -> Void) {
         guard let user = user else {
             debugLog("⚠️ loadMyTeams: user=nil")
             DispatchQueue.main.async { completion([], nil) }
@@ -261,6 +281,8 @@ extension AuthManager {
                             return
                         }
                         guard let teamSnap, let team = try? teamSnap.data(as: Team.self) else { return }
+                        guard includeJoined || TeamAccessRules.coaches(team: team, membership: membership, uid: user.uid)
+                        else { return }
                         lock.lock()
                         results.append((team, membership))
                         lock.unlock()
@@ -592,7 +614,35 @@ extension AuthManager {
         }
     }
 
-    func createTeamInviteToken(teamId: String, roles: [TeamRole], completion: @escaping (Result<String, Error>) -> Void) {
+    /// Removes someone from the team (the creator's Team Members list).
+    /// Their access ends at once; the rules let only the creator do this.
+    func removeTeamMember(teamId: String, memberUid: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        teamsCollection().document(teamId).collection("members").document(memberUid).delete { error in
+            DispatchQueue.main.async { error.map { completion(.failure($0)) } ?? completion(.success(())) }
+        }
+    }
+
+    /// The team's family code: the current one, or a new one if there is
+    /// none (or `reset`, which also deletes the old so it stops working).
+    func familyInviteToken(for team: Team, reset: Bool = false, completion: @escaping (Result<String, Error>) -> Void) {
+        guard let teamId = team.id else { return }
+        if !reset, let existing = team.familyInviteToken, !existing.isEmpty {
+            completion(.success(existing))
+            return
+        }
+        createTeamInviteToken(teamId: teamId, roles: [.parent], multiUse: true) { result in
+            guard case .success(let token) = result else { return completion(result) }
+            if let old = team.familyInviteToken, !old.isEmpty {
+                Firestore.firestore().collection("teamInviteTokens").document(old).delete()
+            }
+            self.teamsCollection().document(teamId).setData(["familyInviteToken": token], merge: true) { error in
+                DispatchQueue.main.async { error.map { completion(.failure($0)) } ?? completion(.success(token)) }
+            }
+        }
+    }
+
+    func createTeamInviteToken(teamId: String, roles: [TeamRole], multiUse: Bool = false,
+                               completion: @escaping (Result<String, Error>) -> Void) {
         guard let user = user else {
             completion(.failure(NSError(domain: "Auth", code: 401, userInfo: [NSLocalizedDescriptionKey: "Not signed in"])))
             return
@@ -600,12 +650,15 @@ extension AuthManager {
 
         let token = randomToken(length: 12)
         let ref = Firestore.firestore().collection("teamInviteTokens").document(token)
+        // A Scheduler's invite is single-use for a week; the family code is
+        // reusable for a season (TeamAccessRules).
         let data: [String: Any] = [
             "teamId": teamId,
             "roles": roles.map { $0.rawValue },
             "createdByUid": user.uid,
             "createdAt": FieldValue.serverTimestamp(),
-            "expiresAt": Timestamp(date: Date().addingTimeInterval(60 * 60 * 24 * 7))
+            "expiresAt": Timestamp(date: Date().addingTimeInterval(TeamAccessRules.inviteLifetime(multiUse: multiUse))),
+            "multiUse": multiUse
         ]
 
         ref.setData(data) { error in
@@ -653,6 +706,7 @@ extension AuthManager {
 
             let roleStrings = data["roles"] as? [String] ?? ["parent"]
             let roles = roleStrings.compactMap { TeamRole(rawValue: $0) }
+            let multiUse = data["multiUse"] as? Bool ?? false
 
             let teamRef = db.collection("teams").document(teamId)
             let membership = TeamMembership(
@@ -661,14 +715,16 @@ extension AuthManager {
                 roles: roles.isEmpty ? [.parent] : roles,
                 joinedAt: Date(),
                 addedByUid: (data["createdByUid"] as? String) ?? user.uid,
-                inviteToken: token
+                inviteToken: token,
+                name: TeamAccessRules.memberName(displayName: user.displayName, email: user.email)
             )
 
             // Burn the token, then name it on the membership: the rules only
             // let you join with a team invite you have redeemed, and only
             // with the roles it grants.
             let burn: (@escaping () -> Void) -> Void = { next in
-                guard redeemedByUid == nil else { return next() }
+                // A family code is never burned - every family uses it.
+                guard redeemedByUid == nil, !multiUse else { return next() }
                 tokenRef.setData([
                     "redeemedByUid": user.uid,
                     "redeemedAt": FieldValue.serverTimestamp()
@@ -708,3 +764,54 @@ extension AuthManager {
     }
 }
 
+
+
+// MARK: - Team access rules (2026-11-22)
+
+/// Plain rules for team membership, kept out of the views so they can be
+/// tested.
+enum TeamAccessRules {
+    /// A team that counts as "my team" (rosters, pickers, player lists):
+    /// one this user created or coaches.
+    static func coaches(team: Team, membership: TeamMembership, uid: String) -> Bool {
+        team.createdByUid == uid || membership.roles.contains(.coach)
+    }
+
+    /// Who edits the team's schedule: the creator or a Scheduler.
+    static func schedules(team: Team, membership: TeamMembership?, uid: String) -> Bool {
+        team.createdByUid == uid || (membership?.roles.contains(.assistant) ?? false)
+    }
+
+    /// A Scheduler's invite lasts a week; the family code a season.
+    static func inviteLifetime(multiUse: Bool) -> TimeInterval {
+        multiUse ? 60 * 60 * 24 * 180 : 60 * 60 * 24 * 7
+    }
+
+    static func memberName(displayName: String?, email: String?) -> String? {
+        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !name.isEmpty { return name }
+        let mail = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return mail.isEmpty ? nil : mail
+    }
+
+    /// The token from a pasted invite: the code itself, or a link ending in it.
+    static func inviteToken(from text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let last = trimmed.split(separator: "/").last.map(String.init) ?? trimmed
+        let token = last.filter { $0.isLetter || $0.isNumber }.uppercased()
+        return (6...64).contains(token.count) ? token : nil
+    }
+
+    /// The token in a team link: https://…/team/{token} or the fallback
+    /// page's pitchmark://team/{token}. Nil for any other link.
+    static func inviteToken(fromURL url: URL) -> String? {
+        let parts = url.pathComponents.filter { $0 != "/" }
+        if url.host?.lowercased() == "team", parts.count == 1 { return inviteToken(from: parts[0]) }
+        if parts.count == 2, parts[0].lowercased() == "team" { return inviteToken(from: parts[1]) }
+        return nil
+    }
+
+    static func inviteLink(_ token: String) -> URL {
+        URL(string: "https://pitchmark-fb9f8.web.app/team/\(token)")!
+    }
+}

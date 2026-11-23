@@ -177,3 +177,81 @@ struct CatcherEstimateView: View {
         }
     }
 }
+
+
+/// Catcher's estimate as a short panel (2026-11-21, user's call): it sits
+/// under the main zone and pitch chips, which pick the estimated pitch and
+/// called spot. Reset / Skip / Done are evenly spaced and styled - Reset
+/// outlined, Skip quiet, Done filled - not plain left-aligned text.
+struct CatcherEstimatePanel: View {
+    let resultCall: PitchCall
+    let draftPitch: String
+    let draftLocation: String?
+    /// Done is allowed (Track Game: a pitch type alone; Catcher: a spot).
+    var canFinish: Bool = true
+    let onReset: () -> Void
+    let onSkip: () -> Void
+    let onDone: () -> Void
+
+    private var resultText: String {
+        let location = resultCall.location.trimmingCharacters(in: .whitespacesAndNewlines)
+        return location.hasPrefix("Strike") || location.hasPrefix("Ball")
+            ? location : "\(resultCall.isStrike ? "Strike" : "Ball") \(location)"
+    }
+
+    /// "Estimate: Curve · Strike Up", "Estimate: Curve", or the hint.
+    private var summary: String {
+        let pitch = draftPitch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasPitch = !pitch.isEmpty && pitch != "Catcher" && pitch != PitchEvent.unknownPitch
+        if let draftLocation { return "Estimate: \(pitch.isEmpty ? "Catcher" : pitch) · \(draftLocation)" }
+        return hasPitch ? "Estimate: \(pitch)" : "Tap a pitch and a spot above"
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            VStack(spacing: 4) {
+                Text("Result: \(resultText)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text("Estimate pitch type and called location?")
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                Text(summary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("estimate.summary")
+            }
+            .frame(maxWidth: .infinity)
+
+            HStack(spacing: 10) {
+                Button(action: onReset) {
+                    Label("Reset", systemImage: "arrow.counterclockwise")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(.primary)
+
+                Button(action: onSkip) {
+                    Label("Skip", systemImage: "forward.end")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(.primary)
+
+                Button(action: onDone) {
+                    Label("Done", systemImage: "checkmark")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.pitchMarkActiveGray)
+                .disabled(!canFinish)
+            }
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("estimate.panel")
+    }
+}

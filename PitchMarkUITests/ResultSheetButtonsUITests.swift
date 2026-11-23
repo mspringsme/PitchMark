@@ -22,7 +22,7 @@ final class ResultSheetButtonsUITests: XCTestCase {
     private func openResultSheet(pitch: String) {
         let chip = app.buttons[pitch]
         XCTAssertTrue(chip.waitForExistence(timeout: 15), pitch)
-        chip.tap()
+        chip.pickChip()
         app.buttons["Ball Up"].tap()
         sleep(1)
         app.buttons["Ball Up"].firstMatch.tap()
@@ -78,7 +78,7 @@ final class ReviewSaveSpotUITests: XCTestCase {
         app.launch()
         let chip = app.buttons["4 Seam"]
         XCTAssertTrue(chip.waitForExistence(timeout: 15))
-        chip.tap()
+        chip.pickChip()
         app.buttons["Ball Up"].tap()
         sleep(1)
         app.buttons["Ball Up"].firstMatch.tap()

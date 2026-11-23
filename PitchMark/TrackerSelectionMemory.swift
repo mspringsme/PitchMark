@@ -22,6 +22,18 @@ struct TrackerSelectionMemory: Codable, Equatable {
     /// The side that was pitching.
     var pitchingSide: String = GameSide.home.rawValue
     var sides: [String: SideState] = [:]
+    /// Each pitcher's key in this game (2026-11-22): "nokey" or "key:<id>"
+    /// (TrackerKeyRules.KeyChoice). Optional - memories saved before have
+    /// none.
+    var keyChoices: [String: String]? = nil
+
+    func keyChoice(for pitcherId: String) -> String? { keyChoices?[pitcherId] }
+
+    mutating func setKeyChoice(_ stored: String?, for pitcherId: String) {
+        var choices = keyChoices ?? [:]
+        choices[pitcherId] = stored
+        keyChoices = choices
+    }
 
     var side: GameSide { GameSide(rawValue: pitchingSide) ?? .home }
 
