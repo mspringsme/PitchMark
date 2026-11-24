@@ -81,6 +81,8 @@ enum TeamSchedule {
     struct Entry: Identifiable, Equatable {
         enum Source: Equatable {
             case tourney(tourneyId: String, name: String)
+            /// A tourney someone shared that this user follows.
+            case sharedTourney(shareId: String, name: String)
             case single
         }
 
@@ -103,7 +105,7 @@ enum TeamSchedule {
     /// Every game on the team's schedule, by date (earliest first): the
     /// team's tourney games and its single games. Archived tourneys are
     /// left out.
-    static func entries(tourneys: [Tourney], singles: [TeamScheduledGame]) -> [Entry] {
+    static func entries(tourneys: [Tourney], singles: [TeamScheduledGame], followed: [Tourney] = []) -> [Entry] {
         let fromTourneys = tourneys.filter { !$0.isArchived }.flatMap { tourney in
             tourney.games.map { game in
                 Entry(id: game.id, teamId: tourney.teamId, time: game.time, opponent: game.opponent,
@@ -117,7 +119,18 @@ enum TeamSchedule {
                   label: single.kind.title, canceled: single.canceled, source: .single,
                   game: single.asTourneyGame, venue: single.venue)
         }
-        return (fromTourneys + fromSingles).sorted { $0.time < $1.time }
+        // A followed tourney's games (its shared copy). The same game seen
+        // as a team tourney too is listed once - team copies come first.
+        let seen = Set((fromTourneys + fromSingles).map(\.id))
+        let fromFollowed = followed.filter { !$0.isArchived }.flatMap { tourney in
+            tourney.games.filter { !seen.contains($0.id) }.map { game in
+                Entry(id: game.id, teamId: tourney.teamId, time: game.time, opponent: game.opponent,
+                      label: tourney.displayName, canceled: game.canceled,
+                      source: .sharedTourney(shareId: tourney.id, name: tourney.displayName),
+                      game: game, venue: tourney.venue)
+            }
+        }
+        return (fromTourneys + fromSingles + fromFollowed).sorted { $0.time < $1.time }
     }
 
     /// Upcoming (from the start of today, soonest first) and past (most

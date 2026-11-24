@@ -15,10 +15,10 @@ struct MomentShareRequest: Identifiable {
     /// The clip and photo copies.
     let files: [URL]
 
-    /// What the share sheet gets: the files, then a line so whoever
-    /// receives it can find the app (2026-11-21). Plain text, not a deep
-    /// link - the receiver may not have PitchMark yet.
-    var items: [Any] { files + [MomentShare.getPitchMarkLine] }
+    /// What the share sheet gets: just the file (2026-11-24, user's call).
+    /// The "Get PitchMark" line and link are off until it comes back a
+    /// different way (`MomentShare.getPitchMarkLine` is kept for that).
+    var items: [Any] { files }
 }
 
 enum MomentShare {
@@ -36,23 +36,23 @@ enum MomentShare {
         return collapsed.isEmpty ? "Moment" : String(collapsed.prefix(80))
     }
 
-    /// What to share, in order: the video, then each photo that exists.
-    /// `exists` is injectable so the choice can be tested without files.
+    /// What to share: ONE file (2026-11-24, user's call - a clip and its
+    /// still arrived as two copies of the same moment). A video Moment
+    /// sends its video; a photo Moment (its "video" is the photo held
+    /// still) sends its photo. With no video on this phone, the first
+    /// photo. `exists` is injectable so the choice can be tested.
     static func sourceFiles(
         momentId: String,
         photoCount: Int,
+        isPhotoMoment: Bool = false,
         exists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     ) -> [URL] {
-        var files: [URL] = []
-        if let video = resolvedMomentPlaybackURL(for: momentId), exists(video) {
-            files.append(video)
-        }
-        for index in 0..<max(0, photoCount) {
-            if let photo = localMomentPhotoURL(momentId: momentId, index: index), exists(photo) {
-                files.append(photo)
-            }
-        }
-        return files
+        let video = resolvedMomentPlaybackURL(for: momentId).flatMap { exists($0) ? $0 : nil }
+        let firstPhoto = (0..<max(0, photoCount)).lazy
+            .compactMap { localMomentPhotoURL(momentId: momentId, index: $0) }
+            .first(where: exists)
+        let pick = isPhotoMoment ? (firstPhoto ?? video) : (video ?? firstPhoto)
+        return pick.map { [$0] } ?? []
     }
 
     /// Copies the files into a fresh temporary folder under the Moment's
@@ -60,7 +60,8 @@ enum MomentShare {
     /// on this device to share.
     static func prepare(_ moment: Moment) -> MomentShareRequest? {
         guard let id = moment.id else { return nil }
-        let sources = sourceFiles(momentId: id, photoCount: moment.photoCount ?? 0)
+        let sources = sourceFiles(momentId: id, photoCount: moment.photoCount ?? 0,
+                                  isPhotoMoment: moment.momentKind == .photoCreation)
         guard !sources.isEmpty else { return nil }
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("MomentShare", isDirectory: true)

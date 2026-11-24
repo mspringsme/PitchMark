@@ -26,7 +26,8 @@ final class PracticeUITests: XCTestCase {
         let add = app.buttons["home.games.add"]
         XCTAssertTrue(add.waitForExistence(timeout: 10))
         add.tap()
-        let practice = app.buttons["newGame.practice"]
+        // Practice is one of + 's three choices now (2026-11-24).
+        let practice = app.segmentedControls["newGame.kindOfNew"].buttons["Practice"]
         XCTAssertTrue(practice.waitForExistence(timeout: 5))
         // + opened the Games section: count its games now.
         let gamesBefore = app.staticTexts.matching(NSPredicate(format: "label == 'Demo Game'")).count
@@ -128,7 +129,7 @@ final class PracticeUITests: XCTestCase {
         let add = app.buttons["home.games.add"]
         XCTAssertTrue(add.waitForExistence(timeout: 10))
         add.tap()
-        app.buttons["newGame.practice"].tap()
+        app.segmentedControls["newGame.kindOfNew"].buttons["Practice"].tap()
         app.buttons["newGame.practiceNext"].tap()
         let player = app.buttons["practice.player"]
         XCTAssertTrue(player.waitForExistence(timeout: 5))

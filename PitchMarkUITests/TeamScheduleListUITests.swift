@@ -19,15 +19,12 @@ final class TeamScheduleListUITests: XCTestCase {
         return app
     }
 
-    private func openTeamPage(_ app: XCUIApplication) {
-        let team = app.buttons["tourney.team.Reds 16U B"]
-        for _ in 0..<5 where !team.isHittable { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(team.waitForExistence(timeout: 10), "the team under Your Teams")
-        team.tap()
-    }
+    /// The team page opens on its own (-UITestTeamPage) - on Home it's a
+    /// team under Teams (2026-11-24).
+    private func openTeamPage(_ app: XCUIApplication) {}
 
     func testASchedulerAddsAScrimmageThenCancelsIt() {
-        let app = launch(["-UITestTourneysTeams"])
+        let app = launch(["-UITestTeamPage", "-UITestTeamPageEdit"])
         openTeamPage(app)
         let add = app.buttons["teamSchedule.addGame"]
         XCTAssertTrue(add.waitForExistence(timeout: 5), "Schedulers can add")
@@ -35,10 +32,10 @@ final class TeamScheduleListUITests: XCTestCase {
         app.segmentedControls["teamGame.kind"].buttons["Scrimmage"].tap()
         let opponent = app.textFields["teamGame.opponent"]
         opponent.tap()
-        opponent.typeText("Storm")
+        opponent.typeText("Tigers")
         app.buttons["teamGame.save"].tap()
 
-        let row = app.buttons["teamSchedule.row.vs Storm"]
+        let row = app.buttons["teamSchedule.row.vs Tigers"]
         XCTAssertTrue(row.waitForExistence(timeout: 5), "on the schedule")
         XCTAssertTrue(row.label.contains("Scrimmage"), row.label)
 
@@ -54,7 +51,7 @@ final class TeamScheduleListUITests: XCTestCase {
     }
 
     func testAFamilysTeamPageShowsTheScheduleOnly() {
-        let app = launch(["-UITestTourneysFamily"])
+        let app = launch(["-UITestTeamPage"])
         openTeamPage(app)
         let row = app.buttons["teamSchedule.row.vs Hawks"]
         XCTAssertTrue(row.waitForExistence(timeout: 5), "the team tourney's games are on the schedule")

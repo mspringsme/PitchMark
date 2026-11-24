@@ -83,20 +83,32 @@ final class MomentShareTests: XCTestCase {
         XCTAssertEqual(MomentShare.fileStem(for: "   "), "Moment")
     }
 
-    func testOnlyFilesOnThisDeviceAreShared() {
+    // Approved 2026-11-24: a share sends ONE file, and no link.
+    func testAVideoMomentSharesOnlyItsVideo() {
+        let video = resolvedMomentPlaybackURL(for: "m1")!
+        let files = MomentShare.sourceFiles(momentId: "m1", photoCount: 2) { _ in true }
+        XCTAssertEqual(files, [video], "not the photos too - they arrived as a second copy")
+    }
+
+    func testAPhotoMomentSharesOnlyItsPhoto() {
+        let photo0 = localMomentPhotoURL(momentId: "m1", index: 0)!
+        let files = MomentShare.sourceFiles(momentId: "m1", photoCount: 2, isPhotoMoment: true) { _ in true }
+        XCTAssertEqual(files, [photo0], "its video is just the photo held still")
+    }
+
+    func testWithNoVideoTheFirstPhoto() {
         let photo1 = localMomentPhotoURL(momentId: "m1", index: 1)!
         let files = MomentShare.sourceFiles(momentId: "m1", photoCount: 3) { $0 == photo1 }
         XCTAssertEqual(files, [photo1])
         XCTAssertTrue(MomentShare.sourceFiles(momentId: "m1", photoCount: 3) { _ in false }.isEmpty)
     }
 
-    /// 2026-11-21: a shared Moment carries a way to find the app.
-    func testASharedMomentEndsWithTheGetPitchMarkLink() {
+    func testNoGetPitchMarkLineIsSent() {
         let clip = URL(fileURLWithPath: "/tmp/clip.mov")
         let items = MomentShareRequest(files: [clip]).items
+        XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items.first as? URL, clip)
-        XCTAssertEqual(items.last as? String, "Get PitchMark: https://apps.apple.com/app/id6791446420")
-        XCTAssertEqual(items.count, 2, "just the clip and the line - no extra picture")
+        XCTAssertFalse(items.contains { $0 is String }, "no text or link")
     }
 }
 

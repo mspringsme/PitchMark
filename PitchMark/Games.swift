@@ -95,6 +95,16 @@ struct Game: Identifiable, Codable {
     /// The team-schedule entry this game was tracked from (a tourney game's
     /// or single game's id), so the calendar shows it once.
     var scheduledGameId: String? = nil
+    /// The rest of the game's details from the New Game form (2026-11-24):
+    /// arrive by, where it's played, field and notes. All optional -
+    /// older games have none.
+    var arriveAt: Date? = nil
+    var venueName: String? = nil
+    var venueAddress: String? = nil
+    var venueLatitude: Double? = nil
+    var venueLongitude: Double? = nil
+    var field: String? = nil
+    var notes: String? = nil
     // Which Team's roster is the opponent for this game, so PitchTrackerView
     // can track the away pitcher's pitches to our batter alongside our own
     // pitcher, switchable mid-game. Optional - most games never set this.

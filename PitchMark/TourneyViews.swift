@@ -109,7 +109,7 @@ enum TourneyRoute: Hashable {
 
 struct TourneysView: View {
     enum Tab: String, CaseIterable, Identifiable {
-        case ours = "Our Tourneys"
+        case ours = "Our Tournaments"
         case scouting = "Scouting"
         var id: String { rawValue }
     }
@@ -130,6 +130,10 @@ struct TourneysView: View {
     @State private var pendingLeave: JoinedTeam? = nil
     @State private var showLeaveDialog = false
     private let onStartGame: ((TourneyGame) -> Void)?
+    /// Games + → Tournament (2026-11-24): open straight onto a new
+    /// tournament for this team (.some(nil) = no team).
+    private let startNewForTeam: String??
+    @State private var didStartNew = false
 
     struct JoinedTeam: Identifiable, Equatable {
         var id: String
@@ -139,11 +143,13 @@ struct TourneysView: View {
     private let teamContext: TourneyTeamContext?
 
     init(inMemory: Bool = false, seed: [Tourney] = [], seedProspects: [TourneyProspect] = [],
-         openId: String? = nil, tab: Tab = .ours, onStartGame: ((TourneyGame) -> Void)? = nil,
-         teamContext: TourneyTeamContext? = nil, seedTeams: [TourneyStore.TeamAccess] = []) {
+         openId: String? = nil, openSharedId: String? = nil, tab: Tab = .ours, onStartGame: ((TourneyGame) -> Void)? = nil,
+         teamContext: TourneyTeamContext? = nil, seedTeams: [TourneyStore.TeamAccess] = [],
+         startNewForTeam: String?? = nil) {
+        self.startNewForTeam = startNewForTeam
         self.onStartGame = onStartGame
         self.teamContext = teamContext
-        _route = State(initialValue: openId.map(TourneyRoute.own))
+        _route = State(initialValue: openId.map(TourneyRoute.own) ?? openSharedId.map(TourneyRoute.shared))
         _tab = State(initialValue: tab)
         _store = StateObject(wrappedValue: {
             let store = TourneyStore(inMemory: inMemory)
@@ -175,7 +181,7 @@ struct TourneysView: View {
                 case .scouting: scoutingSections
                 }
             }
-            .navigationTitle("Round Robin / Tourney Info")
+            .navigationTitle("Tournaments")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
@@ -215,7 +221,14 @@ struct TourneysView: View {
         .environment(\.tourneyTeams, teamContext)
         .task(id: authManager.user?.uid) {
             store.start(uid: authManager.user?.uid)
-            loadTeams()
+            // A new team tournament waits for the teams, so it opens as
+            // editable rather than read-only.
+            loadTeams {
+                if let teamId = startNewForTeam, !didStartNew {
+                    didStartNew = true
+                    createNew(teamId: teamId)
+                }
+            }
         }
         .appSheet(isPresented: $showJoinTeam, chrome: .handle) {
             JoinTeamSheet { loadTeams() }
@@ -298,41 +311,6 @@ struct TourneysView: View {
             }
         }
 
-        Section {
-            // Every team you're on opens its page - the Team Schedule. A team
-            // you joined can be left with a swipe.
-            ForEach(store.teams) { access in
-                let joined = joinedTeams.first { $0.id == access.id }
-                Button {
-                    route = .team(access.id)
-                } label: {
-                    rowLabel(icon: "person.3.fill", iconColor: .secondary, title: access.name,
-                             lines: [joined?.role ?? "Coach", "Team Schedule"])
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("tourney.team.\(access.name)")
-                .swipeActions {
-                    if let joined {
-                        Button(role: .destructive) {
-                            pendingLeave = joined
-                            showLeaveDialog = true
-                        } label: {
-                            Label("Leave", systemImage: "rectangle.portrait.and.arrow.right")
-                        }
-                    }
-                }
-            }
-            Button {
-                showJoinTeam = true
-            } label: {
-                Label("Join a Team", systemImage: "person.badge.plus")
-            }
-            .accessibilityIdentifier("tourney.joinTeam")
-        } header: {
-            Text("Your Teams")
-        } footer: {
-            Text("Tap a team for its schedule. Join with the link or code from your coach; swipe a team you joined to leave it.")
-        }
 
         Section {
             ForEach(store.followed) { f in
@@ -490,16 +468,17 @@ struct TourneysView: View {
         .accessibilityIdentifier("prospect.row.\(p.displayName)")
     }
 
-    private func createNew() {
-        let t = Tourney()
+    private func createNew(teamId: String? = nil) {
+        var t = Tourney()
+        t.teamId = teamId
         store.save(t)
         route = .own(t.id)
     }
 
     /// Every team this user is on: which tourneys they see and edit, and
     /// the joined ones listed under Your Teams.
-    private func loadTeams() {
-        guard let uid = authManager.user?.uid else { return }
+    private func loadTeams(then: (() -> Void)? = nil) {
+        guard let uid = authManager.user?.uid else { then?(); return }
         authManager.loadMyTeams(includeJoined: true) { entries, _ in
             let access: [TourneyStore.TeamAccess] = entries.compactMap { entry in
                 guard let id = entry.team.id else { return nil }
@@ -512,6 +491,7 @@ struct TourneysView: View {
                 .compactMap { entry in
                     entry.team.id.map { JoinedTeam(id: $0, name: entry.team.nameWithClass, role: entry.membership.roleTitle) }
                 }
+            then?()
         }
     }
 
@@ -2334,6 +2314,10 @@ struct TourneyUITestHarness: View {
                         startedGame = "New game: \(game.opponent)"
                         showTourneys = false
                     }
+            } else if args.contains("-UITestTeamPage") {
+                // A team page in memory: the Reds' tourney; editable with
+                // -UITestTeamPageEdit (a Scheduler), read-only otherwise.
+                TeamPageHarness(sample: sample, canEdit: args.contains("-UITestTeamPageEdit"))
             } else if args.contains("-UITestTourneysCalendar") {
                 // Home's calendar with the sample's games scheduled (2026-11-24).
                 GamesCalendarView(games: [], title: { $0.opponent }, onOpen: { _ in },
@@ -2361,6 +2345,27 @@ struct TourneyUITestHarness: View {
                              seedTeams: args.contains("-UITestTourneysTeams")
                                  ? [.init(id: "t-Reds", name: "Reds 16U B", canEdit: true)] : [])
             }
+        }
+    }
+}
+
+
+/// `-UITestTeamPage`: the Reds' team page in memory.
+private struct TeamPageHarness: View {
+    let sample: Tourney
+    let canEdit: Bool
+    @StateObject private var store = TourneyStore(inMemory: true)
+
+    var body: some View {
+        NavigationStack {
+            TeamPageView(store: store, teamId: "t-Reds", showsTeamExtras: false)
+        }
+        .tint(.primary)
+        .onAppear {
+            store.startTeams([.init(id: "t-Reds", name: "Reds 16U B", canEdit: canEdit)])
+            var t = sample
+            t.teamId = "t-Reds"
+            store.save(t)
         }
     }
 }

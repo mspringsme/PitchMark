@@ -610,6 +610,22 @@ struct SettingsView: View {
     @State private var inlineNewGameKind: GameKind = .game
     @State private var inlineNewGameScheduledId: String? = nil
     @State private var showGameStatsQuestion = false
+    /// Home's Games (2026-11-24): the New Game form's details, a new
+    /// tournament from +, an upcoming game's card, starting a scheduled
+    /// game, the team schedule store, and joined teams' pages.
+    @State private var inlineNewGameDetails = NewGameDetails()
+    @State private var tourneysStartNewForTeam: String?? = nil
+    @State private var tourneysOpenId: String? = nil
+    @State private var tourneysOpenSharedId: String? = nil
+    @State private var upcomingItem: HomeGameList.Item? = nil
+    @State private var editingTeamGame: TeamScheduledGame? = nil
+    @State private var editingUpcomingGame: Game? = nil
+    @State private var startingEntry: TeamSchedule.Entry? = nil
+    @State private var showStartStatsQuestion = false
+    @State private var showJoinTeam = false
+    @State private var teamPageTarget: TeamPageTarget? = nil
+    @StateObject private var homeSchedule = TourneyStore()
+    @ObservedObject private var teamSides = TeamSidesStore.shared
     // Scan Opponent Lineup (LineupScanHome.swift / LineupScanSheet.swift).
     @State private var lineupScan: LineupScanContext? = nil
     @State private var showLineupScan = false
@@ -1013,6 +1029,183 @@ struct SettingsView: View {
         return away.isEmpty ? home.nameWithClass : "\(home.nameWithClass) vs. \(away)"
     }
 
+    // MARK: Games list (2026-11-24)
+
+    /// One row of the unified Games list. An upcoming game opens its card;
+    /// a game under way or played opens the tracker as before.
+    private func homeGameRow(_ item: HomeGameList.Item) -> AnyView {
+        switch item {
+        case .tracked(let game, _):
+            return gameRow(
+                opponent: matchupTitle(for: game),
+                dateText: quickLaunchDateCaption(for: game),
+                isLive: false,
+                menuGame: game,
+                detail: item.detail,
+                canceled: item.canceled
+            ) {
+                if HomeGameList.opensCard(item, now: Date()) {
+                    upcomingItem = item
+                } else {
+                    launchGame(game)
+                }
+            }
+        case .scheduled(let entry):
+            let team = homeSchedule.teamName(entry.teamId) ?? myTeams.first { $0.team.id == entry.teamId }?.team.nameWithClass
+            let opponent = entry.opponent.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = [team, opponent.isEmpty ? nil : opponent].compactMap { $0 }.joined(separator: " vs. ")
+            return gameRow(
+                opponent: title.isEmpty ? entry.label : title,
+                dateText: Self.quickLaunchDateFormatter.string(from: entry.time),
+                isLive: false,
+                detail: item.detail,
+                canceled: item.canceled
+            ) {
+                upcomingItem = item
+            }
+        }
+    }
+
+    /// An upcoming game's card: Start Tracking, Edit, its tournament.
+    private func upcomingCard(for item: HomeGameList.Item) -> AnyView {
+        switch item {
+        case .tracked(let game, let entry):
+            return AnyView(UpcomingGameCard(
+                title: matchupTitle(for: game), date: game.date, kindOrTourney: item.detail,
+                canceled: item.canceled, details: NewGamePlan.details(of: game),
+                onStart: { launchGame(game) },
+                onEdit: { DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { editingUpcomingGame = game } },
+                onOpenTourney: tourneyOpener(entry)
+            ))
+        case .scheduled(let entry):
+            let canEditSingle = entry.source == .single && homeSchedule.canEditTeam(entry.teamId ?? "")
+            return AnyView(UpcomingGameCard(
+                title: entry.title, date: entry.time, kindOrTourney: item.detail, canceled: entry.canceled,
+                details: NewGameDetails(arriveAt: entry.game.arriveAt, venue: entry.venue,
+                                        field: entry.game.field,
+                                        notes: homeSchedule.teamGames.first { $0.id == entry.id }?.notes ?? ""),
+                onStart: { startTrackingEntry(entry) },
+                onEdit: canEditSingle ? {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        editingTeamGame = homeSchedule.teamGames.first { $0.id == entry.id }
+                    }
+                } : nil,
+                onOpenTourney: tourneyOpener(entry)
+            ))
+        }
+    }
+
+    private func tourneyOpener(_ entry: TeamSchedule.Entry?) -> (() -> Void)? {
+        switch entry?.source {
+        case .tourney(let tourneyId, _)?:
+            return {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    tourneysOpenId = tourneyId
+                    showTourneys = true
+                }
+            }
+        case .sharedTourney(let shareId, _)?:
+            return {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    tourneysOpenSharedId = shareId
+                    showTourneys = true
+                }
+            }
+        default:
+            return nil
+        }
+    }
+
+    /// Start Tracking on a scheduled game: a Friendly or Scrimmage asks
+    /// about stats first.
+    private func startTrackingEntry(_ entry: TeamSchedule.Entry) {
+        if entry.game.kind.asksAboutStats {
+            startingEntry = entry
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showStartStatsQuestion = true }
+        } else {
+            startTracking(entry, leftOutOfStats: false)
+        }
+    }
+
+    /// Makes the game from the scheduled one (teams, opponent, time, type,
+    /// details, the link back) and opens it in the tracker.
+    private func startTracking(_ entry: TeamSchedule.Entry, leftOutOfStats: Bool) {
+        var game = NewGamePlan.game(from: entry, kind: entry.game.kind)
+        if leftOutOfStats { game.leftOutOfStats = true }
+        if let teamId = game.teamId, !activeTeamEntries.contains(where: { $0.team.id == teamId }) {
+            game.teamId = nil   // a team you only follow isn't yours to track as
+        }
+        authManager.saveGame(game, onLocalWrite: { stamped in
+            if let i = self.games.firstIndex(where: { $0.id == stamped.id }) {
+                self.games[i] = stamped
+            } else {
+                self.games.append(stamped)
+            }
+            self.launchGame(stamped)
+        }) { _ in }
+    }
+
+    /// An upcoming game edited from its card: the game, and its team
+    /// schedule entry when you schedule for that team.
+    private func saveUpcomingGame(_ game: Game) {
+        if let i = games.firstIndex(where: { $0.id == game.id }) { games[i] = game }
+        authManager.saveGame(game) { _ in }
+        guard let entryId = game.scheduledGameId, let teamId = game.teamId,
+              homeSchedule.canEditTeam(teamId),
+              var entry = homeSchedule.teamGames.first(where: { $0.id == entryId }) else { return }
+        entry.time = game.date
+        entry.opponent = game.opponent
+        entry.kind = game.kind ?? .game
+        let details = NewGamePlan.details(of: game)
+        entry.arriveAt = details.arriveAt
+        entry.venue = details.venue
+        entry.field = details.field
+        entry.notes = details.notes
+        homeSchedule.saveTeamGame(entry)
+    }
+
+    /// `-UITestHomeSchedule` (signed out, in memory): one of your teams
+    /// and an opponent, an upcoming Scrimmage, and a team tourney's game.
+    private func seedHomeScheduleForUITest() {
+        var reds = Team(name: "Reds", createdByUid: "")
+        reds.id = "ui-reds"
+        var hawks = Team(name: "Hawks", createdByUid: "")
+        hawks.id = "ui-hawks"
+        let member = TeamMembership(id: "", uid: "", roles: [.coach], addedByUid: "")
+        myTeams = [(reds, member), (hawks, member)]
+        let tomorrow = Date().addingTimeInterval(86_400)
+        var scrim = NewGamePlan.make(opponent: "Storm", date: tomorrow, ourTeamId: "ui-reds", opponentTeamId: "ui-hawks",
+                                     kind: .scrimmage, trackingMode: .coach,
+                                     details: NewGameDetails(field: "7", notes: "Away jerseys"),
+                                     schedulesForTeam: false).game
+        scrim.id = "ui-scrim"
+        games.append(scrim)
+        homeSchedule.startTeams([.init(id: "ui-reds", name: "Reds", canEdit: true)], listen: false)
+        var slam = Tourney()
+        slam.name = "Summer Slam"
+        slam.teamId = "ui-reds"
+        slam.games = [TourneyGame(time: tomorrow.addingTimeInterval(86_400), field: "2", opponent: "Lions")]
+        homeSchedule.save(slam)
+        // A tourney a coach shared by link, followed here.
+        var classic = Tourney()
+        classic.name = "Fall Classic"
+        classic.games = [TourneyGame(time: tomorrow.addingTimeInterval(2 * 86_400), opponent: "Bears")]
+        homeSchedule.seedFollowedForUITest([classic])
+    }
+
+    /// Every team this user is on - for the scheduled games and joined
+    /// teams' pages.
+    private func loadScheduleTeams() {
+        guard let uid = authManager.user?.uid else { return }
+        authManager.loadMyTeams(includeJoined: true) { entries, _ in
+            homeSchedule.startTeams(entries.compactMap { entry in
+                guard let id = entry.team.id else { return nil }
+                return .init(id: id, name: entry.team.nameWithClass,
+                             canEdit: TeamAccessRules.schedules(team: entry.team, membership: entry.membership, uid: uid))
+            })
+        }
+    }
+
     private struct QuickLaunchGame: Identifiable {
         let id: String
         let game: Game
@@ -1038,6 +1231,8 @@ struct SettingsView: View {
         menuGame: Game? = nil,
         scanAction: (() -> Void)? = nil,
         disconnectAction: (() -> Void)? = nil,
+        detail: String? = nil,
+        canceled: Bool = false,
         action: @escaping () -> Void
     ) -> AnyView {
         AnyView(HStack(spacing: 6) {
@@ -1057,13 +1252,31 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(opponent)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(canceled ? .secondary : .primary)
+                            .strikethrough(canceled)
                             .lineLimit(2)
                             .minimumScaleFactor(0.85)
                         if let dateText {
                             Text(dateText)
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                        }
+                        // The tourney's name, or a Friendly / Scrimmage
+                        // (2026-11-24), and Canceled.
+                        if detail != nil || canceled {
+                            HStack(spacing: 6) {
+                                if let detail {
+                                    Text(detail)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                if canceled {
+                                    Text("Canceled")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.red)
+                                }
+                            }
                         }
                     }
 
@@ -1496,6 +1709,43 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private func teamGroupHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .padding(.top, 4)
+            .accessibilityAddTraits(.isHeader)
+            .accessibilityIdentifier("teams.group.\(title)")
+    }
+
+    private func joinedTeamRow(_ access: TourneyStore.TeamAccess) -> some View {
+        Button {
+            teamPageTarget = TeamPageTarget(id: access.id)
+        } label: {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(access.name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(access.canEdit ? "Scheduler · Team Schedule" : "Family · Team Schedule")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("teams.joined.\(access.name)")
+    }
+
     private func teamRow(_ entry: (team: Team, membership: TeamMembership)) -> some View {
         // No role label here on purpose - Coach/Parent/etc. was a leftover
         // from a dropped multi-person-per-team direction. One person can
@@ -1583,8 +1833,41 @@ struct SettingsView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(activeTeamEntries, id: \.team.id) { entry in
+                        // My Teams on top, Opponents below (TeamSides,
+                        // 2026-11-24) - long press a team to move it.
+                        let mine = activeTeamEntries.filter { teamSides.side(of: $0.team.id ?? "", games: games) == .mine }
+                        let opponents = activeTeamEntries.filter { teamSides.side(of: $0.team.id ?? "", games: games) == .opponent }
+                        let joined = homeSchedule.teams.filter { access in !myTeams.contains { $0.team.id == access.id } }
+                        if !mine.isEmpty || !joined.isEmpty {
+                            teamGroupHeader("My Teams")
+                        }
+                        ForEach(mine, id: \.team.id) { entry in
                             teamRow(entry)
+                                .contextMenu {
+                                    Button {
+                                        teamSides.move(entry.team.id ?? "", to: .opponent)
+                                    } label: {
+                                        Label("Move to Opponents", systemImage: "arrow.down.circle")
+                                    }
+                                }
+                        }
+                        // Teams you joined (Scheduler or Family) open their
+                        // team page - the schedule.
+                        ForEach(joined) { access in
+                            joinedTeamRow(access)
+                        }
+                        if !opponents.isEmpty {
+                            teamGroupHeader("Opponents")
+                        }
+                        ForEach(opponents, id: \.team.id) { entry in
+                            teamRow(entry)
+                                .contextMenu {
+                                    Button {
+                                        teamSides.move(entry.team.id ?? "", to: .mine)
+                                    } label: {
+                                        Label("Move to My Teams", systemImage: "arrow.up.circle")
+                                    }
+                                }
                         }
                         if activeTeamEntries.isEmpty, !showInlineNewTeam {
                             Text("All your teams are archived.")
@@ -1656,6 +1939,16 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
             }
+
+            // Joining someone else's team lives here now (2026-11-24).
+            Button {
+                showJoinTeam = true
+            } label: {
+                Label("Have an invite? Join a Team", systemImage: "person.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("teams.joinTeam")
 
             TextField("Team name", text: $newTeamNameForHome)
                 .textFieldStyle(.roundedBorder)
@@ -2302,24 +2595,55 @@ struct SettingsView: View {
                 secondaryLabel: "Games Calendar",
                 secondaryAction: { showGamesCalendar = true },
                 trailingFirst: true,
-                accessory: AnyView(TourneyInfoButton { showTourneys = true }),
+                accessory: AnyView(TournamentsButton { showTourneys = true }),
                 trailingAction: { toggleInlineNewGame() }
             )
-            .appSheet(isPresented: $showTourneys, onDismiss: { openPendingTourneyGame() }, chrome: .handle) {
+            .appSheet(isPresented: $showTourneys, onDismiss: {
+                tourneysStartNewForTeam = nil
+                tourneysOpenId = nil
+                tourneysOpenSharedId = nil
+                openPendingTourneyGame()
+            }, chrome: .handle) {
                 AnyView(
-                    TourneysView(onStartGame: { game in
+                    TourneysView(openId: tourneysOpenId, openSharedId: tourneysOpenSharedId, onStartGame: { game in
                         pendingTourneyGame = game
                         showTourneys = false
                     }, teamContext: TourneyTeamContext(
                         teams: activeTeamEntries.map { $0.team },
                         createTeam: createTeamFromNewGame
-                    ))
+                    ), startNewForTeam: tourneysStartNewForTeam)
                     .environmentObject(authManager)
                     .fixedAppDynamicType()
                 )
             }
             .appSheet(isPresented: $showLineupScan, onDismiss: { lineupScan = nil }) {
                 lineupScanSheetContent
+            }
+            .modifier(HomeUpcomingSheets(
+                upcomingItem: $upcomingItem,
+                editingTeamGame: $editingTeamGame,
+                editingUpcomingGame: $editingUpcomingGame,
+                teamPageTarget: $teamPageTarget,
+                showJoinTeam: $showJoinTeam,
+                showStartStatsQuestion: $showStartStatsQuestion,
+                startingKind: startingEntry?.game.kind ?? .game,
+                store: homeSchedule,
+                card: { upcomingCard(for: $0) },
+                onSaveUpcoming: { saveUpcomingGame($0) },
+                onStatsAnswer: { counts in
+                    if let entry = startingEntry { startTracking(entry, leftOutOfStats: !counts) }
+                    startingEntry = nil
+                },
+                onJoined: { refreshMyTeams(); loadScheduleTeams() }
+            ))
+            .task(id: authManager.user?.uid) {
+                homeSchedule.start(uid: authManager.user?.uid)
+                TeamSidesStore.shared.start(uid: authManager.user?.uid)
+                loadScheduleTeams()
+                if ProcessInfo.processInfo.arguments.contains("-UITestHomeSchedule") {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    seedHomeScheduleForUITest()
+                }
             }
             .appSheet(isPresented: $showGamesCalendar, onDismiss: { openPendingTourneyGame() }, chrome: .handle) {
                 AnyView(
@@ -2391,7 +2715,13 @@ struct SettingsView: View {
                                 closeInlineNewGame()
                                 showPracticeSetup = true
                             },
-                            gameKind: $inlineNewGameKind
+                            gameKind: $inlineNewGameKind,
+                            details: $inlineNewGameDetails,
+                            onStartTournament: { teamId in
+                                closeInlineNewGame()
+                                tourneysStartNewForTeam = .some(teamId)
+                                showTourneys = true
+                            }
                         )
                     }
 
@@ -2409,17 +2739,11 @@ struct SettingsView: View {
                         }
                     }
 
-                    let sorted = activeGames.sorted(by: { $0.date > $1.date })
-                    let quickGames = sorted.map { QuickLaunchGame(id: quickLaunchId(for: $0), game: $0) }
-                    ForEach(quickGames) { item in
-                        gameRow(
-                            opponent: matchupTitle(for: item.game),
-                            dateText: quickLaunchDateCaption(for: item.game),
-                            isLive: false,
-                            menuGame: item.game
-                        ) {
-                            launchGame(item.game)
-                        }
+                    // Tracked and scheduled games together - upcoming first,
+                    // then past (HomeGameList, 2026-11-24).
+                    let listed = HomeGameList.items(tracked: activeGames, scheduled: homeSchedule.allScheduled, now: Date())
+                    ForEach(listed.upcoming + listed.past) { item in
+                        homeGameRow(item)
                     }
 
                     HomePracticeList(onDelete: { pendingPracticeDelete = $0 })
@@ -2433,7 +2757,7 @@ struct SettingsView: View {
                             launchPractice(session)
                         })
 
-                    if joinedLiveSessions.isEmpty, activeGames.isEmpty, !showInlineNewGame {
+                    if joinedLiveSessions.isEmpty, activeGames.isEmpty, homeSchedule.allScheduled.isEmpty, !showInlineNewGame {
                         Text("No games yet. Tap + to create one.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -2611,6 +2935,7 @@ struct SettingsView: View {
         inlineNewGameOpponentTeamId = nil
         inlineNewGameKind = .game
         inlineNewGameScheduledId = nil
+        inlineNewGameDetails = NewGameDetails()
         pendingNewGameLineup = nil
     }
 
@@ -2621,23 +2946,27 @@ struct SettingsView: View {
     private func createInlineGame(leftOutOfStats: Bool = false) {
         let name = inlineNewGameName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        var newGame = Game(
-            id: nil,
-            opponent: name,
-            date: inlineNewGameDate,
-            jerseyNumbers: [],
-            trackingMode: inlineNewGameTrackingMode
+        // Everything the form asked; for one of your teams you schedule
+        // for, the matching team-schedule entry so its members see it
+        // (NewGamePlan, 2026-11-24). Tracked from a scheduled game, it
+        // links to that entry instead of making another.
+        let uid = authManager.user?.uid ?? ""
+        let schedules = inlineNewGameScheduledId == nil && activeTeamEntries.contains { entry in
+            entry.team.id == inlineNewGameTeamId
+                && TeamAccessRules.schedules(team: entry.team, membership: entry.membership, uid: uid)
+        }
+        let gamePlan = NewGamePlan.make(
+            opponent: name, date: inlineNewGameDate, ourTeamId: inlineNewGameTeamId,
+            opponentTeamId: inlineNewGameOpponentTeamId, kind: inlineNewGameKind,
+            trackingMode: inlineNewGameTrackingMode, details: inlineNewGameDetails, schedulesForTeam: schedules
         )
-        // Game is the default and is stored as nil, like every older game.
-        newGame.kind = inlineNewGameKind == .game ? nil : inlineNewGameKind
+        var newGame = gamePlan.game
         newGame.leftOutOfStats = leftOutOfStats ? true : nil
-        newGame.scheduledGameId = inlineNewGameScheduledId
-        // Our side, chosen in the card. Left nil the tracker still asks for
-        // it on the first tap of "Us", exactly as before.
-        newGame.teamId = inlineNewGameTeamId
-        // The opponent is a real Team now, so the away roster is linked
-        // from the start instead of being set up later from the tracker.
-        newGame.awayTeamId = inlineNewGameOpponentTeamId
+        if let scheduledId = inlineNewGameScheduledId { newGame.scheduledGameId = scheduledId }
+        if let entry = gamePlan.entry {
+            TourneyStore.writeTeamGame(entry)
+            homeSchedule.saveTeamGameLocally(entry)
+        }
         // A scanned lineup for this opponent: make its new roster rows
         // first, then the game is created with the lineup already in it.
         let scanned = pendingNewGameLineup.flatMap { $0.teamId == inlineNewGameOpponentTeamId ? $0 : nil }

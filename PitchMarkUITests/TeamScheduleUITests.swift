@@ -22,7 +22,7 @@ final class TeamScheduleUITests: XCTestCase {
         let row = app.buttons["tourney.row.Summer Slam"]
         XCTAssertTrue(row.waitForExistence(timeout: 10))
         XCTAssertTrue(row.label.contains("Team: Reds 16U B"), row.label)
-        XCTAssertTrue(app.buttons["tourney.joinTeam"].exists, "Join a Team is there")
+        // Join a Team moved to Home's Teams (2026-11-24).
         row.tap()
         XCTAssertTrue(app.staticTexts["Cooperstown Dreams Park"].waitForExistence(timeout: 5), "the page opens")
         XCTAssertFalse(app.textFields["tourney.name"].exists, "nothing to edit")

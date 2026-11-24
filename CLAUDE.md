@@ -1187,10 +1187,11 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
   (`startListeningToGameRunnerEvents`). New events carry the board:
   `outsBefore`, `balls`, `strikes`, `batterJersey`. Not yet in the
   per-batter popover's Pitch cards strip.
-- **Shared Moments end with "Get PitchMark: <App Store link>"**
-  (`MomentShareRequest.items`), no extra picture (user's call). The user
-  plans a `pitchmark.app/get` page with its own preview before the next
-  ship. The "Video Not on This Phone" dialog
+- **A shared Moment is ONE file** (2026-11-24, user's call): a video
+  Moment its video, a photo Moment its photo (`MomentShare.sourceFiles`) -
+  video + still arrived as two copies. **No "Get PitchMark" line for now**
+  (user's call); remind the user to bring it back a different way
+  (`pitchmark.app/get` with its own preview is the plan). The "Video Not on This Phone" dialog
   covers reinstalls as well as other devices.
 - Sheets whose content has its own navigation bar get `chrome: .handle` -
   the ✕ landed on top of their Cancel ("Set My Team").
@@ -1262,6 +1263,36 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
   screen. No way to change it later yet.
 - **Sponsors show on team tourney pages** (`TourneyReadView(sponsors:)`,
   surface `.tourneyPage`) and the team page, so members see them.
+
+## Home's Games and Teams (2026-11-24, second pass)
+
+- **Games + offers Game / Tournament / Pitching Practice Session**
+  (`AddGameCard.NewKind`, segmented `newGame.kindOfNew`). A Game asks for
+  everything (type, teams, time, arrive by, where, field, notes -
+  `NewGameDetailsFields`); for one of your teams you schedule for it also
+  writes the team-schedule entry with the same id-link
+  (`NewGamePlan.make`, `Game.scheduledGameId`). Tournament opens the
+  Tournaments screen on a new tournament for the picked team.
+- **One Games list** (`HomeGameList.items`): tracked games and scheduled
+  ones (team single games, own, team AND followed/shared-link tourney
+  games - `TourneyStore.followedTourneys`) together -
+  upcoming soonest first, then past. Third line = the tourney's name or
+  Friendly/Scrimmage. An upcoming game opens `UpcomingGameCard` (Start
+  Tracking / Edit / Open Tournament); Start Tracking on a scheduled game
+  makes the Game (`NewGamePlan.game(from:)`, stats question first for
+  Friendly/Scrimmage) and opens it. Game now has optional `arriveAt`,
+  `venue*`, `field`, `notes`.
+- **The Tourney Info button is gone**: a trophy (`TournamentsButton`) opens
+  the Tournaments screen (Our Tournaments, Scouting, Shared with Me).
+  Your Teams / Join a Team moved to Home's Teams: joined teams list under
+  My Teams and open their team page (Leave Team is there); Join a Team is
+  in the new-team card.
+- **Teams: My Teams on top, Opponents below** (`TeamSides`): your move
+  wins (long press → Move to …, `users/{uid}/meta/teamSides`); else picked
+  as Our team → yours; made from the Opponent picker
+  (`markMadeAsOpponent`) or only ever an opponent → Opponents; else yours.
+- `-UITestHomeSchedule` seeds Home (signed out) with teams and games;
+  `-UITestTeamPage[Edit]` opens a team page in memory.
 
 ## Each pitcher's key, remembered (2026-11-22)
 

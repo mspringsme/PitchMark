@@ -15737,10 +15737,26 @@ struct AddGameCard: View {
     var onStartPractice: (() -> Void)? = nil
     /// Game / Friendly / Scrimmage (2026-11-24); nil = no Type row.
     var gameKind: Binding<GameKind>? = nil
+    /// Arrive by, where, field and notes (Home's New Game, 2026-11-24);
+    /// nil = the card doesn't ask.
+    var details: Binding<NewGameDetails>? = nil
+    /// Tournament (Home's +): opens a new tournament for the picked team.
+    var onStartTournament: ((String?) -> Void)? = nil
+
+    /// What Home's + is making (2026-11-24).
+    enum NewKind: String, CaseIterable, Identifiable {
+        case game = "Game"
+        case tournament = "Tournament"
+        case practice = "Pitching Practice Session"
+        var id: String { rawValue }
+        var shortTitle: String { self == .practice ? "Practice" : rawValue }
+    }
 
     /// True while "New Team…" is open (or creating) - Save waits for it.
     @State private var isAddingTeam = false
-    @State private var isPractice = false
+    @State private var newKind: NewKind = .game
+    @State private var searchingPlace = false
+    private var isPractice: Bool { newKind == .practice }
 
     private var canSave: Bool {
         !opponentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -15762,16 +15778,37 @@ struct AddGameCard: View {
             }
 
             if let onStartPractice {
-                Button {
-                    isPractice.toggle()
-                } label: {
-                    Label("Practice", systemImage: isPractice ? "checkmark.square.fill" : "square")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                // Game, Tournament or Pitching Practice Session (2026-11-24).
+                Picker("New", selection: $newKind) {
+                    ForEach(NewKind.allCases.filter { $0 != .tournament || onStartTournament != nil }) {
+                        Text($0.shortTitle).tag($0)
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("newGame.practice")
-                .accessibilityValue(isPractice ? "On" : "Off")
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("newGame.kindOfNew")
+                if newKind != .game {
+                    Text(newKind.rawValue)
+                        .font(.subheadline.weight(.semibold))
+                }
+
+                if newKind == .tournament, let onStartTournament {
+                    Text("Pick the team, then fill in the tournament - each game you add shows in your Games list.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Team", selection: Binding(get: { ourTeamId ?? "" },
+                                                      set: { ourTeamId = $0.isEmpty ? nil : $0 })) {
+                        Text("No team").tag("")
+                        ForEach(myTeams.filter { $0.id != nil }, id: \.id) { Text($0.nameWithClass).tag($0.id ?? "") }
+                    }
+                    .accessibilityIdentifier("newGame.tournamentTeam")
+                    HStack {
+                        Spacer()
+                        Button("Cancel", action: onCancel)
+                        Button("Create Tournament") { onStartTournament(ourTeamId) }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("newGame.createTournament")
+                    }
+                }
 
                 if isPractice {
                     Text("No teams or opponent - pick the pitcher and the pitches to work on, then call pitches and record where they went. Saved as a practice session, kept apart from games.")
@@ -15787,7 +15824,7 @@ struct AddGameCard: View {
                 }
             }
 
-            if !isPractice {
+            if newKind == .game {
             GameTeamPickers(
                 myTeams: myTeams,
                 ourTeamId: $ourTeamId,
@@ -15821,6 +15858,10 @@ struct AddGameCard: View {
                 }
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("newGame.kind")
+            }
+
+            if let details {
+                NewGameDetailsFields(details: details, gameDate: gameDate)
             }
 
             Picker("Tracking", selection: $trackingMode) {
@@ -15954,6 +15995,9 @@ struct GameTeamPickers: View {
             case .opponent:
                 opponentTeamId = id
                 opponentName = created.name
+                // Made from the Opponent picker: it starts under Opponents
+                // on Home's Teams list (TeamSides, 2026-11-24).
+                TeamSidesStore.shared.markMadeAsOpponent(id)
             }
             cancelNewTeam()
         }

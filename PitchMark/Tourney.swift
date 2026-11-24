@@ -1129,6 +1129,11 @@ final class TourneyStore: ObservableObject {
     @Published private(set) var teamGames: [TeamScheduledGame] = []
     private var teamGameListeners: [String: ListenerRegistration] = [:]
     private var teamGamesByTeam: [String: [TeamScheduledGame]] = [:]
+    /// The shared tourneys this user follows, live (2026-11-24): their
+    /// games are listed in Home's Games like any other.
+    @Published private(set) var followedTourneys: [Tourney] = []
+    private var followedListeners: [String: ListenerRegistration] = [:]
+    private var followedById: [String: Tourney] = [:]
     @Published private(set) var followed: [FollowedTourney] = []
     @Published private(set) var prospects: [TourneyProspect] = []
     @Published private(set) var errorMessage: String? = nil
@@ -1156,6 +1161,7 @@ final class TourneyStore: ObservableObject {
         listeners.forEach { $0.remove() }
         teamListeners.values.forEach { $0.remove() }
         teamGameListeners.values.forEach { $0.remove() }
+        followedListeners.values.forEach { $0.remove() }
     }
 
     /// Own and team tourneys together - one list for the coach.
@@ -1181,9 +1187,9 @@ final class TourneyStore: ObservableObject {
     var editableTeams: [TeamAccess] { teams.filter(\.canEdit) }
 
     /// Listens to each team's tourneys; stops listening to teams left.
-    func startTeams(_ access: [TeamAccess]) {
+    func startTeams(_ access: [TeamAccess], listen: Bool = true) {
         teams = access.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        guard !inMemory else { return }
+        guard !inMemory, listen else { return }
         let wanted = Set(access.map(\.id))
         for (id, listener) in teamListeners where !wanted.contains(id) {
             listener.remove()
@@ -1226,6 +1232,32 @@ final class TourneyStore: ObservableObject {
         teamTourneys = teamTourneysByTeam.values.flatMap { $0 }
     }
 
+    /// UI tests: followed tourneys in memory (`-UITestHomeSchedule`).
+    func seedFollowedForUITest(_ tourneys: [Tourney]) {
+        for t in tourneys { followedById[t.id] = t }
+        followedTourneys = Array(followedById.values)
+    }
+
+    /// One listener per followed tourney's shared copy.
+    private func listenToFollowed() {
+        let wanted = Set(followed.map(\.id))
+        for (id, listener) in followedListeners where !wanted.contains(id) {
+            listener.remove()
+            followedListeners[id] = nil
+            followedById[id] = nil
+        }
+        for id in wanted where followedListeners[id] == nil {
+            followedListeners[id] = Self.sharedDoc(id).addSnapshotListener { [weak self] snapshot, _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.followedById[id] = snapshot?.data().map { Tourney(id: id, firestoreData: $0) }
+                    self.followedTourneys = Array(self.followedById.values)
+                }
+            }
+        }
+        followedTourneys = Array(followedById.values)
+    }
+
     private func publishTeamGames() {
         teamGames = teamGamesByTeam.values.flatMap { $0 }
     }
@@ -1245,7 +1277,7 @@ final class TourneyStore: ObservableObject {
     /// Everything this user has scheduled, for Home's calendar: their own
     /// tourneys' games, and every team's tourneys and single games.
     var allScheduled: [TeamSchedule.Entry] {
-        TeamSchedule.entries(tourneys: allTourneys, singles: teamGames)
+        TeamSchedule.entries(tourneys: allTourneys, singles: teamGames, followed: followedTourneys)
     }
 
     func canEditTeam(_ teamId: String) -> Bool {
@@ -1258,12 +1290,32 @@ final class TourneyStore: ObservableObject {
         teamGamesByTeam[game.teamId] = list
         publishTeamGames()
         guard !inMemory else { return }
-        var data = game.firestoreData
-        data["updatedAt"] = FieldValue.serverTimestamp()
-        Self.teamGamesCollection(game.teamId).document(game.id).setData(data) { [weak self] error in
-            guard let error else { return }
+        Self.writeTeamGame(game) { [weak self] error in
             Task { @MainActor in self?.report("team game save", error, "Couldn't save the game.") }
         }
+    }
+
+    /// Writes a team's single game - also used by Home's New Game, which
+    /// puts a game for your team on its schedule.
+    nonisolated static func writeTeamGame(_ game: TeamScheduledGame, onError: ((Error) -> Void)? = nil) {
+        var data = game.firestoreData
+        data["updatedAt"] = FieldValue.serverTimestamp()
+        Firestore.firestore().collection("teams").document(game.teamId).collection("games")
+            .document(game.id).setData(data) { error in
+                if let error {
+                    debugLog("❌ team game save:", error.localizedDescription)
+                    onError?(error)
+                }
+            }
+    }
+
+    /// Shows a game written elsewhere (Home's New Game) before the
+    /// listener echoes it.
+    func saveTeamGameLocally(_ game: TeamScheduledGame) {
+        var list = teamGamesByTeam[game.teamId] ?? []
+        if let i = list.firstIndex(where: { $0.id == game.id }) { list[i] = game } else { list.append(game) }
+        teamGamesByTeam[game.teamId] = list
+        publishTeamGames()
     }
 
     /// A game entered by mistake (user's call: a scheduled game has no
@@ -1316,6 +1368,7 @@ final class TourneyStore: ObservableObject {
                                            myItems: ((d["myItems"] as? [[String: Any]]) ?? [])
                                                .compactMap(TourneyChecklistItem.init(firestoreData:)))
                 }.sorted { $0.addedAt > $1.addedAt }
+                self.listenToFollowed()
             }
         })
         listeners.append(user.collection("tourneyProspects").addSnapshotListener { [weak self] snapshot, error in

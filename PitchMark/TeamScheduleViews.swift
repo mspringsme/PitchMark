@@ -31,7 +31,9 @@ struct TeamPageView: View {
     @State private var editing: TeamScheduledGame? = nil
     @State private var isNewGame = false
     @State private var viewing: TeamSchedule.Entry? = nil
+    @State private var showLeave = false
     @StateObject private var extras = RosterExtrasPresentation()
+    @Environment(\.dismiss) private var dismiss
 
     private var canEdit: Bool { store.canEditTeam(teamId) }
     private var teamName: String { store.teamName(teamId) ?? team?.nameWithClass ?? "Team" }
@@ -76,6 +78,14 @@ struct TeamPageView: View {
             if showsTeamExtras, let team {
                 TeamSponsorSection(team: team, isTeamOwner: false, presentation: extras)
                 TeamTradingCardsSection(team: team, presentation: extras)
+                // A Scheduler or Family leaves from here (the creator
+                // can't leave their own team).
+                if team.createdByUid != authManager.user?.uid {
+                    Section {
+                        Button("Leave Team", role: .destructive) { showLeave = true }
+                            .accessibilityIdentifier("teamPage.leave")
+                    }
+                }
             }
         }
         .navigationTitle(teamName)
@@ -90,6 +100,22 @@ struct TeamPageView: View {
             TourneyGameCardSheet(game: entry.game, venue: entry.venue, meetSpots: [])
         }
         .modifier(OptionalRosterExtras(enabled: showsTeamExtras, presentation: extras, team: team, players: players))
+        .appConfirmationDialog(
+            isPresented: $showLeave,
+            title: "Leave \(teamName)?",
+            message: "You stop seeing the team's schedule. The coach can invite you again.",
+            primaryTitle: "Leave Team",
+            primaryRole: .destructive,
+            primaryAction: {
+                authManager.leaveTeam(teamId: teamId) { _ in
+                    DispatchQueue.main.async {
+                        store.startTeams(store.teams.filter { $0.id != teamId })
+                        dismiss()
+                    }
+                }
+            },
+            secondaryTitle: "Cancel"
+        )
     }
 
     /// A single game opens its editor for the coach and Schedulers; any
