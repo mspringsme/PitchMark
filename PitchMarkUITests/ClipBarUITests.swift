@@ -5,6 +5,8 @@
 //  Approved 2026-11-24 (clip brief 2c), test 9: the demo game shows Clip;
 //  adding Grandma to Quick Send puts her chip on the bar, picked; a tap
 //  unpicks it. The demo starts from an empty list every launch.
+//  2026-11-24 (user's call): the bar is a permanent row under the score
+//  row on the game screen.
 //
 
 import XCTest

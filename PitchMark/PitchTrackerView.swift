@@ -250,6 +250,17 @@ struct PitchTrackerView: View {
         let home = side(activeHomeTeamName, activeHomeTeamClass)
         return away.isEmpty ? home : "\(home) vs. \(away)"
     }
+    /// What the clip bar needs (ClipShareViews.swift).
+    private var gameClipContext: GameClipContext {
+        GameClipContext(
+            isActive: isGame && ui.practiceSession == nil,
+            gameId: selectedGameId,
+            gameName: momentGameContextSnapshot()?.gameName,
+            half: HalfInningKey(inning: inning, pitchingSide: activeSide == .home ? "home" : "away"),
+            batterName: nil
+        )
+    }
+
     /// The open game right now, for Moments' game caption
     /// (MomentGameCaption.swift). nil with no game open.
     private func momentGameContextSnapshot() -> MomentGameContext? {
@@ -5540,7 +5551,8 @@ struct PitchTrackerView: View {
             overlayContent
                 .padding(.top, 0)
                 .frame(maxWidth: .infinity)
-                .frame(height: 250, alignment: .top)
+                // The progress tab is taller by the clip row under Score.
+                .frame(height: overlayTab == .progress ? 304 : 250, alignment: .top)
                 .overlay(alignment: .top) {
                     if overlayTab == .cards {
                         cardsFilterButton
@@ -5958,6 +5970,7 @@ struct PitchTrackerView: View {
     @ViewBuilder
     private var progressOverlayContent: some View {
         ProgressGameView(
+            clipContext: gameClipContext,
             homeTeamLabel: sideLabel(for: .home, maxLength: 6).uppercased(),
             awayTeamLabel: sideLabel(for: .away, maxLength: 6).uppercased(),
             ownerUserId: effectiveGameOwnerUserId,
@@ -12578,20 +12591,6 @@ struct PitchTrackerView: View {
                     pitchKeys: visibleTemplates,
                     keyId: selectedTemplate?.id
                 ))
-                // Clip button, Quick Send chips and send tray (clip brief
-                // 2c, ClipShareViews.swift). A modifier struct so this
-                // view's type doesn't grow.
-                .modifier(GameClipBarModifier(
-                    clip: GameClipContext(
-                        isActive: isGame && ui.practiceSession == nil,
-                        gameId: selectedGameId,
-                        gameName: momentGameContextSnapshot()?.gameName,
-                        half: HalfInningKey(inning: inning, pitchingSide: activeSide == .home ? "home" : "away"),
-                        batterName: nil
-                    ),
-                    snapshot: { momentGameContextSnapshot() },
-                    latestPitchEventId: { gamePitchEvents.max(by: { $0.timestamp < $1.timestamp })?.id }
-                ))
                 .tabItem { Label(HomeArea.games.title, systemImage: HomeArea.games.systemImage) }
                 .tag(HomeArea.games)
 
@@ -12608,6 +12607,14 @@ struct PitchTrackerView: View {
                 .tabItem { Label(HomeArea.moments.title, systemImage: HomeArea.moments.systemImage) }
                 .tag(HomeArea.moments)
         }
+        // The clip row's sheets and banner (clip brief 2c,
+        // ClipShareViews.swift); the row itself is under the score row
+        // (GameClipRow). A modifier struct so this view's type doesn't grow.
+        .modifier(GameClipBarModifier(
+            clip: gameClipContext,
+            snapshot: { momentGameContextSnapshot() },
+            latestPitchEventId: { gamePitchEvents.max(by: { $0.timestamp < $1.timestamp })?.id }
+        ))
     }
     
     struct OwnerCalledPitchRecordContainer: View {
@@ -13076,6 +13083,8 @@ private struct RunnerPickerSheet: View {
 }
 
 private struct ProgressGameView: View {
+    /// The clip row under the Score row (ClipShareViews.swift).
+    let clipContext: GameClipContext
     /// Team names for the Score row, already abbreviated by the caller.
     /// Fall back to "US"/"THEM" when a side has no team linked.
     let homeTeamLabel: String
@@ -13186,6 +13195,11 @@ private struct ProgressGameView: View {
                 }
             }
             .padding(.horizontal, 12)
+
+            // Clip, Quick Send chips and the tray, under the Score row
+            // (user's call, 2026-11-24).
+            GameClipRow(clip: clipContext)
+                .padding(.horizontal, 12)
         }
         .contentShape(Rectangle())
         .padding(.vertical, 2)

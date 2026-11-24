@@ -1336,8 +1336,11 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
   `functions/src/guardrails.ts` keep gated features off in code whatever the
   doc says. Interim sharing is on unless the doc turns it off, and survives
   the kill switch (it's on-device). Keep the Swift and TS limits identical.
-- **The game screen's clip bar** is `GameClipBarModifier` (ClipShareViews
-  .swift), a modifier struct so the tracker's type doesn't grow. Clip opens
+- **The clip row is a permanent row under the Score stepper row** (US − 0 + Score − 0 + THEM) on the game
+  screen, inside the tracker's scroll (user's call, `GameClipRow`). Tried
+  and dropped: the tab bar's `tabViewBottomAccessory` (a full-width row,
+  too much room) and a floating expandable dock. `GameClipBarModifier` (on
+  the TabView, owns the sheets) and the row share `GameClipUI`. Clip opens
   the camera in `gameClipMode` (60 s auto-stop, Discard & Restart, no
   stills); the clip is a Moment with the game context, queued for the
   picked Quick Send chips (none = Just me). The queue is on the phone; the

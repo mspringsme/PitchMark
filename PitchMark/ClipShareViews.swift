@@ -2,18 +2,25 @@
 //  ClipShareViews.swift
 //  PitchMark
 //
-//  The game screen's clip bar (2026-11-24, clip brief 2c): Clip records
+//  The clip bar (2026-11-24, clip brief 2c): Clip records
 //  (60 s cap, Discard & Restart), the chips pick who new clips go to with
 //  one tap, and the tray holds what's waiting. When the half-inning turns
 //  over with clips waiting, a banner offers to send them: one Messages
 //  sheet per person, every waiting clip attached, so it's one tap each.
 //
-//  A modifier struct, so the tracker's own type doesn't grow (see the
+//  It's a permanent row on the game screen, under the Score stepper row and
+//  scrolling with it (user's call, 2026-11-24). Tried and dropped: the tab
+//  bar's accessory row (too much room) and a floating expandable dock.
+//
+//  `GameClipBarModifier` sits on the tracker's TabView and owns the sheets;
+//  `GameClipRow` draws the row; both share `GameClipUI`.
+//  Modifier structs, so the tracker's own type doesn't grow (see the
 //  PitchTrackerView stack-size notes in CLAUDE.md). Rules: ClipShare.swift.
 //
 
 import SwiftUI
 import MessageUI
+import Combine
 import FirebaseAuth
 
 /// What the tracker hands the clip bar.
@@ -36,36 +43,13 @@ struct GameClipBarModifier: ViewModifier {
     @ObservedObject private var store = ClipShareStore.shared
     @ObservedObject private var flags = AppFeatureFlagStore.shared
 
-    @State private var showCamera = false
-    @State private var showRecipients = false
-    @State private var sendRequest: ClipSendRequest?
-    @State private var showBanner = false
+    @StateObject private var ui = GameClipUI()
     @State private var lastHalf: HalfInningKey?
     @State private var saveError: String?
 
-    private var isShown: Bool {
-        clip.isActive && clip.gameId != nil && flags.flags.isOn(.interimClipSharing)
-    }
-
     func body(content: Content) -> some View {
         content
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if isShown {
-                    VStack(spacing: 6) {
-                        if showBanner { banner }
-                        GameClipBar(
-                            store: store,
-                            pendingCount: ClipSendQueue.pendingCount(store.clips(forGame: clip.gameId), recipients: store.recipients),
-                            onClip: { showCamera = true },
-                            onEditRecipients: { showRecipients = true },
-                            onTray: { sendRequest = ClipSendRequest(onlyClipId: nil) }
-                        )
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.bar)
-                }
-            }
+            .environmentObject(ui)
             .onAppear {
                 store.signedIn(uid: authManager.user?.uid)
                 store.prune(currentGameId: clip.gameId)
@@ -74,27 +58,27 @@ struct GameClipBarModifier: ViewModifier {
             .onChange(of: clip.gameId) { _, gameId in
                 store.prune(currentGameId: gameId)
                 lastHalf = nil
-                showBanner = false
+                ui.showBanner = false
             }
             .onChange(of: clip.half) { _, half in
                 let pending = ClipSendQueue.pendingCount(store.clips(forGame: clip.gameId), recipients: store.recipients)
                 if ClipSendQueue.shouldOfferSend(previous: lastHalf, current: half, pendingCount: pending) {
-                    withAnimation { showBanner = true }
+                    withAnimation { ui.showBanner = true }
                 }
                 lastHalf = half
             }
-            .appSheet(isPresented: $showCamera, chrome: .none) {
+            .appSheet(isPresented: $ui.showCamera, chrome: .none) {
                 MomentCameraPicker(gameClipMode: true) { url, duration, _ in
-                    showCamera = false
+                    ui.showCamera = false
                     guard let url else { return }
                     saveClip(url: url, duration: duration)
                 }
                 .ignoresSafeArea()
             }
-            .appSheet(isPresented: $showRecipients, chrome: .handle) {
+            .appSheet(isPresented: $ui.showRecipients, chrome: .handle) {
                 QuickSendListSheet(store: store)
             }
-            .appSheet(item: $sendRequest) { request in
+            .appSheet(item: $ui.sendRequest) { request in
                 ClipSendSheet(store: store, gameId: clip.gameId, gameName: clip.gameName,
                               onlyClipId: request.onlyClipId)
             }
@@ -106,33 +90,6 @@ struct GameClipBarModifier: ViewModifier {
                 primaryAction: {},
                 secondaryTitle: "Cancel"
             )
-    }
-
-    private var banner: some View {
-        let count = ClipSendQueue.pendingCount(store.clips(forGame: clip.gameId), recipients: store.recipients)
-        return HStack(spacing: 10) {
-            Image(systemName: "paperplane.fill")
-            Text("\(count) clip\(count == 1 ? "" : "s") ready to send")
-                .font(.subheadline.weight(.semibold))
-            Spacer(minLength: 4)
-            Button("Send") {
-                showBanner = false
-                sendRequest = ClipSendRequest(onlyClipId: nil)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(Color.pitchMarkActiveGray)
-            .accessibilityIdentifier("clipBar.banner.send")
-            Button {
-                withAnimation { showBanner = false }
-            } label: {
-                Image(systemName: "xmark").frame(width: 32, height: 32)
-            }
-            .accessibilityLabel("Not now")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
-        .accessibilityIdentifier("clipBar.banner")
     }
 
     /// Saves the take as a Moment with the game on it, then queues it for
@@ -164,6 +121,123 @@ struct GameClipBarModifier: ViewModifier {
     }
 }
 
+/// What the clip bar's buttons open. Shared by the tab bar accessory and
+/// the older-iOS bar so both drive the same sheets.
+@MainActor
+final class GameClipUI: ObservableObject {
+    @Published var showCamera = false
+    @Published var showRecipients = false
+    @Published var sendRequest: ClipSendRequest?
+    @Published var showBanner = false
+
+    func openTray() { sendRequest = ClipSendRequest(onlyClipId: nil) }
+
+    func sendFromBanner() {
+        showBanner = false
+        openTray()
+    }
+}
+
+/// The game screen's clip row, under the score row: the banner above it
+/// between innings, then Clip, the chips and the tray.
+struct GameClipRow: View {
+    let clip: GameClipContext
+    @EnvironmentObject private var ui: GameClipUI
+    @ObservedObject private var store = ClipShareStore.shared
+    @ObservedObject private var flags = AppFeatureFlagStore.shared
+
+    var body: some View {
+        if clip.isActive && clip.gameId != nil && flags.flags.isOn(.interimClipSharing) {
+            let pending = ClipSendQueue.pendingCount(store.clips(forGame: clip.gameId), recipients: store.recipients)
+            VStack(spacing: 6) {
+                if ui.showBanner {
+                    GameClipBanner(ui: ui, pendingCount: pending)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
+                }
+                GameClipBar(store: store, pendingCount: pending,
+                            onClip: { ui.showCamera = true },
+                            onEditRecipients: { ui.showRecipients = true },
+                            onTray: { ui.openTray() })
+            }
+        }
+    }
+}
+
+/// "3 clips ready to send" - Send opens the tray, the x waits.
+struct GameClipBanner: View {
+    @ObservedObject var ui: GameClipUI
+    let pendingCount: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "paperplane.fill")
+            Text("\(pendingCount) clip\(pendingCount == 1 ? "" : "s") ready to send")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 4)
+            Button("Send") { ui.sendFromBanner() }
+                .font(.subheadline.weight(.bold))
+                .buttonStyle(.borderedProminent)
+                .tint(Color.pitchMarkActiveGray)
+                .accessibilityIdentifier("clipBar.banner.send")
+            Button {
+                withAnimation { ui.showBanner = false }
+            } label: {
+                Image(systemName: "xmark").foregroundStyle(Color.primary).frame(width: 32, height: 32)
+            }
+            .accessibilityLabel("Not now")
+        }
+        .accessibilityIdentifier("clipBar.banner")
+    }
+}
+
+struct GameClipButton: View {
+    var compact = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Clip", systemImage: "video.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.subheadline.weight(.bold))
+                .padding(.horizontal, compact ? 10 : 12)
+                .frame(height: compact ? 30 : 34)
+                .foregroundStyle(.white)
+                .background(Capsule().fill(Color.red))
+        }
+        .accessibilityIdentifier("clipBar.clip")
+    }
+}
+
+struct GameClipTrayButton: View {
+    let pendingCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: pendingCount > 0 ? "tray.full.fill" : "tray")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: 40, height: 34)
+                .overlay(alignment: .topTrailing) {
+                    if pendingCount > 0 {
+                        Text("\(pendingCount)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .background(Capsule().fill(Color.red))
+                            .offset(x: 2, y: -2)
+                    }
+                }
+        }
+        .accessibilityLabel(pendingCount > 0 ? "\(pendingCount) clips waiting to send" : "Clip tray")
+        .accessibilityIdentifier("clipBar.tray")
+    }
+}
+
 struct ClipSendRequest: Identifiable {
     let id = UUID()
     var onlyClipId: String?
@@ -173,21 +247,14 @@ struct ClipSendRequest: Identifiable {
 struct GameClipBar: View {
     @ObservedObject var store: ClipShareStore
     let pendingCount: Int
+    var showsClipButton = true
     let onClip: () -> Void
     let onEditRecipients: () -> Void
     let onTray: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(action: onClip) {
-                Label("Clip", systemImage: "video.fill")
-                    .font(.subheadline.weight(.bold))
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
-                    .foregroundStyle(.white)
-                    .background(Capsule().fill(Color.red))
-            }
-            .accessibilityIdentifier("clipBar.clip")
+            if showsClipButton { GameClipButton(action: onClip) }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -230,30 +297,14 @@ struct GameClipBar: View {
                 }
             }
 
-            Button(action: onTray) {
-                Image(systemName: pendingCount > 0 ? "tray.full.fill" : "tray")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 40, height: 36)
-                    .overlay(alignment: .topTrailing) {
-                        if pendingCount > 0 {
-                            Text("\(pendingCount)")
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 5)
-                                .background(Capsule().fill(Color.red))
-                                .offset(x: 2, y: -2)
-                        }
-                    }
-            }
-            .accessibilityLabel(pendingCount > 0 ? "\(pendingCount) clips waiting to send" : "Clip tray")
-            .accessibilityIdentifier("clipBar.tray")
+            GameClipTrayButton(pendingCount: pendingCount, action: onTray)
         }
     }
 }
 
 /// Everything waiting, one Send per person; this game's clips below with
-/// Send Now each.
+/// Send Now each - Messages for that one clip, opening for each person in
+/// turn (a cancel stops the run).
 struct ClipSendSheet: View {
     @ObservedObject var store: ClipShareStore
     let gameId: String?
@@ -262,7 +313,8 @@ struct ClipSendSheet: View {
 
     @State private var composing: ComposeRequest?
     @State private var isPreparing = false
-    @State private var scopedClipId: String?
+    /// Send Now's people still to go, opened one after another.
+    @State private var upNext: [PendingClipMessage] = []
     @State private var missingCount = 0
 
     struct ComposeRequest: Identifiable {
@@ -276,7 +328,7 @@ struct ClipSendSheet: View {
 
     private var messages: [PendingClipMessage] {
         ClipSendQueue.pendingMessages(clips: gameClips, recipients: store.recipients,
-                                      onlyClipId: scopedClipId ?? onlyClipId)
+                                      onlyClipId: onlyClipId)
     }
 
     var body: some View {
@@ -303,7 +355,7 @@ struct ClipSendSheet: View {
                         }
                     }
                 } header: {
-                    Text(scopedClipId == nil ? "Send" : "Send This Clip")
+                    Text("Send")
                 } footer: {
                     Text("Messages opens with the clips attached. Tap Send there - iOS doesn't let apps send for you.")
                 }
@@ -316,9 +368,11 @@ struct ClipSendSheet: View {
                                     Text(clip.label).font(.subheadline.weight(.semibold))
                                     Spacer()
                                     if !clip.isFullySent {
-                                        Button("Send Now") { scopedClipId = clip.id }
+                                        Button("Send Now") { sendNow(clip.id) }
                                             .font(.footnote.weight(.semibold))
                                             .buttonStyle(.bordered)
+                                            .tint(Color.pitchMarkActiveGray)
+                                            .accessibilityIdentifier("clipSend.sendNow")
                                     }
                                 }
                                 Text(status(of: clip)).font(.footnote).foregroundStyle(.secondary)
@@ -332,13 +386,6 @@ struct ClipSendSheet: View {
             }
             .navigationTitle("Send Clips")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if scopedClipId != nil {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("All Clips") { scopedClipId = nil }
-                    }
-                }
-            }
         }
         .overlay {
             if isPreparing {
@@ -351,9 +398,17 @@ struct ClipSendSheet: View {
                 }
             }
         }
-        .appSheet(item: $composing, chrome: .none) { request in
+        .appSheet(item: $composing, onDismiss: {
+            // The next person in a Send Now run, once Messages has gone.
+            guard !upNext.isEmpty else { return }
+            compose(upNext.removeFirst())
+        }, chrome: .none) { request in
             ClipMessageComposer(recipient: request.message.recipient, files: request.files, body: request.body) { sent in
-                if sent { store.markSent(clipIds: request.message.clipIds, to: request.message.recipient.id) }
+                if sent {
+                    store.markSent(clipIds: request.message.clipIds, to: request.message.recipient.id)
+                } else {
+                    upNext = []
+                }
                 composing = nil
             }
             .ignoresSafeArea()
@@ -379,6 +434,15 @@ struct ClipSendSheet: View {
         return line.isEmpty ? "Just me" : line.prefix(1).uppercased() + line.dropFirst()
     }
 
+    /// Messages for this one clip, for each person it's still waiting for.
+    private func sendNow(_ clipId: String) {
+        var run = ClipSendQueue.pendingMessages(clips: gameClips, recipients: store.recipients, onlyClipId: clipId)
+        guard !run.isEmpty else { return }
+        let first = run.removeFirst()
+        upNext = run
+        compose(first)
+    }
+
     private func compose(_ message: PendingClipMessage) {
         isPreparing = true
         let clips = gameClips.filter { message.clipIds.contains($0.id) }
@@ -389,7 +453,10 @@ struct ClipSendSheet: View {
                 isPreparing = false
                 let missing = message.clipIds.count - files.count
                 if missing > 0 { missingCount = missing }
-                guard !files.isEmpty else { return }
+                guard !files.isEmpty else {
+                    upNext = []
+                    return
+                }
                 composing = ComposeRequest(message: message, files: files,
                                            body: ClipSendQueue.messageBody(gameName: gameName, clips: clips))
             }
