@@ -12578,6 +12578,20 @@ struct PitchTrackerView: View {
                     pitchKeys: visibleTemplates,
                     keyId: selectedTemplate?.id
                 ))
+                // Clip button, Quick Send chips and send tray (clip brief
+                // 2c, ClipShareViews.swift). A modifier struct so this
+                // view's type doesn't grow.
+                .modifier(GameClipBarModifier(
+                    clip: GameClipContext(
+                        isActive: isGame && ui.practiceSession == nil,
+                        gameId: selectedGameId,
+                        gameName: momentGameContextSnapshot()?.gameName,
+                        half: HalfInningKey(inning: inning, pitchingSide: activeSide == .home ? "home" : "away"),
+                        batterName: nil
+                    ),
+                    snapshot: { momentGameContextSnapshot() },
+                    latestPitchEventId: { gamePitchEvents.max(by: { $0.timestamp < $1.timestamp })?.id }
+                ))
                 .tabItem { Label(HomeArea.games.title, systemImage: HomeArea.games.systemImage) }
                 .tag(HomeArea.games)
 

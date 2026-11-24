@@ -1016,6 +1016,17 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────
+    // APP CONFIG: /appConfig/{docId} (2026-11-24)
+    // Feature flags and the cost kill switch (CaptureGuardrails.swift,
+    // functions/src/guardrails.ts). Anyone signed in reads; no app writes -
+    // only the console and functions (admin access) change them.
+    // ─────────────────────────────────────────────
+    match /appConfig/{docId} {
+      allow get: if signedIn();
+      allow list, write: if false;
+    }
+
+    // ─────────────────────────────────────────────
     // SHARED TOURNEYS: /sharedTourneys/{shareId} (2026-11-17)
     // A read-only copy of a coach's Round Robin / Tourney Info page that
     // anyone signed in can open from its link. The id is 32+ random hex

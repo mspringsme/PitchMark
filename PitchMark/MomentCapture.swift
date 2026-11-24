@@ -58,6 +58,10 @@ import AVKit
 import CoreMedia
 
 struct MomentCameraPicker: UIViewControllerRepresentable {
+    /// Game clip mode (2026-11-24, clip brief 2c): recording stops on its
+    /// own at `CaptureLimits.maxClipSeconds`, and a Discard & Restart
+    /// button throws the take away and starts again at once.
+    var gameClipMode: Bool = false
     /// The temp video file URL, its duration (seconds), and any stills
     /// captured during the session (JPEG data, in capture order) - or
     /// nil/nil/[] if the user cancelled without finishing a recording.
@@ -65,6 +69,7 @@ struct MomentCameraPicker: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> MomentCaptureViewController {
         let controller = MomentCaptureViewController()
+        controller.gameClipMode = gameClipMode
         controller.onComplete = onComplete
         return controller
     }
@@ -130,6 +135,8 @@ func requestMomentCameraAccess(completion: @escaping (MomentCaptureAuthorization
 
 final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRecordingDelegate, AVCapturePhotoCaptureDelegate {
     var onComplete: ((URL?, Double?, [Data]) -> Void)?
+    /// See `MomentCameraPicker.gameClipMode`.
+    var gameClipMode = false
 
     private let session = AVCaptureMultiCamSession()
     /// All AVCaptureSession configuration (adding inputs/outputs/
@@ -190,6 +197,8 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
     private enum StopReason {
         case finish
         case cancel
+        /// Game clip mode: throw this take away and record again.
+        case restart
     }
     private var pendingStopReason: StopReason?
     /// How many of the movie outputs we're still waiting to hear back
@@ -229,6 +238,7 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
     private let zoomValueLabel = UILabel()
     private let focusReticle = UIView()
     private let timerLabel = UILabel()
+    private let restartButton = UIButton(type: .system)
     private let finishingOverlay = UIView()
     private let finishingSpinner = UIActivityIndicatorView(style: .large)
 
@@ -774,7 +784,25 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         timerLabel.isHidden = true
         view.addSubview(timerLabel)
 
+        restartButton.translatesAutoresizingMaskIntoConstraints = false
+        restartButton.setTitle("  Discard & Restart  ", for: .normal)
+        restartButton.setImage(UIImage(systemName: "arrow.counterclockwise"), for: .normal)
+        restartButton.tintColor = .white
+        restartButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+        restartButton.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        restartButton.layer.cornerRadius = 20
+        restartButton.accessibilityIdentifier = "camera.discardRestart"
+        restartButton.addTarget(self, action: #selector(restartTapped), for: .touchUpInside)
+        restartButton.isHidden = true
+        view.addSubview(restartButton)
+        // Game clips are video only - a still would need a home of its own.
+        shutterButton.isHidden = gameClipMode
+
         NSLayoutConstraint.activate([
+            restartButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            restartButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 52),
+            restartButton.heightAnchor.constraint(equalToConstant: 40),
+
             recordButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             recordButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
             recordButton.widthAnchor.constraint(equalToConstant: 68),
@@ -904,8 +932,20 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
 
             isRecording = true
             recordButton.layer.cornerRadius = 12
+            restartButton.isHidden = !gameClipMode
             startRecordingTimer()
         }
+    }
+
+    /// Game clip mode: stop, throw the take away, record again
+    /// (`fileOutput(_:didFinishRecordingTo:...)` restarts once both
+    /// outputs report back).
+    @objc private func restartTapped() {
+        guard isRecording, pendingStopReason == nil else { return }
+        pendingStopReason = .restart
+        restartButton.isHidden = true
+        backMovieOutput.stopRecording()
+        if isMultiCamActive { frontMovieOutput.stopRecording() }
     }
 
     private func startRecordingTimer() {
@@ -929,6 +969,11 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         guard let start = recordingStartDate else { return }
         let elapsed = Int(Date().timeIntervalSince(start))
         timerLabel.text = String(format: "%02d:%02d", elapsed / 60, elapsed % 60)
+        // Game clips stop on their own at the hard cap.
+        if gameClipMode, Double(elapsed) >= CaptureLimits.maxClipSeconds,
+           isRecording, pendingStopReason == nil {
+            recordTapped()
+        }
     }
 
     @objc private func shutterTapped() {
@@ -1142,14 +1187,17 @@ final class MomentCaptureViewController: UIViewController, AVCaptureFileOutputRe
         pendingStopReason = nil
         isRecording = false
         recordButton.layer.cornerRadius = 34
+        restartButton.isHidden = true
         stopRecordingTimer()
 
         switch reason {
-        case .cancel:
+        case .cancel, .restart:
             if let url = finishedBackURL { try? FileManager.default.removeItem(at: url) }
             if let url = finishedFrontURL { try? FileManager.default.removeItem(at: url) }
             finishedBackURL = nil
             finishedFrontURL = nil
+            cameraSwitchLog = []
+            if reason == .restart { recordTapped() }
         case .finish:
             finalizeMultiCamRecording()
         }

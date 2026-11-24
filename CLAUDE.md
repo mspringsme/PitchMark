@@ -1325,3 +1325,24 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
 
 - The user commits and pushes from Xcode. Don't push.
 - Prefer one conversation per task, ending at a verified build + commit.
+
+## Clip sharing and cost guardrails (2026-11-24)
+
+- **The plan is the brief's "Discovery and plan" tab** (Claude Doc, link in
+  memory). Phases 6-8 (cloud clips, full-game video, content safety) stay
+  off until the release gate: legal review, Android, known-team beta.
+- **Flags live in `appConfig/flags`** (no app writes; rule added, not yet
+  deployed). `AppFeatureFlags.releaseGateCleared` / `releaseGateCleared` in
+  `functions/src/guardrails.ts` keep gated features off in code whatever the
+  doc says. Interim sharing is on unless the doc turns it off, and survives
+  the kill switch (it's on-device). Keep the Swift and TS limits identical.
+- **The game screen's clip bar** is `GameClipBarModifier` (ClipShareViews
+  .swift), a modifier struct so the tracker's type doesn't grow. Clip opens
+  the camera in `gameClipMode` (60 s auto-stop, Discard & Restart, no
+  stills); the clip is a Moment with the game context, queued for the
+  picked Quick Send chips (none = Just me). The queue is on the phone; the
+  list is at `users/{uid}/meta/quickSend`. Sending is one Messages sheet
+  per person - iOS never lets an app send by itself.
+- **Pitch calls are on every pitch** (`calledPitch`, `codes`, `templateId`,
+  `catcherEstimate`) and in the live room, so followers (phase 4) must
+  only ever read an outcome-only copy, never `/liveGames` or game pitches.

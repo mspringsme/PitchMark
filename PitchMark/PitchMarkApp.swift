@@ -162,6 +162,7 @@ struct RootView: View {
             }
             if isSignedIn {
                 isDemoMode = false
+                AppFeatureFlagStore.shared.start()
                 LiveGameService.shared.cleanupExpiredJoinArtifacts()
                 if let token = UserDefaults.standard.string(forKey: "pendingInviteToken"), !token.isEmpty {
                     UserDefaults.standard.removeObject(forKey: "pendingInviteToken")
@@ -180,6 +181,7 @@ struct RootView: View {
                     handleTeamInviteLink(token)
                 }
             } else {
+                AppFeatureFlagStore.shared.stop()
                 showDisplayCover = false
                 showDisplayOnboarding = false
             }
