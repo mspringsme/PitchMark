@@ -274,3 +274,58 @@ describe("R10 a shared team tourney's link copy", () => {
     await assertFails(setDoc(doc(db("helper"), "sharedTourneys", "a".repeat(32)), { ownerUid: "coach", name: "x" }));
   });
 });
+
+// Approved 2026-11-24 (single games): teams/{teamId}/games.
+//   R11 members read the team's single games; outsiders and removed members can't
+//   R12 the creator and Schedulers add, edit and delete; Families can't; the
+//       team id must match
+const single = (extra = {}) => ({ teamId: TEAM, kind: "scrimmage", opponent: "Hawks", canceled: false, ...extra });
+
+describe("R11 reading single games", () => {
+  beforeEach(() => put(`teams/${TEAM}/games/g1`, single()));
+
+  it("the creator and every member read them", async () => {
+    for (const uid of ["coach", "helper", "family"]) {
+      await assertSucceeds(getDoc(doc(db(uid), `teams/${TEAM}/games/g1`)));
+      await assertSucceeds(getDocs(collection(db(uid), `teams/${TEAM}/games`)));
+    }
+  });
+
+  it("outsiders can't", async () => {
+    await assertFails(getDoc(doc(db("stranger"), `teams/${TEAM}/games/g1`)));
+    await assertFails(getDocs(collection(db("stranger"), `teams/${TEAM}/games`)));
+  });
+
+  it("a removed member can't any more", async () => {
+    await admin((f) => deleteDoc(doc(f, `teams/${TEAM}/members/family`)));
+    await assertFails(getDoc(doc(db("family"), `teams/${TEAM}/games/g1`)));
+  });
+});
+
+describe("R12 adding, editing and deleting single games", () => {
+  beforeEach(() => put(`teams/${TEAM}/games/g1`, single()));
+
+  it("the creator and a Scheduler add, edit and delete", async () => {
+    await assertSucceeds(setDoc(doc(db("coach"), `teams/${TEAM}/games/g2`), single({ kind: "game" })));
+    await assertSucceeds(setDoc(doc(db("helper"), `teams/${TEAM}/games/g3`), single({ kind: "friendly" })));
+    await assertSucceeds(updateDoc(doc(db("helper"), `teams/${TEAM}/games/g1`), { canceled: true }));
+    await assertSucceeds(deleteDoc(doc(db("helper"), `teams/${TEAM}/games/g1`)));
+    await assertSucceeds(deleteDoc(doc(db("coach"), `teams/${TEAM}/games/g2`)));
+  });
+
+  it("a Family can't", async () => {
+    await assertFails(setDoc(doc(db("family"), `teams/${TEAM}/games/g2`), single()));
+    await assertFails(updateDoc(doc(db("family"), `teams/${TEAM}/games/g1`), { canceled: true }));
+    await assertFails(deleteDoc(doc(db("family"), `teams/${TEAM}/games/g1`)));
+  });
+
+  it("an outsider can't", async () => {
+    await assertFails(setDoc(doc(db("stranger"), `teams/${TEAM}/games/g2`), single()));
+    await assertFails(deleteDoc(doc(db("stranger"), `teams/${TEAM}/games/g1`)));
+  });
+
+  it("the team id must be this team", async () => {
+    await assertFails(setDoc(doc(db("coach"), `teams/${TEAM}/games/g2`), single({ teamId: OTHER })));
+    await assertFails(setDoc(doc(db("coach"), `teams/${TEAM}/games/g2`), { kind: "game" }));
+  });
+});

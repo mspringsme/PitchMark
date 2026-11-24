@@ -143,6 +143,17 @@ struct TeamRosterView: View {
                         Label("Team Batting Stats", systemImage: "figure.baseball")
                     }
                     .accessibilityIdentifier("team.battingStats")
+                    NavigationLink {
+                        TeamScheduleHost(
+                            team: selection.team,
+                            canEdit: TeamAccessRules.schedules(team: selection.team, membership: selection.membership,
+                                                               uid: authManager.user?.uid ?? "")
+                        )
+                        .environmentObject(authManager)
+                    } label: {
+                        Label("Team Schedule", systemImage: "calendar")
+                    }
+                    .accessibilityIdentifier("team.schedule")
                 }
 
                 TeamSponsorSection(team: selection.team, isTeamOwner: isTeamOwner, presentation: rosterExtras)

@@ -86,6 +86,15 @@ struct Game: Identifiable, Codable {
     var createdAt: Date = Date()
     var archivedAt: Date? = nil
     var teamId: String? = nil
+    /// Game, Friendly or Scrimmage (2026-11-24). Nil = a Game (every game
+    /// saved before).
+    var kind: GameKind? = nil
+    /// A Friendly or Scrimmage the coach chose to keep out of stats when
+    /// tracking began. Nil/false = counts.
+    var leftOutOfStats: Bool? = nil
+    /// The team-schedule entry this game was tracked from (a tourney game's
+    /// or single game's id), so the calendar shows it once.
+    var scheduledGameId: String? = nil
     // Which Team's roster is the opponent for this game, so PitchTrackerView
     // can track the away pitcher's pitches to our batter alongside our own
     // pitcher, switchable mid-game. Optional - most games never set this.
@@ -185,8 +194,30 @@ extension Game {
     /// (`users/{uid}/meta/statsPreferences`). Every stats screen goes through
     /// `AuthManager.gameCountsInStats`, which asks this.
     func countsInStats(includedArchivedIds: Set<String>) -> Bool {
+        // A Friendly or Scrimmage left out when tracking began.
+        if leftOutOfStats == true { return false }
         guard isArchived else { return true }
         guard let id else { return false }
         return includedArchivedIds.contains(id)
     }
+}
+
+
+/// What kind of game (2026-11-24): a Game counts in stats; a Friendly or
+/// Scrimmage asks when tracking begins (`GameKind.asksAboutStats`).
+enum GameKind: String, Codable, CaseIterable, Identifiable {
+    case game, friendly, scrimmage
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .game: return "Game"
+        case .friendly: return "Friendly"
+        case .scrimmage: return "Scrimmage"
+        }
+    }
+
+    /// Whether starting to track one asks "Count this in season stats?".
+    var asksAboutStats: Bool { self != .game }
 }

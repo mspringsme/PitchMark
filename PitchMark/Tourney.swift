@@ -516,6 +516,9 @@ struct TourneyGame: Identifiable, Equatable {
     /// Called off (2026-11-22): stays on the schedule marked Canceled, so
     /// families following the team see it.
     var canceled: Bool = false
+    /// Only carried to Track (a team's single game is a Friendly or
+    /// Scrimmage); tourney games are Games. Not saved.
+    var kind: GameKind = .game
 
     var firestoreData: [String: Any] {
         var data: [String: Any] = ["id": id, "stage": stage.rawValue, "time": Timestamp(date: time),
@@ -1121,6 +1124,11 @@ final class TourneyStore: ObservableObject {
 
     private var teamListeners: [String: ListenerRegistration] = [:]
     private var teamTourneysByTeam: [String: [Tourney]] = [:]
+    /// Each team's single games (Game / Friendly / Scrimmage, 2026-11-24),
+    /// live from `teams/{teamId}/games`.
+    @Published private(set) var teamGames: [TeamScheduledGame] = []
+    private var teamGameListeners: [String: ListenerRegistration] = [:]
+    private var teamGamesByTeam: [String: [TeamScheduledGame]] = [:]
     @Published private(set) var followed: [FollowedTourney] = []
     @Published private(set) var prospects: [TourneyProspect] = []
     @Published private(set) var errorMessage: String? = nil
@@ -1147,6 +1155,7 @@ final class TourneyStore: ObservableObject {
     deinit {
         listeners.forEach { $0.remove() }
         teamListeners.values.forEach { $0.remove() }
+        teamGameListeners.values.forEach { $0.remove() }
     }
 
     /// Own and team tourneys together - one list for the coach.
@@ -1181,6 +1190,23 @@ final class TourneyStore: ObservableObject {
             teamListeners[id] = nil
             teamTourneysByTeam[id] = nil
         }
+        for (id, listener) in teamGameListeners where !wanted.contains(id) {
+            listener.remove()
+            teamGameListeners[id] = nil
+            teamGamesByTeam[id] = nil
+        }
+        for team in access where teamGameListeners[team.id] == nil {
+            teamGameListeners[team.id] = Self.teamGamesCollection(team.id).addSnapshotListener { [weak self] snapshot, error in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if let error { return self.report("team games listener", error, "Couldn't load a team's games.") }
+                    self.teamGamesByTeam[team.id] = (snapshot?.documents ?? []).compactMap {
+                        TeamScheduledGame(id: $0.documentID, firestoreData: $0.data())
+                    }
+                    self.publishTeamGames()
+                }
+            }
+        }
         for team in access where teamListeners[team.id] == nil {
             teamListeners[team.id] = Self.teamCollection(team.id).addSnapshotListener { [weak self] snapshot, error in
                 Task { @MainActor in
@@ -1198,6 +1224,58 @@ final class TourneyStore: ObservableObject {
 
     private func publishTeamTourneys() {
         teamTourneys = teamTourneysByTeam.values.flatMap { $0 }
+    }
+
+    private func publishTeamGames() {
+        teamGames = teamGamesByTeam.values.flatMap { $0 }
+    }
+
+    private static func teamGamesCollection(_ teamId: String) -> CollectionReference {
+        Firestore.firestore().collection("teams").document(teamId).collection("games")
+    }
+
+    // MARK: Team schedule (2026-11-24)
+
+    /// One team's schedule: its tourneys' games and its single games.
+    func schedule(teamId: String) -> [TeamSchedule.Entry] {
+        TeamSchedule.entries(tourneys: teamTourneys.filter { $0.teamId == teamId },
+                             singles: teamGames.filter { $0.teamId == teamId })
+    }
+
+    /// Everything this user has scheduled, for Home's calendar: their own
+    /// tourneys' games, and every team's tourneys and single games.
+    var allScheduled: [TeamSchedule.Entry] {
+        TeamSchedule.entries(tourneys: allTourneys, singles: teamGames)
+    }
+
+    func canEditTeam(_ teamId: String) -> Bool {
+        teams.first { $0.id == teamId }?.canEdit ?? false
+    }
+
+    func saveTeamGame(_ game: TeamScheduledGame) {
+        var list = teamGamesByTeam[game.teamId] ?? []
+        if let i = list.firstIndex(where: { $0.id == game.id }) { list[i] = game } else { list.append(game) }
+        teamGamesByTeam[game.teamId] = list
+        publishTeamGames()
+        guard !inMemory else { return }
+        var data = game.firestoreData
+        data["updatedAt"] = FieldValue.serverTimestamp()
+        Self.teamGamesCollection(game.teamId).document(game.id).setData(data) { [weak self] error in
+            guard let error else { return }
+            Task { @MainActor in self?.report("team game save", error, "Couldn't save the game.") }
+        }
+    }
+
+    /// A game entered by mistake (user's call: a scheduled game has no
+    /// stats, so it can go). Called-off games are Canceled instead.
+    func deleteTeamGame(_ game: TeamScheduledGame) {
+        teamGamesByTeam[game.teamId]?.removeAll { $0.id == game.id }
+        publishTeamGames()
+        guard !inMemory else { return }
+        Self.teamGamesCollection(game.teamId).document(game.id).delete { [weak self] error in
+            guard let error else { return }
+            Task { @MainActor in self?.report("team game delete", error, "Couldn't remove the game.") }
+        }
     }
 
     private static func teamCollection(_ teamId: String) -> CollectionReference {

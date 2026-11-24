@@ -103,6 +103,8 @@ enum TourneyRoute: Hashable {
     case own(String)
     case shared(String)
     case prospect(String)
+    /// A team's page: its schedule, sponsors and trading cards (2026-11-24).
+    case team(String)
 }
 
 struct TourneysView: View {
@@ -198,6 +200,8 @@ struct TourneysView: View {
                     }
                 case .shared(let id):
                     SharedTourneyView(store: store, shareId: id)
+                case .team(let id):
+                    TeamPageView(store: store, teamId: id)
                 case .prospect(let id):
                     TourneyProspectDetailView(store: store, prospectId: id) { tourney in
                         tab = .ours
@@ -295,17 +299,28 @@ struct TourneysView: View {
         }
 
         Section {
-            ForEach(joinedTeams) { team in
-                rowLabel(icon: "person.3.fill", iconColor: .secondary, title: team.name, lines: [team.role])
-                    .accessibilityIdentifier("tourney.joinedTeam.\(team.name)")
-                    .swipeActions {
+            // Every team you're on opens its page - the Team Schedule. A team
+            // you joined can be left with a swipe.
+            ForEach(store.teams) { access in
+                let joined = joinedTeams.first { $0.id == access.id }
+                Button {
+                    route = .team(access.id)
+                } label: {
+                    rowLabel(icon: "person.3.fill", iconColor: .secondary, title: access.name,
+                             lines: [joined?.role ?? "Coach", "Team Schedule"])
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("tourney.team.\(access.name)")
+                .swipeActions {
+                    if let joined {
                         Button(role: .destructive) {
-                            pendingLeave = team
+                            pendingLeave = joined
                             showLeaveDialog = true
                         } label: {
                             Label("Leave", systemImage: "rectangle.portrait.and.arrow.right")
                         }
                     }
+                }
             }
             Button {
                 showJoinTeam = true
@@ -316,7 +331,7 @@ struct TourneysView: View {
         } header: {
             Text("Your Teams")
         } footer: {
-            Text("Join with the link or code from your coach. Your team's tourneys show up above and stay up to date. Swipe a team to leave it.")
+            Text("Tap a team for its schedule. Join with the link or code from your coach; swipe a team you joined to leave it.")
         }
 
         Section {
@@ -514,12 +529,14 @@ struct TourneysView: View {
 struct TeamTourneyReadView: View {
     @ObservedObject var store: TourneyStore
     let tourneyId: String
+    @StateObject private var sponsors = TeamSponsorStore()
 
     var body: some View {
         Group {
             if let tourney = store.tourney(id: tourneyId) {
-                TourneyReadView(tourney: tourney)
+                TourneyReadView(tourney: tourney, sponsors: sponsors.activeSlots)
                     .navigationTitle(tourney.displayName)
+                    .task(id: tourney.teamId) { sponsors.start(teamId: tourney.teamId) }
             } else {
                 ContentUnavailableView("No Longer on the Team", systemImage: "person.3",
                                        description: Text("The coach took this tourney off the team, or you left the team."))
@@ -1648,6 +1665,9 @@ struct TourneyReadView: View {
     /// A follower's own General Info items, when the page is opened from
     /// Shared with Me (nil in the owner's preview).
     var personal: PersonalItems? = nil
+    /// The team's sponsors, on a team tourney's page (2026-11-24) - drawn
+    /// by SponsorBadge on the tourney page surface.
+    var sponsors: [SponsorSlot] = []
 
     struct PersonalItems {
         var items: [TourneyChecklistItem]
@@ -1672,6 +1692,14 @@ struct TourneyReadView: View {
                 if !t.venue.isEmpty {
                     placeLines(t.venue)
                     TourneyDirectionsRow(place: t.venue)
+                }
+            }
+
+            if !sponsors.isEmpty {
+                Section("Team Sponsors") {
+                    ForEach(sponsors) { slot in
+                        SponsorBadge(slot: slot, surface: .tourneyPage)
+                    }
                 }
             }
 
@@ -2306,6 +2334,11 @@ struct TourneyUITestHarness: View {
                         startedGame = "New game: \(game.opponent)"
                         showTourneys = false
                     }
+            } else if args.contains("-UITestTourneysCalendar") {
+                // Home's calendar with the sample's games scheduled (2026-11-24).
+                GamesCalendarView(games: [], title: { $0.opponent }, onOpen: { _ in },
+                                  scheduled: TeamSchedule.entries(tourneys: [{ var t = sample; t.teamId = "t-Reds"; return t }()],
+                                                                  singles: []))
             } else if args.contains("-UITestTourneysFamily") {
                 // A family on the Reds: the Reds' tourney, read-only.
                 TourneysView(inMemory: true, seed: [{ var t = sample; t.teamId = "t-Reds"; return t }()],

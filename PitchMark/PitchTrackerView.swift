@@ -15735,6 +15735,8 @@ struct AddGameCard: View {
     /// date and goes on to the pitcher and pitches (PracticeSetupView).
     /// Nil = this card doesn't offer practice.
     var onStartPractice: (() -> Void)? = nil
+    /// Game / Friendly / Scrimmage (2026-11-24); nil = no Type row.
+    var gameKind: Binding<GameKind>? = nil
 
     /// True while "New Team…" is open (or creating) - Save waits for it.
     @State private var isAddingTeam = false
@@ -15812,6 +15814,14 @@ struct AddGameCard: View {
             }
 
             DatePicker("Date & Time", selection: $gameDate, displayedComponents: [.date, .hourAndMinute])
+
+            if let gameKind {
+                Picker("Type", selection: gameKind) {
+                    ForEach(GameKind.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("newGame.kind")
+            }
 
             Picker("Tracking", selection: $trackingMode) {
                 ForEach(TrackingMode.allCases, id: \.rawValue) { mode in

@@ -605,6 +605,11 @@ struct SettingsView: View {
     /// A tourney game whose Start Game was tapped: opens the new-game card
     /// once Tourney Info has closed.
     @State private var pendingTourneyGame: TourneyGame? = nil
+    /// The new-game card's Type (2026-11-24), the schedule entry it came
+    /// from (Track), and the stats question for a Friendly or Scrimmage.
+    @State private var inlineNewGameKind: GameKind = .game
+    @State private var inlineNewGameScheduledId: String? = nil
+    @State private var showGameStatsQuestion = false
     // Scan Opponent Lineup (LineupScanHome.swift / LineupScanSheet.swift).
     @State private var lineupScan: LineupScanContext? = nil
     @State private var showLineupScan = false
@@ -2300,13 +2305,7 @@ struct SettingsView: View {
                 accessory: AnyView(TourneyInfoButton { showTourneys = true }),
                 trailingAction: { toggleInlineNewGame() }
             )
-            .appSheet(isPresented: $showTourneys, onDismiss: {
-                guard let game = pendingTourneyGame else { return }
-                pendingTourneyGame = nil
-                let seed = game.newGameSeed(myTeamIds: Set(activeTeamEntries.compactMap { $0.team.id }))
-                openInlineNewGame(opponentName: seed.opponentName, date: seed.date,
-                                  ourTeamId: seed.ourTeamId, opponentTeamId: seed.opponentTeamId)
-            }, chrome: .handle) {
+            .appSheet(isPresented: $showTourneys, onDismiss: { openPendingTourneyGame() }, chrome: .handle) {
                 AnyView(
                     TourneysView(onStartGame: { game in
                         pendingTourneyGame = game
@@ -2322,13 +2321,18 @@ struct SettingsView: View {
             .appSheet(isPresented: $showLineupScan, onDismiss: { lineupScan = nil }) {
                 lineupScanSheetContent
             }
-            .appSheet(isPresented: $showGamesCalendar, chrome: .handle) {
+            .appSheet(isPresented: $showGamesCalendar, onDismiss: { openPendingTourneyGame() }, chrome: .handle) {
                 AnyView(
-                    GamesCalendarView(
+                    HomeGamesCalendar(
                         games: games,
                         title: { matchupTitle(for: $0) },
-                        onOpen: { launchGame($0) }
+                        onOpen: { launchGame($0) },
+                        onTrack: { game in
+                            pendingTourneyGame = game
+                            showGamesCalendar = false
+                        }
                     )
+                    .environmentObject(authManager)
                     .fixedAppDynamicType()
                 )
             }
@@ -2372,13 +2376,22 @@ struct SettingsView: View {
                             opponentTeamId: $inlineNewGameOpponentTeamId,
                             onCreateTeam: createTeamFromNewGame,
                             onCancel: { closeInlineNewGame() },
-                            onSave: { createInlineGame() },
+                            onSave: {
+                                // A Friendly or Scrimmage asks whether it
+                                // counts in stats (user's call, 2026-11-24).
+                                if inlineNewGameKind.asksAboutStats {
+                                    showGameStatsQuestion = true
+                                } else {
+                                    createInlineGame()
+                                }
+                            },
                             lineupSummary: pendingNewGameLineup.flatMap { $0.teamId == inlineNewGameOpponentTeamId ? $0.summary : nil },
                             onScanLineup: { beginNewGameLineupScan() },
                             onStartPractice: {
                                 closeInlineNewGame()
                                 showPracticeSetup = true
-                            }
+                            },
+                            gameKind: $inlineNewGameKind
                         )
                     }
 
@@ -2540,8 +2553,22 @@ struct SettingsView: View {
 
     /// Home's new-game card, blank (the Games row's +) or filled in from a
     /// tourney game's Start Game.
+    /// Track on a tourney or scheduled game (Tourney Info, the calendar):
+    /// Home's new-game card, filled in, once that sheet is gone.
+    private func openPendingTourneyGame() {
+        guard let game = pendingTourneyGame else { return }
+        pendingTourneyGame = nil
+        let seed = game.newGameSeed(myTeamIds: Set(activeTeamEntries.compactMap { $0.team.id }))
+        openInlineNewGame(opponentName: seed.opponentName, date: seed.date,
+                          ourTeamId: seed.ourTeamId, opponentTeamId: seed.opponentTeamId,
+                          kind: game.kind, scheduledGameId: game.id)
+    }
+
     private func openInlineNewGame(opponentName: String = "", date: Date = Date(),
-                                   ourTeamId: String? = nil, opponentTeamId: String? = nil) {
+                                   ourTeamId: String? = nil, opponentTeamId: String? = nil,
+                                   kind: GameKind = .game, scheduledGameId: String? = nil) {
+        inlineNewGameKind = kind
+        inlineNewGameScheduledId = scheduledGameId
         inlineNewGameName = opponentName
         inlineNewGameDate = date
         inlineNewGameTrackingMode = .coach
@@ -2582,6 +2609,8 @@ struct SettingsView: View {
         inlineNewGameName = ""
         inlineNewGameTeamId = nil
         inlineNewGameOpponentTeamId = nil
+        inlineNewGameKind = .game
+        inlineNewGameScheduledId = nil
         pendingNewGameLineup = nil
     }
 
@@ -2589,7 +2618,7 @@ struct SettingsView: View {
     /// and openable as soon as Firestore mints the id (onLocalWrite) -
     /// waiting on the server ack is what used to leave a new game sitting
     /// in the list as an untappable "Saving..." row.
-    private func createInlineGame() {
+    private func createInlineGame(leftOutOfStats: Bool = false) {
         let name = inlineNewGameName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         var newGame = Game(
@@ -2599,6 +2628,10 @@ struct SettingsView: View {
             jerseyNumbers: [],
             trackingMode: inlineNewGameTrackingMode
         )
+        // Game is the default and is stored as nil, like every older game.
+        newGame.kind = inlineNewGameKind == .game ? nil : inlineNewGameKind
+        newGame.leftOutOfStats = leftOutOfStats ? true : nil
+        newGame.scheduledGameId = inlineNewGameScheduledId
         // Our side, chosen in the card. Left nil the tracker still asks for
         // it on the first tap of "Us", exactly as before.
         newGame.teamId = inlineNewGameTeamId
@@ -3894,6 +3927,9 @@ struct SettingsView: View {
             }
             .homeLiveLeaveDialog(pending: $pendingLiveLeave) { leave in confirmLiveLeave(leave) }
             .practiceDeleteDialog(pending: $pendingPracticeDelete) { PracticeStore.shared.delete($0) }
+            .gameStatsQuestionDialog(isPresented: $showGameStatsQuestion, kind: inlineNewGameKind) { counts in
+                createInlineGame(leftOutOfStats: !counts)
+            }
             .archiveGameDialog(game: $pendingArchiveGame, title: matchupTitle) { game, keepInStats in
                 guard let id = game.id, !id.isEmpty else { return }
                 authManager.archiveGame(gameId: id, keepInStats: keepInStats)
@@ -6306,6 +6342,23 @@ enum OpenGameLock {
 // MARK: - Archive Game dialog
 
 extension View {
+    /// Starting to track a Friendly or Scrimmage (2026-11-24, user's call):
+    /// does it count in season stats? Its own Bool - the dialog clears it
+    /// before running the answer.
+    func gameStatsQuestionDialog(isPresented: Binding<Bool>, kind: GameKind,
+                                 onAnswer: @escaping (_ counts: Bool) -> Void) -> some View {
+        appConfirmationDialog(
+            isPresented: isPresented,
+            title: "Count this \(kind.title) in stats?",
+            message: "Its pitches are saved either way. Leave it out and season and career stats skip this game.",
+            primaryTitle: "Count in Stats",
+            primaryAction: { onAnswer(true) },
+            secondaryTitle: "Cancel",
+            alternateTitle: "Leave Out of Stats",
+            alternateAction: { onAnswer(false) }
+        )
+    }
+
     /// The one place a game gets archived, from Home or the game picker.
     /// Archiving never deletes; the only question is whether this user's
     /// stats keep counting the game (every pitch in it, both teams). The

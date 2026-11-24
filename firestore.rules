@@ -464,6 +464,18 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // TEAM SINGLE GAMES (2026-11-24): a Game, Friendly or Scrimmage on
+      // the team's schedule outside any tourney. Same readers and writers
+      // as team tourneys; a mistaken entry may be deleted (no stats yet -
+      // a called-off game is marked canceled instead).
+      match /games/{gameId} {
+        allow get, list: if signedIn() && (isTeamCreator() || isTeamMember());
+        allow create, update: if signedIn()
+          && isTeamPublisherOf(teamId)
+          && request.resource.data.teamId == teamId;
+        allow delete: if signedIn() && isTeamPublisherOf(teamId);
+      }
+
       match /players/{playerId} {
         allow get, list: if signedIn()
           && exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()));

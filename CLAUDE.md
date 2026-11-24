@@ -1232,9 +1232,36 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
   `public/.well-known/apple-app-site-association` (iOS reads this one
   first). The .well-known copy had gone stale without `/tourney/*`, so
   tourney links never opened the app. Keep them identical.
-- **Cloud Storage isn't set up on the project** - `storage.rules` can't
-  deploy until someone clicks Get Started in the Firebase console; Season
-  Book and trading card uploads fail until then.
+- **Cloud Storage** was set up 2026-11-23 (`pitchmark-fb9f8.firebasestorage.app`,
+  us-central1, beside the functions); `storage.rules` deployed and Storage
+  granted access to read Firestore (the console's "Fix issue" - the
+  cardArt rules use `firestore.get`). A `--non-interactive` deploy skips
+  that prompt silently; check Storage → Rules for the banner.
+
+## Team Schedule, single games, game types (2026-11-24)
+
+- **Single games** (`TeamScheduledGame`, TeamSchedule.swift) live with the
+  team at `teams/{id}/games`: Game / Friendly / Scrimmage, time, arrive,
+  opponent, venue (place search), field, notes, Canceled. Creator and
+  Schedulers write; members read; a mistaken entry can be deleted (no
+  stats yet - user's call); a called-off one is Canceled. Rules tests R11-12.
+- **The Team Schedule** (`TeamSchedule.entries/split`) merges the team's
+  tourney games and single games by date; past folded away. It's on the
+  members' **team page** (`TeamPageView`, Tourney Info → Your Teams: every
+  team you're on) with the team's sponsors and, for families, Team
+  Trading Cards - and on the coach's roster (Team Schedule →
+  `TeamScheduleHost`, schedule only).
+- **Home's calendar shows scheduled games** (`HomeGamesCalendar`): an
+  outlined dot, a dashed row under the day, the game card with Track.
+  A tracked game names its entry (`Game.scheduledGameId`) and replaces
+  it (`TeamSchedule.calendarEntries`).
+- **Tracked games have a Type** (`Game.kind`, nil = Game; Home's new-game
+  card has the picker). Starting a Friendly or Scrimmage asks "Count this
+  in stats?" (`gameStatsQuestionDialog`, user's call); Leave Out sets
+  `Game.leftOutOfStats`, which `Game.countsInStats` honours on every stats
+  screen. No way to change it later yet.
+- **Sponsors show on team tourney pages** (`TourneyReadView(sponsors:)`,
+  surface `.tourneyPage`) and the team page, so members see them.
 
 ## Each pitcher's key, remembered (2026-11-22)
 
