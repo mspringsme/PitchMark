@@ -551,7 +551,9 @@ final class FollowerGameModel: ObservableObject {
     private func listen(_ feedId: String) {
         access[feedId] = .open
         listeners[feedId] = GameFeedService.shared.listenEvents(feedId: feedId) { events in
-            Task { @MainActor in self.events[feedId] = events ?? [] }
+            // A dropped connection keeps what's on screen; never clear it.
+            guard let events else { return }
+            Task { @MainActor in self.events[feedId] = events }
         }
     }
 
@@ -579,6 +581,13 @@ struct FollowerGameView: View {
     }
 
     private var official: GameFeedDoc? { feeds.first { $0.kind == .official } }
+
+    /// Plays that made an out, per feed (red text).
+    private var outPlayIds: Set<String> {
+        sortedFeeds.reduce(into: Set<String>()) { result, feed in
+            result.formUnion(GameFeedRules.outPlays(model.events[feed.id] ?? []))
+        }
+    }
 
     /// The scoreboard's names, from the official feed (else any feed).
     private var scoreNames: (our: String, their: String) {
@@ -633,8 +642,9 @@ struct FollowerGameView: View {
                 if rows.isEmpty {
                     Text("Nothing yet.").foregroundStyle(.secondary)
                 }
+                let outs = outPlayIds
                 ForEach(rows, id: \.event.id) { item in
-                    FeedPlayRow(event: item.event,
+                    FeedPlayRow(event: item.event, isOut: outs.contains(item.event.id),
                                 feedTitle: tab == "all" && sortedFeeds.count > 1 ? item.feedTitle : nil,
                                 ourName: scoreNames.our, theirName: scoreNames.their)
                 }
@@ -652,6 +662,8 @@ struct FollowerGameView: View {
 /// for a ball or strike.
 struct FeedPlayRow: View {
     let event: GameFeedEvent
+    /// The play made an out: its result shows in red (user, 2026-11-24).
+    var isOut: Bool = false
     let feedTitle: String?
     var ourName: String = "Us"
     var theirName: String = "Them"
@@ -674,21 +686,24 @@ struct FeedPlayRow: View {
                     }
                     Text(event.kindLabel)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    if event.showsPlayLines {
-                        HStack(spacing: 4) {
-                            if event.batterRan { Image(systemName: "figure.run") }
-                            Text(event.detail[0]).font(.body.weight(.semibold))
+                        .foregroundStyle(isOut ? Color.red : Color.secondary)
+                    Group {
+                        if event.showsPlayLines {
+                            HStack(spacing: 4) {
+                                if event.batterRan { Image(systemName: "figure.run") }
+                                Text(event.detail[0]).font(.body.weight(.semibold))
+                            }
+                            ForEach(Array(event.detail.dropFirst()), id: \.self) { line in
+                                Text(line).font(.subheadline)
+                            }
+                            if event.runs > 0, !event.detail.joined().localizedCaseInsensitiveContains("run") {
+                                Text("\(event.runs) run\(event.runs == 1 ? "" : "s") scored").font(.subheadline)
+                            }
+                        } else {
+                            Text(event.text).font(.body)
                         }
-                        ForEach(Array(event.detail.dropFirst()), id: \.self) { line in
-                            Text(line).font(.subheadline)
-                        }
-                        if event.runs > 0, !event.detail.joined().localizedCaseInsensitiveContains("run") {
-                            Text("\(event.runs) run\(event.runs == 1 ? "" : "s") scored").font(.subheadline)
-                        }
-                    } else {
-                        Text(event.text).font(.body)
                     }
+                    .foregroundStyle(isOut ? Color.red : Color.primary)
                     if let feedTitle {
                         Text(feedTitle).font(.caption2).foregroundStyle(.secondary)
                     }

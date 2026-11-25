@@ -314,10 +314,39 @@ enum GameFeedRules {
 
     /// What changed between what's on the feed and the game's pitches now:
     /// events to write (new or different) and ids to delete (undone).
-    static func diff(current: [String: GameFeedEvent], wanted: [GameFeedEvent]) -> (write: [GameFeedEvent], delete: [String]) {
+    /// Most plays one sync may delete. An undo takes back one pitch; more
+    /// at once is a glitch (a list reloading), never a reason to empty a feed.
+    static let maxDeletesPerSync = 3
+
+    /// HIGH RISK (2026-11-24, user: the feed cleared on the follower's phone
+    /// when the scorer's phone turned off). A play is deleted only when it
+    /// was in the last sync's list (`lastWantedIds`, this session) and has
+    /// gone from this one - an undo. Never with an empty list, never a play
+    /// from an earlier session, never more than `maxDeletesPerSync`.
+    static func diff(current: [String: GameFeedEvent], wanted: [GameFeedEvent],
+                     lastWantedIds: Set<String>? = nil) -> (write: [GameFeedEvent], delete: [String]) {
         let wantedIds = Set(wanted.map(\.id))
         let write = wanted.filter { current[$0.id] != $0 }
-        let delete = current.keys.filter { !wantedIds.contains($0) }.sorted()
-        return (write, delete)
+        guard !wanted.isEmpty, let lastWantedIds else { return (write, []) }
+        let delete = current.keys.filter { lastWantedIds.contains($0) && !wantedIds.contains($0) }.sorted()
+        return (write, delete.count > maxDeletesPerSync ? [] : delete)
+    }
+
+    /// The plays that made an out, for the red text (user, 2026-11-24): an
+    /// out or strikeout, or the outs going up within the half (a runner
+    /// out on a fielder's choice, a double play). `events` in time order.
+    static func outPlays(_ events: [GameFeedEvent]) -> Set<String> {
+        var result: Set<String> = []
+        var previous: GameFeedEvent? = nil
+        for e in events.sorted(by: { $0.at == $1.at ? $0.id < $1.id : $0.at < $1.at }) {
+            if e.kind == "out" || e.kind == "strikeout" {
+                result.insert(e.id)
+            } else if let p = previous, let outs = e.outs, let before = p.outs,
+                      p.inning == e.inning, p.batting == e.batting, outs > before {
+                result.insert(e.id)
+            }
+            previous = e
+        }
+        return result
     }
 }

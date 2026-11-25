@@ -387,6 +387,9 @@ final class GameFeedWriter: ObservableObject {
     private var attachedFeedId: String?
     private var isLoaded = false
     private var lastScoreboard: [Int] = []
+    /// The plays the last sync wanted, this session - the only ones a later
+    /// sync may delete (GameFeedRules.diff).
+    private var lastWantedIds: Set<String>? = nil
 
     /// The scorer's own players for "only my players" - picked in the feed
     /// sheet, kept on this phone per feed.
@@ -407,6 +410,7 @@ final class GameFeedWriter: ObservableObject {
         placeById = [:]
         isLoaded = false
         lastScoreboard = []
+        lastWantedIds = nil
         guard let feedId else { return }
         GameFeedService.shared.loadFeed(id: feedId) { [weak self] doc in
             guard let doc else { return }
@@ -454,6 +458,9 @@ final class GameFeedWriter: ObservableObject {
 
     func sync(_ state: GameState) {
         guard isLoaded, let feed, feed.ownerUid == Auth.auth().currentUser?.uid else { return }
+        // A game closing or reloading empties the list for a moment - that's
+        // not every pitch being undone.
+        guard !state.pitches.isEmpty else { return }
         let mine = myHitterIds(feedId: feed.id)
         let now = GameFeedRules.Situation(inning: state.inning, half: state.half,
                                           batting: state.batting.isEmpty ? nil : state.batting,
@@ -477,7 +484,8 @@ final class GameFeedWriter: ObservableObject {
             wanted.append(GameFeedRules.event(from: pitch, id: id, situation: board,
                                               batterName: name, showLastNames: feed.showLastNames))
         }
-        let diff = GameFeedRules.diff(current: written, wanted: wanted)
+        let diff = GameFeedRules.diff(current: written, wanted: wanted, lastWantedIds: lastWantedIds)
+        lastWantedIds = Set(wanted.map(\.id))
         if !diff.write.isEmpty || !diff.delete.isEmpty {
             for e in diff.write { written[e.id] = e }
             for id in diff.delete { written[id] = nil }

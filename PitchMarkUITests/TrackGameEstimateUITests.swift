@@ -52,7 +52,7 @@ final class TrackGameEstimateUITests: XCTestCase {
     private func recordSingle() {
         let field = app.otherElements["result.field"]
         XCTAssertTrue(field.waitForExistence(timeout: 8), "the result sheet's field")
-        let sheet = app.scrollViews.element(boundBy: app.scrollViews.count - 1)
+        let sheet = app.scrollViews["result.scroll"]
         reveal(field, in: sheet)
         field.coordinate(withNormalizedOffset: CGVector(dx: 0.30, dy: 0.40)).tap()
         let first = app.buttons["1st"].firstMatch

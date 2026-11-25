@@ -2131,6 +2131,9 @@ struct PitchResultSheetView: View {
                 .padding(.bottom, 12)
             }
             .coordinateSpace(.named(StickyActionBar<EmptyView>.ownScrollSpace))
+            // UI tests find the sheet by this, not "the last scroll view" -
+            // the game screen's clip row has a scroll view of its own.
+            .accessibilityIdentifier("result.scroll")
             .modifier(
                 OutcomeChangeHandlers(
                     isPresented: $isPresented,

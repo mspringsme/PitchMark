@@ -1370,6 +1370,20 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
   in firestore.rules - `GameFeedTests` reads both. Never copy a PitchEvent
   field into a feed without adding it to both, and never a call, code,
   key or estimate. Followers never read /liveGames or game pitches.
+- **HIGH RISK: a feed never empties because the scorer's phone did.**
+  Closing or reopening a game briefly empties its pitch list; reading that
+  as "every pitch undone" wiped followers' feeds (2026-11-24). Now: no sync
+  with an empty list; only plays the *last sync this session* wanted may be
+  deleted (an undo); never more than `GameFeedRules.maxDeletesPerSync` (3)
+  at once. The follower keeps what's on screen if its listener errors.
+  Changing a feed's scope to "my players" therefore leaves earlier plays up.
+- Each play keeps the board from when the scorer's phone first saw it
+  (`GameFeedRules.boards`, floored by the previous pitch + this pitch's
+  outs/runs) - the board moves just BEFORE the next pitch arrives, so
+  refreshing the newest pitch put the next pitch's out on it. Plays that
+  made an out show red (`GameFeedRules.outPlays`).
+- The result sheet's scroll view is `result.scroll`; UI tests find it by
+  that, never "the last scroll view" (the clip row has one too).
 - `GameFeedWriter` (the scorer's phone) diffs the game's pitches against
   what's written: new and edited pitches are set, undone ones deleted, the
   inning a pitch was first seen in is kept. `GameFeedWriterHook` drives it

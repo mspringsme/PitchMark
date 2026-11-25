@@ -58,7 +58,7 @@ final class WildPitchUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Save Result"].waitForExistence(timeout: 8), "result sheet")
 
         // Ball + Wild Pitch: the runners-only diamond.
-        let sheet = app.scrollViews.element(boundBy: app.scrollViews.count - 1)
+        let sheet = app.scrollViews["result.scroll"]
         tapWhenHittable(app.buttons["Ball"].firstMatch, in: sheet)
         tapWhenHittable(app.buttons["Wild Pitch"].firstMatch, in: sheet)
         let token = app.buttons["Runner R"]

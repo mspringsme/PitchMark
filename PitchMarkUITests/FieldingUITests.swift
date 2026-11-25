@@ -51,7 +51,7 @@ final class FieldingUITests: XCTestCase {
         sleep(1)
         tapWhenHittable(app.buttons["Ball Up"].firstMatch)
         XCTAssertTrue(app.buttons["Save Result"].waitForExistence(timeout: 8), "result sheet")
-        let sheet = app.scrollViews.element(boundBy: app.scrollViews.count - 1)
+        let sheet = app.scrollViews["result.scroll"]
 
         // A ground ball to the left side of the infield, then Out.
         let field = app.otherElements["result.field"]
@@ -108,7 +108,7 @@ final class FieldingUITests: XCTestCase {
         sleep(1)
         tapWhenHittable(app.buttons["Ball Up"].firstMatch)
         XCTAssertTrue(app.buttons["Save Result"].waitForExistence(timeout: 8), "result sheet")
-        let sheet = app.scrollViews.element(boundBy: app.scrollViews.count - 1)
+        let sheet = app.scrollViews["result.scroll"]
 
         let field = app.otherElements["result.field"]
         XCTAssertTrue(field.waitForExistence(timeout: 5), "field")

@@ -235,10 +235,38 @@ final class GameFeedTests: XCTestCase {
         XCTAssertEqual(merged.map(\.feedTitle), ["Coach", "Mrs. Jones", "Mrs. Jones", "Coach"])
     }
 
+    // MARK: Never empty a feed (high risk, 2026-11-24)
+
+    func testAnEmptyOrReloadingListNeverDeletesPlays() {
+        let current = ["a": event("a", at: 1), "b": event("b", at: 2), "c": event("c", at: 3), "d": event("d", at: 4)]
+        // The scorer's game closed: no pitches at all.
+        XCTAssertEqual(GameFeedRules.diff(current: current, wanted: [], lastWantedIds: ["a", "b", "c", "d"]).delete, [])
+        // A new session (app relaunched): plays from before aren't this session's to delete.
+        XCTAssertEqual(GameFeedRules.diff(current: current, wanted: [event("a", at: 1)], lastWantedIds: nil).delete, [])
+        // A list that reloads half-empty: far more than an undo - skipped.
+        XCTAssertEqual(GameFeedRules.diff(current: current, wanted: [event("e", at: 5)],
+                                          lastWantedIds: ["a", "b", "c", "d"]).delete, [])
+    }
+
+    func testAnUndoInThisSessionStillDeletesThatPlay() {
+        let current = ["a": event("a", at: 1), "b": event("b", at: 2)]
+        let diff = GameFeedRules.diff(current: current, wanted: [event("a", at: 1)], lastWantedIds: ["a", "b"])
+        XCTAssertEqual(diff.delete, ["b"])
+    }
+
+    func testOutPlaysAreTheOnesThatMadeAnOut() {
+        func e(_ id: String, _ at: TimeInterval, _ kind: String, outs: Int) -> GameFeedEvent {
+            var x = event(id, at: at); x.kind = kind; x.outs = outs; x.batting = "Hawks"; return x
+        }
+        let plays = [e("ball", 1, "ball", outs: 0), e("k", 2, "strikeout", outs: 1),
+                     e("fc", 3, "hit", outs: 2), e("single", 4, "hit", outs: 2), e("fly", 5, "out", outs: 3)]
+        XCTAssertEqual(GameFeedRules.outPlays(plays), ["k", "fc", "fly"], "a fielder's choice out counts; a clean single doesn't")
+    }
+
     func testEditsAndUndosMakeTheRightWrites() {
         let current = ["a": event("a", at: 1), "b": event("b", at: 2), "gone": event("gone", at: 3)]
         let wanted = [event("a", at: 1), event("b", at: 2, text: "Strike"), event("new", at: 4)]
-        let diff = GameFeedRules.diff(current: current, wanted: wanted)
+        let diff = GameFeedRules.diff(current: current, wanted: wanted, lastWantedIds: ["a", "b", "gone"])
         XCTAssertEqual(diff.write.map(\.id), ["b", "new"], "the edit and the new pitch; unchanged ones aren't rewritten")
         XCTAssertEqual(diff.delete, ["gone"], "the undone pitch")
     }

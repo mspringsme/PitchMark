@@ -55,7 +55,7 @@ final class ResultFieldUITests: XCTestCase {
         sleep(1)
         tapWhenHittable(app.buttons["Ball Up"].firstMatch)
         XCTAssertTrue(app.buttons["Save Result"].waitForExistence(timeout: 8), "result sheet")
-        return app.scrollViews.element(boundBy: app.scrollViews.count - 1)
+        return app.scrollViews["result.scroll"]
     }
 
     private func tapField(_ sheet: XCUIElement) {
