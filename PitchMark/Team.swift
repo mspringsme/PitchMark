@@ -18,12 +18,16 @@ enum TeamRole: String, Codable, CaseIterable {
     case coach
     case parent
     case assistant
+    /// Off-site follower of the team's game feeds (2026-11-24). Never a
+    /// member - followers live in teams/{id}/followers (GameFeedService).
+    case follower
 
     var displayName: String {
         switch self {
         case .coach: return "Coach"
         case .parent: return "Parent"
         case .assistant: return "Assistant"
+        case .follower: return "Follower"
         }
     }
 }

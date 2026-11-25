@@ -252,13 +252,35 @@ struct PitchTrackerView: View {
     }
     /// What the clip bar needs (ClipShareViews.swift).
     private var gameClipContext: GameClipContext {
-        GameClipContext(
+        let game = selectedGameId.flatMap { gid in games.first { $0.id == gid } }
+        return GameClipContext(
             isActive: isGame && ui.practiceSession == nil,
             gameId: selectedGameId,
             gameName: momentGameContextSnapshot()?.gameName,
             half: HalfInningKey(inning: inning, pitchingSide: activeSide == .home ? "home" : "away"),
-            batterName: nil
+            batterName: nil,
+            teamId: game?.teamId,
+            scheduledGameId: game?.scheduledGameId,
+            gameDate: game?.date,
+            lineup: jerseyCells.compactMap { cell in
+                hitterIdByJerseyCellId[cell.id].map { id in
+                    GameFeedLineupEntry(hitterId: id, name: lineupBatterNamesById[cell.id]
+                        ?? (cell.jerseyNumber.isEmpty ? "Batter" : "#\(cell.jerseyNumber)"))
+                }
+            }
         )
+    }
+
+    /// The game's state for the scorer's feed (GameFeedService.swift).
+    private var gameFeedState: GameFeedWriter.GameState {
+        var names: [String: String] = [:]
+        for (id, name) in lineupBatterNamesById { names[id.uuidString] = name }
+        // activeSide is who's pitching; the other side bats.
+        return GameFeedWriter.GameState(pitches: gamePitchEvents, inning: inning, half: nil,
+                                        names: names, ourScore: us, theirScore: them, outs: outs,
+                                        batting: sideLabel(for: activeSide == .home ? .away : .home, maxLength: 30),
+                                        ourName: sideLabel(for: .home, maxLength: 30),
+                                        theirName: sideLabel(for: .away, maxLength: 30))
     }
 
     /// The open game right now, for Moments' game caption
@@ -12591,6 +12613,13 @@ struct PitchTrackerView: View {
                     pitchKeys: visibleTemplates,
                     keyId: selectedTemplate?.id
                 ))
+                // Keeps this scorer's game feed in step with the pitches
+                // (GameFeedViews.swift).
+                .modifier(GameFeedWriterHook(clip: gameClipContext, state: { gameFeedState },
+                                             // Only built while this phone writes a feed.
+                                             signature: GameFeedWriter.shared.feed == nil ? ""
+                                                : GameFeedWriterHook.signature(gamePitchEvents, inning: inning, us: us, them: them)
+                                                    + "|\(outs)|\(activeSide == .home ? 0 : 1)"))
                 .tabItem { Label(HomeArea.games.title, systemImage: HomeArea.games.systemImage) }
                 .tag(HomeArea.games)
 

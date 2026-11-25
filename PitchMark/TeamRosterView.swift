@@ -162,6 +162,9 @@ struct TeamRosterView: View {
 
                 if isTeamOwner {
                     TeamMembersSection(model: teamMembers)
+                    if let teamId = selection.team.id {
+                        TeamFollowersSection(teamId: teamId, teamName: selection.team.name, members: teamMembers)
+                    }
                 }
 
                 Section("Roster") {

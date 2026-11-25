@@ -137,6 +137,11 @@ struct RootView: View {
         .onAppear {
             authManager.restoreSignIn() // ✅ safe here
         }
+        // Feature flags (appConfig/flags): also when already signed in at
+        // launch - the isSignedIn onChange below never fires for that.
+        .task(id: authManager.isSignedIn) {
+            if authManager.isSignedIn { AppFeatureFlagStore.shared.start() }
+        }
         .onOpenURL { url in
             if authManager.handleEmailSignInLink(url) {
                 return
@@ -254,10 +259,16 @@ struct RootView: View {
             UserDefaults.standard.set(token, forKey: "pendingTeamInviteToken")
             return
         }
-        authManager.redeemTeamInviteToken(token) { result in
+        // A follower link makes a pending follower (GameFeedService).
+        GameFeedService.shared.join(token: token, authManager: authManager) { result in
             DispatchQueue.main.async {
                 switch result {
-                case .success(let team):
+                case .success(.followerPending(let teamName)):
+                    rootAlert = RootAlert(
+                        title: "Asked to Follow \(teamName)",
+                        message: "The coach approves you. Then their games show under Home → Teams → Following."
+                    )
+                case .success(.member(let team)):
                     rootAlert = RootAlert(
                         title: "You're on \(team.name)",
                         message: "The team's schedule is in Home → Games → Round Robin / Tourney Info."

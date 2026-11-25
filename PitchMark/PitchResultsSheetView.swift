@@ -597,6 +597,8 @@ private struct SafeOutButtonsRow: View {
     /// as "Out" (see BaseRunnerRules.outcome) but the batter is safe, so the
     /// circles follow the diamond rather than the outcome string.
     let batterPlaced: Bool
+    /// Safe tapped, batter not placed yet - Safe shows as on.
+    var safePending: Bool = false
     let onClearBatter: () -> Void
     /// Out was just selected - with runners on, the diamond is where their
     /// moves (a double play, a sac fly) get recorded.
@@ -604,6 +606,8 @@ private struct SafeOutButtonsRow: View {
 
     private var safeCircleSelected: Bool {
         if batterPlaced { return true }
+        if safePending && !isStrikeSwinging && !isStrikeLooking && !isBall
+            && !["Out", "K", "ꓘ", "Walk"].contains(selectedOutcome ?? "") { return true }
         if isHitTagSelected { return true }
         guard let selectedOutcome else { return false }
         return ["1B", "2B", "3B", "HR"].contains(selectedOutcome)
@@ -617,9 +621,9 @@ private struct SafeOutButtonsRow: View {
 
     private func selectSafeCategory() {
         if safeCircleSelected {
-            if batterPlaced {
+            if batterPlaced || safePending {
                 onClearBatter()
-                selectedOutcome = nil
+                if batterPlaced { selectedOutcome = nil }
             }
             if isHitTagSelected {
                 isHitTagSelected = false
@@ -1020,6 +1024,10 @@ struct PitchResultSheetView: View {
     /// ended up. See BasesDiamondView.
     private enum FieldStage { case spray, bases }
     @State private var fieldStage: FieldStage = .spray
+    /// Safe was tapped and the batter isn't on a bag yet (2026-11-24, user:
+    /// Safe looked like it wouldn't turn on - it only lit once a bag was
+    /// picked). Lights Safe while the diamond waits for the base.
+    @State private var safePending = false
     @State private var batterReachedBase: Int? = nil
     @State private var batterCredit: BatterCredit? = nil
     @State private var batterExtraBasesOn: ExtraBasesReason? = nil
@@ -1182,6 +1190,7 @@ struct PitchResultSheetView: View {
         battedBallSelection = nil
         battedBallTapNormalized = nil
         fieldStage = .spray
+        safePending = false
         runnerDestinations = [:]
         batterReachedBase = nil
         batterCredit = nil
@@ -2075,16 +2084,20 @@ struct PitchResultSheetView: View {
                                     isSafeDisabled: isOutcomeDisabled("1B"),
                                     isOutDisabled: isOutcomeDisabled("Out"),
                                     onSelectSafe: {
+                                        safePending = true
                                         fieldStage = .bases
                                         shouldScrollToInPlayOutcome = true
                                     },
                                     batterPlaced: batterReachedBase != nil,
+                                    safePending: safePending,
                                     onClearBatter: {
+                                        safePending = false
                                         batterReachedBase = nil
                                         batterCredit = nil
                                         batterExtraBasesOn = nil
                                     },
                                     onSelectOut: {
+                                        safePending = false
                                         guard !basesBefore.isEmpty else { return }
                                         fieldStage = .bases
                                         shouldScrollToInPlayOutcome = true

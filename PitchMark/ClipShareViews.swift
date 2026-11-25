@@ -30,6 +30,11 @@ struct GameClipContext {
     var gameName: String?
     var half: HalfInningKey
     var batterName: String?
+    /// For the game feed (GameFeedViews.swift).
+    var teamId: String? = nil
+    var scheduledGameId: String? = nil
+    var gameDate: Date? = nil
+    var lineup: [GameFeedLineupEntry] = []
 }
 
 struct GameClipBarModifier: ViewModifier {
@@ -156,10 +161,15 @@ struct GameClipRow: View {
                         .padding(.vertical, 4)
                         .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemBackground)))
                 }
-                GameClipBar(store: store, pendingCount: pending,
-                            onClip: { ui.showCamera = true },
-                            onEditRecipients: { ui.showRecipients = true },
-                            onTray: { ui.openTray() })
+                HStack(spacing: 6) {
+                    GameClipBar(store: store, pendingCount: pending,
+                                onClip: { ui.showCamera = true },
+                                onEditRecipients: { ui.showRecipients = true },
+                                onTray: { ui.openTray() })
+                    if flags.flags.isOn(.gameFeeds) {
+                        GameFeedButton(clip: clip)
+                    }
+                }
             }
         }
     }

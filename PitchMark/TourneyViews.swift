@@ -535,6 +535,7 @@ struct JoinTeamSheet: View {
     @State private var text = ""
     @State private var isJoining = false
     @State private var errorText: String? = nil
+    @State private var followerNote: String? = nil
 
     var body: some View {
         NavigationStack {
@@ -549,6 +550,9 @@ struct JoinTeamSheet: View {
                 }
                 if let errorText {
                     Text(errorText).font(.footnote).foregroundStyle(.red)
+                }
+                if let followerNote {
+                    Text(followerNote).font(.footnote)
                 }
             }
             .navigationTitle("Join a Team")
@@ -570,13 +574,16 @@ struct JoinTeamSheet: View {
         guard let token = TeamAccessRules.inviteToken(from: text) else { return }
         isJoining = true
         errorText = nil
-        authManager.redeemTeamInviteToken(token) { result in
+        // A follower code makes a pending follower (GameFeedService).
+        GameFeedService.shared.join(token: token, authManager: authManager) { result in
             DispatchQueue.main.async {
                 isJoining = false
                 switch result {
-                case .success:
+                case .success(.member):
                     onJoined()
                     dismiss()
+                case .success(.followerPending(let teamName)):
+                    followerNote = "You asked to follow \(teamName). The coach approves you - then their games show under Home → Teams → Following."
                 case .failure(let error):
                     errorText = error.localizedDescription
                 }

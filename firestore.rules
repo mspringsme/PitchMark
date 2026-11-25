@@ -27,6 +27,24 @@ service cloud.firestore {
         || (exists(member) && get(member).data.roles.hasAny(['assistant']));
     }
 
+    // GAME FEEDS (2026-11-24): off-site followers are NOT team members -
+    // they sit in teams/{teamId}/followers, so nothing gated on membership
+    // (roster, card sets, team tourneys) opens to them.
+    function isTeamCreatorOf(teamId) {
+      return get(/databases/$(database)/documents/teams/$(teamId)).data.createdByUid == uid();
+    }
+    function isOnTeamAsMember(teamId) {
+      return isTeamCreatorOf(teamId)
+        || exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()));
+    }
+    function isApprovedTeamFollower(teamId) {
+      let f = /databases/$(database)/documents/teams/$(teamId)/followers/$(uid());
+      return exists(f) && get(f).data.status == "approved";
+    }
+    function followerFeedsOff(teamId) {
+      return get(/databases/$(database)/documents/teams/$(teamId)).data.get("followerFeedsOff", false) == true;
+    }
+
     function sharedWithMe(data) {
       return (
         data.keys().hasAny(['sharedWith']) && data.sharedWith.hasAny([uid()])
@@ -416,6 +434,7 @@ service cloud.firestore {
         resource.data.createdByUid == uid()
         || exists(/databases/$(database)/documents/teams/$(teamId)/members/$(uid()))
         || isRoomPartnerOf(teamId)
+        || isApprovedTeamFollower(teamId)
       );
       allow list: if false; // fetched individually via the members collectionGroup query
 
@@ -442,6 +461,7 @@ service cloud.firestore {
         // you have just redeemed, or with the team's family code - with no
         // role the invite didn't grant. Knowing a team's id is not enough.
         allow create: if signedIn() && memberUid == uid() && request.resource.data.uid == uid()
+          && !request.resource.data.roles.hasAny(['follower'])
           && (isTeamCreator()
               || redeemedTeamInvite(request.resource.data)
               || joinedWithFamilyCode(request.resource.data));
@@ -451,6 +471,33 @@ service cloud.firestore {
         // remove anyone's. Split from `update` on purpose - role changes
         // stay creator-only, only self-removal is opened up.
         allow delete: if signedIn() && (isTeamCreator() || memberUid == uid());
+      }
+
+      // TEAM FOLLOWERS (2026-11-24): off-site followers of the team's game
+      // feeds. They join with the team's follower code, arrive pending, and
+      // the creator approves them. Not members - see isApprovedTeamFollower.
+      match /followers/{followerUid} {
+        function followerCodeOpens(data) {
+          let path = /databases/$(database)/documents/teamInviteTokens/$(data.inviteToken);
+          return data.inviteToken is string
+            && exists(path)
+            && get(path).data.teamId == teamId
+            && get(path).data.get("multiUse", false) == true
+            && get(path).data.roles.hasOnly(['follower'])
+            && notExpired(get(path).data);
+        }
+
+        allow get: if signedIn() && (followerUid == uid() || isTeamCreator());
+        allow list: if signedIn() && isTeamCreator();
+        allow create: if signedIn() && followerUid == uid()
+          && request.resource.data.keys().hasOnly(["uid", "name", "teamName", "status", "inviteToken", "joinedAt"])
+          && request.resource.data.uid == uid()
+          && request.resource.data.status == "pending"
+          && followerCodeOpens(request.resource.data);
+        allow update: if signedIn() && isTeamCreator()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "approvedAt"])
+          && request.resource.data.status in ["pending", "approved"];
+        allow delete: if signedIn() && (isTeamCreator() || followerUid == uid());
       }
 
       // TEAM TOURNEYS (2026-11-22): a tourney set to this team, so the
@@ -657,9 +704,14 @@ service cloud.firestore {
         && request.resource.data.teamId is string
         && request.resource.data.expiresAt is timestamp
         && get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.createdByUid == uid()
-        && request.resource.data.roles.hasOnly(['assistant', 'parent'])
+        && request.resource.data.roles.hasOnly(['assistant', 'parent', 'follower'])
         && (request.resource.data.get('multiUse', false) == false
-            || request.resource.data.roles.hasOnly(['parent']));
+            || request.resource.data.roles.hasOnly(['parent'])
+            || request.resource.data.roles.hasOnly(['follower']))
+        // A follower code is reusable and follower-only (2026-11-24).
+        && (!request.resource.data.roles.hasAny(['follower'])
+            || (request.resource.data.get('multiUse', false) == true
+                && request.resource.data.roles.hasOnly(['follower'])));
 
       allow update, delete: if signedIn()
         && resource != null
@@ -1013,6 +1065,93 @@ service cloud.firestore {
 
         allow update, delete: if signedIn() && uid() == ownerUid;
       }
+    }
+
+    // ─────────────────────────────────────────────
+    // GAME FEEDS: /gameFeeds/{feedId} (2026-11-24, clip brief 2b)
+    // One feed per scorer per game: official (the team's creator) or
+    // personal (any member). Followers read outcomes only - events carry
+    // the allowed fields and nothing else (GameFeed.swift allowedKeys).
+    // ─────────────────────────────────────────────
+    match /gameFeeds/{feedId} {
+      function onTeam(teamId) {
+        return isOnTeamAsMember(teamId) || isApprovedTeamFollower(teamId);
+      }
+      function approvedFeedFollower() {
+        let f = /databases/$(database)/documents/gameFeeds/$(feedId)/feedFollowers/$(uid());
+        return exists(f) && get(f).data.status == "approved";
+      }
+      function canRead(data) {
+        return data.ownerUid == uid()
+          || (!followerFeedsOff(data.teamId) && onTeam(data.teamId) && (
+                (data.audience == "team")
+                || (data.audience == "approved" && approvedFeedFollower())
+             ));
+      }
+      function validFeed(data) {
+        return data.keys().hasOnly(["ownerUid", "teamId", "scheduledGameId", "gameLabel", "startsAt",
+                                    "title", "kind", "audience", "scope", "showLastNames",
+                                    "ourScore", "theirScore", "ourName", "theirName", "inning", "half", "status",
+                                    "createdAt", "updatedAt"])
+          && data.teamId is string
+          && data.scheduledGameId is string
+          && data.title is string && data.title.size() >= 1 && data.title.size() <= 40
+          && data.kind in ["official", "personal"]
+          && data.audience in ["nobody", "approved", "team"]
+          && data.scope in ["everything", "myPlayers"];
+      }
+
+      allow get: if signedIn() && canRead(resource.data);
+      // A game's feeds, by team: members and approved followers.
+      allow list: if signedIn() && onTeam(resource.data.teamId);
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && validFeed(request.resource.data)
+        && isOnTeamAsMember(request.resource.data.teamId)
+        && (request.resource.data.kind == "personal" || isTeamCreatorOf(request.resource.data.teamId));
+      allow update: if signedIn()
+        && resource.data.ownerUid == uid()
+        && validFeed(request.resource.data)
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.teamId == resource.data.teamId
+        && request.resource.data.kind == resource.data.kind;
+      allow delete: if signedIn() && resource.data.ownerUid == uid();
+
+      match /events/{eventId} {
+        function feedDoc() {
+          return get(/databases/$(database)/documents/gameFeeds/$(feedId)).data;
+        }
+        allow get, list: if signedIn() && canRead(feedDoc());
+        allow create, update: if signedIn()
+          && feedDoc().ownerUid == uid()
+          && request.resource.data.keys().hasOnly(["at", "inning", "half", "batter", "jersey", "kind", "text", "runs", "detail", "batting", "ourScore", "theirScore", "outs", "updatedAt"])
+          // The card's result lines: a short list of words, no more.
+          && (!request.resource.data.keys().hasAny(["detail"])
+              || (request.resource.data.detail is list && request.resource.data.detail.size() <= 3));
+        allow delete: if signedIn() && feedDoc().ownerUid == uid();
+      }
+
+      match /feedFollowers/{followerUid} {
+        function feedDoc() {
+          return get(/databases/$(database)/documents/gameFeeds/$(feedId)).data;
+        }
+        allow get: if signedIn() && (followerUid == uid() || feedDoc().ownerUid == uid());
+        allow list: if signedIn() && feedDoc().ownerUid == uid();
+        allow create: if signedIn() && followerUid == uid()
+          && request.resource.data.keys().hasOnly(["uid", "name", "status", "requestedAt"])
+          && request.resource.data.uid == uid()
+          && request.resource.data.status == "requested"
+          && onTeam(feedDoc().teamId);
+        allow update: if signedIn() && feedDoc().ownerUid == uid()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "approvedAt"])
+          && request.resource.data.status in ["requested", "approved"];
+        allow delete: if signedIn() && (followerUid == uid() || feedDoc().ownerUid == uid());
+      }
+    }
+
+    // A follower's own teams: teams/*/followers where uid == me.
+    match /{path=**}/followers/{followerUid} {
+      allow list: if signedIn() && resource.data.uid == uid();
     }
 
     // ─────────────────────────────────────────────

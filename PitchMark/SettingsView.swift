@@ -1828,6 +1828,9 @@ struct SettingsView: View {
                     // branch below, so it disappeared the moment you had your
                     // first team - no way to add a second one from Home. It's
                     // the header's + now, available either way.
+                    // Teams this account follows (game feeds, GameFeedViews.swift).
+                    FollowedTeamsSection()
+
                     if myTeams.isEmpty, !showInlineNewTeam {
                         Text("You're not on any teams yet. Tap + to create one.")
                             .font(.subheadline)

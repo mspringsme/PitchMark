@@ -1349,3 +1349,40 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
 - **Pitch calls are on every pitch** (`calledPitch`, `codes`, `templateId`,
   `catcherEstimate`) and in the live room, so followers (phase 4) must
   only ever read an outcome-only copy, never `/liveGames` or game pitches.
+
+## Game feeds (2026-11-24, clip brief phase 4)
+
+- **Followers are never team members.** They live in
+  `teams/{id}/followers/{uid}` (pending until the creator approves),
+  joined with the team's reusable follower code (`followerInviteToken` on
+  the team; roles `["follower"]`, multiUse). Membership opens the roster,
+  card sets and team tourneys, so keeping followers out of `members` means
+  none of those rules changed. A member doc can never carry `follower`.
+  `GameFeedService.join` routes a follower code; every other code still
+  goes through `redeemTeamInviteToken`.
+- **One feed per scorer per game**, `gameFeeds/{gameKey}_{uid}`. The game
+  key is the team schedule entry id, else `game-{gameId}`. Official = the
+  team's creator; personal = any member. Audience team / approved /
+  nobody; scope everything / my players (the picked hitter ids stay on the
+  phone); last names off by default.
+- **HIGH RISK: feed events are outcome-only.** `GameFeedRules` builds them
+  (GameFeed.swift); `GameFeedEvent.allowedKeys` must match the events rule
+  in firestore.rules - `GameFeedTests` reads both. Never copy a PitchEvent
+  field into a feed without adding it to both, and never a call, code,
+  key or estimate. Followers never read /liveGames or game pitches.
+- `GameFeedWriter` (the scorer's phone) diffs the game's pitches against
+  what's written: new and edited pitches are set, undone ones deleted, the
+  inning a pitch was first seen in is kept. `GameFeedWriterHook` drives it
+  from the tracker; its signature string is only built while a feed is
+  attached.
+- Screens: the clip row's Feed button (`GameFeedSheet`), Team Members →
+  Followers (`TeamFollowersSection`, its share sheet goes through
+  `TeamMembersModel.shareItems` - no sheet on a List section), Home →
+  Teams → Following (`FollowedTeamsSection` → `FollowerTeamFeedsView` →
+  `FollowerGameView`). All behind the `gameFeeds` flag (off by default).
+- **A follower finds their teams with a collection-group query**
+  (`followers` where `uid ==` me), which needs the `followers.uid`
+  COLLECTION_GROUP override in firestore.indexes.json (deployed
+  2026-11-24). Without it the query fails quietly and Following never
+  shows - the first two-phone test hit exactly that.
+- Rules tests: `rules-tests/tests/gameFeeds.test.mjs`. Rules DEPLOYED 2026-11-24; `appConfig/flags` has `gameFeeds: true` (set with `functions/scripts/setAppFlags.js` - also the kill switch: `killSwitch=true`).
