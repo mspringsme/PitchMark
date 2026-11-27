@@ -73,11 +73,20 @@ struct GameFeedEvent: Equatable, Identifiable {
     var ourScore: Int? = nil
     var theirScore: Int? = nil
     var outs: Int? = nil
+    /// For the play animation (2026-11-25): where the ball went (0 to 1
+    /// across and down the result sheet's field picture, the same space as
+    /// the bag positions), how it was hit, and who moved base to base.
+    var spotX: Double? = nil
+    var spotY: Double? = nil
+    /// grounder, line, fly, pop, bunt, hr
+    var ballType: String? = nil
+    var moves: [FeedMove] = []
 
     /// The only fields a feed event may carry. The rules allow exactly
     /// these; adding one means changing both.
     static let allowedKeys: Set<String> = ["at", "inning", "half", "batter", "jersey", "kind", "text", "runs", "detail",
-                                           "batting", "ourScore", "theirScore", "outs", "updatedAt"]
+                                           "batting", "ourScore", "theirScore", "outs",
+                                           "spotX", "spotY", "ballType", "moves", "updatedAt"]
 
     /// "Smith #26", "#26" for a number-only player, or just the name.
     var batterLabel: String {
@@ -139,7 +148,32 @@ struct GameFeedEvent: Equatable, Identifiable {
         if let ourScore { data["ourScore"] = ourScore }
         if let theirScore { data["theirScore"] = theirScore }
         if let outs { data["outs"] = outs }
+        if let spotX, let spotY { data["spotX"] = spotX; data["spotY"] = spotY }
+        if let ballType { data["ballType"] = ballType }
+        if !moves.isEmpty { data["moves"] = moves.map(\.firestoreData) }
         return data
+    }
+}
+
+/// One runner's move on a play, as the feed carries it: bases only.
+struct FeedMove: Equatable, Hashable {
+    /// 0 home (the batter), 1-3 the base they started on.
+    var from: Int
+    /// 1-3 a base, 4 scored, -1 out.
+    var to: Int
+
+    var firestoreData: [String: Int] { ["f": from, "t": to] }
+
+    init(from: Int, to: Int) {
+        self.from = from
+        self.to = to
+    }
+
+    init?(data: [String: Any]) {
+        guard let f = data["f"] as? Int, let t = data["t"] as? Int,
+              (0...3).contains(f), [-1, 1, 2, 3, 4].contains(t) else { return nil }
+        from = f
+        to = t
     }
 }
 
@@ -266,11 +300,46 @@ enum GameFeedRules {
             kind: result.kind, text: result.text, runs: result.runs,
             detail: playLines(for: pitch),
             batting: situation.batting.map { String($0.prefix(40)) },
-            ourScore: situation.ourScore, theirScore: situation.theirScore, outs: situation.outs
+            ourScore: situation.ourScore, theirScore: situation.theirScore, outs: situation.outs,
+            spotX: spot(for: pitch)?.x, spotY: spot(for: pitch)?.y,
+            ballType: ballType(of: pitch),
+            moves: moves(of: pitch)
         )
     }
 
     static let maxDetailLines = 3
+    static let maxMoves = 4
+
+    /// Where the ball went, rounded - only for a ball in play (fair or
+    /// over the fence). A foul or no tap has none.
+    static func spot(for pitch: PitchEvent) -> (x: Double, y: Double)? {
+        guard let x = pitch.battedBallTapX, let y = pitch.battedBallTapY,
+              ["Field", "HR"].contains(pitch.battedBallType ?? "") else { return nil }
+        func clean(_ v: Double) -> Double { (min(1, max(0, v)) * 1000).rounded() / 1000 }
+        return (clean(x), clean(y))
+    }
+
+    /// How it was hit, from the result sheet's ball-type buttons (they're
+    /// saved in the descriptor, "Line, Hit"); a ball over the fence is hr.
+    static func ballType(of pitch: PitchEvent) -> String? {
+        if pitch.battedBallType == "HR" { return "hr" }
+        let tags = (pitch.descriptor ?? "").split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+        let known = ["grounder", "line", "fly", "pop", "bunt"]
+        return tags.first { known.contains($0) }
+    }
+
+    /// Who moved where on the play (batter from home), bases only - no
+    /// names or ids. 1-3 bases, 4 scored, -1 out. Runners who stayed put
+    /// are listed too, from == to, so the animation draws everyone who was
+    /// on base (2026-11-25, user: a runner holding 2nd vanished).
+    static func moves(of pitch: PitchEvent) -> [FeedMove] {
+        var result = (pitch.play?.moves ?? []).map { FeedMove(from: $0.from, to: $0.to) }
+        for base in pitch.basesBefore?.occupiedBases ?? [] where !result.contains(where: { $0.from == base }) {
+            result.append(FeedMove(from: base, to: base))
+        }
+        return Array(result.sorted { $0.from < $1.from }.prefix(maxMoves))
+    }
 
     /// The card's result box lines, capped: what was hit, how it was
     /// fielded, ball type and where it went. `outcomeSummaryLines` never

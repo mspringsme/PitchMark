@@ -80,6 +80,21 @@ struct PlayDraft: Equatable {
         return nil
     }
 
+    /// The scorer said the batter was safe (Hit or Safe) on a fair ball but
+    /// never tapped a base: put them on 1st, like tapping 1st (2026-11-25,
+    /// user: a hit with a runner on 1st saved with nobody moving). Not when
+    /// the batter is already placed or out, and not without a fair ball.
+    static func impliesBatterOnFirst(safeSaid: Bool, fairBallTapped: Bool,
+                                     batterPlaced: Bool, batterOut: Bool) -> Bool {
+        safeSaid && fairBallTapped && !batterPlaced && !batterOut
+    }
+
+    /// What an assumed trip to 1st is credited as: a single, or reached on
+    /// error when the Error button is on.
+    static func impliedFirstBaseCredit(isError: Bool) -> BatterCredit {
+        isError ? .reachedOnError : BaseRunnerRules.defaultCredit(reached: Base.first)
+    }
+
     /// The batter's base changed: runners start from the minimum it forces.
     mutating func batterBaseChanged() {
         runnerDestinations = BaseRunnerRules.defaultDestinations(before: basesBefore, batterTo: batterReachedBase)

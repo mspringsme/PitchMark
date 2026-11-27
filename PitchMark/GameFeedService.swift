@@ -103,7 +103,10 @@ extension GameFeedEvent {
                   text: data["text"] as? String ?? "", runs: data["runs"] as? Int ?? 0,
                   detail: data["detail"] as? [String] ?? [],
                   batting: data["batting"] as? String, ourScore: data["ourScore"] as? Int,
-                  theirScore: data["theirScore"] as? Int, outs: data["outs"] as? Int)
+                  theirScore: data["theirScore"] as? Int, outs: data["outs"] as? Int,
+                  spotX: data["spotX"] as? Double, spotY: data["spotY"] as? Double,
+                  ballType: data["ballType"] as? String,
+                  moves: (data["moves"] as? [[String: Any]] ?? []).compactMap(FeedMove.init(data:)))
     }
 }
 

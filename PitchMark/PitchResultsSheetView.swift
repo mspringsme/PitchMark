@@ -104,6 +104,11 @@ private struct OutcomeButton: View {
     }
 }
 
+/// A ball-type button (Grounder, Fly, Line, Pop, Bunt, Hit Batter), drawn
+/// in code like the Hit button beside it: the word and a small picture of
+/// the ball's path (2026-11-26, user: the old picture-in-a-box art looked
+/// like a square inside a rectangle). `assetName` keeps the old names so
+/// call sites and UI tests ("Grounder", "Hit Batter"...) are unchanged.
 private struct AssetOutcomeButton: View {
     let assetName: String
     let width: CGFloat
@@ -112,27 +117,102 @@ private struct AssetOutcomeButton: View {
     let isDisabled: Bool
     let action: () -> Void
 
+    private var title: String { assetName.capitalized }
+
     var body: some View {
         Button(action: action) {
-            Image(assetName)
-                .resizable()
-                .scaledToFit()
-                .frame(width: width, height: height)
-                .padding(4)
-                .pitchResultSelectionBackground(isSelected: isSelected, inactiveOpacity: 0.08)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(isSelected ? Color.black.opacity(0.8) : Color.black.opacity(0.08), lineWidth: isSelected ? 1.6 : 1)
-                )
-                .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
+            VStack(spacing: 3) {
+                BallPathGlyph(kind: assetName.lowercased())
+                    .stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round))
+                    .frame(width: 40, height: 16)
+                    .overlay(alignment: .topLeading) {
+                        GeometryReader { geo in
+                            let ball = BallPathGlyph.ballPoint(kind: assetName.lowercased(), in: geo.size)
+                            Circle()
+                                .fill(isSelected ? Color.white : Color.primary)
+                                .frame(width: 6, height: 6)
+                                .position(ball)
+                        }
+                    }
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .foregroundStyle(isSelected ? Color.white : Color.primary)
+            .frame(width: width + 8, height: height + 8)
+            .pitchResultSelectionBackground(isSelected: isSelected)
+            .cornerRadius(6)
+            .shadow(color: .black.opacity(0.2), radius: 4, x: 0, y: 2)
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.4 : 1.0)
         .contentShape(Rectangle())
-        .accessibilityLabel(assetName.capitalized)
+        .accessibilityLabel(title)
         .accessibilityValue(isSelected ? "selected" : "")
+    }
+}
+
+/// The little path each ball type takes, from contact (left) to where it
+/// ends (the ball dot, `ballPoint`). Hit Batter is a pitch into a batter.
+private struct BallPathGlyph: Shape {
+    let kind: String
+
+    static func ballPoint(kind: String, in size: CGSize) -> CGPoint {
+        let w = size.width, h = size.height
+        switch kind {
+        case "grounder": return CGPoint(x: w - 3, y: h - 2)
+        case "line": return CGPoint(x: w - 3, y: h * 0.3)
+        case "fly": return CGPoint(x: w - 3, y: h - 3)
+        case "pop": return CGPoint(x: w * 0.55, y: 3)
+        case "bunt": return CGPoint(x: w * 0.55, y: h - 2)
+        default: return CGPoint(x: w * 0.4, y: h * 0.5)   // hit batter
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width, h = rect.height
+        var p = Path()
+        switch kind {
+        case "grounder":
+            // Three hops, each lower, along the ground.
+            p.move(to: CGPoint(x: 2, y: h - 2))
+            let hops: [(CGFloat, CGFloat)] = [(0.36, 0.75), (0.66, 0.5), (0.86, 0.3)]
+            var x0: CGFloat = 2
+            for (end, height) in hops {
+                let x1 = end * w
+                p.addQuadCurve(to: CGPoint(x: x1, y: h - 2), control: CGPoint(x: (x0 + x1) / 2, y: h - 2 - height * h * 1.6))
+                x0 = x1
+            }
+            p.addLine(to: CGPoint(x: w - 6, y: h - 2))
+        case "line":
+            p.move(to: CGPoint(x: 2, y: h - 3))
+            p.addLine(to: CGPoint(x: w - 6, y: h * 0.33))
+        case "fly":
+            p.move(to: CGPoint(x: 2, y: h - 2))
+            p.addQuadCurve(to: CGPoint(x: w - 6, y: h - 3), control: CGPoint(x: w * 0.5, y: -h * 0.95))
+        case "pop":
+            p.move(to: CGPoint(x: w * 0.3, y: h - 2))
+            p.addQuadCurve(to: CGPoint(x: w * 0.5, y: 3), control: CGPoint(x: w * 0.33, y: -h * 0.2))
+        case "bunt":
+            // A bat held level, the ball rolling a short way off it.
+            p.move(to: CGPoint(x: 2, y: h * 0.35))
+            p.addLine(to: CGPoint(x: w * 0.3, y: h * 0.35))
+            p.move(to: CGPoint(x: w * 0.18, y: h * 0.45))
+            p.addLine(to: CGPoint(x: w * 0.5, y: h - 2))
+        default:
+            // Hit batter: a stick batter on the right, the pitch coming in.
+            let bx = w * 0.78
+            p.addEllipse(in: CGRect(x: bx - 2.5, y: 0, width: 5, height: 5))
+            p.move(to: CGPoint(x: bx, y: 5)); p.addLine(to: CGPoint(x: bx, y: h * 0.7))
+            p.move(to: CGPoint(x: bx, y: h * 0.7)); p.addLine(to: CGPoint(x: bx - 4, y: h - 1))
+            p.move(to: CGPoint(x: bx, y: h * 0.7)); p.addLine(to: CGPoint(x: bx + 4, y: h - 1))
+            p.move(to: CGPoint(x: bx - 5, y: h * 0.38)); p.addLine(to: CGPoint(x: bx + 5, y: h * 0.38))
+            // The pitch's path into the batter.
+            p.move(to: CGPoint(x: 2, y: h * 0.5)); p.addLine(to: CGPoint(x: w * 0.32, y: h * 0.5))
+        }
+        return p
     }
 }
 
@@ -159,6 +239,9 @@ private struct BasesFieldLayer: View {
     /// The runner (by starting base) the next bag tap moves. Owned by the
     /// sheet so Refresh and a new hit-location tap clear it.
     @Binding var selectedRunner: Int?
+    /// The sheet put the batter on 1st itself (a hit nobody placed). A tap
+    /// on that base then confirms it instead of taking the batter off.
+    var batterAutoPlaced: Binding<Bool> = .constant(false)
     /// Why the current positions are impossible, if they are.
     let conflict: String?
     /// Wild pitch / passed ball with nobody's ball in play: only runners
@@ -233,6 +316,11 @@ private struct BasesFieldLayer: View {
     }
 
     private func selectBase(_ base: Int) {
+        if reachedBase == base && batterAutoPlaced.wrappedValue {
+            batterAutoPlaced.wrappedValue = false
+            return
+        }
+        batterAutoPlaced.wrappedValue = false
         if reachedBase == base {
             reachedBase = nil
             credit = nil
@@ -660,7 +748,9 @@ private struct SafeOutButtonsRow: View {
             isFoulSelected = false
             isHitTagSelected = false
             isHitBatter = false
-            selectedDescriptor = nil
+            // The ball type stays (2026-11-26, user): a groundout is still a
+            // grounder. Types that can't go with an out are cleared by
+            // deselectIfDisabled, as for any other change.
         }
     }
 
@@ -1028,6 +1118,8 @@ struct PitchResultSheetView: View {
     /// Safe looked like it wouldn't turn on - it only lit once a bag was
     /// picked). Lights Safe while the diamond waits for the base.
     @State private var safePending = false
+    /// The batter is on 1st because the sheet assumed it (BasesFieldLayer).
+    @State private var batterAutoPlaced = false
     @State private var batterReachedBase: Int? = nil
     @State private var batterCredit: BatterCredit? = nil
     @State private var batterExtraBasesOn: ExtraBasesReason? = nil
@@ -1191,6 +1283,7 @@ struct PitchResultSheetView: View {
         battedBallTapNormalized = nil
         fieldStage = .spray
         safePending = false
+        batterAutoPlaced = false
         runnerDestinations = [:]
         batterReachedBase = nil
         batterCredit = nil
@@ -1398,6 +1491,7 @@ struct PitchResultSheetView: View {
                             basesBefore: basesBefore,
                             runnerDestinations: $runnerDestinations,
                             selectedRunner: $selectedRunnerBase,
+                            batterAutoPlaced: $batterAutoPlaced,
                             conflict: runnerConflict,
                             runnersOnlyReason: runnersOnlyReason?.label,
                             batterLabel: effectiveOpponentJersey.map { "#\($0)" } ?? "B",
@@ -1783,7 +1877,34 @@ struct PitchResultSheetView: View {
             showMissingBatterPrompt = true
             return
         }
+        // A hit nobody placed still puts the batter on 1st and moves the
+        // forced runners before it's saved.
+        placeBatterOnFirstIfImplied(now: true)
         performSave()
+    }
+
+    /// Safe or Hit, a fair ball, no base tapped: batter to 1st (a single, or
+    /// reached on error with Error on), forced runners up one - exactly as
+    /// if 1st had been tapped. `now` also applies the runner moves and the
+    /// sheet's selections right away (Save can't wait for onChange).
+    private func placeBatterOnFirstIfImplied(now: Bool = false) {
+        guard PlayDraft.impliesBatterOnFirst(
+            safeSaid: isHitTagSelected || safePending,
+            fairBallTapped: battedBallSelection == .field && battedBallTapNormalized != nil,
+            batterPlaced: batterReachedBase != nil,
+            batterOut: isBatterOutOnPlay || selectedOutcome == "Out"
+        ) else { return }
+        batterReachedBase = Base.first
+        batterCredit = PlayDraft.impliedFirstBaseCredit(isError: isError)
+        batterExtraBasesOn = nil
+        batterAutoPlaced = true
+        fieldStage = .bases
+        if now {
+            var draft = playDraft
+            draft.batterBaseChanged()
+            runnerDestinations = draft.runnerDestinations
+            applyBatterPlayToSelections()
+        }
     }
 
     private func buildCurrentEvent() -> PitchEvent? {
@@ -2087,11 +2208,13 @@ struct PitchResultSheetView: View {
                                         safePending = true
                                         fieldStage = .bases
                                         shouldScrollToInPlayOutcome = true
+                                        placeBatterOnFirstIfImplied()
                                     },
                                     batterPlaced: batterReachedBase != nil,
                                     safePending: safePending,
                                     onClearBatter: {
                                         safePending = false
+                                        batterAutoPlaced = false
                                         batterReachedBase = nil
                                         batterCredit = nil
                                         batterExtraBasesOn = nil
@@ -2184,6 +2307,7 @@ struct PitchResultSheetView: View {
                     fieldStage = .bases
                 case .field?:
                     fieldStage = .bases
+                    placeBatterOnFirstIfImplied()
                 case .foul?, nil:
                     break
                 }
@@ -2212,7 +2336,10 @@ struct PitchResultSheetView: View {
             }
             .onChange(of: batterExtraBasesOn) { _, _ in applyBatterPlayToSelections() }
             .onChange(of: isError) { _, newValue in syncBatterCreditToErrorButton(newValue) }
-            .onChange(of: isHitTagSelected) { _, newValue in syncBatterCreditToHitButton(newValue) }
+            .onChange(of: isHitTagSelected) { _, newValue in
+                syncBatterCreditToHitButton(newValue)
+                if newValue { placeBatterOnFirstIfImplied() }
+            }
             .onChange(of: selectedOutcome) { _, newValue in clearBatterPlayIfOutcomeDiverged(newValue) }
             .onChange(of: shouldScrollToInPlayOutcome) { _, newValue in
                 guard newValue else { return }

@@ -528,7 +528,24 @@ final class FollowerGameModel: ObservableObject {
 
     @Published var events: [String: [GameFeedEvent]] = [:]
     @Published var access: [String: Access] = [:]
+    /// Plays whose animation runs on their own: the newest when the game
+    /// opens, then each new play as it arrives (not every old play at once).
+    @Published var autoPlayIds: Set<String> = []
+    private var seenIds: [String: Set<String>] = [:]
     private var listeners: [String: ListenerRegistration] = [:]
+
+    func played(_ id: String) { autoPlayIds.remove(id) }
+
+    private func noteArrivals(feedId: String, events: [GameFeedEvent]) {
+        let ids = Set(events.map(\.id))
+        if let seen = seenIds[feedId] {
+            autoPlayIds.formUnion(ids.subtracting(seen))
+            seenIds[feedId] = seen.union(ids)
+        } else {
+            if let newest = events.max(by: { $0.at < $1.at }) { autoPlayIds.insert(newest.id) }
+            seenIds[feedId] = ids
+        }
+    }
 
     func start(_ feeds: [GameFeedDoc]) {
         for feed in feeds where listeners[feed.id] == nil {
@@ -553,7 +570,10 @@ final class FollowerGameModel: ObservableObject {
         listeners[feedId] = GameFeedService.shared.listenEvents(feedId: feedId) { events in
             // A dropped connection keeps what's on screen; never clear it.
             guard let events else { return }
-            Task { @MainActor in self.events[feedId] = events }
+            Task { @MainActor in
+                self.noteArrivals(feedId: feedId, events: events)
+                self.events[feedId] = events
+            }
         }
     }
 
@@ -645,6 +665,8 @@ struct FollowerGameView: View {
                 let outs = outPlayIds
                 ForEach(rows, id: \.event.id) { item in
                     FeedPlayRow(event: item.event, isOut: outs.contains(item.event.id),
+                                autoPlay: model.autoPlayIds.contains(item.event.id),
+                                onPlayed: { model.played(item.event.id) },
                                 feedTitle: tab == "all" && sortedFeeds.count > 1 ? item.feedTitle : nil,
                                 ourName: scoreNames.our, theirName: scoreNames.their)
                 }
@@ -664,9 +686,17 @@ struct FeedPlayRow: View {
     let event: GameFeedEvent
     /// The play made an out: its result shows in red (user, 2026-11-24).
     var isOut: Bool = false
+    /// Run the play animation on appearing (PlayAnimation.swift).
+    var autoPlay: Bool = false
+    var onPlayed: () -> Void = {}
     let feedTitle: String?
     var ourName: String = "Us"
     var theirName: String = "Them"
+
+    @State private var animating = false
+    @State private var didAutoPlay = false
+
+    private var plan: PlayAnimationPlan? { PlayAnimationPlan.make(for: event) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -684,9 +714,31 @@ struct FeedPlayRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    Text(event.kindLabel)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(isOut ? Color.red : Color.secondary)
+                    HStack(spacing: 6) {
+                        Text(event.kindLabel)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(isOut ? Color.red : Color.secondary)
+                        if plan != nil, !animating {
+                            Button { animating = true } label: {
+                                Image(systemName: "play.circle.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(Color.pitchMarkActiveGray)
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Play animation")
+                            .accessibilityIdentifier("feed.play")
+                        }
+                    }
+                    if animating, let plan {
+                        PlayAnimationView(plan: plan) {
+                            animating = false
+                            onPlayed()
+                        }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 190)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .accessibilityIdentifier("feed.animation")
+                    } else {
                     Group {
                         if event.showsPlayLines {
                             HStack(spacing: 4) {
@@ -704,6 +756,7 @@ struct FeedPlayRow: View {
                         }
                     }
                     .foregroundStyle(isOut ? Color.red : Color.primary)
+                    }
                     if let feedTitle {
                         Text(feedTitle).font(.caption2).foregroundStyle(.secondary)
                     }
@@ -724,6 +777,81 @@ struct FeedPlayRow: View {
             }
         }
         .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+        .onAppear {
+            if autoPlay, !didAutoPlay, plan != nil {
+                didAutoPlay = true
+                animating = true
+            }
+        }
+        .onChange(of: autoPlay) { _, now in
+            if now, !didAutoPlay, plan != nil {
+                didAutoPlay = true
+                animating = true
+            }
+        }
+    }
+}
+
+/// `-UITestPlayAnimations`: sample plays in feed cards, in memory, for
+/// screenshots of each animation.
+struct PlayAnimationsUITestHarness: View {
+    private static func sample(_ id: String, _ kind: String, text: String, detail: [String] = [],
+                               spot: (Double, Double)? = nil, type: String? = nil, moves: [FeedMove] = []) -> GameFeedEvent {
+        GameFeedEvent(id: id, at: Date(), inning: 1, half: nil, batter: "Smith", jersey: "26",
+                      kind: kind, text: text, runs: moves.filter { $0.to == 4 }.count, detail: detail,
+                      batting: "Hawks", ourScore: 1, theirScore: 2, outs: 1,
+                      spotX: spot?.0, spotY: spot?.1, ballType: type, moves: moves)
+    }
+
+    static let samples: [GameFeedEvent] = [
+        sample("line", "hit", text: "1B", detail: ["1B", "Line · Shallow Center"], spot: (0.5, 0.36), type: "line",
+               moves: [FeedMove(from: 0, to: 1), FeedMove(from: 2, to: 4)]),
+        sample("fly", "out", text: "Out", detail: ["Out", "Fly · Deep Right"], spot: (0.66, 0.33), type: "fly",
+               moves: [FeedMove(from: 0, to: -1)]),
+        sample("grounder", "out", text: "Out", detail: ["Out", "Grounder · Short"], spot: (0.42, 0.5), type: "grounder",
+               moves: [FeedMove(from: 0, to: -1), FeedMove(from: 1, to: 2)]),
+        sample("hr", "hit", text: "HR", detail: ["HR", "Fly · Left"], spot: (0.2, 0.1), type: "hr",
+               moves: [FeedMove(from: 0, to: 4), FeedMove(from: 3, to: 4)]),
+        sample("k", "strikeout", text: "Strikeout"),
+        sample("walk", "walk", text: "Walk")
+    ]
+
+    private let frozen = ProcessInfo.processInfo.arguments.contains("-UITestPlayAnimationsFrozen")
+
+    var body: some View {
+        if frozen { frozenGrid } else { liveList }
+    }
+
+    /// Each sample at 30%, 65% and 100% of its animation.
+    private var frozenGrid: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Self.samples) { event in
+                    if let plan = PlayAnimationPlan.make(for: event) {
+                        Text(event.id).font(.caption.weight(.bold))
+                        HStack(spacing: 4) {
+                            ForEach([0.12, 0.3, 1.0], id: \.self) { f in
+                                PlayAnimationView(plan: plan, frozenAt: f)
+                                    .frame(height: 150)
+                                    .background(Color(.secondarySystemBackground))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(8)
+        }
+    }
+
+    private var liveList: some View {
+        NavigationStack {
+            List(Self.samples) { event in
+                FeedPlayRow(event: event, isOut: event.kind == "out" || event.kind == "strikeout",
+                            autoPlay: true, feedTitle: nil, ourName: "Reds", theirName: "Hawks")
+            }
+            .navigationTitle("Play Animations")
+        }
     }
 }

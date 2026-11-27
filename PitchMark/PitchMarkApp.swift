@@ -50,6 +50,8 @@ struct RootView: View {
     /// `-UITestTourneys`: the Games row's Tourney Info button and screens,
     /// in memory (add `-UITestTourneysOpen` to start with the list open).
     private static let isUITestTourneys = ProcessInfo.processInfo.arguments.contains("-UITestTourneys")
+    /// `-UITestPlayAnimations`: sample feed cards with their play animations.
+    private static let isUITestPlayAnimations = ProcessInfo.processInfo.arguments.contains("-UITestPlayAnimations")
 
     var body: some View {
         Group {
@@ -63,6 +65,8 @@ struct RootView: View {
                 HomeActionsUITestHarness()
             } else if Self.isUITestTourneys {
                 TourneyUITestHarness()
+            } else if Self.isUITestPlayAnimations {
+                PlayAnimationsUITestHarness()
             } else if Self.isUITestDemo {
                 PitchTrackerView(isDemoMode: true, onRequireSignIn: {})
                     .id("uitest-demo")
@@ -140,7 +144,11 @@ struct RootView: View {
         // Feature flags (appConfig/flags): also when already signed in at
         // launch - the isSignedIn onChange below never fires for that.
         .task(id: authManager.isSignedIn) {
-            if authManager.isSignedIn { AppFeatureFlagStore.shared.start() }
+            if authManager.isSignedIn {
+                AppFeatureFlagStore.shared.start()
+                // Freeze and crash reports from iOS (HangReporter.swift).
+                HangReporter.shared.start()
+            }
         }
         .onOpenURL { url in
             if authManager.handleEmailSignInLink(url) {

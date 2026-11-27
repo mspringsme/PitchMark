@@ -1400,3 +1400,42 @@ Checkout; the server twins are `functions/src/seasonBook.ts` and
   2026-11-24). Without it the query fails quietly and Following never
   shows - the first two-phone test hit exactly that.
 - Rules tests: `rules-tests/tests/gameFeeds.test.mjs`. Rules DEPLOYED 2026-11-24; `appConfig/flags` has `gameFeeds: true` (set with `functions/scripts/setAppFlags.js` - also the kill switch: `killSwitch=true`).
+
+## Play animation in the feed card (2026-11-25)
+
+- **Drawn in code, not Rive** (user's call after trying the Rive editor):
+  `PlayAnimationPlan` (pure math: ball path by type, runner routes along
+  the base paths, timing) and `PlayAnimationView` (draws over FieldImage2),
+  PlayAnimation.swift. Positions are 0-1 of the field picture - the same
+  space as the result sheet's tap (`battedBallTapX/Y`) and
+  `BasesFieldLayer.normalizedPoint`.
+- The feed event carries `spotX/spotY` (only for a Field or HR tap),
+  `ballType` (from the descriptor's Grounder/Line/Fly/Pop/Bunt, or hr) and
+  `moves` (`{f, t}` bases only, at most 4). All four are on
+  `GameFeedEvent.allowedKeys` and the events rule.
+- In a follower's card it plays once (the newest play when the game opens,
+  then each new arrival), then back to the text; the ▶ beside the result
+  word replays it. Balls, strikes and fouls never animate. Reduce Motion
+  shows the last frame.
+- `-UITestPlayAnimations` shows sample cards; add
+  `-UITestPlayAnimationsFrozen` for each play at 30/65/100% - use it for
+  screenshots, the live animation is over before a UI test can capture it.
+- **Every runner on base is drawn** (2026-11-25): the feed's `moves`
+  lists runners who held too (from == to, from `basesBefore`), so a
+  runner standing on 2nd doesn't vanish. Runners run at one speed
+  (`secondsPerBase`, distance-based, slow out of and into the base) so a
+  batter circling the bases never laps the runner ahead.
+
+## A hit nobody placed (2026-11-25)
+
+- **Hit or Safe + a fair-ball tap puts the batter on 1st** without a base
+  tap (`PlayDraft.impliesBatterOnFirst`, `placeBatterOnFirstIfImplied` in
+  PitchResultsSheetView): a single, or ROE with Error on
+  (`impliedFirstBaseCredit`); forced runners move up through the normal
+  `batterBaseChanged`. Fires on the field tap, the Hit button, Safe, and
+  once more at Save (applied immediately there - Save can't wait for
+  onChange). Before this, a hit with a runner on 1st saved with nobody
+  moving.
+- After an automatic placement, the first tap on that base confirms it
+  instead of taking the batter off (`batterAutoPlaced`); later taps work
+  as before. Non-forced runners are never guessed.

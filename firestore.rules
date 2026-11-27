@@ -1124,10 +1124,13 @@ service cloud.firestore {
         allow get, list: if signedIn() && canRead(feedDoc());
         allow create, update: if signedIn()
           && feedDoc().ownerUid == uid()
-          && request.resource.data.keys().hasOnly(["at", "inning", "half", "batter", "jersey", "kind", "text", "runs", "detail", "batting", "ourScore", "theirScore", "outs", "updatedAt"])
+          && request.resource.data.keys().hasOnly(["at", "inning", "half", "batter", "jersey", "kind", "text", "runs", "detail", "batting", "ourScore", "theirScore", "outs", "spotX", "spotY", "ballType", "moves", "updatedAt"])
           // The card's result lines: a short list of words, no more.
           && (!request.resource.data.keys().hasAny(["detail"])
-              || (request.resource.data.detail is list && request.resource.data.detail.size() <= 3));
+              || (request.resource.data.detail is list && request.resource.data.detail.size() <= 3))
+          // The play animation's runner moves: a short list, no more.
+          && (!request.resource.data.keys().hasAny(["moves"])
+              || (request.resource.data.moves is list && request.resource.data.moves.size() <= 4));
         allow delete: if signedIn() && feedDoc().ownerUid == uid();
       }
 

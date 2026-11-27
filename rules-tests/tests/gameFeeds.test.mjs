@@ -291,6 +291,15 @@ describe("8 feed events", () => {
     await assertFails(setDoc(doc(f, "gameFeeds/f1/events/e6"), event({ detail: "1B" })));
   });
 
+  it("the play animation's location, ball type and runner moves; four moves at most", async () => {
+    const f = db("coach");
+    await assertSucceeds(setDoc(doc(f, "gameFeeds/f1/events/e7"),
+      event({ kind: "hit", spotX: 0.5, spotY: 0.36, ballType: "line", moves: [{ f: 0, t: 1 }, { f: 2, t: 4 }] })));
+    await assertFails(setDoc(doc(f, "gameFeeds/f1/events/e8"),
+      event({ moves: [{ f: 0, t: 1 }, { f: 1, t: 2 }, { f: 2, t: 3 }, { f: 3, t: 4 }, { f: 0, t: 1 }] })));
+    await assertFails(setDoc(doc(f, "gameFeeds/f1/events/e9"), event({ moves: "1-4" })));
+  });
+
   it("HIGH RISK: no pitch, location, codes, key or estimate", async () => {
     const f = db("coach");
     for (const extra of [{ pitch: "Fastball" }, { location: "Strike Up" }, { codes: ["12"] },
