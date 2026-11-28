@@ -743,10 +743,11 @@ struct FeedPlayRow: View {
                         if event.showsPlayLines {
                             HStack(spacing: 4) {
                                 if event.batterRan { Image(systemName: "figure.run") }
-                                Text(event.detail[0]).font(.body.weight(.semibold))
+                                // Cleaned again here for plays saved before cleanLine.
+                                Text(GameFeedRules.cleanLine(event.detail[0])).font(.body.weight(.semibold))
                             }
                             ForEach(Array(event.detail.dropFirst()), id: \.self) { line in
-                                Text(line).font(.subheadline)
+                                Text(GameFeedRules.cleanLine(line)).font(.subheadline)
                             }
                             if event.runs > 0, !event.detail.joined().localizedCaseInsensitiveContains("run") {
                                 Text("\(event.runs) run\(event.runs == 1 ? "" : "s") scored").font(.subheadline)

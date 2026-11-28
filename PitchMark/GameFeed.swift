@@ -201,7 +201,7 @@ enum GameFeedRules {
         if let end = pitch.atBatEnd {
             switch end {
             case .walk: return ("walk", "Walk" + runText, runs)
-            case .strikeout: return ("strikeout", "Strikeout", runs)
+            case .strikeout: return ("strikeout", "Strikeout" + strikeKind(pitch), runs)
             case .hitByPitch: return ("hbp", "Hit by pitch" + runText, runs)
             case .hit:
                 let label = pitch.play.flatMap { BaseRunnerRules.cardSummary(for: $0) } ?? "Hit"
@@ -221,7 +221,8 @@ enum GameFeedRules {
         case .ball: return ("ball", "Ball" + countText, runs)
         case .strike:
             let isFoul = (pitch.outcome ?? "").localizedCaseInsensitiveContains("foul")
-            return (isFoul ? "foul" : "strike", (isFoul ? "Foul" : "Strike") + countText, runs)
+            if isFoul { return ("foul", "Foul" + countText, runs) }
+            return ("strike", "Strike" + strikeKind(pitch) + countText, runs)
         default:
             return ("inPlay", "In play", runs)
         }
@@ -307,6 +308,24 @@ enum GameFeedRules {
         )
     }
 
+    /// " – Swinging" / " – Looking" when the scorer said which (user,
+    /// 2026-11-27), else nothing.
+    static func strikeKind(_ pitch: PitchEvent) -> String {
+        if pitch.strikeSwinging { return " – Swinging" }
+        if pitch.strikeLooking { return " – Looking" }
+        return ""
+    }
+
+    /// A card line as text. The pitch card draws a leading "3.circle" or
+    /// "f.circle" as a count icon; the feed has no icon, so it's dropped
+    /// (user, 2026-11-27: the feed showed "3.circle Strike — Swinging"
+    /// under Strikeout, and "4.circle Ball" under a walk).
+    static func cleanLine(_ line: String) -> String {
+        let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard let first = parts.first, first.hasSuffix(".circle") else { return line }
+        return parts.count > 1 ? String(parts[1]) : ""
+    }
+
     static let maxDetailLines = 3
     static let maxMoves = 4
 
@@ -346,6 +365,8 @@ enum GameFeedRules {
     /// reads the called pitch, its location, codes, key or estimate.
     static func playLines(for pitch: PitchEvent) -> [String] {
         outcomeSummaryLines(for: pitch)
+            .map(cleanLine)
+            .filter { !$0.isEmpty }
             .map { String($0.prefix(60)) }
             .prefix(maxDetailLines)
             .map { $0 }
